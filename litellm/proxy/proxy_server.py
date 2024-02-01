@@ -3021,12 +3021,9 @@ async def google_login(request: Request):
 
         return HTMLResponse(content=html_form, status_code=200)
     else:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": "No SSO/Auth provider configured. Please set your Auth Provider in .env. See https://docs.litellm.ai/docs/proxy/ui"
-            },
-        )
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
 
 
 @router.post(
@@ -3041,26 +3038,31 @@ async def login(request: Request):
     form = await request.form()
     username = str(form.get("username"))
     password = form.get("password")
-    ui_username = os.getenv("UI_USERNAME")
-    ui_password = os.getenv("UI_PASSWORD")
+    ui_username = os.getenv("UI_USERNAME", "litellm")
+    ui_password = os.getenv("UI_PASSWORD", "llm")
 
     if username == ui_username and password == ui_password:
         user_id = username
+        # User is Authe'd in - generate key for the UI to access Proxy
         response = await generate_key_helper_fn(
-            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+            **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
         )
 
         key = response["token"]  # type: ignore
         user_id = response["user_id"]  # type: ignore
-        litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
 
-        # if user set LITELLM_UI_LINK in .env, use that
-        litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
-        if litellm_ui_link_in_env is not None:
-            litellm_dashboard_ui = litellm_ui_link_in_env
+        litellm_dashboard_ui = "/ui/"
 
-        litellm_dashboard_ui += "?userID=" + user_id + "&accessToken=" + key
-        return RedirectResponse(url=litellm_dashboard_ui)
+        import jwt
+
+        jwt_token = jwt.encode(
+            {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
+        )
+        litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
+
+        # if a user has logged in they should be allowed to create keys - this ensures that it's set to True
+        general_settings["allow_user_auth"] = True
+        return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     else:
         raise ProxyException(
             message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
