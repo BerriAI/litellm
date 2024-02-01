@@ -3143,7 +3143,7 @@ async def auth_callback(request: Request):
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
 
     response = await generate_key_helper_fn(
-        **{"duration": "1hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
     )
 
     key = response["token"]  # type: ignore
