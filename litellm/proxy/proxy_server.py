@@ -116,7 +116,7 @@ import logging
 from typing import Union
 
 proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-ui_link = f"/ui?proxyBaseUrl={proxy_base_url}"
+ui_link = f"/ui/?proxyBaseUrl={proxy_base_url}"
 ui_message = f"👉 [LiteLLM Admin Panel on /ui]({ui_link}). Create, Edit Keys with SSO"
 if proxy_base_url is None:
     ui_message = "👉 LiteLLM Admin Panel - 'PROXY_BASE_URL' not set in env, see [UI docs](https://docs.litellm.ai/docs/proxy/ui)"
@@ -3178,10 +3178,10 @@ async def auth_callback(request: Request):
 
     litellm_dashboard_ui = proxy_base_url
     if proxy_base_url.endswith("/"):
-        litellm_dashboard_ui += "ui"
+        litellm_dashboard_ui += "ui/"
         proxy_base_url = proxy_base_url[:-1]
     else:
-        litellm_dashboard_ui += "/ui"
+        litellm_dashboard_ui += "/ui/"
 
     import jwt
 
