@@ -14,8 +14,6 @@ const UserDashboard = () => {
   const searchParams = useSearchParams();
   const userID = searchParams.get("userID");
 
-  const proxyBaseUrl = searchParams.get("proxyBaseUrl");
-
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
@@ -34,11 +32,10 @@ const UserDashboard = () => {
       }
 
     }
-    if (userID && accessToken && proxyBaseUrl && !data) {
+    if (userID && accessToken  && !data) {
       const fetchData = async () => {
         try {
           const response = await userInfoCall(
-            proxyBaseUrl,
             accessToken,
             userID
           );
@@ -50,20 +47,13 @@ const UserDashboard = () => {
       };
       fetchData();
     }
-  }, [userID, token, accessToken, proxyBaseUrl, data]);
+  }, [userID, token, accessToken, data]);
 
-  if (proxyBaseUrl == null) {
-    return (
-      <div>
-        <EnterProxyUrl />
-      </div>
-    );
-  }
-  else if (userID == null || token == null) {
-    const baseUrl = proxyBaseUrl.endsWith('/') ? proxyBaseUrl : proxyBaseUrl + '/';
+  if (userID == null || token == null) {
+
   
     // Now you can construct the full URL
-    const url = `${baseUrl}sso/key/generate`;
+    const url = `/sso/key/generate`;
 
     window.location.href = url;
 
@@ -80,14 +70,12 @@ const UserDashboard = () => {
         <ViewKeyTable
           userID={userID}
           accessToken={accessToken}
-          proxyBaseUrl={proxyBaseUrl}
           data={data}
           setData={setData}
         />
         <CreateKey
           userID={userID}
           accessToken={accessToken}
-          proxyBaseUrl={proxyBaseUrl}
           data={data}
           setData={setData}
         />
