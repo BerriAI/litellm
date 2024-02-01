@@ -8,10 +8,8 @@ load_dotenv()
 
 async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
     try:
-        from litellm.proxy.proxy_server import MISSING_BEARER
-
         print(f"api_key: {api_key}")
-        if api_key == MISSING_BEARER:
+        if api_key == "":
             raise Exception(
                 f"CustomAuth - Malformed API Key passed in. Ensure Key has `Bearer` prefix"
             )
