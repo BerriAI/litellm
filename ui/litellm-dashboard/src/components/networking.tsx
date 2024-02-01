@@ -11,6 +11,17 @@ export const keyCreateCall = async (
 ) => {
   try {
     console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call    
+    
+    // if formValues.metadata is not undefined, make it a valid dict 
+    if (formValues.metadata) {
+      // if there's an exception JSON.parse, show it in the message
+      try {
+        formValues.metadata = JSON.parse(formValues.metadata);
+      } catch (error) {
+        message.error("Failed to parse metadata: " + error);
+      }
+    }
+    
     const response = await fetch(`${proxyBaseUrl}/key/generate`, {
       method: "POST",
       headers: {
