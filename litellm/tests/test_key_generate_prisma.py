@@ -1255,3 +1255,29 @@ async def test_user_api_key_auth(prisma_client):
     except ProxyException as exc:
         print(exc.message)
         assert exc.message == "Authentication Error, No API Key passed in. Passed in: "
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_without_master_key(prisma_client):
+    # if master key is not set, expect all calls to go through
+    try:
+        from litellm.proxy.proxy_server import ProxyException
+
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm.proxy.proxy_server, "master_key", None)
+        setattr(
+            litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": True}
+        )
+        await litellm.proxy.proxy_server.prisma_client.connect()
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+        # Test case: No API Key passed in
+
+        await user_api_key_auth(request, api_key=None)
+        await user_api_key_auth(request, api_key="my_token")
+        await user_api_key_auth(request, api_key="")
+        await user_api_key_auth(request, api_key="Bearer " + "1234")
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
