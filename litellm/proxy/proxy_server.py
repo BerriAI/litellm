@@ -3027,7 +3027,7 @@ async def google_login(request: Request):
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
-                "error": "No SSO/Auth provider configured. See https://docs.litellm.ai/docs/proxy/ui"
+                "error": "No SSO/Auth provider configured. Please set your Auth Provider in .env. See https://docs.litellm.ai/docs/proxy/ui"
             },
         )
 
