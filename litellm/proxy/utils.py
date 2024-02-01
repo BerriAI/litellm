@@ -1266,6 +1266,10 @@ html_form = """
 <body>
     <form action="/login" method="post">
         <h2>LiteLLM Login</h2>
+
+        <p>By default Username is "litellm" and Password is "llm". Enter them here</p>
+        <p>If you need to set credentials set UI_USERNAME and UI_PASSWORD in .env, or use SSO</p>
+        <br>
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" required>
         <label for="password">Password:</label>
