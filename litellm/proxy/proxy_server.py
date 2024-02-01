@@ -115,12 +115,8 @@ import json
 import logging
 from typing import Union
 
-proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-ui_link = f"/ui/?proxyBaseUrl={proxy_base_url}"
+ui_link = f"/ui/"
 ui_message = f"👉 [LiteLLM Admin Panel on /ui]({ui_link}). Create, Edit Keys with SSO"
-if proxy_base_url is None:
-    ui_message = "👉 LiteLLM Admin Panel - 'PROXY_BASE_URL' not set in env, see [UI docs](https://docs.litellm.ai/docs/proxy/ui)"
-
 app = FastAPI(
     docs_url="/",
     title="LiteLLM API",
@@ -2960,17 +2956,11 @@ async def google_login(request: Request):
     """
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
-    redirect_url = os.getenv("PROXY_BASE_URL", None)
+
+    # get url from request
+    redirect_url = str(request.base_url)
 
     ui_username = os.getenv("UI_USERNAME")
-    if redirect_url is None:
-        raise ProxyException(
-            message="PROXY_BASE_URL not set. Set it in .env file",
-            type="auth_error",
-            param="PROXY_BASE_URL",
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
     if redirect_url.endswith("/"):
         redirect_url += "sso/callback"
     else:
@@ -3166,31 +3156,14 @@ async def auth_callback(request: Request):
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
-    # get current host:port/ui
-    proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-    if proxy_base_url is None:
-        raise ProxyException(
-            message="PROXY_BASE_URL not set. Set it in .env file",
-            type="auth_error",
-            param="PROXY_BASE_URL",
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-    litellm_dashboard_ui = proxy_base_url
-    if proxy_base_url.endswith("/"):
-        litellm_dashboard_ui += "ui/"
-        proxy_base_url = proxy_base_url[:-1]
-    else:
-        litellm_dashboard_ui += "/ui/"
+    litellm_dashboard_ui = "/ui/"
 
     import jwt
 
     jwt_token = jwt.encode(
         {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
     )
-    litellm_dashboard_ui += (
-        "?userID=" + user_id + "&token=" + jwt_token + "&proxyBaseUrl=" + proxy_base_url
-    )
+    litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
 
     # if a user has logged in they should be allowed to create keys - this ensures that it's set to True
     general_settings["allow_user_auth"] = True
