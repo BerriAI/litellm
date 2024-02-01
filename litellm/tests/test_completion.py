@@ -584,7 +584,7 @@ def test_completion_openai_organization():
 
 def test_completion_text_openai():
     try:
-        # litellm.set_verbose = True
+        # litellm.set_verbose =True
         response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
         print(response["choices"][0]["message"]["content"])
     except Exception as e:
