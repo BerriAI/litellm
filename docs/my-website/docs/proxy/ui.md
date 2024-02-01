@@ -28,8 +28,6 @@ Allow your users to create, view their own keys through a UI
 
 **Required .env variables on your Proxy**
 ```shell
-PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
-
 # for Google SSO Login
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
@@ -50,8 +48,6 @@ GOOGLE_CLIENT_SECRET=
 
 **Required .env variables on your Proxy**
 ```shell
-PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
-
 MICROSOFT_CLIENT_ID="84583a4d-"
 MICROSOFT_CLIENT_SECRET="nbk8Q~"
 MICROSOFT_TENANT="5a39737
@@ -68,8 +64,6 @@ MICROSOFT_TENANT="5a39737
 Set the following in your .env on the Proxy
 
 ```shell
-PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
-
 UI_USERNAME=ishaan-litellm
 UI_PASSWORD=langchain
 ```

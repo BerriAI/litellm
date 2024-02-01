@@ -4,7 +4,6 @@
 import { message } from 'antd';
 
 export const keyCreateCall = async (
-  proxyBaseUrl: string,
   accessToken: string,
   userID: string,
   formValues: Record<string, any> // Assuming formValues is an object
@@ -22,7 +21,7 @@ export const keyCreateCall = async (
       }
     }
     
-    const response = await fetch(`${proxyBaseUrl}/key/generate`, {
+    const response = await fetch(`/key/generate`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -53,12 +52,11 @@ export const keyCreateCall = async (
 
 
 export const keyDeleteCall = async (
-  proxyBaseUrl: String,
   accessToken: String,
   user_key: String
 ) => {
   try {
-    const response = await fetch(`${proxyBaseUrl}/key/delete`, {
+    const response = await fetch(`/key/delete`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -84,13 +82,12 @@ export const keyDeleteCall = async (
 };
 
 export const userInfoCall = async (
-  proxyBaseUrl: String,
   accessToken: String,
   userID: String
 ) => {
   try {
     const response = await fetch(
-      `${proxyBaseUrl}/user/info?user_id=${userID}`,
+      `/user/info?user_id=${userID}`,
       {
         method: "GET",
         headers: {
