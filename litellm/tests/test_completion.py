@@ -592,9 +592,6 @@ def test_completion_text_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_text_openai()
-
-
 def custom_callback(
     kwargs,  # kwargs to completion
     completion_response,  # response from completion
