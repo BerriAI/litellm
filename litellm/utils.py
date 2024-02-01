@@ -2094,13 +2094,13 @@ def client(original_function):
         logging_obj = kwargs.get("litellm_logging_obj", None)
 
         # only set litellm_call_id if its not in kwargs
+        call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
         except:
             model = None
-            call_type = original_function.__name__
             if (
                 call_type != CallTypes.image_generation.value
                 and call_type != CallTypes.text_completion.value
@@ -2186,6 +2186,44 @@ def client(original_function):
                                 )
                             else:
                                 return cached_result
+
+            # CHECK MAX TOKENS
+            if (
+                kwargs.get("max_tokens", None) is not None
+                and model is not None
+                and litellm.drop_params
+                == True  # user is okay with params being modified
+                and (
+                    call_type == CallTypes.acompletion.value
+                    or call_type == CallTypes.completion.value
+                )
+            ):
+                try:
+                    base_model = model
+                    if kwargs.get("hf_model_name", None) is not None:
+                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
+                    max_output_tokens = (
+                        get_max_tokens(model=base_model) or 4096
+                    )  # assume min context window is 4k tokens
+                    user_max_tokens = kwargs.get("max_tokens")
+                    ## Scenario 1: User limit + prompt > model limit
+                    messages = None
+                    if len(args) > 1:
+                        messages = args[1]
+                    elif kwargs.get("messages", None):
+                        messages = kwargs["messages"]
+                    input_tokens = token_counter(model=base_model, messages=messages)
+                    input_tokens += max(
+                        0.1 * input_tokens, 10
+                    )  # give at least a 10 token buffer. token counting can be imprecise.
+                    if input_tokens > max_output_tokens:
+                        pass  # allow call to fail normally
+                    elif user_max_tokens + input_tokens > max_output_tokens:
+                        user_max_tokens = max_output_tokens - input_tokens
+                    print_verbose(f"user_max_tokens: {user_max_tokens}")
+                    kwargs["max_tokens"] = user_max_tokens
+                except Exception as e:
+                    print_verbose(f"Error while checking max token limit: {str(e)}")
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -4503,7 +4541,7 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
 
 def get_max_tokens(model: str):
     """
-    Get the maximum number of tokens allowed for a given model.
+    Get the maximum number of output tokens allowed for a given model.
 
     Parameters:
     model (str): The name of the model.
@@ -4522,7 +4560,6 @@ def get_max_tokens(model: str):
     def _get_max_position_embeddings(model_name):
         # Construct the URL for the config.json file
         config_url = f"https://huggingface.co/{model_name}/raw/main/config.json"
-
         try:
             # Make the HTTP request to get the raw JSON file
             response = requests.get(config_url)
@@ -4530,10 +4567,8 @@ def get_max_tokens(model: str):
 
             # Parse the JSON response
             config_json = response.json()
-
             # Extract and return the max_position_embeddings
             max_position_embeddings = config_json.get("max_position_embeddings")
-
             if max_position_embeddings is not None:
                 return max_position_embeddings
             else:
@@ -4543,7 +4578,10 @@ def get_max_tokens(model: str):
 
     try:
         if model in litellm.model_cost:
-            return litellm.model_cost[model]["max_tokens"]
+            if "max_output_tokens" in litellm.model_cost[model]:
+                return litellm.model_cost[model]["max_output_tokens"]
+            elif "max_tokens" in litellm.model_cost[model]:
+                return litellm.model_cost[model]["max_tokens"]
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
