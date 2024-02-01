@@ -338,6 +338,26 @@ See supported Embedding Providers & Models [here](https://docs.litellm.ai/docs/e
 #### Create Config.yaml
 
 <Tabs>
+<TabItem value="bedrock" label="Bedrock Completion/Chat">
+
+```yaml
+model_list:
+  - model_name: bedrock-cohere
+    litellm_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-west-2"
+  - model_name: bedrock-cohere
+    litellm_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-east-2"
+  - model_name: bedrock-cohere
+    litellm_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-east-1"
+
+```
+
+</TabItem>
 
 <TabItem value="sagemaker" label="Sagemaker, Bedrock Embeddings">
 
@@ -450,20 +470,26 @@ model_list:
 </Tabs>
 
 #### Start Proxy
+
 ```shell
 litellm --config config.yaml
 ```
 
 #### Make Request
-Sends Request to `deployed-codebert-base`
+Sends Request to `bedrock-cohere`
 
 ```shell
-curl --location 'http://0.0.0.0:8000/embeddings' \
+curl --location 'http://0.0.0.0:8000/chat/completions' \
   --header 'Content-Type: application/json' \
   --data ' {
-  "model": "deployed-codebert-base",
-  "input": ["write a litellm poem"]
-  }'
+  "model": "bedrock-cohere",
+  "messages": [
+      {
+      "role": "user",
+      "content": "gm"
+      }
+  ]
+}'
 ```
 
 
