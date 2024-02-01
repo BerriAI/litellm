@@ -6,14 +6,32 @@ import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import EnterProxyUrl from "./enter_proxy_url";
 import { useSearchParams } from "next/navigation";
+import { jwtDecode } from "jwt-decode";
 
 const UserDashboard = () => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
   const userID = searchParams.get("userID");
-  const accessToken = searchParams.get("accessToken");
   const proxyBaseUrl = searchParams.get("proxyBaseUrl");
+  const token = searchParams.get("token");
+  let accessToken = "";
+
+  useEffect(() => {
+    if (token){
+      const decoded = jwtDecode(token) as { [key: string]: any };
+      if (decoded) {
+        // cast decoded to dictionary
+        console.log("Decoded token:", decoded);
+
+        console.log("Decoded key:", decoded.key);
+        // set accessToken
+        accessToken = decoded.key
+      }
+      
+
+    }
+  }, [token]);
 
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
@@ -34,7 +52,6 @@ const UserDashboard = () => {
       fetchData();
     }
   }, [userID, accessToken, proxyBaseUrl, data]);
-
   if (proxyBaseUrl == null) {
     return (
       <div>
@@ -50,7 +67,6 @@ const UserDashboard = () => {
 
     window.location.href = url;
     
-
     return null;
   }
   
