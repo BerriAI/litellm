@@ -548,6 +548,7 @@ async def user_api_key_auth(
                     or route.startswith("/model/")
                 )
                 and (not is_master_key_valid)
+                and (not _has_user_setup_sso())
                 and (not general_settings.get("allow_user_auth", False))
             ):
                 # enters this block when allow_user_auth is set to False
@@ -3867,6 +3868,24 @@ async def get_routes():
         routes.append(route_info)
 
     return {"routes": routes}
+
+
+def _has_user_setup_sso():
+    """
+    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID, and UI username environment variables.
+    Returns a boolean indicating whether SSO has been set up.
+    """
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    ui_username = os.getenv("UI_USERNAME")
+
+    sso_setup = (
+        (microsoft_client_id is not None)
+        or (google_client_id is not None)
+        or (ui_username is not None)
+    )
+
+    return sso_setup
 
 
 @router.on_event("shutdown")
