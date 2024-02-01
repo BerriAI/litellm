@@ -62,6 +62,15 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "gpt-4-0125-preview": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "gpt-4-vision-preview": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
@@ -142,6 +151,20 @@
         "output_cost_per_token": 0.000016,
         "litellm_provider": "openai",
         "mode": "chat"
+    },
+    "text-embedding-3-large": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "embedding"
+    },
+    "text-embedding-3-small": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.00000002,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "embedding"
     },
     "text-embedding-ada-002": {
         "max_tokens": 8191,
@@ -906,6 +929,14 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "amazon.titan-embed-text-v1": {
+        "max_tokens": 8192, 
+        "output_vector_size": 1536,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bedrock", 
+        "mode": "embedding"
+    },
     "anthropic.claude-v1": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
@@ -1644,29 +1675,38 @@
     },
       "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
+        "input_cost_per_token": 0.00000007, 
+        "output_cost_per_token": 0.00000028, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-34b-chat": { 
+        "max_tokens": 8192, 
+        "input_cost_per_token": 0.00000035, 
+        "output_cost_per_token": 0.00000140, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
       "perplexity/pplx-70b-chat": { 
         "max_tokens": 4096, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
+        "input_cost_per_token": 0.00000070, 
+        "output_cost_per_token": 0.00000280, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
       "perplexity/pplx-7b-online": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.0005, 
+        "output_cost_per_token": 0.00000028, 
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
       "perplexity/pplx-70b-online": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.0005, 
+        "output_cost_per_token": 0.00000280, 
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },

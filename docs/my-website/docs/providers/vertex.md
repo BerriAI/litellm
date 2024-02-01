@@ -17,7 +17,28 @@ import litellm
 litellm.vertex_project = "hardy-device-38811" # Your Project ID
 litellm.vertex_location = "us-central1"  # proj location
 
-response = completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+response = litellm.completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+```
+
+## OpenAI Proxy Usage 
+
+1. Modify the config.yaml 
+
+```yaml
+litellm_settings: 
+  vertex_project: "hardy-device-38811" # Your Project ID
+  vertex_location: "us-central1" # proj location
+
+model_list: 
+  -model_name: team1-gemini-pro
+   litellm_params: 
+     model: gemini-pro
+```
+
+2. Start the proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
 ```
 
 ## Set Vertex Project & Vertex Location

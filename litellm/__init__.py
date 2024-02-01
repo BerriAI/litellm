@@ -2,10 +2,14 @@
 import threading, requests
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
-from litellm._logging import set_verbose
+from litellm._logging import set_verbose, _turn_on_debug
 from litellm.proxy._types import KeyManagementSystem
 import httpx
 
+#############################################
+if set_verbose == True:
+    _turn_on_debug()
+#############################################
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
@@ -58,6 +62,9 @@ cache: Optional[
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
+budget_duration: Optional[
+    str
+] = None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 _openai_completion_params = [
     "functions",
     "function_call",
@@ -136,6 +143,7 @@ model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/mai
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+default_key_generate_params: Optional[Dict] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint

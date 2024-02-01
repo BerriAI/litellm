@@ -41,6 +41,7 @@ jobs:
           push: true
           file: Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
+      
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
@@ -74,7 +75,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
-  build-and-push-image-alpine:
+          platform: local, linux/amd64,linux/arm64,linux/arm64/v8
+          
+  build-and-push-image-ui:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -90,20 +93,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Alpine Dockerfile
-        id: meta-alpine
+      - name: Extract metadata (tags, labels) for UI Dockerfile
+        id: meta-ui
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-alpine
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-ui
 
-      - name: Build and push Alpine Docker image
+      - name: Build and push UI Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: .
-          file: Dockerfile.alpine
+          context: ui/
+          file: ui/Dockerfile
           push: true
-          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-alpine.outputs.tags }}-latest
-          labels: ${{ steps.meta-alpine.outputs.labels }}
+          tags: ${{ steps.meta-ui.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-ui.outputs.tags }}-latest
+          labels: ${{ steps.meta-ui.outputs.labels }}
+          platform: local, linux/amd64,linux/arm64,linux/arm64/v8
   build-and-push-image-database:
     runs-on: ubuntu-latest
     permissions:
@@ -168,3 +172,14 @@ jobs:
             } catch (error) {
               core.setFailed(error.message);
             }
+      - name: Github Releases To Discord
+        uses: SethCohen/github-releases-to-discord@v1.13.1
+        with:
+          webhook_url: ${{ secrets.WEBHOOK_URL }}
+          color: "2105893"
+          username: "Release Changelog"
+          avatar_url: "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png"
+          content: "||@everyone||"
+          footer_title: "Changelog"
+          footer_icon_url: "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png"
+          footer_timestamp: true
