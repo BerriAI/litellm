@@ -2,7 +2,7 @@ import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Literal
+from typing import Optional, List
 import secrets, subprocess
 import hashlib, uuid
 import warnings
