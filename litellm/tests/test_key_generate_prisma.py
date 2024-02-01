@@ -1216,6 +1216,40 @@ async def test_default_key_params(prisma_client):
         pytest.fail(f"Got exception {e}")
 
 
+def test_get_bearer_token():
+    from litellm.proxy.proxy_server import _get_bearer_token
+
+    # Test valid Bearer token
+    api_key = "Bearer valid_token"
+    result = _get_bearer_token(api_key)
+    assert result == "valid_token", f"Expected 'valid_token', got '{result}'"
+
+    # Test empty API key
+    api_key = ""
+    result = _get_bearer_token(api_key)
+    assert result == "", f"Expected '', got '{result}'"
+
+    # Test API key without Bearer prefix
+    api_key = "invalid_token"
+    result = _get_bearer_token(api_key)
+    assert result == "", f"Expected '', got '{result}'"
+
+    # Test API key with Bearer prefix in lowercase
+    api_key = "bearer valid_token"
+    result = _get_bearer_token(api_key)
+    assert result == "", f"Expected '', got '{result}'"
+
+    # Test API key with Bearer prefix and extra spaces
+    api_key = "  Bearer   valid_token  "
+    result = _get_bearer_token(api_key)
+    assert result == "", f"Expected '', got '{result}'"
+
+    # Test API key with Bearer prefix and no token
+    api_key = "Bearer sk-1234"
+    result = _get_bearer_token(api_key)
+    assert result == "sk-1234", f"Expected 'valid_token', got '{result}'"
+
+
 @pytest.mark.asyncio
 async def test_user_api_key_auth(prisma_client):
     from litellm.proxy.proxy_server import ProxyException
