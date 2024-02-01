@@ -92,6 +92,7 @@ def validate_second_format(chunk):
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
+        assert "role" not in choice["delta"], "'role' should be a string."
         # openai v1.0.0 returns content as None
         assert (choice["finish_reason"] is None) or isinstance(
             choice["finish_reason"], str
