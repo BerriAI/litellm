@@ -22,18 +22,22 @@ Set a model alias for your deployments.
 
 In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
 
-In the config below requests with:
+In the config below:
+- `model_name`: the name to pass TO litellm from the external client  
+- `litellm_params.model`: the model string passed to the litellm.completion() function
+
+E.g.: 
 - `model=vllm-models` will route to `openai/facebook/opt-125m`. 
 - `model=gpt-3.5-turbo` will load balance between `azure/gpt-turbo-small-eu` and `azure/gpt-turbo-small-ca`
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo # user-facing model alias
+  - model_name: gpt-3.5-turbo ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
-      model: azure/gpt-turbo-small-eu
+      model: azure/gpt-turbo-small-eu ### MODEL NAME sent to `litellm.completion()` ###
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
-      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+      rpm: 6      # [OPTIONAL] Rate limit for this deployment: in requests per minute (rpm)
   - model_name: bedrock-claude-v1 
     litellm_params:
       model: bedrock/anthropic.claude-instant-v1
@@ -43,6 +47,11 @@ model_list:
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_CA"
       rpm: 6
+  - model_name: anthropic-claude
+    litellm_params: 
+      model="bedrock/anthropic.claude-instant-v1"
+      ### [OPTIONAL] SET AWS REGION ###
+      aws_region_name="us-east-1"
   - model_name: vllm-models
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
@@ -58,6 +67,11 @@ litellm_settings: # module level litellm settings - https://github.com/BerriAI/l
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
 ```
+:::info
+
+For more provider-specific info, [go here](../providers/)
+
+:::
 
 #### Step 2: Start Proxy with config
 
