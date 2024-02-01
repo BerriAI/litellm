@@ -9,42 +9,48 @@ import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
 const UserDashboard = () => {
-  const [data, setData] = useState<null | any[]>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-
+  const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
+  // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
   const userID = searchParams.get("userID");
+
   const proxyBaseUrl = searchParams.get("proxyBaseUrl");
+
   const token = searchParams.get("token");
+  const [accessToken, setAccessToken] = useState<string | null>(null);
 
+
+  // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        if (token) {
-          const decoded = jwtDecode(token) as { key: string };
-          console.log("Decoded token:", decoded);
-          console.log("Decoded key:", decoded.key);
-          setAccessToken(decoded.key);
-        }
+    if (token){
+      const decoded = jwtDecode(token) as { [key: string]: any };
+      if (decoded) {
+        // cast decoded to dictionary
+        console.log("Decoded token:", decoded);
 
-        if (userID && accessToken && proxyBaseUrl && !data) {
-          const response = await userInfoCall(proxyBaseUrl, accessToken, userID);
-          setData(response["keys"]);
-        }
-      } catch (error) {
-        console.error("Error fetching data:", error);
-      } finally {
-        setLoading(false); // Set loading to false when the effect is done
+        console.log("Decoded key:", decoded.key);
+        // set accessToken
+        setAccessToken(decoded.key);
       }
-    };
 
-    fetchData();
-  }, [token, userID, accessToken, proxyBaseUrl, data]);
-
-  if (loading) {
-    return <div>Loading...</div>;
-  }
+    }
+    if (userID && accessToken && proxyBaseUrl && !data) {
+      const fetchData = async () => {
+        try {
+          const response = await userInfoCall(
+            proxyBaseUrl,
+            accessToken,
+            userID
+          );
+          setData(response["keys"]); // Assuming this is the correct path to your data
+        } catch (error) {
+          console.error("There was an error fetching the data", error);
+          // Optionally, update your UI to reflect the error state here as well
+        }
+      };
+      fetchData();
+    }
+  }, [userID, token, accessToken, proxyBaseUrl, data]);
 
   if (proxyBaseUrl == null) {
     return (
@@ -53,9 +59,9 @@ const UserDashboard = () => {
       </div>
     );
   }
-  else if (userID == null || accessToken == null) {
+  else if (userID == null || token == null) {
     const baseUrl = proxyBaseUrl.endsWith('/') ? proxyBaseUrl : proxyBaseUrl + '/';
-
+  
     // Now you can construct the full URL
     const url = `${baseUrl}sso/key/generate`;
 
@@ -63,7 +69,11 @@ const UserDashboard = () => {
 
     return null;
   }
+  else if (accessToken == null) {
+    return null;
+  }
 
+  
   return (
     <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
       <Col numColSpan={1}>
