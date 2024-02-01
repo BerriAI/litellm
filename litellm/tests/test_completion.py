@@ -566,9 +566,6 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_openai()
-
-
 def test_completion_openai_organization():
     try:
         litellm.set_verbose = True
