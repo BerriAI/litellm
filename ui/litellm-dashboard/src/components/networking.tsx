@@ -1,6 +1,7 @@
 /**
  * Helper file for calls being made to proxy
  */
+import { message } from 'antd';
 
 export const keyCreateCall = async (
   proxyBaseUrl: string,
@@ -9,7 +10,7 @@ export const keyCreateCall = async (
   formValues: Record<string, any> // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call    
     const response = await fetch(`${proxyBaseUrl}/key/generate`, {
       method: "POST",
       headers: {
@@ -23,7 +24,8 @@ export const keyCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.text();
+      message.error("Failed to create key: " + errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
