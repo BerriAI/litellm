@@ -60,6 +60,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Key Budget (USD)</TableHeaderCell>
+            <TableHeaderCell>Team ID</TableHeaderCell>
+            <TableHeaderCell>Metadata</TableHeaderCell>
             <TableHeaderCell>Expires</TableHeaderCell>
           </TableRow>
         </TableHead>
@@ -69,8 +71,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             return (
               <TableRow key={item.token}>
                 <TableCell>
-                  {item.key_name != null ? (
-                    <Text>{item.key_name}</Text>
+                  {item.key_alias != null ? (
+                    <Text>{item.key_alias}</Text>
                   ) : (
                     <Text>{item.token}</Text>
                   )
@@ -86,6 +88,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>Unlimited Budget</Text>
                   )
                 }
+                </TableCell>
+                <TableCell >
+                  <Text>{item.team_id}</Text>
+                </TableCell>
+                <TableCell >
+                  <Text>{JSON.stringify(item.metadata)}</Text>
                 </TableCell>
                 <TableCell>
                   {item.expires != null ? (
