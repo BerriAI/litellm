@@ -20,7 +20,6 @@ import {
 interface ViewKeyTableProps {
   userID: string;
   accessToken: string;
-  proxyBaseUrl: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
@@ -28,7 +27,6 @@ interface ViewKeyTableProps {
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   accessToken,
-  proxyBaseUrl,
   data,
   setData,
 }) => {
@@ -37,7 +35,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       return;
     }
     try {
-      await keyDeleteCall(proxyBaseUrl, accessToken, token);
+      await keyDeleteCall(accessToken, token);
       // Successfully completed the deletion. Update the state to trigger a rerender.
       const filteredData = data.filter((item) => item.token !== token);
       setData(filteredData);
