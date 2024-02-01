@@ -2220,6 +2220,7 @@ def client(original_function):
                         pass  # allow call to fail normally
                     elif user_max_tokens + input_tokens > max_output_tokens:
                         user_max_tokens = max_output_tokens - input_tokens
+                    print_verbose(f"user_max_tokens: {user_max_tokens}")
                     kwargs["max_tokens"] = user_max_tokens
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {str(e)}")
