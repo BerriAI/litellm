@@ -1212,3 +1212,44 @@ async def test_default_key_params(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth(prisma_client):
+    from litellm.proxy.proxy_server import ProxyException
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": True})
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    # Test case: No API Key passed in
+    try:
+        await user_api_key_auth(request, api_key=None)
+        pytest.fail(f"This should have failed!. IT's an invalid key")
+    except ProxyException as exc:
+        print(exc.message)
+        assert (
+            exc.message == "Authentication Error, No API Key passed in. api_key is None"
+        )
+
+    # Test case: Malformed API Key (missing 'Bearer ' prefix)
+    try:
+        await user_api_key_auth(request, api_key="my_token")
+        pytest.fail(f"This should have failed!. IT's an invalid key")
+    except ProxyException as exc:
+        print(exc.message)
+        assert (
+            exc.message
+            == "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: my_token"
+        )
+
+    # Test case: User passes empty string API Key
+    try:
+        await user_api_key_auth(request, api_key="")
+        pytest.fail(f"This should have failed!. IT's an invalid key")
+    except ProxyException as exc:
+        print(exc.message)
+        assert exc.message == "Authentication Error, No API Key passed in. Passed in: "
