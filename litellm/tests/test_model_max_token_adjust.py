@@ -15,6 +15,7 @@ litellm.drop_params = True
 
 
 def test_completion_sagemaker():
+    litellm.set_verbose = True
     response = completion(
         model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
         messages=[{"content": "Hello, how are you?", "role": "user"}],
