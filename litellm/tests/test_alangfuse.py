@@ -99,34 +99,34 @@ def pre_langfuse_setup():
     return
 
 
-def test_langfuse_logging_async():
-    # this tests time added to make langfuse logging calls, vs just acompletion calls
-    try:
-        pre_langfuse_setup()
-        litellm.set_verbose = True
+# def test_langfuse_logging_async():
+#     # this tests time added to make langfuse logging calls, vs just acompletion calls
+#     try:
+#         pre_langfuse_setup()
+#         litellm.set_verbose = True
 
-        # Make 5 calls with an empty success_callback
-        litellm.success_callback = []
-        start_time_empty_callback = asyncio.run(make_async_calls())
-        print("done with no callback test")
+#         # Make 5 calls with an empty success_callback
+#         litellm.success_callback = []
+#         start_time_empty_callback = asyncio.run(make_async_calls())
+#         print("done with no callback test")
 
-        print("starting langfuse test")
-        # Make 5 calls with success_callback set to "langfuse"
-        litellm.success_callback = ["langfuse"]
-        start_time_langfuse = asyncio.run(make_async_calls())
-        print("done with langfuse test")
+#         print("starting langfuse test")
+#         # Make 5 calls with success_callback set to "langfuse"
+#         litellm.success_callback = ["langfuse"]
+#         start_time_langfuse = asyncio.run(make_async_calls())
+#         print("done with langfuse test")
 
-        # Compare the time for both scenarios
-        print(f"Time taken with success_callback='langfuse': {start_time_langfuse}")
-        print(f"Time taken with empty success_callback: {start_time_empty_callback}")
+#         # Compare the time for both scenarios
+#         print(f"Time taken with success_callback='langfuse': {start_time_langfuse}")
+#         print(f"Time taken with empty success_callback: {start_time_empty_callback}")
 
-        # assert the diff is not more than 1 second - this was 5 seconds before the fix
-        assert abs(start_time_langfuse - start_time_empty_callback) < 1
+#         # assert the diff is not more than 1 second - this was 5 seconds before the fix
+#         assert abs(start_time_langfuse - start_time_empty_callback) < 1
 
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
+#     except litellm.Timeout as e:
+#         pass
+#     except Exception as e:
+#         pytest.fail(f"An exception occurred - {e}")
 
 
 async def make_async_calls():
@@ -197,16 +197,16 @@ async def make_async_calls():
 # test_langfuse_logging_async_text_completion()
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging():
+# @pytest.mark.skip(reason="beta test - checking langfuse output")
+def angfuse_logging():
     try:
         pre_langfuse_setup()
         litellm.set_verbose = True
         response = completion(
-            model="claude-instant-1.2",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
-            max_tokens=10,
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hi, write an intro to Javascript"}],
             temperature=0.2,
+            stream=False
         )
         print(response)
         # time.sleep(5)
@@ -219,177 +219,180 @@ def test_langfuse_logging():
         pytest.fail(f"An exception occurred - {e}")
 
 
-# test_langfuse_logging()
+angfuse_logging()
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_stream():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a streaming test for llama2 + langfuse",
-                }
-            ],
-            max_tokens=20,
-            temperature=0.2,
-            stream=True,
-        )
-        print(response)
-        for chunk in response:
-            pass
-            # print(chunk)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        print(e)
+# @pytest.mark.skip(reason="beta test - checking langfuse output")
+# def test_langfuse_logging_stream():
+#     try:
+#         litellm.set_verbose = True
+#         response = completion(
+#             model="gpt-3.5-turbo",
+#             messages=[
+#                 {
+#                     "role": "user",
+#                     "content": "Please write a paragraph for the next harry potter book",
+#                 }
+#             ],
+#             max_tokens=20,
+#             temperature=0.2,
+#             stream=True,
+#         )
+#         print(response)
+#         for chunk in response:
+#             pass
+#             # print(chunk)
+#     except litellm.Timeout as e:
+#         pass
+#     except Exception as e:
+#         print(e)
 
 
 # test_langfuse_logging_stream()
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_custom_generation_name():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
-            max_tokens=10,
-            metadata={
-                "langfuse/foo": "bar",
-                "langsmith/fizz": "buzz",
-                "prompt_hash": "asdf98u0j9131123",
-                "generation_name": "ishaan-test-generation",
-                "generation_id": "gen-id22",
-                "trace_id": "trace-id22",
-                "trace_user_id": "user-id2",
-            },
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-        print(e)
+# @pytest.mark.skip(reason="beta test - checking langfuse output")
+# def test_langfuse_logging_custom_generation_name():
+#     try:
+#         pre_langfuse_setup()
+#         litellm.set_verbose = True
+#         response = completion(
+#             model="gpt-3.5-turbo",
+#             messages=[{"role": "user", "content": "Please write the first 10 sentences of a new harry potter book"}],
+#             max_tokens=10,
+#             metadata={
+#                 "langfuse/foo": "bar",
+#                 "langsmith/fizz": "buzz",
+#                 "prompt_hash": "asdf98u0j9131123",
+#                 "generation_name": "ishaan-test-generation",
+#                 "generation_id": "gen-id22",
+#                 "trace_id": "trace-id22",
+#                 "trace_user_id": "user-id2",
+#             },
+#         )
+#         print(response)
+#         time.sleep(5)
+        
+#     except litellm.Timeout as e:
+#         pass
+#     except Exception as e:
+#         pytest.fail(f"An exception occurred - {e}")
+#         print(e)
 
 
 # test_langfuse_logging_custom_generation_name()
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_embedding():
-    try:
-        litellm.set_verbose = True
-        litellm.success_callback = ["langfuse"]
-        response = litellm.embedding(
-            model="text-embedding-ada-002",
-            input=["gm", "ishaan"],
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-        print(e)
+# @pytest.mark.skip(reason="beta test - checking langfuse output")
+# def test_langfuse_logging_embedding():
+#     try:
+#         litellm.set_verbose = True
+#         litellm.success_callback = ["langfuse"]
+#         response = litellm.embedding(
+#             model="text-embedding-ada-002",
+#             input=["gm", "ishaan"],
+#         )
+#         print(response)
+#     except litellm.Timeout as e:
+#         pass
+#     except Exception as e:
+#         pytest.fail(f"An exception occurred - {e}")
+#         print(e)
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_function_calling():
-    litellm.set_verbose = True
-    function1 = [
-        {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
-                    },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                },
-                "required": ["location"],
-            },
-        }
-    ]
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "what's the weather in boston"}],
-            temperature=0.1,
-            functions=function1,
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        print(e)
+# @pytest.mark.skip(reason="beta test - checking langfuse output")
+# def test_langfuse_logging_function_calling():
+#     litellm.set_verbose = True
+#     function1 = [
+#         {
+#             "name": "get_current_weather",
+#             "description": "Get the current weather in a given location",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "location": {
+#                         "type": "string",
+#                         "description": "The city and state, e.g. San Francisco, CA",
+#                     },
+#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+#                 },
+#                 "required": ["location"],
+#             },
+#         }
+#     ]
+#     try:
+#         response = completion(
+#             model="gpt-3.5-turbo",
+#             messages=[{"role": "user", "content": "what's the weather in boston"}],
+#             temperature=0.1,
+#             functions=function1,
+#         )
+#         print(response)
+#     except litellm.Timeout as e:
+#         pass
+#     except Exception as e:
+#         print(e)
 
 
 # test_langfuse_logging_function_calling()
 
 
-def test_langfuse_logging_tool_calling():
-    litellm.set_verbose = True
+# def test_langfuse_logging_tool_calling():
+#     litellm.set_verbose = True
 
-    def get_current_weather(location, unit="fahrenheit"):
-        """Get the current weather in a given location"""
-        if "tokyo" in location.lower():
-            return json.dumps(
-                {"location": "Tokyo", "temperature": "10", "unit": "celsius"}
-            )
-        elif "san francisco" in location.lower():
-            return json.dumps(
-                {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
-            )
-        elif "paris" in location.lower():
-            return json.dumps(
-                {"location": "Paris", "temperature": "22", "unit": "celsius"}
-            )
-        else:
-            return json.dumps({"location": location, "temperature": "unknown"})
+#     def get_current_weather(location, unit="fahrenheit"):
+#         """Get the current weather in a given location"""
+#         if "tokyo" in location.lower():
+#             return json.dumps(
+#                 {"location": "Tokyo", "temperature": "10", "unit": "celsius"}
+#             )
+#         elif "san francisco" in location.lower():
+#             return json.dumps(
+#                 {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
+#             )
+#         elif "paris" in location.lower():
+#             return json.dumps(
+#                 {"location": "Paris", "temperature": "22", "unit": "celsius"}
+#             )
+#         else:
+#             return json.dumps({"location": location, "temperature": "unknown"})
 
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in San Francisco, Tokyo, and Paris?",
-        }
-    ]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
+#     messages = [
+#         {
+#             "role": "user",
+#             "content": "What's the weather like in San Francisco, Tokyo, and Paris?",
+#         }
+#     ]
+#     tools = [
+#         {
+#             "type": "function",
+#             "function": {
+#                 "name": "get_current_weather",
+#                 "description": "Get the current weather in a given location",
+#                 "parameters": {
+#                     "type": "object",
+#                     "properties": {
+#                         "location": {
+#                             "type": "string",
+#                             "description": "The city and state, e.g. San Francisco, CA",
+#                         },
+#                         "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+#                     },
+#                     "required": ["location"],
+#                 },
+#             },
+#         }
+#     ]
 
-    response = litellm.completion(
-        model="gpt-3.5-turbo-1106",
-        messages=messages,
-        tools=tools,
-        tool_choice="auto",  # auto is default, but we'll be explicit
-    )
-    print("\nLLM Response1:\n", response)
-    response_message = response.choices[0].message
-    tool_calls = response.choices[0].message.tool_calls
+#     response = litellm.completion(
+#         model="gpt-3.5-turbo-1106",
+#         messages=messages,
+#         tools=tools,
+#         tool_choice="auto",  # auto is default, but we'll be explicit
+#     )
+#     print("\nLLM Response1:\n", response)
+#     response_message = response.choices[0].message
+#     tool_calls = response.choices[0].message.tool_calls
 
 
 # test_langfuse_logging_tool_calling()

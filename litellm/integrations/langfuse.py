@@ -215,7 +215,7 @@ class LangFuseLogger:
             "id": metadata.get("trace_id", None),
         }
         cost = kwargs["response_cost"]
-        print_verbose(f"trace: {cost}")
+        print_verbose(f"trace: {cost} {kwargs}, {response_obj} {metadata} ")
         if supports_tags:
             for key, value in metadata.items():
                 tags.append(f"{key}:{value}")
@@ -260,6 +260,7 @@ class LangFuseLogger:
                 usage={
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
+                    "total_cost": cost if supports_costs else None,
                 },
                 metadata=metadata,
             )
