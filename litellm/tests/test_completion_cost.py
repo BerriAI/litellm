@@ -13,7 +13,7 @@ import pytest
 def test_get_gpt3_tokens():
     max_tokens = get_max_tokens("gpt-3.5-turbo")
     print(max_tokens)
-    assert max_tokens == 4097
+    assert max_tokens == 4096
     # print(results)
 
 
