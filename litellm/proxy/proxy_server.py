@@ -2954,6 +2954,8 @@ async def google_login(request: Request):
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     redirect_url = os.getenv("PROXY_BASE_URL", None)
+
+    ui_username = os.getenv("UI_USERNAME")
     if redirect_url is None:
         raise ProxyException(
             message="PROXY_BASE_URL not set. Set it in .env file",
@@ -3015,12 +3017,19 @@ async def google_login(request: Request):
         )
         with microsoft_sso:
             return await microsoft_sso.get_login_redirect()
-    else:
+    elif ui_username is not None:
         # No Google, Microsoft SSO
         # Use UI Credentials set in .env
         from fastapi.responses import HTMLResponse
 
         return HTMLResponse(content=html_form, status_code=200)
+    else:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": "No SSO/Auth provider configured. See https://docs.litellm.ai/docs/proxy/ui"
+            },
+        )
 
 
 @router.post(
@@ -3143,7 +3152,7 @@ async def auth_callback(request: Request):
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
 
     response = await generate_key_helper_fn(
-        **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
     )
 
     key = response["token"]  # type: ignore
@@ -3163,11 +3172,16 @@ async def auth_callback(request: Request):
     else:
         proxy_base_url += "/ui"
     litellm_dashboard_ui = proxy_base_url
+    import jwt
+
+    jwt_token = jwt.encode(
+        {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
+    )
     litellm_dashboard_ui += (
         "?userID="
         + user_id
-        + "&accessToken="
-        + key
+        + "&token="
+        + jwt_token
         + "&proxyBaseUrl="
         + os.getenv("PROXY_BASE_URL")
     )
