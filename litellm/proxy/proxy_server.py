@@ -84,6 +84,7 @@ from litellm.proxy._types import *
 from litellm.caching import DualCache
 from litellm.proxy.health_check import perform_health_check
 from litellm._logging import verbose_router_logger, verbose_proxy_logger
+from litellm._version import version
 
 litellm.suppress_debug_info = True
 from fastapi import (
@@ -124,6 +125,7 @@ app = FastAPI(
     docs_url="/",
     title="LiteLLM API",
     description=f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}",
+    version=version,
 )
 
 
@@ -3806,7 +3808,6 @@ async def health_readiness():
     cache_type = None
     if litellm.cache is not None:
         cache_type = litellm.cache.type
-    from litellm._version import version
 
     if prisma_client is not None:  # if db passed in, check if it's connected
         if prisma_client.db.is_connected() == True:
