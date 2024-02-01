@@ -629,12 +629,23 @@ class AzureChatCompletion(BaseLLM):
                 client_session = litellm.aclient_session or httpx.AsyncClient(
                     transport=AsyncCustomHTTPTransport(),
                 )
-                openai_aclient = AsyncAzureOpenAI(
+                azure_client = AsyncAzureOpenAI(
                     http_client=client_session, **azure_client_params
                 )
             else:
-                openai_aclient = client
-            response = await openai_aclient.images.generate(**data, timeout=timeout)
+                azure_client = client
+            ## LOGGING
+            logging_obj.pre_call(
+                input=data["prompt"],
+                api_key=azure_client.api_key,
+                additional_args={
+                    "headers": {"api_key": azure_client.api_key},
+                    "api_base": azure_client._base_url._uri_reference,
+                    "acompletion": True,
+                    "complete_input_dict": data,
+                },
+            )
+            response = await azure_client.images.generate(**data, timeout=timeout)
             stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
@@ -719,7 +730,7 @@ class AzureChatCompletion(BaseLLM):
                 input=prompt,
                 api_key=azure_client.api_key,
                 additional_args={
-                    "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
+                    "headers": {"api_key": azure_client.api_key},
                     "api_base": azure_client._base_url._uri_reference,
                     "acompletion": False,
                     "complete_input_dict": data,
