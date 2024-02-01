@@ -3021,12 +3021,9 @@ async def google_login(request: Request):
 
         return HTMLResponse(content=html_form, status_code=200)
     else:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": "No SSO/Auth provider configured. Please set your Auth Provider in .env. See https://docs.litellm.ai/docs/proxy/ui"
-            },
-        )
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
 
 
 @router.post(
@@ -3041,8 +3038,8 @@ async def login(request: Request):
     form = await request.form()
     username = str(form.get("username"))
     password = form.get("password")
-    ui_username = os.getenv("UI_USERNAME")
-    ui_password = os.getenv("UI_PASSWORD")
+    ui_username = os.getenv("UI_USERNAME", "litellm")
+    ui_password = os.getenv("UI_PASSWORD", "llm")
 
     if username == ui_username and password == ui_password:
         user_id = username
