@@ -1,8 +1,8 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-# [BETA] Self-serve UI 
-
-Allow your users to create their own keys through a UI
+# [BETA] Admin UI
 
 :::info
 
@@ -10,40 +10,94 @@ This is in beta, so things may change. If you have feedback, [let us know](https
 
 :::
 
+Allow your users to create, view their own keys through a UI
+
+<Image img={require('../../img/admin_ui_2.png')} />  
+
+
+
 ## Quick Start
 
-Requirements: 
+## 1. Setup SSO/Auth for UI
 
-- Need to a SMTP server connection to send emails (e.g. [Resend](https://resend.com/docs/send-with-smtp))
+<Tabs>
 
-[**See code**](https://github.com/BerriAI/litellm/blob/61cd800b9ffbb02c286481d2056b65c7fb5447bf/litellm/proxy/proxy_server.py#L1782)
+<TabItem value="google" label="Google SSO">
 
-### Step 1. Save SMTP server credentials
+- Create a new Oauth 2.0 Client on https://console.cloud.google.com/ 
 
-```env
-export SMTP_HOST="my-smtp-host"
-export SMTP_USERNAME="my-smtp-password"
-export SMTP_PASSWORD="my-smtp-password"
-export SMTP_SENDER_EMAIL="krrish@berri.ai"
+**Required .env variables on your Proxy**
+```shell
+PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
+
+# for Google SSO Login
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
 ```
 
-### Step 2. Enable user auth 
+- Set Redirect URL on your Oauth 2.0 Client on https://console.cloud.google.com/ 
+    - Set a redirect url = `<your proxy base url>/sso/callback`
+    ```shell
+    https://litellm-production-7002.up.railway.app/sso/callback
+    ```
 
-In your config.yaml, 
+</TabItem>
 
-```yaml
-general_settings:
-    # other changes
-    allow_user_auth: true
+<TabItem value="msft" label="Microsoft SSO">
+
+- Create a new App Registration on https://portal.azure.com/
+- Create a client Secret for your App Registration
+
+**Required .env variables on your Proxy**
+```shell
+PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
+
+MICROSOFT_CLIENT_ID="84583a4d-"
+MICROSOFT_CLIENT_SECRET="nbk8Q~"
+MICROSOFT_TENANT="5a39737
+```
+- Set Redirect URI on your App Registration on https://portal.azure.com/
+    - Set a redirect url = `<your proxy base url>/sso/callback`
+    ```shell
+    http://localhost:4000/sso/callback
+    ```
+
+</TabItem>
+<TabItem value="username" label="Quick Start - Username, Password">
+
+Set the following in your .env on the Proxy
+
+```shell
+PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
+
+UI_USERNAME=ishaan-litellm
+UI_PASSWORD=langchain
 ```
 
-This will enable:
-* Users to create keys via `/key/generate` (by default, only admin can create keys)
-* The `/user/auth` endpoint to send user's emails with their login credentials (key + user id)
+On accessing the LiteLLM UI, you will be prompted to enter your username, password
 
-### Step 3. Connect to UI 
+</TabItem>
 
-You can use our hosted UI (https://dashboard.litellm.ai/) or [self-host your own](https://github.com/BerriAI/litellm/tree/main/ui). 
+</Tabs>
+
+## 2. Start Proxy Server
+
+```shell
+litellm --config proxy_config.yaml --port 4000
+
+# start proxy on port 4000
+```
+
+## 3. Get Admin UI Link to you on Swagger 
+
+Your Proxy Swagger is available on the root of the Proxy: `http://localhost:4000/`
+
+<Image img={require('../../img/ui_link.png')} />
+
+
+
+
+<!-- You can use our hosted UI (https://dashboard.litellm.ai/) or [self-host your own](https://github.com/BerriAI/litellm/tree/main/ui). 
 
 If you self-host, you need to save the UI url in your proxy environment as `LITELLM_HOSTED_UI`. 
 
@@ -63,3 +117,12 @@ Connect your proxy to your UI, by entering:
 ### Create Keys 
 
 <Image img={require('../../img/user_create_key_screen.png')} />  
+
+### Spend Per Key
+
+<Image img={require('../../img/spend_per_api_key.png')} />  
+
+### Spend Per User
+
+<Image img={require('../../img/spend_per_user.png')} />   -->
+

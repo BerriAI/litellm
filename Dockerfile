@@ -52,4 +52,4 @@ RUN chmod +x entrypoint.sh
 EXPOSE 4000/tcp
 
 ENTRYPOINT ["litellm"]
-CMD ["--port", "4000"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--detailed_debug", "--run_gunicorn"]
