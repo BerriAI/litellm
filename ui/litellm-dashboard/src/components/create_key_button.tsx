@@ -105,6 +105,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Input />
           </Form.Item>
           <Form.Item
+            label="Team ID"
+            name="team_id"
+          >
+            <Input placeholder="ai_team" />
+          </Form.Item>
+          <Form.Item
             label="Metadata"
             name="metadata"
           >
