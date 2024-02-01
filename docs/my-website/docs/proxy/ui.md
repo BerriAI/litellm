@@ -18,31 +18,9 @@ Allow your users to create, view their own keys through a UI
 
 ## Quick Start
 
-## 1. Changes to your config.yaml
-
-Set `allow_user_auth: true` on your config
-
-```yaml
-general_settings:
-    # other changes
-    allow_user_auth: true
-```
-
-## 2. Setup SSO/Auth for UI
+## 1. Setup SSO/Auth for UI
 
 <Tabs>
-<TabItem value="username" label="Quick Start - Username, Password">
-
-Set the following in your .env on the Proxy
-
-```shell
-UI_USERNAME=ishaan-litellm
-UI_PASSWORD=langchain
-```
-
-On accessing the LiteLLM UI, you will be prompted to enter your username, password
-
-</TabItem>
 
 <TabItem value="google" label="Google SSO">
 
@@ -85,12 +63,38 @@ MICROSOFT_TENANT="5a39737
     ```
 
 </TabItem>
+<TabItem value="username" label="Quick Start - Username, Password">
+
+Set the following in your .env on the Proxy
+
+```shell
+PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
+
+UI_USERNAME=ishaan-litellm
+UI_PASSWORD=langchain
+```
+
+On accessing the LiteLLM UI, you will be prompted to enter your username, password
+
+</TabItem>
 
 </Tabs>
 
-## 4. Use UI
+## 2. Start Proxy Server
 
-👉 Get Started here: https://litellm-dashboard.vercel.app/
+```shell
+litellm --config proxy_config.yaml --port 4000
+
+# start proxy on port 4000
+```
+
+## 3. Get Admin UI Link to you on Swagger 
+
+Your Proxy Swagger is available on the root of the Proxy: `http://localhost:4000/`
+
+<Image img={require('../../img/ui_link.png')} />
+
+
 
 
 <!-- You can use our hosted UI (https://dashboard.litellm.ai/) or [self-host your own](https://github.com/BerriAI/litellm/tree/main/ui). 
