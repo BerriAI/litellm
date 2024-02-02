@@ -125,6 +125,15 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "gpt-3.5-turbo-0125": {
+        "max_tokens": 16385,
+        "max_input_tokens": 16385,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "gpt-3.5-turbo-16k": {
         "max_tokens": 16385,
         "max_input_tokens": 16385,
