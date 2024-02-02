@@ -1297,7 +1297,10 @@ class Logging:
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
-                        if langFuseLogger is None:
+                        if langFuseLogger is None or (
+                            self.langfuse_public_key != langFuseLogger.public_key
+                            and self.langfuse_secret != langFuseLogger.secret_key
+                        ):
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
