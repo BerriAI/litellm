@@ -146,6 +146,7 @@ suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
+default_team_settings: Optional[List] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
@@ -165,9 +166,6 @@ _key_management_system: Optional[KeyManagementSystem] = None
 
 
 def get_model_cost_map(url: str):
-    verbose_logger.debug(
-        f"os.getenv('LITELLM_LOCAL_MODEL_COST_MAP', False): {os.environ['LITELLM_LOCAL_MODEL_COST_MAP']}"
-    )
     if (
         os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
         or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
@@ -175,7 +173,6 @@ def get_model_cost_map(url: str):
         import importlib.resources
         import json
 
-        verbose_logger.debug("RUNS LOCALLY")
         with importlib.resources.open_text(
             "litellm", "model_prices_and_context_window_backup.json"
         ) as f:

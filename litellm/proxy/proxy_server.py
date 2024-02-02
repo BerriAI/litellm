@@ -1024,6 +1024,24 @@ class ProxyConfig:
                     m["litellm_params"]["api_key"] = f"os.environ/{key_name}"
             await prisma_client.insert_data(data=new_config, table_name="config")
 
+    async def load_team_config(self, team_id: str):
+        """
+        - for a given team id
+        - return the relevant completion() call params
+        """
+        all_teams_config = litellm.default_team_settings
+        team_config: dict = {}
+        if all_teams_config is None:
+            return team_config
+        for team in all_teams_config:
+            if team_id == team["team_id"]:
+                team_config = team
+                break
+        for k, v in team_config.items():
+            if isinstance(v, str) and v.startswith("os.environ/"):
+                team_config[k] = litellm.get_secret(v)
+        return team_config
+
     async def load_config(
         self, router: Optional[litellm.Router], config_file_path: str
     ):
@@ -2040,6 +2058,21 @@ async def chat_completion(
         data["metadata"]["headers"] = _headers
         data["metadata"]["endpoint"] = str(request.url)
 
+        ### TEAM-SPECIFIC PARAMS ###
+        if user_api_key_dict.team_id is not None:
+            team_config = await proxy_config.load_team_config(
+                team_id=user_api_key_dict.team_id
+            )
+            if len(team_config) == 0:
+                pass
+            else:
+                team_id = team_config.pop("team_id", None)
+                data["metadata"]["team_id"] = team_id
+                data = {
+                    **team_config,
+                    **data,
+                }  # add the team-specific configs to the completion call
+
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
         if user_temperature:
@@ -2215,6 +2248,21 @@ async def embeddings(
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["endpoint"] = str(request.url)
 
+        ### TEAM-SPECIFIC PARAMS ###
+        if user_api_key_dict.team_id is not None:
+            team_config = await proxy_config.load_team_config(
+                team_id=user_api_key_dict.team_id
+            )
+            if len(team_config) == 0:
+                pass
+            else:
+                team_id = team_config.pop("team_id", None)
+                data["metadata"]["team_id"] = team_id
+                data = {
+                    **team_config,
+                    **data,
+                }  # add the team-specific configs to the completion call
+
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
             if llm_model_list is not None
@@ -2360,6 +2408,21 @@ async def image_generation(
         data["metadata"]["headers"] = _headers
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["endpoint"] = str(request.url)
+
+        ### TEAM-SPECIFIC PARAMS ###
+        if user_api_key_dict.team_id is not None:
+            team_config = await proxy_config.load_team_config(
+                team_id=user_api_key_dict.team_id
+            )
+            if len(team_config) == 0:
+                pass
+            else:
+                team_id = team_config.pop("team_id", None)
+                data["metadata"]["team_id"] = team_id
+                data = {
+                    **team_config,
+                    **data,
+                }  # add the team-specific configs to the completion call
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
