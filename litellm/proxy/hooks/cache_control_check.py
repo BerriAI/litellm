@@ -10,7 +10,7 @@ from fastapi import HTTPException
 import json, traceback
 
 
-class CacheControlCheck(CustomLogger):
+class _PROXY_CacheControlCheck(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         pass
