@@ -3040,13 +3040,13 @@ async def google_login(request: Request):
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
 
     # get url from request
-    redirect_url = str(request.base_url)
+    redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
 
     ui_username = os.getenv("UI_USERNAME")
-    if redirect_url.endswith("/"):
-        redirect_url += "sso/callback"
-    else:
-        redirect_url += "/sso/callback"
+    if not redirect_url.endswith("/"):
+        redirect_url += "/"
+
+    redirect_url += "sso/callback"
     # Google SSO Auth
     if google_client_id is not None:
         from fastapi_sso.sso.google import GoogleSSO
