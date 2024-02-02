@@ -22,6 +22,19 @@ Allow your users to create, view their own keys through a UI
 
 <Tabs>
 
+<TabItem value="username" label="Quick Start - Username, Password">
+
+Set the following in your .env on the Proxy
+
+```shell
+UI_USERNAME=ishaan-litellm
+UI_PASSWORD=langchain
+```
+
+On accessing the LiteLLM UI, you will be prompted to enter your username, password
+
+</TabItem>
+
 <TabItem value="google" label="Google SSO">
 
 - Create a new Oauth 2.0 Client on https://console.cloud.google.com/ 
@@ -57,18 +70,6 @@ MICROSOFT_TENANT="5a39737
     ```shell
     http://localhost:4000/sso/callback
     ```
-
-</TabItem>
-<TabItem value="username" label="Quick Start - Username, Password">
-
-Set the following in your .env on the Proxy
-
-```shell
-UI_USERNAME=ishaan-litellm
-UI_PASSWORD=langchain
-```
-
-On accessing the LiteLLM UI, you will be prompted to enter your username, password
 
 </TabItem>
 
