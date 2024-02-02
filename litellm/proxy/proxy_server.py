@@ -3121,7 +3121,7 @@ async def login(request: Request):
     username = str(form.get("username"))
     password = str(form.get("password"))
     ui_username = os.getenv("UI_USERNAME", "admin")
-    ui_password = os.getenv("UI_PASSWORD", "")
+    ui_password = os.getenv("UI_PASSWORD", None)
     if ui_password is None:
         ui_password = str(master_key) if master_key is not None else None
 
