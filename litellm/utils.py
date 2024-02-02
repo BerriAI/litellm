@@ -6964,6 +6964,21 @@ def exception_type(
                             llm_provider="azure",
                             response=original_exception.response,
                         )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"AzureException - {original_exception.message}",
+                            model=model,
+                            llm_provider="azure",
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"AzureException - {original_exception.message}",
+                            model=model,
+                            llm_provider="azure",
+                        )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
