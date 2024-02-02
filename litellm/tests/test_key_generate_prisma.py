@@ -941,7 +941,7 @@ def test_call_with_key_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(4)
             # test spend_log was written and we can read it
             spend_logs = await view_spend_logs(request_id=request_id)
 
@@ -965,6 +965,8 @@ def test_call_with_key_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
+        # print(f"Error - {str(e)}")
+        traceback.print_exc()
         error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
