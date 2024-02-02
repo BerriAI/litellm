@@ -1267,8 +1267,8 @@ html_form = """
     <form action="/login" method="post">
         <h2>LiteLLM Login</h2>
 
-        <p>By default Username is "litellm" and Password is "llm". Enter them here</p>
-        <p>If you need to set credentials set UI_USERNAME and UI_PASSWORD in .env, or use SSO</p>
+        <p>By default Username is "admin" and Password is your set LiteLLM Proxy `MASTER_KEY`. Enter them here</p>
+        <p>If you need to set credentials / SSO docs here: https://docs.litellm.com</p>
         <br>
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" required>
