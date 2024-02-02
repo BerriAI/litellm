@@ -14,7 +14,7 @@ import litellm
 
 class LangFuseLogger:
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self, langfuse_public_key=None, langfuse_secret=None):
         try:
             from langfuse import Langfuse
         except Exception as e:
@@ -22,8 +22,8 @@ class LangFuseLogger:
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
             )
         # Instance variables
-        self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
-        self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+        self.secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
+        self.public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
