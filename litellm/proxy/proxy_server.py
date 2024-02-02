@@ -556,15 +556,17 @@ async def user_api_key_auth(
                 )
 
             if (
-                (
-                    route.startswith("/key/")
-                    or route.startswith("/user/")
-                    or route.startswith("/model/")
-                )
-                and (not is_master_key_valid)
-                and (not _has_user_setup_sso())
-                and (not general_settings.get("allow_user_auth", False))
-            ):
+                route.startswith("/key/")
+                or route.startswith("/user/")
+                or route.startswith("/model/")
+                or route.startswith("/spend/")
+            ) and (not is_master_key_valid):
+                allow_user_auth = False
+                if (
+                    general_settings.get("allow_user_auth", False) == True
+                    or _has_user_setup_sso() == True
+                ):
+                    allow_user_auth = True  # user can create and delete their own keys
                 # enters this block when allow_user_auth is set to False
                 if route == "/key/info":
                     # check if user can access this route
@@ -590,12 +592,14 @@ async def user_api_key_auth(
                 elif route == "/model/info":
                     # /model/info just shows models user has access to
                     pass
+                elif allow_user_auth == True and route == "/key/generate":
+                    pass
+                elif allow_user_auth == True and route == "/key/delete":
+                    pass
                 else:
-                    allow_user_auth = general_settings.get("allow_user_auth", False)
                     raise Exception(
                         f"Only master key can be used to generate, delete, update or get info for new keys/users. Value of allow_user_auth={allow_user_auth}"
                     )
-
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
         else:
             raise Exception(f"Invalid Key Passed to LiteLLM Proxy")
