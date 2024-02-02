@@ -55,6 +55,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       <Table className="mt-5">
         <TableHead>
           <TableRow>
+            <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Key Budget (USD)</TableHeaderCell>
@@ -72,9 +73,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   {item.key_alias != null ? (
                     <Text>{item.key_alias}</Text>
                   ) : (
-                    <Text>{item.token}</Text>
-                  )
-                }
+                    <Text>Not Set</Text>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Text>{item.key_name}</Text>
                 </TableCell>
                 <TableCell>
                   <Text>{item.spend}</Text>
@@ -84,13 +87,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>{item.max_budget}</Text>
                   ) : (
                     <Text>Unlimited Budget</Text>
-                  )
-                }
+                  )}
                 </TableCell>
-                <TableCell >
+                <TableCell>
                   <Text>{item.team_id}</Text>
                 </TableCell>
-                <TableCell >
+                <TableCell>
                   <Text>{JSON.stringify(item.metadata)}</Text>
                 </TableCell>
                 <TableCell>
