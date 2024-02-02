@@ -210,6 +210,11 @@ class DynamoDBArgs(LiteLLMBase):
     spend_table_name: str = "LiteLLM_SpendLogs"
     aws_role_name: Optional[str] = None
     aws_session_name: Optional[str] = None
+    aws_web_identity_token: Optional[str] = None
+    aws_provider_id: Optional[str] = None
+    aws_policy_arns: Optional[List[str]] = None
+    aws_policy: Optional[str] = None
+    aws_duration_seconds: Optional[int] = None
 
 
 class ConfigGeneralSettings(LiteLLMBase):
