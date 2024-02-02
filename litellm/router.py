@@ -1407,7 +1407,6 @@ class Router:
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
 
-
             # proxy support
             import os
             import httpx
@@ -1463,6 +1462,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -1485,6 +1485,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -1507,6 +1508,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -1529,6 +1531,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -1565,6 +1568,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -1585,6 +1589,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -1606,6 +1611,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
                         ),
                     )
@@ -1626,6 +1632,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=sync_proxy_mounts,
                         ),
                     )
@@ -1652,6 +1659,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        verify=litellm.ssl_verify,
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
@@ -1674,6 +1682,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        verify=litellm.ssl_verify,
                         mounts=sync_proxy_mounts,
                     ),  # type: ignore
                 )
@@ -1697,6 +1706,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        verify=litellm.ssl_verify,
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
@@ -1720,6 +1730,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        verify=litellm.ssl_verify,
                         mounts=sync_proxy_mounts,
                     ),  # type: ignore
                 )
