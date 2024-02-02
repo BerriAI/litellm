@@ -166,7 +166,7 @@ _key_management_system: Optional[KeyManagementSystem] = None
 
 def get_model_cost_map(url: str):
     verbose_logger.debug(
-        f"os.getenv('LITELLM_LOCAL_MODEL_COST_MAP', False): {os.environ['LITELLM_LOCAL_MODEL_COST_MAP']}"
+        f"os.getenv('LITELLM_LOCAL_MODEL_COST_MAP', False): {os.getenv('LITELLM_LOCAL_MODEL_COST_MAP', False)}"
     )
     if (
         os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
