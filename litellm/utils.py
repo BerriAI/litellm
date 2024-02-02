@@ -5907,6 +5907,11 @@ def exception_type(
                 or custom_llm_provider in litellm.openai_compatible_providers
             ):
                 # custom_llm_provider is openai, make it OpenAI
+                message = original_exception.message
+                if message is not None and isinstance(message, str):
+                    message = message.replace("OPENAI", custom_llm_provider.upper())
+                    message = message.replace("openai", custom_llm_provider)
+                    message = message.replace("OpenAI", custom_llm_provider)
                 if custom_llm_provider == "openai":
                     exception_provider = "OpenAI" + "Exception"
                 else:
@@ -5922,7 +5927,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"{exception_provider} - {original_exception.message}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -5933,7 +5938,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise NotFoundError(
-                        message=f"{exception_provider} - {original_exception.message}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -5944,7 +5949,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"{exception_provider} - {original_exception.message}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -5955,7 +5960,18 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"{exception_provider} - {original_exception.message}",
+                        message=f"{exception_provider} - {message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -5965,7 +5981,7 @@ def exception_type(
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             response=original_exception.response,
@@ -5973,7 +5989,7 @@ def exception_type(
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -5981,14 +5997,14 @@ def exception_type(
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                         )
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -5996,7 +6012,7 @@ def exception_type(
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -6004,7 +6020,7 @@ def exception_type(
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -6012,7 +6028,7 @@ def exception_type(
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                         )
@@ -6020,7 +6036,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"{exception_provider} - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             request=original_exception.request,
@@ -6950,6 +6966,17 @@ def exception_type(
                     raise BadRequestError(
                         message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "The api_key client option must be set either by passing api_key to the client or by setting"
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=f"{exception_provider} - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
