@@ -566,7 +566,6 @@ async def user_api_key_auth(
                 and (not general_settings.get("allow_user_auth", False))
             ):
                 # enters this block when allow_user_auth is set to False
-                assert not general_settings.get("allow_user_auth", False)
                 if route == "/key/info":
                     # check if user can access this route
                     query_params = request.query_params
@@ -3931,7 +3930,7 @@ def _has_user_setup_sso():
     """
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
-    ui_username = os.getenv("UI_USERNAME")
+    ui_username = os.getenv("UI_USERNAME", None)
 
     sso_setup = (
         (microsoft_client_id is not None)
