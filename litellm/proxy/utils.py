@@ -524,7 +524,6 @@ class PrismaClient:
                     response = await self.db.litellm_verificationtoken.find_many(
                         order={"spend": "desc"},
                     )
-                print_verbose(f"PrismaClient: response={response}")
                 if response is not None:
                     return response
                 else:
@@ -1201,8 +1200,6 @@ async def reset_budget(prisma_client: PrismaClient):
         users_to_reset = await prisma_client.get_data(
             table_name="user", query_type="find_all", reset_at=now
         )
-
-        verbose_proxy_logger.debug(f"users_to_reset from get_data: {users_to_reset}")
 
         if users_to_reset is not None and len(users_to_reset) > 0:
             for user in users_to_reset:
