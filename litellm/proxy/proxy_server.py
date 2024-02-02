@@ -3051,14 +3051,26 @@ async def login(request: Request):
         import multipart
     except ImportError:
         subprocess.run(["pip", "install", "python-multipart"])
-
+    global master_key
     form = await request.form()
     username = str(form.get("username"))
-    password = form.get("password")
-    ui_username = os.getenv("UI_USERNAME", "litellm")
-    ui_password = os.getenv("UI_PASSWORD", "llm")
+    password = str(form.get("password"))
+    ui_username = os.getenv("UI_USERNAME", "admin")
+    ui_password = os.getenv("UI_PASSWORD", "")
+    if ui_password is None:
+        ui_password = str(master_key) if master_key is not None else None
 
-    if username == ui_username and password == ui_password:
+    if ui_password is None:
+        raise ProxyException(
+            message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys",
+            type="auth_error",
+            param="UI_PASSWORD",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
+        password, ui_password
+    ):
         user_id = username
         # User is Authe'd in - generate key for the UI to access Proxy
         response = await generate_key_helper_fn(
