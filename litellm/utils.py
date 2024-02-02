@@ -1470,10 +1470,12 @@ class Logging:
             callbacks = self.dynamic_async_success_callbacks
             ## keep the internal functions ##
             for callback in litellm._async_success_callback:
-                if (
-                    isinstance(callback, CustomLogger)
-                    and "_PROXY_" in callback.__class__.__name__
-                ):
+                callback_name = ""
+                if isinstance(callback, CustomLogger):
+                    callback_name = callback.__class__.__name__
+                if callable(callback):
+                    callback_name = callback.__name__
+                if "_PROXY_" in callback_name:
                     callbacks.append(callback)
         else:
             callbacks = litellm._async_success_callback
