@@ -1,11 +1,13 @@
 ### INIT VARIABLES ###
-import threading, requests
+import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
 from litellm._logging import set_verbose, _turn_on_debug
 from litellm.proxy._types import KeyManagementSystem
 import httpx
+import dotenv
 
+dotenv.load_dotenv()
 #############################################
 if set_verbose == True:
     _turn_on_debug()
@@ -163,6 +165,23 @@ _key_management_system: Optional[KeyManagementSystem] = None
 
 
 def get_model_cost_map(url: str):
+    verbose_logger.debug(
+        f"os.getenv('LITELLM_LOCAL_MODEL_COST_MAP', False): {os.environ['LITELLM_LOCAL_MODEL_COST_MAP']}"
+    )
+    if (
+        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
+        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
+    ):
+        import importlib.resources
+        import json
+
+        verbose_logger.debug("RUNS LOCALLY")
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window_backup.json"
+        ) as f:
+            content = json.load(f)
+            return content
+
     try:
         with requests.get(
             url, timeout=5
