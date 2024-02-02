@@ -774,14 +774,14 @@ class Logging:
         self.streaming_chunks = []  # for generating complete stream response
         self.sync_streaming_chunks = []  # for generating complete stream response
         self.model_call_details = {}
-        self.dynamic_input_callbacks = []  # callbacks set for just that call
-        self.dynamic_failure_callbacks = []  # callbacks set for just that call
+        self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
+        self.dynamic_failure_callbacks = []  # [TODO] callbacks set for just that call
         self.dynamic_success_callbacks = (
-            dynamic_success_callbacks or []
-        )  # callbacks set for just that call
+            dynamic_success_callbacks  # callbacks set for just that call
+        )
         self.dynamic_async_success_callbacks = (
-            dynamic_async_success_callbacks or []
-        )  # callbacks set for just that call
+            dynamic_async_success_callbacks  # callbacks set for just that call
+        )
         ## DYNAMIC LANGFUSE KEYS ##
         self.langfuse_public_key = langfuse_public_key
         self.langfuse_secret = langfuse_secret
@@ -1145,7 +1145,19 @@ class Logging:
                         f"Model={self.model} not found in completion cost map."
                     )
                     self.model_call_details["response_cost"] = None
-            callbacks = litellm.success_callback + self.dynamic_success_callbacks
+            if self.dynamic_success_callbacks is not None and isinstance(
+                self.dynamic_success_callbacks, list
+            ):
+                callbacks = self.dynamic_success_callbacks
+                ## keep the internal functions ##
+                for callback in litellm.success_callback:
+                    if (
+                        isinstance(callback, CustomLogger)
+                        and "_PROXY_" in callback.__class__.__name__
+                    ):
+                        callbacks.append(callback)
+            else:
+                callbacks = litellm.success_callback
             for callback in callbacks:
                 try:
                     if callback == "lite_debugger":
@@ -1406,9 +1418,6 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
-        verbose_logger.debug(
-            f"Async success callbacks: {litellm._async_success_callback}"
-        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
@@ -1452,9 +1461,22 @@ class Logging:
                 )
                 self.model_call_details["response_cost"] = None
 
-        callbacks = (
-            litellm._async_success_callback + self.dynamic_async_success_callbacks
-        )
+        if self.dynamic_async_success_callbacks is not None and isinstance(
+            self.dynamic_async_success_callbacks, list
+        ):
+            callbacks = self.dynamic_async_success_callbacks
+            ## keep the internal functions ##
+            for callback in litellm._async_success_callback:
+                callback_name = ""
+                if isinstance(callback, CustomLogger):
+                    callback_name = callback.__class__.__name__
+                if callable(callback):
+                    callback_name = callback.__name__
+                if "_PROXY_" in callback_name:
+                    callbacks.append(callback)
+        else:
+            callbacks = litellm._async_success_callback
+        verbose_logger.debug(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             try:
                 if callback == "cache" and litellm.cache is not None:
@@ -1501,6 +1523,7 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
+                    print_verbose(f"Making async function logging call")
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
                             await customLogger.async_log_event(
@@ -1958,8 +1981,8 @@ def client(original_function):
                 for index in reversed(removed_async_items):
                     litellm.failure_callback.pop(index)
             ### DYNAMIC CALLBACKS ###
-            dynamic_success_callbacks = []
-            dynamic_async_success_callbacks = []
+            dynamic_success_callbacks = None
+            dynamic_async_success_callbacks = None
             if kwargs.get("success_callback", None) is not None and isinstance(
                 kwargs["success_callback"], list
             ):
@@ -1970,7 +1993,12 @@ def client(original_function):
                         or callback == "dynamodb"
                         or callback == "s3"
                     ):
-                        dynamic_async_success_callbacks.append(callback)
+                        if dynamic_async_success_callbacks is not None and isinstance(
+                            dynamic_async_success_callbacks, list
+                        ):
+                            dynamic_async_success_callbacks.append(callback)
+                        else:
+                            dynamic_async_success_callbacks = [callback]
                         removed_async_items.append(index)
                 # Pop the async items from success_callback in reverse order to avoid index issues
                 for index in reversed(removed_async_items):
