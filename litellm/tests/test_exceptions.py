@@ -444,6 +444,44 @@ def test_content_policy_violation_error_streaming():
     asyncio.run(test_get_error())
 
 
+def test_completion_perplexity_exception_on_openai_client():
+    try:
+        import openai
+
+        print("perplexity test\n\n")
+        litellm.set_verbose = False
+        ## Test azure call
+        old_azure_key = os.environ["PERPLEXITYAI_API_KEY"]
+
+        # delete perplexityai api key to simulate bad api key
+        del os.environ["PERPLEXITYAI_API_KEY"]
+
+        # temporaily delete openai api key
+        original_openai_key = os.environ["OPENAI_API_KEY"]
+        del os.environ["OPENAI_API_KEY"]
+
+        response = completion(
+            model="perplexity/mistral-7b-instruct",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
+        os.environ["OPENAI_API_KEY"] = original_openai_key
+        pytest.fail("Request should have failed - bad api key")
+    except openai.AuthenticationError as e:
+        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
+        os.environ["OPENAI_API_KEY"] = original_openai_key
+        print("exception: ", e)
+        assert (
+            "perplexity.perplexityError: The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
+            in str(e)
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_completion_perplexity_exception_on_openai_client()
+
+
 def test_completion_perplexity_exception():
     try:
         import openai
