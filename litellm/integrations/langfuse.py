@@ -207,6 +207,7 @@ class LangFuseLogger:
         if generation_name is None:
             # just log `litellm-{call_type}` as the generation name
             generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+        response_id = response_obj.get("id", None)
         trace_params = {
             "name": generation_name,
             "input": input,
@@ -226,7 +227,7 @@ class LangFuseLogger:
         trace = self.Langfuse.trace(**trace_params)
         trace.generation(
             name=generation_name,
-            id=metadata.get("generation_id", None),
+            id=metadata.get("generation_id", response_id),
             startTime=start_time,
             endTime=end_time,
             model=kwargs["model"],
