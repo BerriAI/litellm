@@ -1032,9 +1032,10 @@ class ProxyConfig:
         if all_teams_config is None:
             return team_config
         for team in all_teams_config:
-            if team_id == team["team_id"]:
-                team_config = team
-                break
+            if "team_id" in team:
+                if team_id == team["team_id"]:
+                    team_config = team
+                    break
         for k, v in team_config.items():
             if isinstance(v, str) and v.startswith("os.environ/"):
                 team_config[k] = litellm.get_secret(v)
@@ -1175,6 +1176,20 @@ class ProxyConfig:
                     # this is set in the cache branch
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
                     pass
+                elif key == "default_team_settings":
+                    for idx, team_setting in enumerate(
+                        value
+                    ):  # run through pydantic validation
+                        try:
+                            TeamDefaultSettings(**team_setting)
+                        except:
+                            raise Exception(
+                                f"team_id missing from default_team_settings at index={idx}\npassed in value={team_setting}"
+                            )
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
+                    )
+                    setattr(litellm, key, value)
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
