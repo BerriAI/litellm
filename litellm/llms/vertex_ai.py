@@ -817,6 +817,7 @@ async def async_streaming(
     model_response: ModelResponse,
     logging_obj=None,
     request_str=None,
+    encoding=None,
     messages=None,
     print_verbose=None,
     client_options=None,
