@@ -193,6 +193,7 @@ class DeleteKeyRequest(LiteLLMBase):
 
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
+    user_email: Optional[str] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
