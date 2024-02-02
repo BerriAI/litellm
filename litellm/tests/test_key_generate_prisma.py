@@ -277,7 +277,7 @@ def test_call_with_user_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -360,7 +360,7 @@ def test_call_with_proxy_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -441,7 +441,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -530,7 +530,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -1036,7 +1036,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
-
+        await asyncio.sleep(5)
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
         print("result from user auth with new key", result)
@@ -1112,7 +1112,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
-
+        await asyncio.sleep(5)
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
         print("result from user auth with new key", result)
