@@ -465,6 +465,7 @@ def test_completion_mistral_api_stream():
 def test_completion_deep_infra_stream():
     # deep infra currently includes role in the 2nd chunk
     # waiting for them to make a fix on this
+    litellm.set_verbose = True
     try:
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},

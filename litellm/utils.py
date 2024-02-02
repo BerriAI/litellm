@@ -8048,6 +8048,7 @@ class CustomStreamWrapper:
                         if len(original_chunk.choices) > 0:
                             try:
                                 delta = dict(original_chunk.choices[0].delta)
+                                print_verbose(f"original delta: {delta}")
                                 model_response.choices[0].delta = Delta(**delta)
                             except Exception as e:
                                 model_response.choices[0].delta = Delta()
@@ -8056,9 +8057,21 @@ class CustomStreamWrapper:
                         model_response.system_fingerprint = (
                             original_chunk.system_fingerprint
                         )
+                        print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                         if self.sent_first_chunk == False:
                             model_response.choices[0].delta["role"] = "assistant"
                             self.sent_first_chunk = True
+                        elif self.sent_first_chunk == True and hasattr(
+                            model_response.choices[0].delta, "role"
+                        ):
+                            _initial_delta = model_response.choices[
+                                0
+                            ].delta.model_dump()
+                            _initial_delta.pop("role", None)
+                            model_response.choices[0].delta = Delta(**_initial_delta)
+                        print_verbose(
+                            f"model_response.choices[0].delta: {model_response.choices[0].delta}"
+                        )
                     else:
                         ## else
                         completion_obj["content"] = model_response_str
