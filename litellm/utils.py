@@ -6977,6 +6977,21 @@ def exception_type(
                             llm_provider="azure",
                             response=original_exception.response,
                         )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"AzureException - {original_exception.message}",
+                            model=model,
+                            llm_provider="azure",
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"AzureException - {original_exception.message}",
+                            model=model,
+                            llm_provider="azure",
+                        )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
@@ -8061,6 +8076,7 @@ class CustomStreamWrapper:
                         if len(original_chunk.choices) > 0:
                             try:
                                 delta = dict(original_chunk.choices[0].delta)
+                                print_verbose(f"original delta: {delta}")
                                 model_response.choices[0].delta = Delta(**delta)
                             except Exception as e:
                                 model_response.choices[0].delta = Delta()
@@ -8069,6 +8085,7 @@ class CustomStreamWrapper:
                         model_response.system_fingerprint = (
                             original_chunk.system_fingerprint
                         )
+                        print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                         if self.sent_first_chunk == False:
                             model_response.choices[0].delta["role"] = "assistant"
                             self.sent_first_chunk = True
