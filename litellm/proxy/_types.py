@@ -214,6 +214,13 @@ class KeyManagementSystem(enum.Enum):
     LOCAL = "local"
 
 
+class TeamDefaultSettings(LiteLLMBase):
+    team_id: str
+
+    class Config:
+        extra = "allow"  # allow params not defined here, these fall in litellm.completion(**kwargs)
+
+
 class DynamoDBArgs(LiteLLMBase):
     billing_mode: Literal["PROVISIONED_THROUGHPUT", "PAY_PER_REQUEST"]
     read_capacity_units: Optional[int] = None
