@@ -5906,14 +5906,24 @@ def exception_type(
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
             ):
+                # custom_llm_provider is openai, make it OpenAI
+                if custom_llm_provider == "openai":
+                    exception_provider = "OpenAI" + "Exception"
+                else:
+                    exception_provider = (
+                        custom_llm_provider[0].upper()
+                        + custom_llm_provider[1:]
+                        + "Exception"
+                    )
+
                 if (
                     "This model's maximum context length is" in error_str
                     or "Request too large" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5923,8 +5933,8 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise NotFoundError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5934,8 +5944,8 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5945,8 +5955,8 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5955,63 +5965,63 @@ def exception_type(
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"OpenAIException - {original_exception.message}",
-                            llm_provider="openai",
+                            message=f"{exception_provider} - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
                             model=model,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {original_exception.message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {original_exception.message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                         )
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {original_exception.message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {original_exception.message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {original_exception.message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {original_exception.message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                         )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"OpenAIException - {original_exception.message}",
-                            llm_provider="openai",
+                            message=f"{exception_provider} - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
                             model=model,
                             request=original_exception.request,
                         )
@@ -7015,7 +7025,7 @@ def exception_type(
         ):  # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
-                message=f"OpenAIException: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
+                message=f"{exception_provider}: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=original_exception.response,
