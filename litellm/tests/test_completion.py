@@ -1911,6 +1911,42 @@ def test_completion_gemini():
 # test_completion_gemini()
 
 
+def test_completion_gemini_with_safety_settings():
+    litellm.set_verbose = True
+    model_name = "gemini/gemini-pro"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+
+    from google import generativeai
+    safety_settings = [
+        {
+            "category": generativeai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+            "threshold": generativeai.types.HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+            "category": generativeai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            "threshold": generativeai.types.HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+            "category": generativeai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            "threshold": generativeai.types.HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+            "category": generativeai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            "threshold": generativeai.types.HarmBlockThreshold.BLOCK_NONE,
+        },
+    ]
+
+    try:
+        response = completion(model=model_name, messages=messages, safety_settings=safety_settings)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_completion_gemini_with_safety_settings()
+
+
 # Palm tests
 def test_completion_palm():
     litellm.set_verbose = True
