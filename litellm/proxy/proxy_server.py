@@ -2935,6 +2935,7 @@ async def new_user(data: NewUserRequest):
 
     Parameters:
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
+    - user_email: Optional[str] - Specify a user email.
     - max_budget: Optional[float] - Specify max budget for a given user.
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"). **(Default is set to 1 hour.)**
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
