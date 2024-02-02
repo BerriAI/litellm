@@ -287,7 +287,9 @@ def test_call_with_user_over_budget_stream(custom_db_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -359,7 +361,9 @@ def test_call_with_user_key_budget(custom_db_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -431,7 +435,9 @@ def test_call_with_key_over_budget_stream(custom_db_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
