@@ -8,9 +8,11 @@ from litellm.proxy._types import (
     LiteLLM_SpendLogs,
 )
 from litellm.caching import DualCache
-from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
-from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
-from litellm.proxy.hooks.cache_control_check import CacheControlCheck
+from litellm.proxy.hooks.parallel_request_limiter import (
+    _PROXY_MaxParallelRequestsHandler,
+)
+from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.db.base_client import CustomDB
 from litellm._logging import verbose_proxy_logger
@@ -41,9 +43,9 @@ class ProxyLogging:
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
-        self.max_parallel_request_limiter = MaxParallelRequestsHandler()
-        self.max_budget_limiter = MaxBudgetLimiter()
-        self.cache_control_check = CacheControlCheck()
+        self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler()
+        self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
+        self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
         pass

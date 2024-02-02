@@ -774,14 +774,14 @@ class Logging:
         self.streaming_chunks = []  # for generating complete stream response
         self.sync_streaming_chunks = []  # for generating complete stream response
         self.model_call_details = {}
-        self.dynamic_input_callbacks = []  # callbacks set for just that call
-        self.dynamic_failure_callbacks = []  # callbacks set for just that call
+        self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
+        self.dynamic_failure_callbacks = []  # [TODO] callbacks set for just that call
         self.dynamic_success_callbacks = (
-            dynamic_success_callbacks or []
-        )  # callbacks set for just that call
+            dynamic_success_callbacks  # callbacks set for just that call
+        )
         self.dynamic_async_success_callbacks = (
-            dynamic_async_success_callbacks or []
-        )  # callbacks set for just that call
+            dynamic_async_success_callbacks  # callbacks set for just that call
+        )
         ## DYNAMIC LANGFUSE KEYS ##
         self.langfuse_public_key = langfuse_public_key
         self.langfuse_secret = langfuse_secret
@@ -1145,7 +1145,19 @@ class Logging:
                         f"Model={self.model} not found in completion cost map."
                     )
                     self.model_call_details["response_cost"] = None
-            callbacks = litellm.success_callback + self.dynamic_success_callbacks
+            if self.dynamic_success_callbacks is not None and isinstance(
+                self.dynamic_success_callbacks, list
+            ):
+                callbacks = self.dynamic_success_callbacks
+                ## keep the internal functions ##
+                for callback in litellm.success_callback:
+                    if (
+                        isinstance(callback, CustomLogger)
+                        and "_PROXY_" in callback.__class__.__name__
+                    ):
+                        callbacks.append(callback)
+            else:
+                callbacks = litellm.success_callback
             for callback in callbacks:
                 try:
                     if callback == "lite_debugger":
@@ -1452,9 +1464,19 @@ class Logging:
                 )
                 self.model_call_details["response_cost"] = None
 
-        callbacks = (
-            litellm._async_success_callback + self.dynamic_async_success_callbacks
-        )
+        if self.dynamic_async_success_callbacks is not None and isinstance(
+            self.dynamic_async_success_callbacks, list
+        ):
+            callbacks = self.dynamic_async_success_callbacks
+            ## keep the internal functions ##
+            for callback in litellm._async_success_callback:
+                if (
+                    isinstance(callback, CustomLogger)
+                    and "_PROXY_" in callback.__class__.__name__
+                ):
+                    callbacks.append(callback)
+        else:
+            callbacks = litellm._async_success_callback
         for callback in callbacks:
             try:
                 if callback == "cache" and litellm.cache is not None:
