@@ -321,6 +321,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     aliases: Dict = {}
     config: Dict = {}
     user_id: Optional[str] = None
+    team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Dict = {}
     tpm_limit: Optional[int] = None

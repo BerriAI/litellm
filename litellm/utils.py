@@ -752,6 +752,8 @@ class Logging:
         function_id,
         dynamic_success_callbacks=None,
         dynamic_async_success_callbacks=None,
+        langfuse_public_key=None,
+        langfuse_secret=None,
     ):
         if call_type not in [item.value for item in CallTypes]:
             allowed_values = ", ".join([item.value for item in CallTypes])
@@ -780,6 +782,9 @@ class Logging:
         self.dynamic_async_success_callbacks = (
             dynamic_async_success_callbacks or []
         )  # callbacks set for just that call
+        ## DYNAMIC LANGFUSE KEYS ##
+        self.langfuse_public_key = langfuse_public_key
+        self.langfuse_secret = langfuse_secret
 
     def update_environment_variables(
         self, model, user, optional_params, litellm_params, **additional_params
@@ -1211,7 +1216,9 @@ class Logging:
                             if "complete_streaming_response" not in kwargs:
                                 break
                             else:
-                                print_verbose("reaches langfuse for streaming logging!")
+                                print_verbose(
+                                    "reaches langsmith for streaming logging!"
+                                )
                                 result = kwargs["complete_streaming_response"]
                         langsmithLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1279,7 +1286,10 @@ class Logging:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
                         if langFuseLogger is None:
-                            langFuseLogger = LangFuseLogger()
+                            langFuseLogger = LangFuseLogger(
+                                langfuse_public_key=self.langfuse_public_key,
+                                langfuse_secret=self.langfuse_secret,
+                            )
                         langFuseLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
@@ -1965,7 +1975,7 @@ def client(original_function):
                 # Pop the async items from success_callback in reverse order to avoid index issues
                 for index in reversed(removed_async_items):
                     kwargs["success_callback"].pop(index)
-                dynamic_success_callbacks = kwargs["success_callback"]
+                dynamic_success_callbacks = kwargs.pop("success_callback")
 
             if add_breadcrumb:
                 add_breadcrumb(
@@ -2030,6 +2040,8 @@ def client(original_function):
                 start_time=start_time,
                 dynamic_success_callbacks=dynamic_success_callbacks,
                 dynamic_async_success_callbacks=dynamic_async_success_callbacks,
+                langfuse_public_key=kwargs.pop("langfuse_public_key", None),
+                langfuse_secret=kwargs.pop("langfuse_secret", None),
             )
             ## check if metadata is passed in
             litellm_params = {}
@@ -2041,7 +2053,7 @@ def client(original_function):
                 optional_params={},
                 litellm_params=litellm_params,
             )
-            return logging_obj
+            return logging_obj, kwargs
         except Exception as e:
             import logging
 
@@ -2111,7 +2123,7 @@ def client(original_function):
 
         try:
             if logging_obj is None:
-                logging_obj = function_setup(start_time, *args, **kwargs)
+                logging_obj, kwargs = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
 
             # CHECK FOR 'os.environ/' in kwargs
@@ -2346,7 +2358,7 @@ def client(original_function):
 
         try:
             if logging_obj is None:
-                logging_obj = function_setup(start_time, *args, **kwargs)
+                logging_obj, kwargs = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
 
             # [OPTIONAL] CHECK BUDGET
