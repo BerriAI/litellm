@@ -18,7 +18,9 @@ from litellm import Router
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
-from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
+from litellm.proxy.hooks.parallel_request_limiter import (
+    _PROXY_MaxParallelRequestsHandler as MaxParallelRequestsHandler,
+)
 from datetime import datetime
 
 ## On Request received
