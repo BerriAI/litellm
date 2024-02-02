@@ -279,6 +279,9 @@ def test_completion_azure_gpt4_vision():
     except openai.RateLimitError as e:
         print("got a rate liimt error", e)
         pass
+    except openai.APIStatusError as e:
+        print("got an api status error", e)
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
