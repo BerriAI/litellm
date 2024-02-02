@@ -130,11 +130,21 @@ class S3Logger:
 
             s3_object_key = (
                 (self.s3_path.rstrip("/") + "/" if self.s3_path else "")
+                + start_time.strftime('%Y-%m-%d') + "/"
+                + "time-"
+                + start_time.strftime('%H-%M-%S-%f')
+                + "_"
                 + payload["id"]
-                + "-time="
-                + str(start_time)
             )  # we need the s3 key to include the time, so we log cache hits too
             s3_object_key += ".json"
+
+            s3_object_download_filename = (
+                "time-"
+                + start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')
+                + "_"
+                + payload["id"]
+                + ".json"
+            )
 
             import json
 
@@ -148,7 +158,8 @@ class S3Logger:
                 Body=payload,
                 ContentType="application/json",
                 ContentLanguage="en",
-                ContentDisposition=f'inline; filename="{key}.json"',
+                ContentDisposition=f'inline; filename="{s3_object_download_filename}"',
+                CacheControl="private, immutable, max-age=31536000, s-maxage=0",
             )
 
             print_verbose(f"Response from s3:{str(response)}")
