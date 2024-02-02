@@ -84,8 +84,11 @@ from litellm.proxy._types import *
 from litellm.caching import DualCache
 from litellm.proxy.health_check import perform_health_check
 from litellm._logging import verbose_router_logger, verbose_proxy_logger
-from litellm._version import version
 
+try:
+    from litellm._version import version
+except:
+    version = "0.0.0"
 litellm.suppress_debug_info = True
 from fastapi import (
     FastAPI,
