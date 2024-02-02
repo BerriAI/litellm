@@ -1982,8 +1982,8 @@ def client(original_function):
                 for index in reversed(removed_async_items):
                     litellm.failure_callback.pop(index)
             ### DYNAMIC CALLBACKS ###
-            dynamic_success_callbacks = []
-            dynamic_async_success_callbacks = []
+            dynamic_success_callbacks = None
+            dynamic_async_success_callbacks = None
             if kwargs.get("success_callback", None) is not None and isinstance(
                 kwargs["success_callback"], list
             ):
@@ -1994,7 +1994,12 @@ def client(original_function):
                         or callback == "dynamodb"
                         or callback == "s3"
                     ):
-                        dynamic_async_success_callbacks.append(callback)
+                        if dynamic_async_success_callbacks is not None and isinstance(
+                            dynamic_async_success_callbacks, list
+                        ):
+                            dynamic_async_success_callbacks.append(callback)
+                        else:
+                            dynamic_async_success_callbacks = [callback]
                         removed_async_items.append(index)
                 # Pop the async items from success_callback in reverse order to avoid index issues
                 for index in reversed(removed_async_items):
