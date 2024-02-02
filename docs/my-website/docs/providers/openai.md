@@ -174,6 +174,31 @@ response = completion(
     messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
+
+### Set `ssl_verify=False`
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.client_session=httpx.Client(verify=False)`
+- For `litellm.acompletion` set `litellm.aclient_session=AsyncClient.Client(verify=False)`
+```python
+import litellm, httpx
+
+# for completion
+litellm.client_session = httpx.Client(verify=False)
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+
+# for acompletion
+litellm.aclient_session = httpx.AsyncClient(verify=False)
+response = litellm.acompletion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+```
+
 ### Using Helicone Proxy with LiteLLM
 ```python
 import os 
