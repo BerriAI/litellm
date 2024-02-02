@@ -688,6 +688,7 @@ async def _PROXY_track_cost_callback(
     start_time=None,
     end_time=None,  # start/end time for completion
 ):
+    verbose_proxy_logger.debug(f"INSIDE _PROXY_track_cost_callback")
     global prisma_client, custom_db_client
     try:
         # check if it has collected an entire stream response
