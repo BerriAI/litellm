@@ -1418,9 +1418,6 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
-        verbose_logger.debug(
-            f"Async success callbacks: {litellm._async_success_callback}"
-        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
@@ -1479,6 +1476,7 @@ class Logging:
                     callbacks.append(callback)
         else:
             callbacks = litellm._async_success_callback
+        verbose_logger.debug(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             try:
                 if callback == "cache" and litellm.cache is not None:
@@ -1525,6 +1523,7 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
+                    print_verbose(f"Making async function logging call")
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
                             await customLogger.async_log_event(
