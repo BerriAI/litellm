@@ -43,7 +43,7 @@ proxy = [
     "apscheduler",
     "fastapi-sso",
     "PyJWT",
-    "python-multipart",
+    "python-multipart"
 ]
 
 extra_proxy = [
@@ -51,6 +51,7 @@ extra_proxy = [
     "azure-identity",
     "azure-keyvault-secrets",
     "google-cloud-kms",
+    "streamlit",
     "resend"
 ]
 
