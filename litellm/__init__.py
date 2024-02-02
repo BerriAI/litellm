@@ -2,7 +2,7 @@
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug
+from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
 from litellm.proxy._types import KeyManagementSystem
 import httpx
 import dotenv
