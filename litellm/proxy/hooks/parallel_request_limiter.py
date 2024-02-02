@@ -9,7 +9,7 @@ from litellm import ModelResponse
 from datetime import datetime
 
 
-class MaxParallelRequestsHandler(CustomLogger):
+class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     user_api_key_cache = None
 
     # Class variables or attributes
