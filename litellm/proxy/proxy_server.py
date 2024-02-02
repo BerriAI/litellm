@@ -277,14 +277,6 @@ async def user_api_key_auth(
             else:
                 return UserAPIKeyAuth()
 
-        if api_key is None:
-            raise Exception("No API Key passed in. api_key is None")
-        if secrets.compare_digest(api_key, ""):
-            # missing 'Bearer ' prefix
-            raise Exception(
-                f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
-            )
-
         route: str = request.url.path
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) == True:
@@ -309,6 +301,12 @@ async def user_api_key_auth(
 
         if api_key is None:  # only require api key if master key is set
             raise Exception(f"No api key passed in.")
+
+        if secrets.compare_digest(api_key, ""):
+            # missing 'Bearer ' prefix
+            raise Exception(
+                f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
+            )
 
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         is_master_key_valid = secrets.compare_digest(api_key, master_key)
