@@ -805,13 +805,18 @@ def completion(
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
             # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or get_secret("OPENAI_API_KEY")
-            )
 
+            api_key = (
+                api_key or litellm.api_key
+            )  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            # only for OpenAI we check env OPENAI_API_KEY, and litellm.openai_key
+            if (
+                custom_llm_provider == "openai"
+                or custom_llm_provider == "custom_openai"
+                or model in litellm.open_ai_chat_completion_models
+                or "ft:gpt-3.5-turbo" in model
+            ):
+                api_key = api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
             headers = headers or litellm.headers
 
             ## LOAD CONFIG - if set
