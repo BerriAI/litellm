@@ -3030,9 +3030,9 @@ async def user_auth(request: Request):
 @app.get("/sso/key/generate", tags=["experimental"])
 async def google_login(request: Request):
     """
-    Create Proxy API Keys using Google Workspace SSO. Requires setting GOOGLE_REDIRECT_URI in .env
+    Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
 
-    GOOGLE_REDIRECT_URI should be the your deployed proxy endpoint, e.g. GOOGLE_REDIRECT_URI="https://litellm-production-7002.up.railway.app"
+    PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
 
     """
