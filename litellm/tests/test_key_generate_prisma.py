@@ -242,7 +242,9 @@ def test_call_with_user_over_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -275,7 +277,7 @@ def test_call_with_user_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -323,7 +325,9 @@ def test_call_with_proxy_over_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -356,7 +360,7 @@ def test_call_with_proxy_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -401,7 +405,9 @@ def test_call_with_user_over_budget_stream(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -435,7 +441,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -488,7 +494,9 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -522,7 +530,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -891,7 +899,9 @@ def test_call_with_key_over_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
             from litellm.caching import Cache
 
@@ -931,7 +941,7 @@ def test_call_with_key_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-
+            await asyncio.sleep(4)
             # test spend_log was written and we can read it
             spend_logs = await view_spend_logs(request_id=request_id)
 
@@ -955,6 +965,8 @@ def test_call_with_key_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
+        # print(f"Error - {str(e)}")
+        traceback.print_exc()
         error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
@@ -983,7 +995,9 @@ async def test_call_with_key_never_over_budget(prisma_client):
         print("result from user auth with new key", result)
 
         # update spend using track_cost callback, make 2nd request, it should fail
-        from litellm.proxy.proxy_server import track_cost_callback
+        from litellm.proxy.proxy_server import (
+            _PROXY_track_cost_callback as track_cost_callback,
+        )
         from litellm import ModelResponse, Choices, Message, Usage
         import time
 
@@ -1022,7 +1036,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
-
+        await asyncio.sleep(5)
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
         print("result from user auth with new key", result)
@@ -1058,7 +1072,9 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         print("result from user auth with new key", result)
 
         # update spend using track_cost callback, make 2nd request, it should fail
-        from litellm.proxy.proxy_server import track_cost_callback
+        from litellm.proxy.proxy_server import (
+            _PROXY_track_cost_callback as track_cost_callback,
+        )
         from litellm import ModelResponse, Choices, Message, Usage
         import time
 
@@ -1096,7 +1112,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
-
+        await asyncio.sleep(5)
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
         print("result from user auth with new key", result)
