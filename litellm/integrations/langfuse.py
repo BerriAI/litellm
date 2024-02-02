@@ -14,7 +14,7 @@ import litellm
 
 class LangFuseLogger:
     # Class variables or attributes
-    def __init__(self, langfuse_public_key=None, langfuse_secret=None):
+    def __init__(self):
         try:
             from langfuse import Langfuse
         except Exception as e:
@@ -22,8 +22,8 @@ class LangFuseLogger:
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
             )
         # Instance variables
-        self.secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
-        self.public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
+        self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+        self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
@@ -201,7 +201,6 @@ class LangFuseLogger:
         supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
         supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
 
-        print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
         generation_name = metadata.get("generation_name", None)
         if generation_name is None:
@@ -213,12 +212,10 @@ class LangFuseLogger:
             "output": output,
             "user_id": metadata.get("trace_user_id", user_id),
             "id": metadata.get("trace_id", None),
+            "metadata":  metadata,
         }
         cost = kwargs["response_cost"]
-        print_verbose(f"trace: {cost}")
         if supports_tags:
-            for key, value in metadata.items():
-                tags.append(f"{key}:{value}")
             if "cache_hit" in kwargs:
                 tags.append(f"cache_hit:{kwargs['cache_hit']}")
             trace_params.update({"tags": tags})
@@ -260,6 +257,7 @@ class LangFuseLogger:
                 usage={
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
+                    "total_cost": cost if supports_costs else None,
                 },
                 metadata=metadata,
             )
