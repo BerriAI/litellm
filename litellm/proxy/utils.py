@@ -1268,7 +1268,7 @@ html_form = """
         <h2>LiteLLM Login</h2>
 
         <p>By default Username is "admin" and Password is your set LiteLLM Proxy `MASTER_KEY`. Enter them here</p>
-        <p>If you need to set credentials / SSO docs here: https://docs.litellm.com</p>
+        <p>If you need to set credentials / SSO docs here: <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank">https://docs.litellm.ai/docs/proxy/ui</a></p>
         <br>
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" required>
