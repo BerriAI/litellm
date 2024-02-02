@@ -116,7 +116,9 @@ import logging
 from typing import Union
 
 ui_link = f"/ui/"
-ui_message = f"👉 [LiteLLM Admin Panel on /ui]({ui_link}). Create, Edit Keys with SSO"
+ui_message = (
+    f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
+)
 app = FastAPI(
     docs_url="/",
     title="LiteLLM API",
