@@ -455,7 +455,7 @@ def test_completion_perplexity_exception_on_openai_client():
 
         # delete perplexityai api key to simulate bad api key
         del os.environ["PERPLEXITYAI_API_KEY"]
-        # del os.environ["OPENAI_API_KEY"]
+        del os.environ["OPENAI_API_KEY"]
         response = completion(
             model="perplexity/mistral-7b-instruct",
             messages=[{"role": "user", "content": "hello"}],
