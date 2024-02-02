@@ -85,6 +85,8 @@ def test_s3_logging():
         cleaned_keys = []
         for key in most_recent_keys:
             split_key = key.split("_")
+            if len(split_key) < 2:
+                continue
             cleaned_keys.append(split_key[1])
         print("\n most recent keys", most_recent_keys)
         print("\n cleaned keys", cleaned_keys)
