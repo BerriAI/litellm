@@ -67,6 +67,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <TableBody>
           {data.map((item) => {
             console.log(item);
+            // skip item if item.team_id == "litellm-dashboard"
+            if (item.team_id === "litellm-dashboard") {
+              return null;
+            }
             return (
               <TableRow key={item.token}>
                 <TableCell>

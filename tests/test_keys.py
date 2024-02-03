@@ -234,7 +234,9 @@ async def get_key_info(session, call_key, get_key=None):
                 return status
             else:
                 print(f"call_key: {call_key}; get_key: {get_key}")
-                raise Exception(f"Request did not return a 200 status code: {status}")
+                raise Exception(
+                    f"Request did not return a 200 status code: {status}. Responses {response_text}"
+                )
         return await response.json()
 
 
@@ -282,7 +284,7 @@ async def get_spend_logs(session, request_id):
 @pytest.mark.asyncio
 async def test_key_info_spend_values():
     """
-    Test to ensure spend is correctly calculated.
+    Test to ensure spend is correctly calculated
     - create key
     - make completion call
     - assert cost is expected value
