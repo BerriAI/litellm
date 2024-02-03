@@ -128,19 +128,18 @@ class S3Logger:
                     # non blocking if it can't cast to a str
                     pass
 
+            s3_file_name = litellm.utils.get_logging_id(start_time, payload) or ""
             s3_object_key = (
                 (self.s3_path.rstrip("/") + "/" if self.s3_path else "")
-                + start_time.strftime('%Y-%m-%d') + "/"
-                + "time-"
-                + start_time.strftime('%H-%M-%S-%f')
-                + "_"
-                + payload["id"]
+                + start_time.strftime("%Y-%m-%d")
+                + "/"
+                + s3_file_name
             )  # we need the s3 key to include the time, so we log cache hits too
             s3_object_key += ".json"
 
             s3_object_download_filename = (
                 "time-"
-                + start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')
+                + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f")
                 + "_"
                 + payload["id"]
                 + ".json"
