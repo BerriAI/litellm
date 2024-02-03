@@ -4,6 +4,7 @@ import { userInfoCall } from "./networking";
 import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
+import ViewUserSpend from "./view_user_spend";
 import EnterProxyUrl from "./enter_proxy_url";
 import Navbar from "./navbar";
 import { useSearchParams } from "next/navigation";
@@ -14,6 +15,7 @@ const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
 
 const UserDashboard = () => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
+  const [userSpendData, setUserSpendData] = useState<null | any[]>(null);
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
   const userID = searchParams.get("userID");
@@ -71,6 +73,8 @@ const UserDashboard = () => {
             accessToken,
             userID
           );
+          console.log("Response:", response);
+          setUserSpendData(response["user_info"])
           setData(response["keys"]); // Assuming this is the correct path to your data
         } catch (error) {
           console.error("There was an error fetching the data", error);
@@ -104,6 +108,10 @@ const UserDashboard = () => {
       />
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
       <Col numColSpan={1}>
+        <ViewUserSpend
+          userID={userID}
+          userSpendData={userSpendData}
+        />
         <ViewKeyTable
           userID={userID}
           userRole={userRole}
