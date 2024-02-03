@@ -61,6 +61,10 @@ class InMemoryCache(BaseCache):
         self.cache_dict.clear()
         self.ttl_dict.clear()
 
+    def delete_cache(self, key):
+        self.cache_dict.pop(key, None)
+        self.ttl_dict.pop(key, None)
+
 
 class RedisCache(BaseCache):
     def __init__(self, host=None, port=None, password=None, **kwargs):
@@ -116,6 +120,9 @@ class RedisCache(BaseCache):
 
     def flush_cache(self):
         self.redis_client.flushall()
+
+    def delete_cache(self, key):
+        self.redis_client.delete(key)
 
 
 class S3Cache(BaseCache):
@@ -303,6 +310,12 @@ class DualCache(BaseCache):
             self.in_memory_cache.flush_cache()
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
+
+    def delete_cache(self, key):
+        if self.in_memory_cache is not None:
+            self.in_memory_cache.delete_cache(key)
+        if self.redis_cache is not None:
+            self.redis_cache.delete_cache(key)
 
 
 #### LiteLLM.Completion / Embedding Cache ####
