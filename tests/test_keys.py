@@ -282,7 +282,7 @@ async def get_spend_logs(session, request_id):
 @pytest.mark.asyncio
 async def test_key_info_spend_values():
     """
-    Test to ensure spend is correctly calculated.
+    Test to ensure spend is correctly calculated
     - create key
     - make completion call
     - assert cost is expected value
