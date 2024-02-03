@@ -239,7 +239,6 @@ def test_vertexai_embedding():
             input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
-        raise Exception("it worked!")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
