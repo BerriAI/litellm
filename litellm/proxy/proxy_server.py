@@ -1452,11 +1452,14 @@ async def generate_key_helper_fn(
             saved_token["expires"], datetime
         ):
             saved_token["expires"] = saved_token["expires"].isoformat()
-        user_api_key_cache.set_cache(
-            key=key_data["token"],
-            value=LiteLLM_VerificationToken(**saved_token),  # type: ignore
-            ttl=60,
-        )
+        if key_data["token"] is not None and isinstance(key_data["token"], str):
+            hashed_token = hash_token(key_data["token"])
+            saved_token["token"] = hashed_token
+            user_api_key_cache.set_cache(
+                key=hashed_token,
+                value=LiteLLM_VerificationToken(**saved_token),  # type: ignore
+                ttl=60,
+            )
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
@@ -2672,13 +2675,32 @@ async def delete_key_fn(data: DeleteKeyRequest):
         HTTPException: If an error occurs during key deletion.
     """
     try:
+        global user_api_key_cache
         keys = data.keys
+        if len(keys) == 0:
+            raise ProxyException(
+                message=f"No keys provided, passed in: keys={keys}",
+                type="auth_error",
+                param="keys",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
 
         result = await delete_verification_token(tokens=keys)
         verbose_proxy_logger.debug("/key/delete - deleted_keys=", result)
 
         number_deleted_keys = len(result["deleted_keys"])
         assert len(keys) == number_deleted_keys
+
+        for key in keys:
+            user_api_key_cache.delete_cache(key)
+            # remove hash token from cache
+            hashed_token = hash_token(key)
+            user_api_key_cache.delete_cache(hashed_token)
+
+        verbose_proxy_logger.debug(
+            f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
+        )
+
         return {"deleted_keys": keys}
     except Exception as e:
         if isinstance(e, HTTPException):
@@ -3165,9 +3187,16 @@ async def login(request: Request):
     ):
         user_id = username
         # User is Authe'd in - generate key for the UI to access Proxy
-        response = await generate_key_helper_fn(
-            **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
-        )
+
+        if os.getenv("DATABASE_URL") is not None:
+            response = await generate_key_helper_fn(
+                **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+            )
+        else:
+            response = {
+                "token": "sk-gm",
+                "user_id": "litellm-dashboard",
+            }
 
         key = response["token"]  # type: ignore
         user_id = response["user_id"]  # type: ignore
