@@ -14,15 +14,31 @@ export const keyCreateCall = async (
   try {
     console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call    
     
+    // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
+    if (formValues.description) {
+      // add to formValues.metadata
+      if (!formValues.metadata) {
+        formValues.metadata = {}
+      }
+      // value needs to be in "", valid JSON
+      formValues.metadata.description = formValues.description;
+      // remove descrption from formValues
+      delete formValues.description;
+      formValues.metadata = JSON.stringify(formValues.metadata);
+    }
     // if formValues.metadata is not undefined, make it a valid dict 
     if (formValues.metadata) {
+      console.log("formValues.metadata:", formValues.metadata);
       // if there's an exception JSON.parse, show it in the message
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
       } catch (error) {
         message.error("Failed to parse metadata: " + error);
+        throw new Error("Failed to parse metadata: " + error);
       }
     }
+
+    console.log("Form Values after check:", formValues);
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
     const response = await fetch(url, {
       method: "POST",
