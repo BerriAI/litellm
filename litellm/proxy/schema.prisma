@@ -11,6 +11,7 @@ generator client {
 model LiteLLM_UserTable {
 		user_id    String @unique
     team_id    String?
+    role       String?
 		max_budget Float?
     spend      Float    @default(0.0)
     user_email    String?
