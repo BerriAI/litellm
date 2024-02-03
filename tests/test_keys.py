@@ -234,7 +234,9 @@ async def get_key_info(session, call_key, get_key=None):
                 return status
             else:
                 print(f"call_key: {call_key}; get_key: {get_key}")
-                raise Exception(f"Request did not return a 200 status code: {status}")
+                raise Exception(
+                    f"Request did not return a 200 status code: {status}. Responses {response_text}"
+                )
         return await response.json()
 
 
