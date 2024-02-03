@@ -1,4 +1,4 @@
-# Virtual Keys
+# Virtual Keys, Users
 Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
@@ -265,6 +265,80 @@ curl 'http://0.0.0.0:8000/key/delete' \
 --data-raw '{
   "keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
 }'
+```
+
+Request Params:
+- keys: List[str] - List of keys to delete
+
+### Response
+
+```json
+{
+  "deleted_keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}
+```
+
+## /user/new
+
+### Request
+
+All [key/generate params supported](#keygenerate) for creating a user
+```shell
+curl 'http://0.0.0.0:4000/user/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "user_id": "ishaan1",
+  "user_email": "ishaan@litellm.ai",
+  "user_role": "admin",
+  "team_id": "cto-team",
+  "max_budget": 20,
+  "budget_duration": "1h"
+
+}'
+```
+
+Request Params:
+
+- user_id: str (optional - defaults to uuid)  - The unique identifier for the user.
+- user_email: str (optional - defaults to "")  - The email address associated with the user.
+- user_role: str (optional - defaults to "app_user") - The role assigned to the user. Can be "admin", "app_owner", "app_user"
+
+**Possible `user_role` values**
+```
+"admin" - Maintaining the proxy and owning the overall budget
+"app_owner" - employees maintaining the apps, each owner may own more than one app
+"app_user" - users who know nothing about the proxy. These users get created when you pass `user` to /chat/completions
+```
+- team_id: str (optional - defaults to "") - The identifier for the team to which the user belongs.
+- max_budget: float (optional - defaults to `null`) - The maximum budget allocated for the user. No budget checks done if `max_budget==null`
+- budget_duration: str (optional - defaults to `null`) - The duration for which the budget is valid, e.g., "1h", "1d"
+
+### Response
+A key will be generated for the new user created
+
+```shell
+{
+  "models": [],
+  "spend": 0.0,
+  "max_budget": null,
+  "user_id": "ishaan1",
+  "team_id": null,
+  "max_parallel_requests": null,
+  "metadata": {},
+  "tpm_limit": null,
+  "rpm_limit": null,
+  "budget_duration": null,
+  "allowed_cache_controls": [],
+  "key_alias": null,
+  "duration": null,
+  "aliases": {},
+  "config": {},
+  "key": "sk-JflB33ucTqc2NYvNAgiBCA",
+  "key_name": null,
+  "expires": null
+}
+
 ```
 
 Request Params:
