@@ -243,6 +243,19 @@ def test_vertexai_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio
+async def test_vertexai_aembedding():
+    try:
+        # litellm.set_verbose=True
+        response = await litellm.aembedding(
+            model="textembedding-gecko@001",
+            input=["good morning from litellm", "this is another item"],
+        )
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_bedrock_embedding_titan():
     try:
         # this tests if we support str input for bedrock embedding
