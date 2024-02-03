@@ -234,6 +234,7 @@ vertex_chat_models: List = []
 vertex_code_chat_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
+vertex_embedding_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
@@ -263,6 +264,8 @@ for key, value in model_cost.items():
         vertex_chat_models.append(key)
     elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
         vertex_code_chat_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-embedding-models":
+        vertex_embedding_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -499,7 +502,10 @@ bedrock_embedding_models: List = [
 ]
 
 all_embedding_models = (
-    open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+    open_ai_embedding_models
+    + cohere_embedding_models
+    + bedrock_embedding_models
+    + vertex_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
