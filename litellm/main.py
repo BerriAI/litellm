@@ -3177,7 +3177,18 @@ def image_generation(
                 model_response=model_response,
                 aimg_generation=aimg_generation,
             )
-
+        elif custom_llm_provider == "bedrock":
+            if model is None:
+                raise Exception("Model needs to be set for bedrock")
+            model_response = bedrock.image_generation(
+                model=model,
+                prompt=prompt,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                optional_params=optional_params,
+                model_response=model_response,
+                aimg_generation=aimg_generation,
+            )
         return model_response
     except Exception as e:
         ## Map to OpenAI Exception
