@@ -554,7 +554,6 @@ async def user_api_key_auth(
                         db=custom_db_client,
                     )
                 )
-
             if (
                 route.startswith("/key/")
                 or route.startswith("/user/")
@@ -589,6 +588,11 @@ async def user_api_key_auth(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="user not allowed to access this key's info",
                         )
+                elif route == "/user/update":
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="only proxy admin can update user settings. Tried calling `/user/update`",
+                    )
                 elif route == "/model/info":
                     # /model/info just shows models user has access to
                     pass
