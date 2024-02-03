@@ -2486,7 +2486,7 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
             )
-        elif model in litellm.cohere_embedding_models:
+        elif custom_llm_provider == "cohere":
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -2527,6 +2527,28 @@ def embedding(
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+            )
+        elif custom_llm_provider == "vertex_ai":
+            vertex_ai_project = (
+                optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+
+            response = vertex_ai.embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
             )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(
