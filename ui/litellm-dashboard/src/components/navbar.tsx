@@ -5,11 +5,14 @@ import Image from 'next/image'
 import React, { useState } from 'react';
 import { useSearchParams } from "next/navigation";
 import { Button, Text, Metric,Title, TextInput, Grid, Col } from "@tremor/react";
-function Navbar() {
+
+// Define the props type
+interface NavbarProps {
+    userID: string | null;
+}
+const Navbar: React.FC<NavbarProps> = ({ userID }) => {
     const searchParams = useSearchParams();
-
-    const userID = searchParams.get("userID");
-
+    const token = searchParams.get("token");
     console.log("User ID:", userID);
 
     return (
@@ -22,7 +25,7 @@ function Navbar() {
             </div>
             </div>
             <div className="text-right mx-4 my-2 absolute top-0 right-0">
-                <Button color='transparent'>
+                <Button color="white">
                 <Title>{userID}</Title>
                 </Button>
             </div>
