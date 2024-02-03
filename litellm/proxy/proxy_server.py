@@ -1336,6 +1336,7 @@ async def generate_key_helper_fn(
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
     user_email: Optional[str] = None,
+    user_role: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
     metadata: Optional[dict] = {},
     tpm_limit: Optional[int] = None,
@@ -1396,6 +1397,7 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
+    user_role = user_role or "app_user"
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
     allowed_cache_controls = allowed_cache_controls
@@ -1408,6 +1410,7 @@ async def generate_key_helper_fn(
             "user_email": user_email,
             "user_id": user_id,
             "team_id": team_id,
+            "user_role": user_role,
             "spend": spend,
             "models": models,
             "max_parallel_requests": max_parallel_requests,
@@ -2985,6 +2988,7 @@ async def new_user(data: NewUserRequest):
     Parameters:
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_email: Optional[str] - Specify a user email.
+    - user_role: Optional[str] - Specify a user role - "proxy_admin", "app_owner", "app_user"
     - max_budget: Optional[float] - Specify max budget for a given user.
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"). **(Default is set to 1 hour.)**
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
