@@ -3187,9 +3187,16 @@ async def login(request: Request):
     ):
         user_id = username
         # User is Authe'd in - generate key for the UI to access Proxy
-        response = await generate_key_helper_fn(
-            **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
-        )
+
+        if os.getenv("DATABASE_URL") is not None:
+            response = await generate_key_helper_fn(
+                **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+            )
+        else:
+            response = {
+                "token": "sk-gm",
+                "user_id": "litellm-dashboard",
+            }
 
         key = response["token"]  # type: ignore
         user_id = response["user_id"]  # type: ignore
