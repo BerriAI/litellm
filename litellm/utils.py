@@ -3445,21 +3445,42 @@ def get_optional_params_image_gen(
         for k, v in passed_params.items()
         if (k in default_params and v != default_params[k])
     }
-    ## raise exception if non-default value passed for non-openai/azure embedding calls
-    if custom_llm_provider != "openai" and custom_llm_provider != "azure":
-        if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
-                return non_default_params
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-            )
+    optional_params = {}
 
-    final_params = {**non_default_params, **kwargs}
-    return final_params
+    ## raise exception if non-default value passed for non-openai/azure embedding calls
+    def _check_valid_arg(supported_params):
+        if len(non_default_params.keys()) > 0:
+            keys = list(non_default_params.keys())
+            for k in keys:
+                if (
+                    litellm.drop_params is True and k not in supported_params
+                ):  # drop the unsupported non-default values
+                    non_default_params.pop(k, None)
+                elif k not in supported_params:
+                    raise UnsupportedParamsError(
+                        status_code=500,
+                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                    )
+            return non_default_params
+
+    if (
+        custom_llm_provider == "openai"
+        or custom_llm_provider == "azure"
+        or custom_llm_provider in litellm.openai_compatible_providers
+    ):
+        optional_params = non_default_params
+    elif custom_llm_provider == "bedrock":
+        supported_params = ["size"]
+        _check_valid_arg(supported_params=supported_params)
+        if size is not None:
+            width, height = size.split("x")
+            optional_params["width"] = int(width)
+            optional_params["height"] = int(height)
+
+    for k in passed_params.keys():
+        if k not in default_params.keys():
+            optional_params[k] = passed_params[k]
+    return optional_params
 
 
 def get_optional_params_embeddings(
