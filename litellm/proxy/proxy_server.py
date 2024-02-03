@@ -1429,7 +1429,10 @@ async def generate_key_helper_fn(
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
         }
-        if general_settings.get("allow_user_auth", False) == True:
+        if (
+            general_settings.get("allow_user_auth", False) == True
+            or _has_user_setup_sso() == True
+        ):
             key_data["key_name"] = f"sk-...{token[-4:]}"
         saved_token = copy.deepcopy(key_data)
         if isinstance(saved_token["aliases"], str):
