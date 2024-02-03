@@ -194,6 +194,7 @@ class DeleteKeyRequest(LiteLLMBase):
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
+    user_role: Optional[str] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -206,6 +207,7 @@ class UpdateUserRequest(GenerateRequestBase):
     user_id: str
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    user_role: Optional[str] = None
 
 
 class KeyManagementSystem(enum.Enum):
