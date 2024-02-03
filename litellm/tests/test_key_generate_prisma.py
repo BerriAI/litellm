@@ -965,7 +965,7 @@ def test_call_with_key_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-            await asyncio.sleep(4)
+            await asyncio.sleep(10)
             # test spend_log was written and we can read it
             spend_logs = await view_spend_logs(request_id=request_id)
 
