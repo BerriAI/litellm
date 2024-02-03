@@ -1036,10 +1036,10 @@ class ProxyConfig:
         if all_teams_config is None:
             return team_config
         for team in all_teams_config:
-            if "team_id" in team:
-                if team_id == team["team_id"]:
-                    team_config = team
-                    break
+            assert "team_id" in team
+            if team_id == team["team_id"]:
+                team_config = team
+                break
         for k, v in team_config.items():
             if isinstance(v, str) and v.startswith("os.environ/"):
                 team_config[k] = litellm.get_secret(v)
