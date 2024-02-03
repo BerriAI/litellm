@@ -11,6 +11,7 @@ const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
+  userRole: string;
   accessToken: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
@@ -18,6 +19,7 @@ interface CreateKeyProps {
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
+  userRole,
   accessToken,
   data,
   setData,
@@ -80,45 +82,56 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             name="key_alias"
           >
             <Input />
-          </Form.Item>
+            </Form.Item>
+            <Form.Item
+              label="Team ID"
+              name="team_id"
+            >
+              <Input placeholder="ai_team" />
+            </Form.Item>
 
-          <Form.Item
-            label="Models (Comma Separated). Eg: gpt-3.5-turbo,gpt-4"
-            name="models"
-          >
-            <Input placeholder="gpt-4,gpt-3.5-turbo" />
-          </Form.Item>
-          
+            <Form.Item
+              label="Description"
+              name="description"
+            >
+              <Input placeholder="ai_team" />
+            </Form.Item>
 
-          <Form.Item
-            label="Max Budget (USD)"
-            name="max_budget"
-          >
-            <InputNumber step={0.01} precision={2} width={200}/>
-          </Form.Item>
-          <Form.Item
-            label="Duration (eg: 30s, 30h, 30d)"
-            name="duration"
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item
-            label="Team ID"
-            name="team_id"
-          >
-            <Input placeholder="ai_team" />
-          </Form.Item>
-          <Form.Item
-            label="Metadata"
-            name="metadata"
-          >
-            <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-          </Form.Item>
-          <div style={{ textAlign: 'right', marginTop: '10px' }}>
-            <Button2 htmlType="submit">
-              Create Key
-            </Button2>
-          </div>
+          {userRole === 'App Owner' || userRole === 'Admin' ? (
+            <>
+            <Form.Item
+              label="Models (Comma Separated). Eg: gpt-3.5-turbo,gpt-4"
+              name="models"
+            >
+              <Input placeholder="gpt-4,gpt-3.5-turbo" />
+            </Form.Item>
+            
+
+            <Form.Item
+              label="Max Budget (USD)"
+              name="max_budget"
+            >
+              <InputNumber step={0.01} precision={2} width={200}/>
+            </Form.Item>
+            <Form.Item
+              label="Duration (eg: 30s, 30h, 30d)"
+              name="duration"
+            >
+              <Input />
+            </Form.Item>
+            <Form.Item
+              label="Metadata"
+              name="metadata"
+            >
+              <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+            </Form.Item>
+            </>
+            ) : null}
+            <div style={{ textAlign: 'right', marginTop: '10px' }}>
+              <Button2 htmlType="submit">
+                Create Key
+              </Button2>
+              </div>
         </Form>
       </Modal>
       {apiKey && (
