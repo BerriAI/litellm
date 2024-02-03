@@ -527,10 +527,11 @@ async def user_api_key_auth(
                     )
 
             # Token passed all checks
-            api_key = hash_token(valid_token.token)
+            api_key = valid_token.token
+            hashed_token = hash_token(api_key)
 
             # Add hashed token to cache
-            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
+            user_api_key_cache.set_cache(key=hashed_token, value=valid_token, ttl=60)
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
             """
