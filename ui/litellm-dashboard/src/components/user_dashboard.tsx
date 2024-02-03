@@ -8,8 +8,7 @@ import EnterProxyUrl from "./enter_proxy_url";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
-const proxyBaseUrl = process.env.PROXY_BASE_URL || null;
-console.log("Proxy Base URL:", proxyBaseUrl);
+const proxyBaseUrl = null
 
 const UserDashboard = () => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
