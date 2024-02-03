@@ -3005,6 +3005,16 @@ async def new_user(data: NewUserRequest):
     - max_budget: (float|None) Max budget for given user.
     """
     data_json = data.json()  # type: ignore
+    if "user_role" in data_json:
+        user_role = data_json["user_role"]
+        if user_role is not None:
+            if user_role not in ["proxy_admin", "app_owner", "app_user"]:
+                raise ProxyException(
+                    message=f"Invalid user role, passed in {user_role}. Must be one of 'proxy_admin', 'app_owner', 'app_user'",
+                    type="invalid_user_role",
+                    param="user_role",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
     response = await generate_key_helper_fn(**data_json)
     return NewUserResponse(
         key=response["token"],
