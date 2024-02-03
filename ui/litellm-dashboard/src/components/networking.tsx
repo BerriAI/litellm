@@ -3,10 +3,12 @@
  */
 import { message } from 'antd';
 
+const proxyBaseUrl = null
+
 export const keyCreateCall = async (
   accessToken: string,
   userID: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call    
@@ -20,8 +22,8 @@ export const keyCreateCall = async (
         message.error("Failed to parse metadata: " + error);
       }
     }
-    
-    const response = await fetch(`/key/generate`, {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -56,7 +58,10 @@ export const keyDeleteCall = async (
   user_key: String
 ) => {
   try {
-    const response = await fetch(`/key/delete`, {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/key/delete` : `/key/delete`;
+    console.log("in keyDeleteCall:", user_key)
+    
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -68,11 +73,14 @@ export const keyDeleteCall = async (
     });
 
     if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to delete key: " + errorData);
       throw new Error("Network response was not ok");
     }
 
     const data = await response.json();
     console.log(data);
+    message.success("API Key Deleted");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -86,8 +94,10 @@ export const userInfoCall = async (
   userID: String
 ) => {
   try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
+    console.log("in userInfoCall:", url)
     const response = await fetch(
-      `/user/info?user_id=${userID}`,
+      `${url}/?user_id=${userID}`,
       {
         method: "GET",
         headers: {
@@ -98,6 +108,8 @@ export const userInfoCall = async (
     );
 
     if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
       throw new Error("Network response was not ok");
     }
 
