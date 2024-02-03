@@ -9,14 +9,13 @@ import { Button, Text, Metric,Title, TextInput, Grid, Col } from "@tremor/react"
 // Define the props type
 interface NavbarProps {
     userID: string | null;
+    userRole: string | null;
 }
-const Navbar: React.FC<NavbarProps> = ({ userID }) => {
-    const searchParams = useSearchParams();
-    const token = searchParams.get("token");
+const Navbar: React.FC<NavbarProps> = ({ userID, userRole }) => {
     console.log("User ID:", userID);
 
     return (
-        <nav className="left-0 right-0 top-0 flex justify-between items-center h-12">
+        <nav className="left-0 right-0 top-0 flex justify-between items-center h-12 mb-4">
             <div className="text-left mx-4 my-2 absolute top-0 left-0">
                 <div className="flex flex-col items-center">
                 <Link href="/">
@@ -27,6 +26,7 @@ const Navbar: React.FC<NavbarProps> = ({ userID }) => {
             <div className="text-right mx-4 my-2 absolute top-0 right-0">
                 <Button color="white">
                 <Title>{userID}</Title>
+                <Text>Role: {userRole}</Text>
                 </Button>
             </div>
             
