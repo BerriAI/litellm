@@ -104,12 +104,20 @@ def test_generate_and_call_with_valid_key(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
+            from litellm.proxy.proxy_server import user_api_key_cache
+
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
 
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
+
+            assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
+            assert (
+                hash_token(generated_key)
+                in user_api_key_cache.in_memory_cache.cache_dict
+            )
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
@@ -618,6 +626,8 @@ def test_delete_key(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
+            from litellm.proxy.proxy_server import user_api_key_cache
+
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
@@ -631,6 +641,12 @@ def test_delete_key(prisma_client):
             result_delete_key = await delete_key_fn(data=delete_key_request)
             print("result from delete key", result_delete_key)
             assert result_delete_key == {"deleted_keys": [generated_key]}
+
+            assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
+            assert (
+                hash_token(generated_key)
+                not in user_api_key_cache.in_memory_cache.cache_dict
+            )
 
         asyncio.run(test())
     except Exception as e:
@@ -648,6 +664,8 @@ def test_delete_key_auth(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
+            from litellm.proxy.proxy_server import user_api_key_cache
+
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
@@ -665,6 +683,12 @@ def test_delete_key_auth(prisma_client):
 
             request = Request(scope={"type": "http"}, receive=None)
             request._url = URL(url="/chat/completions")
+
+            assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
+            assert (
+                hash_token(generated_key)
+                not in user_api_key_cache.in_memory_cache.cache_dict
+            )
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
