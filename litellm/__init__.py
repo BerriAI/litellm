@@ -554,6 +554,7 @@ from .llms.bedrock import (
     AmazonAnthropicConfig,
     AmazonCohereConfig,
     AmazonLlamaConfig,
+    AmazonStabilityConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
