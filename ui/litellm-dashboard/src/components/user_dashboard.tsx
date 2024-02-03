@@ -31,6 +31,8 @@ const UserDashboard = () => {
     switch (userRole.toLowerCase()) {
       case "app_owner":
         return "App Owner";
+      case "demo_app_owner":
+          return "AppOwner";
       case "admin":
         return "Admin";
       case "app_user":
@@ -104,12 +106,14 @@ const UserDashboard = () => {
       <Col numColSpan={1}>
         <ViewKeyTable
           userID={userID}
+          userRole={userRole}
           accessToken={accessToken}
           data={data}
           setData={setData}
         />
         <CreateKey
           userID={userID}
+          userRole={userRole}
           accessToken={accessToken}
           data={data}
           setData={setData}
