@@ -20,7 +20,27 @@ const UserDashboard = () => {
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
+
+  function formatUserRole(userRole: string) {
+    if (!userRole) {
+      return "Undefined Role";
+    }
+  
+    switch (userRole.toLowerCase()) {
+      case "app_owner":
+        return "App Owner";
+      case "demo_app_owner":
+          return "AppOwner";
+      case "admin":
+        return "Admin";
+      case "app_user":
+        return "App User";
+      default:
+        return "Unknown Role";
+    }
+  }
 
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
@@ -33,8 +53,16 @@ const UserDashboard = () => {
         console.log("Decoded key:", decoded.key);
         // set accessToken
         setAccessToken(decoded.key);
-      }
 
+        // check if userRole is defined
+        if (decoded.user_role) {
+          const formattedUserRole = formatUserRole(decoded.user_role);
+          console.log("Decoded user_role:", formattedUserRole);
+          setUserRole(formattedUserRole);
+        } else {
+          console.log("User role not defined");
+        }
+      }
     }
     if (userID && accessToken  && !data) {
       const fetchData = async () => {
@@ -72,17 +100,20 @@ const UserDashboard = () => {
     <div>
       <Navbar
         userID={userID}
+        userRole={userRole}
       />
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
       <Col numColSpan={1}>
         <ViewKeyTable
           userID={userID}
+          userRole={userRole}
           accessToken={accessToken}
           data={data}
           setData={setData}
         />
         <CreateKey
           userID={userID}
+          userRole={userRole}
           accessToken={accessToken}
           data={data}
           setData={setData}
