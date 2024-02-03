@@ -5,10 +5,12 @@ import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import EnterProxyUrl from "./enter_proxy_url";
+import Navbar from "./navbar";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
-const proxyBaseUrl = null
+// const proxyBaseUrl = null;
+const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
 
 const UserDashboard = () => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
@@ -67,7 +69,11 @@ const UserDashboard = () => {
 
   
   return (
-    <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
+    <div>
+      <Navbar
+        userID={userID}
+      />
+      <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
       <Col numColSpan={1}>
         <ViewKeyTable
           userID={userID}
@@ -83,6 +89,8 @@ const UserDashboard = () => {
         />
       </Col>
     </Grid>
+    </div>
+
   );
 };
 
