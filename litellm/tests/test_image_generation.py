@@ -51,7 +51,10 @@ def test_image_generation_azure():
     except litellm.ContentPolicyViolationError:
         pass  # Azure randomly raises these errors - skip when they occur
     except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # test_image_generation_azure()
@@ -74,7 +77,10 @@ def test_image_generation_azure_dall_e_3():
     except litellm.ContentPolicyViolationError:
         pass  # OpenAI randomly raises these errors - skip when they occur
     except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # test_image_generation_azure_dall_e_3()
@@ -109,4 +115,7 @@ async def test_async_image_generation_azure():
     except litellm.ContentPolicyViolationError:
         pass  # Azure randomly raises these errors - skip when they occur
     except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
