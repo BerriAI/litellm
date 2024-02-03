@@ -208,6 +208,7 @@ class UpdateUserRequest(GenerateRequestBase):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     user_role: Optional[str] = None
+    max_budget: Optional[float] = None
 
 
 class KeyManagementSystem(enum.Enum):
