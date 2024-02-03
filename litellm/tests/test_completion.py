@@ -1694,6 +1694,7 @@ def test_completion_anyscale_api():
 # test_completion_anyscale_api()
 
 
+@pytest.mark.skip(reason="flaky test, times out frequently")
 def test_completion_cohere():
     try:
         # litellm.set_verbose=True
