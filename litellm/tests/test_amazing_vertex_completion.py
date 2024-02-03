@@ -99,8 +99,7 @@ def test_vertex_ai():
     # litellm.vertex_project = "reliablekeys"
 
     test_models = random.sample(test_models, 1)
-    # test_models += litellm.vertex_language_models  # always test gemini-pro
-    test_models = litellm.vertex_language_models  # always test gemini-pro
+    test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         try:
             if model in [
@@ -374,7 +373,7 @@ async def gemini_pro_async_function_calling():
     print(f"completion: {completion}")
 
 
-asyncio.run(gemini_pro_async_function_calling())
+# asyncio.run(gemini_pro_async_function_calling())
 
 # Extra gemini Vision tests for completion + stream, async, async + stream
 # if we run into issues with gemini, we will also add these to our ci/cd pipeline
