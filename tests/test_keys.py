@@ -318,6 +318,17 @@ async def test_key_info_spend_values():
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
         assert rounded_response_cost == rounded_key_info_spend
+
+
+@pytest.mark.asyncio
+async def test_key_info_spend_values_streaming():
+    """
+    Test to ensure spend is correctly calculated.
+    - create key
+    - make completion call
+    - assert cost is expected value
+    """
+    async with aiohttp.ClientSession() as session:
         ## streaming - azure
         key_gen = await generate_key(session=session, i=0)
         new_key = key_gen["key"]
@@ -332,6 +343,7 @@ async def test_key_info_spend_values():
         )
         response_cost = prompt_cost + completion_cost
         await asyncio.sleep(5)  # allow db log to be updated
+        print(f"new_key: {new_key}")
         key_info = await get_key_info(
             session=session, get_key=new_key, call_key=new_key
         )
