@@ -21,7 +21,7 @@ def get_random_job_id():
     # get 10 random letters and numbers
     return APP_ID + "".join([chr(random.randint(97, 122)) for _ in range(10)])
 
-def submit_job(api_base, job_id, model_input, model_id, use_stream=True):
+def submit_job(api_base, job_id, model_input, model_id, api_key, use_stream=True):
     url = api_base + "/submit_job"
     job = {
         "job_id": job_id,
@@ -36,7 +36,12 @@ def submit_job(api_base, job_id, model_input, model_id, use_stream=True):
         "deadline": default_deadline,
         "priority": default_priority,
     }
-    response = requests.post(url, json=job)
+    headers = {
+        "Authorization" : f"Bearer {api_key}"
+    }
+    print(f"Submitting job with headers {headers}")
+    print(f"Job: {job}")
+    response = requests.post(url, json=job, headers=headers)
     if response.status_code != 200:
         raise Exception(f"Error submitting job {job_id}: {response.text}")
 
@@ -71,14 +76,16 @@ def completion(
 ):
     prompt = prompt_factory(model=model, messages=messages)
 
+    user_api_key = litellm_params['metadata'].get('user_api_key', None)
+
     ## COMPLETION CALL
     model_response["created"] = int(
         time.time()
     ) 
     if "stream" in optional_params and optional_params["stream"] == True:
-        return handle_stream(submit_job(api_base, get_random_job_id(), prompt, model, use_stream=True))
+        return handle_stream(submit_job(api_base, get_random_job_id(), prompt, model, user_api_key, use_stream=True))
     else:
-        result = submit_job(api_base, get_random_job_id(), prompt, model, use_stream=False)
+        result = submit_job(api_base, get_random_job_id(), prompt, model, user_api_key, use_stream=False)
         model_response["ended"] = int(
             time.time()
         )

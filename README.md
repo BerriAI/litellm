@@ -33,6 +33,12 @@ LiteLLM manages:
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
+
+## Example Proxy Server
+`python3 ./litellm/proxy/proxy_cli.py --api_base http://localhost:3030`
+
+``
+
 > [!IMPORTANT]
 > LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
 
