@@ -1031,12 +1031,17 @@ class ProxyConfig:
         - for a given team id
         - return the relevant completion() call params
         """
-        all_teams_config = litellm.default_team_settings
+        # load existing config
+        config = await self.get_config()
+        ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
+        litellm_settings = config.get("litellm_settings", None)
+        all_teams_config = litellm_settings.get("default_team_settings", None)
         team_config: dict = {}
         if all_teams_config is None:
             return team_config
         for team in all_teams_config:
-            assert "team_id" in team
+            if "team_id" not in team:
+                raise Exception(f"team_id missing from team: {team}")
             if team_id == team["team_id"]:
                 team_config = team
                 break
