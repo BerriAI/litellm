@@ -207,14 +207,6 @@ class LangFuseLogger:
         if generation_name is None:
             # just log `litellm-{call_type}` as the generation name
             generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
-        response_id = None
-        if response_obj.get("id", None) is not None:
-            response_id = (
-                "time-"
-                + start_time.strftime("%H-%M-%S-%f")
-                + "_"
-                + response_obj.get("id")
-            )
 
         trace_params = {
             "name": generation_name,
@@ -233,9 +225,14 @@ class LangFuseLogger:
             trace_params.update({"tags": tags})
 
         trace = self.Langfuse.trace(**trace_params)
+
+        # get generation_id
+        generation_id = None
+        if response_obj.get("id", None) is not None:
+            generation_id = litellm.utils.get_logging_id(start_time, response_obj)
         trace.generation(
             name=generation_name,
-            id=metadata.get("generation_id", response_id),
+            id=metadata.get("generation_id", generation_id),
             startTime=start_time,
             endTime=end_time,
             model=kwargs["model"],
@@ -249,26 +246,3 @@ class LangFuseLogger:
             },
             metadata=metadata,
         )
-
-        if self.upstream_langfuse:
-            # user wants to log RAW LLM API call in 2nd langfuse project
-            # key change - model=response_obj["model"], instead of input model used
-            # this is useful for litellm proxy, where users need to see analytics on their LLM Endpoints
-
-            trace = self.upstream_langfuse.trace(**trace_params)
-
-            trace.generation(
-                name=generation_name,
-                id=metadata.get("generation_id", None),
-                startTime=start_time,
-                endTime=end_time,
-                model=response_obj["model"],
-                modelParameters=optional_params,
-                input=input,
-                output=output,
-                usage={
-                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
-                    "completion_tokens": response_obj["usage"]["completion_tokens"],
-                },
-                metadata=metadata,
-            )
