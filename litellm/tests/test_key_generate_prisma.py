@@ -119,6 +119,20 @@ def test_generate_and_call_with_valid_key(prisma_client):
                 in user_api_key_cache.in_memory_cache.cache_dict
             )
 
+            cached_value = user_api_key_cache.in_memory_cache.cache_dict[
+                hash_token(generated_key)
+            ]
+
+            print("cached value=", cached_value)
+            print("cached token", cached_value.token)
+
+            value_from_prisma = valid_token = await prisma_client.get_data(
+                token=generated_key,
+            )
+            print("token from prisma", value_from_prisma)
+
+            assert value_from_prisma.token == cached_value.token
+
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
 
