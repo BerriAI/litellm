@@ -1477,6 +1477,48 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "512-x-512/50-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.018,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "512-x-512/max-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.036,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "max-x-max/50-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.036,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "max-x-max/max-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.072,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "1024-x-1024/50-steps/stability.stable-diffusion-xl-v1": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "1024-x-1024/max-steps/stability.stable-diffusion-xl-v1": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.08,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
     "sagemaker/meta-textgeneration-llama-2-7b": {
         "max_tokens": 4096, 
         "input_cost_per_token": 0.000,
