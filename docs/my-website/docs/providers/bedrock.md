@@ -315,3 +315,50 @@ print(response)
 | Titan Embeddings - G1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` |
 | Cohere Embeddings - English | `embedding(model="bedrock/cohere.embed-english-v3", input=input)` |
 | Cohere Embeddings - Multilingual | `embedding(model="bedrock/cohere.embed-multilingual-v3", input=input)` |
+
+## Image Generation
+Use this for stable diffusion on bedrock
+
+
+### Usage
+```python
+import os
+from litellm import image_generation
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = image_generation(
+            prompt="A cute baby sea otter",
+            model="bedrock/stability.stable-diffusion-xl-v0",
+        )
+print(f"response: {response}")
+```
+
+**Set optional params**
+```python
+import os
+from litellm import image_generation
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = image_generation(
+            prompt="A cute baby sea otter",
+            model="bedrock/stability.stable-diffusion-xl-v0",
+            ### OPENAI-COMPATIBLE ###
+            size="128x512", # width=128, height=512
+            ### PROVIDER-SPECIFIC ### see `AmazonStabilityConfig` in bedrock.py for all params
+            seed=30
+        )
+print(f"response: {response}")
+```
+
+## Supported AWS Bedrock Image Generation Models
+
+| Model Name           | Function Call                               |
+|----------------------|---------------------------------------------|
+| Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
+| Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
