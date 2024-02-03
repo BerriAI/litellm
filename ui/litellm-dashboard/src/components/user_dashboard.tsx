@@ -8,6 +8,9 @@ import EnterProxyUrl from "./enter_proxy_url";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
+const proxyBaseUrl = process.env.PROXY_BASE_URL || null;
+console.log("Proxy Base URL:", proxyBaseUrl);
+
 const UserDashboard = () => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
   // Assuming useSearchParams() hook exists and works in your setup
@@ -53,8 +56,8 @@ const UserDashboard = () => {
 
   
     // Now you can construct the full URL
-    const url = `/sso/key/generate`;
-
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/sso/key/generate` : `/sso/key/generate`;
+    console.log("Full URL:", url);
     window.location.href = url;
 
     return null;
