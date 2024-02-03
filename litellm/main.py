@@ -3259,6 +3259,9 @@ async def ahealth_check(
                 organization=organization,
             )
         else:
+            model_params["cache"] = {
+                "no-cache": True
+            }  # don't used cached responses for making health check calls
             if mode == "embedding":
                 model_params.pop("messages", None)
                 model_params["input"] = input
