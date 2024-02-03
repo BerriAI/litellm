@@ -47,6 +47,7 @@ from litellm.proxy.proxy_server import (
     spend_user_fn,
     spend_key_fn,
     view_spend_logs,
+    user_info,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 from litellm._logging import verbose_proxy_logger
@@ -106,9 +107,17 @@ def test_generate_and_call_with_valid_key(prisma_client):
             await litellm.proxy.proxy_server.prisma_client.connect()
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            request = NewUserRequest()
+            request = NewUserRequest(user_role="app_owner")
             key = await new_user(request)
             print(key)
+            user_id = key.user_id
+
+            # check /user/info to verify user_role was set correctly
+            new_user_info = await user_info(user_id=user_id)
+            new_user_info = new_user_info["user_info"]
+            print("new_user_info=", new_user_info)
+            assert new_user_info.user_role == "app_owner"
+            assert new_user_info.user_id == user_id
 
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
