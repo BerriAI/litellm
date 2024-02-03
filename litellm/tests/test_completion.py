@@ -1694,6 +1694,25 @@ def test_completion_anyscale_api():
 # test_completion_anyscale_api()
 
 
+def test_completion_cohere():
+    try:
+        # litellm.set_verbose=True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="command-nightly",
+            messages=messages,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_azure_cloudflare_api():
     litellm.set_verbose = True
     try:
