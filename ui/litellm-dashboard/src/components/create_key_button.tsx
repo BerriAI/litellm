@@ -76,8 +76,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         onCancel={handleCancel}
       >
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 6 }} wrapperCol={{ span: 16 }} labelAlign="left">
-        
-          <Form.Item
+        {userRole === 'App Owner' || userRole === 'Admin' ? (
+            <>
+            <Form.Item
             label="Key Name"
             name="key_alias"
           >
@@ -96,9 +97,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             >
               <Input placeholder="ai_team" />
             </Form.Item>
-
-          {userRole === 'App Owner' || userRole === 'Admin' ? (
-            <>
             <Form.Item
               label="Models (Comma Separated). Eg: gpt-3.5-turbo,gpt-4"
               name="models"
@@ -126,7 +124,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
             </Form.Item>
             </>
-            ) : null}
+            ) : (
+              <>
+              <Form.Item
+            label="Key Name"
+            name="key_alias"
+          >
+            <Input />
+            </Form.Item>
+            <Form.Item
+              label="Team ID (Contact Group)"
+              name="team_id"
+            >
+              <Input placeholder="ai_team" />
+            </Form.Item>
+
+            <Form.Item
+              label="Description"
+              name="description"
+            >
+              <Input.TextArea placeholder="Enter description" rows={4}/>
+            </Form.Item>
+              </>
+            )
+          }        
             <div style={{ textAlign: 'right', marginTop: '10px' }}>
               <Button2 htmlType="submit">
                 Create Key
