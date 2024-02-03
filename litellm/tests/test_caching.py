@@ -95,10 +95,7 @@ def test_caching_with_cache_controls():
         )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
-        assert (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        )
+        assert response2["id"] != response1["id"]
         message = [{"role": "user", "content": f"Hey, how's it going? {uuid.uuid4()}"}]
         ## TTL = 5
         response1 = completion(
