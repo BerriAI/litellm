@@ -6468,6 +6468,23 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response,
                     )
+                elif (
+                    "429 Quota exceeded" in error_str
+                    or "IndexError: list index out of range"
+                ):
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"VertexAIException - {error_str}",
+                        model=model,
+                        llm_provider="vertex_ai",
+                        response=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
+                    )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
