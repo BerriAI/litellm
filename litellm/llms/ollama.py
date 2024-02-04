@@ -147,6 +147,7 @@ def get_ollama_response(
 
     stream = optional_params.pop("stream", False)
     data = {"model": model, "prompt": prompt, "options": optional_params}
+
     ## LOGGING
     logging_obj.pre_call(
         input=None,
