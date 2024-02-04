@@ -440,8 +440,8 @@ class OpenAIChatCompletion(BaseLLM):
             input=data["messages"],
             api_key=api_key,
             additional_args={
-                "headers": headers,
-                "api_base": api_base,
+                "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
+                "api_base": openai_client._base_url._uri_reference,
                 "acompletion": False,
                 "complete_input_dict": data,
             },

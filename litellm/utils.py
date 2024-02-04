@@ -863,6 +863,7 @@ class Logging:
                 curl_command += additional_args.get("request_str", None)
             elif api_base == "":
                 curl_command = self.model_call_details
+            print_verbose(f"\033[92m{curl_command}\033[0m\n")
             verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -4043,7 +4044,7 @@ def get_optional_params(
         _check_valid_arg(supported_params=supported_params)
 
         if stream:
-            optional_params["stream_tokens"] = stream
+            optional_params["stream"] = stream
         if temperature is not None:
             optional_params["temperature"] = temperature
         if top_p is not None:
@@ -4677,6 +4678,13 @@ def get_llm_provider(
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
                 api_base = "https://api.voyageai.com/v1"
                 dynamic_api_key = get_secret("VOYAGE_API_KEY")
+            elif custom_llm_provider == "together_ai":
+                api_base = "https://api.together.xyz/v1"
+                dynamic_api_key = (
+                    get_secret("TOGETHER_API_KEY")
+                    or get_secret("TOGETHER_AI_API_KEY")
+                    or get_secret("TOGETHERAI_API_KEY")
+                )
             return model, custom_llm_provider, dynamic_api_key, api_base
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
