@@ -11,10 +11,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion
+from litellm import embedding, completion, aembedding
 from litellm.caching import Cache
 import random
-import hashlib
+import hashlib, asyncio
 
 # litellm.set_verbose=True
 
@@ -106,10 +106,7 @@ def test_caching_with_cache_controls():
         )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
-        assert (
-            response2["choices"][0]["message"]["content"]
-            == response1["choices"][0]["message"]["content"]
-        )
+        assert response2["id"] == response1["id"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
@@ -259,6 +256,84 @@ def test_embedding_caching_azure():
 # test_embedding_caching_azure()
 
 
+@pytest.mark.asyncio
+async def test_embedding_caching_azure_individual_items():
+    """
+    Tests caching for individual items in an embedding list
+
+    - Cache an item
+    - call aembedding(..) with the item + 1 unique item
+    - compare to a 2nd aembedding (...) with 2 unique items
+    ```
+    embedding_1 = ["hey how's it going", "I'm doing well"]
+    embedding_val_1 = embedding(...)
+
+    embedding_2 = ["hey how's it going", "I'm fine"]
+    embedding_val_2 = embedding(...)
+
+    assert embedding_val_1[0]["id"] == embedding_val_2[0]["id"]
+    ```
+    """
+    litellm.cache = Cache()
+    common_msg = f"hey how's it going {uuid.uuid4()}"
+    common_msg_2 = f"hey how's it going {uuid.uuid4()}"
+    embedding_1 = [common_msg]
+    embedding_2 = [
+        common_msg,
+        f"I'm fine {uuid.uuid4()}",
+    ]
+
+    embedding_val_1 = await aembedding(
+        model="azure/azure-embedding-model", input=embedding_1, caching=True
+    )
+    embedding_val_2 = await aembedding(
+        model="azure/azure-embedding-model", input=embedding_2, caching=True
+    )
+    print(f"embedding_val_2._hidden_params: {embedding_val_2._hidden_params}")
+    assert embedding_val_2._hidden_params["cache_hit"] == True
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_basic():
+    """
+    Init redis client
+    - write to client
+    - read from client
+    """
+    litellm.set_verbose = False
+
+    random_number = random.randint(
+        1, 100000
+    )  # add a random number to ensure it's always adding / reading from cache
+    messages = [
+        {"role": "user", "content": f"write a one sentence poem about: {random_number}"}
+    ]
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    response1 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    cache_key = litellm.cache.get_cache_key(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    print(f"cache_key: {cache_key}")
+    litellm.cache.add_cache(result=response1, cache_key=cache_key)
+    print(f"cache key pre async get: {cache_key}")
+    stored_val = await litellm.cache.async_get_cache(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    print(f"stored_val: {stored_val}")
+    assert stored_val["id"] == response1.id
+
+
 def test_redis_cache_completion():
     litellm.set_verbose = False
 
@@ -406,7 +481,7 @@ def test_redis_cache_acompletion_stream():
     import asyncio
 
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
         random_word = generate_random_word()
         messages = [
             {
@@ -434,7 +509,6 @@ def test_redis_cache_acompletion_stream():
                 stream=True,
             )
             async for chunk in response1:
-                print(chunk)
                 response_1_content += chunk.choices[0].delta.content or ""
             print(response_1_content)
 
@@ -452,7 +526,6 @@ def test_redis_cache_acompletion_stream():
                 stream=True,
             )
             async for chunk in response2:
-                print(chunk)
                 response_2_content += chunk.choices[0].delta.content or ""
             print(response_2_content)
 
@@ -914,101 +987,3 @@ def test_cache_context_managers():
 
 
 # test_cache_context_managers()
-
-# test_custom_redis_cache_params()
-
-# def test_redis_cache_with_ttl():
-#     cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
-#     sample_model_response_object_str = """{
-#   "choices": [
-#     {
-#       "finish_reason": "stop",
-#       "index": 0,
-#       "message": {
-#         "role": "assistant",
-#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-#       }
-#     }
-#   ],
-#   "created": 1691429984.3852863,
-#   "model": "claude-instant-1",
-#   "usage": {
-#     "prompt_tokens": 18,
-#     "completion_tokens": 23,
-#     "total_tokens": 41
-#   }
-# }"""
-#     sample_model_response_object = {
-#   "choices": [
-#     {
-#       "finish_reason": "stop",
-#       "index": 0,
-#       "message": {
-#         "role": "assistant",
-#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-#       }
-#     }
-#   ],
-#   "created": 1691429984.3852863,
-#   "model": "claude-instant-1",
-#   "usage": {
-#     "prompt_tokens": 18,
-#     "completion_tokens": 23,
-#     "total_tokens": 41
-#   }
-# }
-#     cache.add_cache(cache_key="test_key", result=sample_model_response_object_str, ttl=1)
-#     cached_value = cache.get_cache(cache_key="test_key")
-#     print(f"cached-value: {cached_value}")
-#     assert cached_value['choices'][0]['message']['content'] == sample_model_response_object['choices'][0]['message']['content']
-#     time.sleep(2)
-#     assert cache.get_cache(cache_key="test_key") is None
-
-# # test_redis_cache_with_ttl()
-
-# def test_in_memory_cache_with_ttl():
-#     cache = Cache(type="local")
-#     sample_model_response_object_str = """{
-#   "choices": [
-#     {
-#       "finish_reason": "stop",
-#       "index": 0,
-#       "message": {
-#         "role": "assistant",
-#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-#       }
-#     }
-#   ],
-#   "created": 1691429984.3852863,
-#   "model": "claude-instant-1",
-#   "usage": {
-#     "prompt_tokens": 18,
-#     "completion_tokens": 23,
-#     "total_tokens": 41
-#   }
-# }"""
-#     sample_model_response_object = {
-#   "choices": [
-#     {
-#       "finish_reason": "stop",
-#       "index": 0,
-#       "message": {
-#         "role": "assistant",
-#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-#       }
-#     }
-#   ],
-#   "created": 1691429984.3852863,
-#   "model": "claude-instant-1",
-#   "usage": {
-#     "prompt_tokens": 18,
-#     "completion_tokens": 23,
-#     "total_tokens": 41
-#   }
-# }
-#     cache.add_cache(cache_key="test_key", result=sample_model_response_object_str, ttl=1)
-#     cached_value = cache.get_cache(cache_key="test_key")
-#     assert cached_value['choices'][0]['message']['content'] == sample_model_response_object['choices'][0]['message']['content']
-#     time.sleep(2)
-#     assert cache.get_cache(cache_key="test_key") is None
-# # test_in_memory_cache_with_ttl()

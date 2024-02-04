@@ -10,6 +10,7 @@
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union
 from functools import partial
+
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
@@ -234,6 +235,9 @@ async def acompletion(
         "model_list": model_list,
         "acompletion": True,  # assuming this is a required parameter
     }
+    _, custom_llm_provider, _, _ = get_llm_provider(
+        model=model, api_base=completion_kwargs.get("base_url", None)
+    )
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(completion, **completion_kwargs, **kwargs)
@@ -245,7 +249,6 @@ async def acompletion(
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model, api_base=kwargs.get("api_base", None)
         )
-
         if (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
@@ -788,6 +791,7 @@ def completion(
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
+            or custom_llm_provider == "together_ai"
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -1327,6 +1331,9 @@ def completion(
             or ("togethercomputer" in model)
             or (model in litellm.together_ai_models)
         ):
+            """
+            Deprecated. We now do together ai calls via the openai client - https://docs.together.ai/docs/openai-api-compatibility
+            """
             custom_llm_provider = "together_ai"
             together_ai_key = (
                 api_key
