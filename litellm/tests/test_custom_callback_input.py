@@ -556,7 +556,6 @@ async def test_async_chat_bedrock_stream():
 
 # asyncio.run(test_async_chat_bedrock_stream())
 
-
 ## Test Sagemaker + Async
 @pytest.mark.asyncio
 async def test_async_chat_sagemaker_stream():
@@ -725,7 +724,7 @@ async def test_async_embedding_bedrock():
         response = await litellm.aembedding(
             model="bedrock/cohere.embed-multilingual-v3",
             input=["good morning from litellm"],
-            aws_region_name="os.environ/AWS_REGION_NAME_2",
+            aws_region_name="us-east-1",
         )
         await asyncio.sleep(1)
         print(f"customHandler_success.errors: {customHandler_success.errors}")
@@ -758,6 +757,7 @@ async def test_async_embedding_bedrock():
 ## Test Azure - completion, embedding
 @pytest.mark.asyncio
 async def test_async_completion_azure_caching():
+    litellm.set_verbose = True
     customHandler_caching = CompletionCustomHandler()
     litellm.cache = Cache(
         type="redis",
@@ -812,6 +812,7 @@ async def test_async_embedding_azure_caching():
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel
     print(customHandler_caching.states)
+    print(customHandler_caching.errors)
     assert len(customHandler_caching.errors) == 0
     assert len(customHandler_caching.states) == 4  # pre, post, success, success
 

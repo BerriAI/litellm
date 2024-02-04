@@ -55,6 +55,7 @@ from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
+from .caching import S3Cache
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
@@ -862,6 +863,7 @@ class Logging:
                 curl_command += additional_args.get("request_str", None)
             elif api_base == "":
                 curl_command = self.model_call_details
+            print_verbose(f"\033[92m{curl_command}\033[0m\n")
             verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -2196,12 +2198,21 @@ def client(original_function):
             )
             # if caching is false or cache["no-cache"]==True, don't run this
             if (
-                (kwargs.get("caching", None) is None and litellm.cache is not None)
-                or kwargs.get("caching", False) == True
-                or (
-                    kwargs.get("cache", None) is not None
-                    and kwargs.get("cache", {}).get("no-cache", False) != True
+                (
+                    (
+                        kwargs.get("caching", None) is None
+                        and kwargs.get("cache", None) is None
+                        and litellm.cache is not None
+                    )
+                    or kwargs.get("caching", False) == True
+                    or (
+                        kwargs.get("cache", None) is not None
+                        and kwargs.get("cache", {}).get("no-cache", False) != True
+                    )
                 )
+                and kwargs.get("aembedding", False) != True
+                and kwargs.get("acompletion", False) != True
+                and kwargs.get("aimg_generation", False) != True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
@@ -2435,6 +2446,7 @@ def client(original_function):
         result = None
         logging_obj = kwargs.get("litellm_logging_obj", None)
         # only set litellm_call_id if its not in kwargs
+        call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
         try:
@@ -2465,8 +2477,14 @@ def client(original_function):
                 f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}"
             )
             # if caching is false, don't run this
+            final_embedding_cached_response = None
+
             if (
-                (kwargs.get("caching", None) is None and litellm.cache is not None)
+                (
+                    kwargs.get("caching", None) is None
+                    and kwargs.get("cache", None) is None
+                    and litellm.cache is not None
+                )
                 or kwargs.get("caching", False) == True
                 or (
                     kwargs.get("cache", None) is not None
@@ -2481,8 +2499,36 @@ def client(original_function):
                     in litellm.cache.supported_call_types
                 ):
                     print_verbose(f"Checking Cache")
-                    cached_result = litellm.cache.get_cache(*args, **kwargs)
-                    if cached_result != None:
+                    if call_type == CallTypes.aembedding.value and isinstance(
+                        kwargs["input"], list
+                    ):
+                        tasks = []
+                        for idx, i in enumerate(kwargs["input"]):
+                            preset_cache_key = litellm.cache.get_cache_key(
+                                *args, **{**kwargs, "input": i}
+                            )
+                            tasks.append(
+                                litellm.cache.async_get_cache(
+                                    cache_key=preset_cache_key
+                                )
+                            )
+                        cached_result = await asyncio.gather(*tasks)
+                        ## check if cached result is None ##
+                        if cached_result is not None and isinstance(
+                            cached_result, list
+                        ):
+                            if len(cached_result) == 1 and cached_result[0] is None:
+                                cached_result = None
+                    else:
+                        preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+                        kwargs[
+                            "preset_cache_key"
+                        ] = preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
+                        cached_result = litellm.cache.get_cache(*args, **kwargs)
+
+                    if cached_result is not None and not isinstance(
+                        cached_result, list
+                    ):
                         print_verbose(f"Cache Hit!")
                         call_type = original_function.__name__
                         if call_type == CallTypes.acompletion.value and isinstance(
@@ -2555,6 +2601,103 @@ def client(original_function):
                             args=(cached_result, start_time, end_time, cache_hit),
                         ).start()
                         return cached_result
+                    elif (
+                        call_type == CallTypes.aembedding.value
+                        and cached_result is not None
+                        and isinstance(cached_result, list)
+                        and litellm.cache is not None
+                        and not isinstance(
+                            litellm.cache.cache, S3Cache
+                        )  # s3 doesn't support bulk writing. Exclude.
+                    ):
+                        remaining_list = []
+                        non_null_list = []
+                        for idx, cr in enumerate(cached_result):
+                            if cr is None:
+                                remaining_list.append(kwargs["input"][idx])
+                            else:
+                                non_null_list.append((idx, cr))
+                        original_kwargs_input = kwargs["input"]
+                        kwargs["input"] = remaining_list
+                        if len(non_null_list) > 0:
+                            print_verbose(
+                                f"EMBEDDING CACHE HIT! - {len(non_null_list)}"
+                            )
+                            final_embedding_cached_response = EmbeddingResponse(
+                                model=kwargs.get("model"),
+                                data=[None] * len(original_kwargs_input),
+                            )
+                            final_embedding_cached_response._hidden_params[
+                                "cache_hit"
+                            ] = True
+
+                            for val in non_null_list:
+                                idx, cr = val  # (idx, cr) tuple
+                                if cr is not None:
+                                    final_embedding_cached_response.data[idx] = cr
+                        if len(remaining_list) == 0:
+                            # LOG SUCCESS
+                            cache_hit = True
+                            end_time = datetime.datetime.now()
+                            (
+                                model,
+                                custom_llm_provider,
+                                dynamic_api_key,
+                                api_base,
+                            ) = litellm.get_llm_provider(
+                                model=model,
+                                custom_llm_provider=kwargs.get(
+                                    "custom_llm_provider", None
+                                ),
+                                api_base=kwargs.get("api_base", None),
+                                api_key=kwargs.get("api_key", None),
+                            )
+                            print_verbose(
+                                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+                            )
+                            logging_obj.update_environment_variables(
+                                model=model,
+                                user=kwargs.get("user", None),
+                                optional_params={},
+                                litellm_params={
+                                    "logger_fn": kwargs.get("logger_fn", None),
+                                    "acompletion": True,
+                                    "metadata": kwargs.get("metadata", {}),
+                                    "model_info": kwargs.get("model_info", {}),
+                                    "proxy_server_request": kwargs.get(
+                                        "proxy_server_request", None
+                                    ),
+                                    "preset_cache_key": kwargs.get(
+                                        "preset_cache_key", None
+                                    ),
+                                    "stream_response": kwargs.get(
+                                        "stream_response", {}
+                                    ),
+                                },
+                                input=kwargs.get("messages", ""),
+                                api_key=kwargs.get("api_key", None),
+                                original_response=str(final_embedding_cached_response),
+                                additional_args=None,
+                                stream=kwargs.get("stream", False),
+                            )
+                            asyncio.create_task(
+                                logging_obj.async_success_handler(
+                                    final_embedding_cached_response,
+                                    start_time,
+                                    end_time,
+                                    cache_hit,
+                                )
+                            )
+                            threading.Thread(
+                                target=logging_obj.success_handler,
+                                args=(
+                                    final_embedding_cached_response,
+                                    start_time,
+                                    end_time,
+                                    cache_hit,
+                                ),
+                            ).start()
+                            return final_embedding_cached_response
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -2587,12 +2730,28 @@ def client(original_function):
                 if isinstance(result, litellm.ModelResponse) or isinstance(
                     result, litellm.EmbeddingResponse
                 ):
-                    asyncio.create_task(
-                        litellm.cache._async_add_cache(result.json(), *args, **kwargs)
-                    )
+                    if (
+                        isinstance(result, EmbeddingResponse)
+                        and isinstance(kwargs["input"], list)
+                        and litellm.cache is not None
+                        and not isinstance(
+                            litellm.cache.cache, S3Cache
+                        )  # s3 doesn't support bulk writing. Exclude.
+                    ):
+                        asyncio.create_task(
+                            litellm.cache.async_add_cache_pipeline(
+                                result, *args, **kwargs
+                            )
+                        )
+                    else:
+                        asyncio.create_task(
+                            litellm.cache.async_add_cache(
+                                result.json(), *args, **kwargs
+                            )
+                        )
                 else:
                     asyncio.create_task(
-                        litellm.cache._async_add_cache(result, *args, **kwargs)
+                        litellm.cache.async_add_cache(result, *args, **kwargs)
                     )
             # LOG SUCCESS - handle streaming success logging in the _next_ object
             print_verbose(
@@ -2616,6 +2775,27 @@ def client(original_function):
                 result._response_ms = (
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
+
+            if (
+                isinstance(result, EmbeddingResponse)
+                and final_embedding_cached_response is not None
+            ):
+                idx = 0
+                final_data_list = []
+                for item in final_embedding_cached_response.data:
+                    if item is None:
+                        final_data_list.append(result.data[idx])
+                        idx += 1
+                    else:
+                        final_data_list.append(item)
+
+                final_embedding_cached_response.data = final_data_list
+                final_embedding_cached_response._hidden_params["cache_hit"] = True
+                final_embedding_cached_response._response_ms = (
+                    end_time - start_time
+                ).total_seconds() * 1000
+                return final_embedding_cached_response
+
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
@@ -3275,7 +3455,11 @@ def completion_cost(
             else:
                 raise Exception(f"Model={model} not found in completion cost model map")
         # Calculate cost based on prompt_tokens, completion_tokens
-        if "togethercomputer" in model or "together_ai" in model:
+        if (
+            "togethercomputer" in model
+            or "together_ai" in model
+            or custom_llm_provider == "together_ai"
+        ):
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
             model = get_model_params_and_category(model)
@@ -3864,7 +4048,7 @@ def get_optional_params(
         _check_valid_arg(supported_params=supported_params)
 
         if stream:
-            optional_params["stream_tokens"] = stream
+            optional_params["stream"] = stream
         if temperature is not None:
             optional_params["temperature"] = temperature
         if top_p is not None:
@@ -4498,6 +4682,14 @@ def get_llm_provider(
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
                 api_base = "https://api.voyageai.com/v1"
                 dynamic_api_key = get_secret("VOYAGE_API_KEY")
+            elif custom_llm_provider == "together_ai":
+                api_base = "https://api.together.xyz/v1"
+                dynamic_api_key = (
+                    get_secret("TOGETHER_API_KEY")
+                    or get_secret("TOGETHER_AI_API_KEY")
+                    or get_secret("TOGETHERAI_API_KEY")
+                    or get_secret("TOGETHER_AI_TOKEN")
+                )
             return model, custom_llm_provider, dynamic_api_key, api_base
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -6383,7 +6575,12 @@ def exception_type(
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
                             model=model,
-                            response=original_exception.response,
+                            response=httpx.Response(
+                                status_code=500,
+                                request=httpx.Request(
+                                    method="POST", url="https://api.openai.com/v1/"
+                                ),
+                            ),
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True

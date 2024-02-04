@@ -285,6 +285,7 @@ openai_compatible_endpoints: List = [
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
+    "api.together.xyz/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -294,6 +295,7 @@ openai_compatible_providers: List = [
     "deepinfra",
     "perplexity",
     "xinference",
+    "together_ai",
 ]
 
 

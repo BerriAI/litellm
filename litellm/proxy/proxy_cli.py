@@ -380,7 +380,7 @@ def run_server(
                 import gunicorn.app.base
         except:
             raise ImportError(
-                "Uvicorn, gunicorn needs to be imported. Run - `pip 'litellm[proxy]'`"
+                "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
             )
 
         if config is not None:
@@ -444,6 +444,7 @@ def run_server(
                 )
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
+
         from litellm.proxy.proxy_server import app
 
         if run_gunicorn == False:
@@ -519,6 +520,7 @@ def run_server(
             StandaloneApplication(
                 app=app, options=gunicorn_options
             ).run()  # Run gunicorn
+
 
 
 if __name__ == "__main__":

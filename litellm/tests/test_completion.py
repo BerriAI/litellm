@@ -1994,6 +1994,7 @@ def test_completion_palm_stream():
 
 
 def test_completion_together_ai_stream():
+    litellm.set_verbose = True
     user_message = "Write 1pg about YC & litellm"
     messages = [{"content": user_message, "role": "user"}]
     try:
