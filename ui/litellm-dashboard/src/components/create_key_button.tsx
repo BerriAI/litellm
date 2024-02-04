@@ -92,12 +92,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             </Form.Item>
 
             <Form.Item
-              label="Description"
-              name="description"
-            >
-              <Input placeholder="ai_team" />
-            </Form.Item>
-            <Form.Item
               label="Models (Comma Separated). Eg: gpt-3.5-turbo,gpt-4"
               name="models"
             >

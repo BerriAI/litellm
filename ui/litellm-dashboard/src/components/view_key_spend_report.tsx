@@ -39,6 +39,9 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({ token, accessTo
   // call keySpendLogsCall and set the data
   const fetchData = async () => {
     try {
+      if (accessToken == null || token == null) {
+        return;
+      } 
       const response = await keySpendLogsCall(accessToken=accessToken, token=token);
       console.log("Response:", response);
       // loop through response
