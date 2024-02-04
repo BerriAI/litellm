@@ -10,8 +10,8 @@ import Navbar from "./navbar";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
-// const proxyBaseUrl = null;
-const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
+const proxyBaseUrl = null;
+// const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
 
 type UserSpendData = {
   spend: number;

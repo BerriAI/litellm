@@ -3,8 +3,8 @@
  */
 import { message } from 'antd';
 
-// const proxyBaseUrl = null;
-const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
+const proxyBaseUrl = null;
+// const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
 
 export const keyCreateCall = async (
   accessToken: string,
