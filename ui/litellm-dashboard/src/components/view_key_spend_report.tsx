@@ -41,82 +41,82 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({ token, accessTo
   }
 
   // call keySpendLogsCall and set the data
-  const fetchData = async () => {
-    try {
-      const response = await keySpendLogsCall(accessToken=accessToken, token=token);
-      console.log("Response:", response);
-      // loop through response
-      // get spend, startTime for each element, place in new array
-
-
-      const pricePerDay: Record<string, number> = (Object.values(response) as ResponseValueType[]).reduce((acc: Record<string, number>, value) => {
-        const startTime = new Date(value.startTime);
-        const day = new Intl.DateTimeFormat('en-US', { day: '2-digit', month: 'short' }).format(startTime);
-      
-        acc[day] = (acc[day] || 0) + value.spend;
-      
-        return acc;
-      }, {});
-      
-      
-      // sort pricePerDay by day
-      // Convert object to array of key-value pairs
-        const pricePerDayArray = Object.entries(pricePerDay);
-
-        // Sort the array based on the date (key)
-        pricePerDayArray.sort(([aKey], [bKey]) => {
-            const dateA = new Date(aKey);
-            const dateB = new Date(bKey);
-            return dateA.getTime() - dateB.getTime();
-        });
-
-    // Convert the sorted array back to an object
-    const sortedPricePerDay = Object.fromEntries(pricePerDayArray);
-
-
-      console.log(sortedPricePerDay);
-    
-      const pricePerUser: Record<string, number> = (Object.values(response) as ResponseValueType[]).reduce((acc: Record<string, number>, value) => {
-        const user = value.user;
-        acc[user] = (acc[user] || 0) + value.spend;
-      
-        return acc;
-      }, {});
-      
-    
-      console.log(pricePerDay);
-      console.log(pricePerUser);
-
-      const arrayBarChart = [];
-        // [
-        // {
-        //     "day": "02 Feb",
-        //     "spend": pricePerDay["02 Feb"],
-        // }
-        // ]
-      for (const [key, value] of Object.entries(sortedPricePerDay)) {
-        arrayBarChart.push({ day: key, spend: value });
-      }
-
-
-      // get 5 most expensive users
-      const sortedUsers = Object.entries(pricePerUser).sort((a, b) => b[1] - a[1]);
-      const top5Users = sortedUsers.slice(0, 5);
-      const userChart = top5Users.map(([key, value]) => ({ name: key, value: value }));
-      
-      setData(arrayBarChart);
-      setUserData(userChart);
-      console.log("arrayBarChart:", arrayBarChart);
-    } catch (error) {
-      console.error("There was an error fetching the data", error);
-      // Optionally, update your UI to reflect the error state here as well
-    }
-  };
-
   useEffect(() => {
-    // Fetch data only when the token changes
-    fetchData();
-  }, [token]);  // Dependency array containing the 'token' variable
+    const fetchData = async () => {
+        try {
+        const response = await keySpendLogsCall(accessToken=accessToken, token=token);
+        console.log("Response:", response);
+        // loop through response
+        // get spend, startTime for each element, place in new array
+
+
+        const pricePerDay: Record<string, number> = (Object.values(response) as ResponseValueType[]).reduce((acc: Record<string, number>, value) => {
+            const startTime = new Date(value.startTime);
+            const day = new Intl.DateTimeFormat('en-US', { day: '2-digit', month: 'short' }).format(startTime);
+        
+            acc[day] = (acc[day] || 0) + value.spend;
+        
+            return acc;
+        }, {});
+        
+        
+        // sort pricePerDay by day
+        // Convert object to array of key-value pairs
+            const pricePerDayArray = Object.entries(pricePerDay);
+
+            // Sort the array based on the date (key)
+            pricePerDayArray.sort(([aKey], [bKey]) => {
+                const dateA = new Date(aKey);
+                const dateB = new Date(bKey);
+                return dateA.getTime() - dateB.getTime();
+            });
+
+        // Convert the sorted array back to an object
+        const sortedPricePerDay = Object.fromEntries(pricePerDayArray);
+
+
+        console.log(sortedPricePerDay);
+        
+        const pricePerUser: Record<string, number> = (Object.values(response) as ResponseValueType[]).reduce((acc: Record<string, number>, value) => {
+            const user = value.user;
+            acc[user] = (acc[user] || 0) + value.spend;
+        
+            return acc;
+        }, {});
+        
+        
+        console.log(pricePerDay);
+        console.log(pricePerUser);
+
+        const arrayBarChart = [];
+            // [
+            // {
+            //     "day": "02 Feb",
+            //     "spend": pricePerDay["02 Feb"],
+            // }
+            // ]
+        for (const [key, value] of Object.entries(sortedPricePerDay)) {
+            arrayBarChart.push({ day: key, spend: value });
+        }
+
+
+        // get 5 most expensive users
+        const sortedUsers = Object.entries(pricePerUser).sort((a, b) => b[1] - a[1]);
+        const top5Users = sortedUsers.slice(0, 5);
+        const userChart = top5Users.map(([key, value]) => ({ name: key, value: value }));
+        
+        setData(arrayBarChart);
+        setUserData(userChart);
+        console.log("arrayBarChart:", arrayBarChart);
+        } catch (error) {
+        console.error("There was an error fetching the data", error);
+        // Optionally, update your UI to reflect the error state here as well
+        }
+    };
+  fetchData();
+}, [token, accessToken]);
+
+
 
 
 
