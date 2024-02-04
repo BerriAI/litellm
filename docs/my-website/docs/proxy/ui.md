@@ -12,7 +12,7 @@ This is in beta, so things may change. If you have feedback, [let us know](https
 
 Allow your users to create, view their own keys through a UI
 
-<Image img={require('../../img/admin_ui_2.png')} />  
+<Image img={require('../../img/ui_3.gif')} />  
 
 
 
