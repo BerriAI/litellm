@@ -21,6 +21,7 @@ from openai import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    PermissionDeniedError,
 )
 import httpx
 
@@ -79,6 +80,17 @@ class Timeout(APITimeoutError):  # type: ignore
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(
             request=request
+        )  # Call the base class constructor with the parameters it needs
+
+
+class PermissionDeniedError(PermissionDeniedError):  # type:ignore
+    def __init__(self, message, llm_provider, model, response: httpx.Response):
+        self.status_code = 403
+        self.message = message
+        self.llm_provider = llm_provider
+        self.model = model
+        super().__init__(
+            self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
 
 

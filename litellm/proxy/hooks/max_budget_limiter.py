@@ -7,7 +7,7 @@ from fastapi import HTTPException
 import json, traceback
 
 
-class MaxBudgetLimiter(CustomLogger):
+class _PROXY_MaxBudgetLimiter(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         pass

@@ -57,7 +57,7 @@ print(f"response: {response}")
 
 - `api_type`: *string (optional)* - The type of API to use.
 
-### Output from `litellm.embedding()`
+### Output from `litellm.image_generation()`
 
 ```json
 
@@ -85,7 +85,7 @@ response = image_generation(model='dall-e-2', prompt="cute baby otter")
 | Model Name           | Function Call                               | Required OS Variables                |
 |----------------------|---------------------------------------------|--------------------------------------|
 | dall-e-2 | `image_generation(model='dall-e-2', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
-| dall-e-3 | `image_generation(model='dall-e-2', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
+| dall-e-3 | `image_generation(model='dall-e-3', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
 
 ## Azure OpenAI Image Generation Models
 
@@ -130,4 +130,24 @@ response = image_generation(
   api_base="http://0.0.0.0:8000/"       # set API Base of your Custom OpenAI Endpoint
   prompt="cute baby otter"
 )
+```
+
+## Bedrock - Stable Diffusion
+Use this for stable diffusion on bedrock
+
+
+### Usage
+```python
+import os
+from litellm import image_generation
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = image_generation(
+            prompt="A cute baby sea otter",
+            model="bedrock/stability.stable-diffusion-xl-v0",
+        )
+print(f"response: {response}")
 ```

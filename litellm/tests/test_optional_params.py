@@ -36,3 +36,85 @@ def test_azure_optional_params_embeddings():
     )
     assert len(optional_params) == 1
     assert optional_params["user"] == "John"
+
+
+def test_azure_gpt_optional_params_gpt_vision():
+    # for OpenAI, Azure all extra params need to get passed as extra_body to OpenAI python. We assert we actually set extra_body here
+    optional_params = litellm.utils.get_optional_params(
+        user="John",
+        custom_llm_provider="azure",
+        max_tokens=10,
+        temperature=0.2,
+        enhancements={"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+        dataSources=[
+            {
+                "type": "AzureComputerVision",
+                "parameters": {
+                    "endpoint": "<your_computer_vision_endpoint>",
+                    "key": "<your_computer_vision_key>",
+                },
+            }
+        ],
+    )
+
+    print(optional_params)
+    assert optional_params["max_tokens"] == 10
+    assert optional_params["temperature"] == 0.2
+    assert optional_params["extra_body"] == {
+        "enhancements": {"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+        "dataSources": [
+            {
+                "type": "AzureComputerVision",
+                "parameters": {
+                    "endpoint": "<your_computer_vision_endpoint>",
+                    "key": "<your_computer_vision_key>",
+                },
+            }
+        ],
+    }
+
+
+# test_azure_gpt_optional_params_gpt_vision()
+
+
+def test_azure_gpt_optional_params_gpt_vision_with_extra_body():
+    # if user passes extra_body, we should not over write it, we should pass it along to OpenAI python
+    optional_params = litellm.utils.get_optional_params(
+        user="John",
+        custom_llm_provider="azure",
+        max_tokens=10,
+        temperature=0.2,
+        extra_body={
+            "meta": "hi",
+        },
+        enhancements={"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+        dataSources=[
+            {
+                "type": "AzureComputerVision",
+                "parameters": {
+                    "endpoint": "<your_computer_vision_endpoint>",
+                    "key": "<your_computer_vision_key>",
+                },
+            }
+        ],
+    )
+
+    print(optional_params)
+    assert optional_params["max_tokens"] == 10
+    assert optional_params["temperature"] == 0.2
+    assert optional_params["extra_body"] == {
+        "enhancements": {"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+        "dataSources": [
+            {
+                "type": "AzureComputerVision",
+                "parameters": {
+                    "endpoint": "<your_computer_vision_endpoint>",
+                    "key": "<your_computer_vision_key>",
+                },
+            }
+        ],
+        "meta": "hi",
+    }
+
+
+# test_azure_gpt_optional_params_gpt_vision_with_extra_body()

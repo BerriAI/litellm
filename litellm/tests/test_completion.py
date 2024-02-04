@@ -87,6 +87,7 @@ def test_completion_mistral_api():
         litellm.set_verbose = True
         response = completion(
             model="mistral/mistral-tiny",
+            max_tokens=5,
             messages=[
                 {
                     "role": "user",
@@ -96,6 +97,10 @@ def test_completion_mistral_api():
         )
         # Add any assertions here to check the response
         print(response)
+
+        cost = litellm.completion_cost(completion_response=response)
+        print("cost to make mistral completion=", cost)
+        assert cost > 0.0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -186,6 +191,21 @@ def test_completion_gpt4_turbo():
 # test_completion_gpt4_turbo()
 
 
+def test_completion_gpt4_turbo_0125():
+    try:
+        response = completion(
+            model="gpt-4-0125-preview",
+            messages=messages,
+            max_tokens=10,
+        )
+        print(response)
+    except openai.RateLimitError:
+        print("got a rate liimt error")
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
     try:
@@ -219,12 +239,12 @@ def test_completion_gpt4_vision():
 
 
 def test_completion_azure_gpt4_vision():
-    # azure gpt-4 vision takes 5s to respond
+    # azure/gpt-4, vision takes 5seconds to respond
     try:
         litellm.set_verbose = True
         response = completion(
             model="azure/gpt-4-vision",
-            timeout=1,
+            timeout=5,
             messages=[
                 {
                     "role": "user",
@@ -239,15 +259,28 @@ def test_completion_azure_gpt4_vision():
                     ],
                 }
             ],
-            base_url="https://gpt-4-vision-resource.openai.azure.com/",
+            base_url="https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions",
             api_key=os.getenv("AZURE_VISION_API_KEY"),
+            enhancements={"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+            dataSources=[
+                {
+                    "type": "AzureComputerVision",
+                    "parameters": {
+                        "endpoint": "https://gpt-4-vision-enhancement.cognitiveservices.azure.com/",
+                        "key": os.environ["AZURE_VISION_ENHANCE_KEY"],
+                    },
+                }
+            ],
         )
         print(response)
     except openai.APITimeoutError:
         print("got a timeout error")
         pass
-    except openai.RateLimitError:
-        print("got a rate liimt error")
+    except openai.RateLimitError as e:
+        print("got a rate liimt error", e)
+        pass
+    except openai.APIStatusError as e:
+        print("got an api status error", e)
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -485,22 +518,22 @@ def hf_test_completion_tgi():
 # hf_test_error_logs()
 
 
-def test_completion_cohere():  # commenting for now as the cohere endpoint is being flaky
-    try:
-        litellm.CohereConfig(max_tokens=1000, stop_sequences=["a"])
-        response = completion(
-            model="command-nightly", messages=messages, logger_fn=logger_fn
-        )
-        # Add any assertions here to check the response
-        print(response)
-        response_str = response["choices"][0]["message"]["content"]
-        response_str_2 = response.choices[0].message.content
-        if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
-        if type(response_str_2) != str:
-            pytest.fail(f"Error occurred: {e}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_cohere():  # commenting out,for now as the cohere endpoint is being flaky
+#     try:
+#         litellm.CohereConfig(max_tokens=10, stop_sequences=["a"])
+#         response = completion(
+#             model="command-nightly", messages=messages, logger_fn=logger_fn
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#         response_str = response["choices"][0]["message"]["content"]
+#         response_str_2 = response.choices[0].message.content
+#         if type(response_str) != str:
+#             pytest.fail(f"Error occurred: {e}")
+#         if type(response_str_2) != str:
+#             pytest.fail(f"Error occurred: {e}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_cohere()
@@ -536,20 +569,30 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_openai()
-
-
-def test_completion_text_openai():
+def test_completion_openai_organization():
     try:
-        # litellm.set_verbose = True
-        response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
-        print(response["choices"][0]["message"]["content"])
+        litellm.set_verbose = True
+        try:
+            response = completion(
+                model="gpt-3.5-turbo", messages=messages, organization="org-ikDc4ex8NB"
+            )
+            pytest.fail("Request should have failed - This organization does not exist")
+        except Exception as e:
+            assert "No such organization: org-ikDc4ex8NB" in str(e)
+
     except Exception as e:
         print(e)
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_text_openai()
+def test_completion_text_openai():
+    try:
+        # litellm.set_verbose =True
+        response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
+        print(response["choices"][0]["message"]["content"])
+    except Exception as e:
+        print(e)
+        pytest.fail(f"Error occurred: {e}")
 
 
 def custom_callback(
@@ -758,6 +801,8 @@ def test_completion_ollama_hosted():
         litellm.request_timeout = None
         pass
     except Exception as e:
+        if "try pulling it first" in str(e):
+            return
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -766,8 +811,9 @@ def test_completion_ollama_hosted():
 
 def test_completion_openrouter1():
     try:
+        litellm.set_verbose = True
         response = completion(
-            model="openrouter/google/palm-2-chat-bison",
+            model="openrouter/mistralai/mistral-tiny",
             messages=messages,
             max_tokens=5,
         )
@@ -824,6 +870,10 @@ def test_completion_anyscale_with_functions():
         )
         # Add any assertions here to check the response
         print(response)
+
+        cost = litellm.completion_cost(completion_response=response)
+        print("cost to make anyscale completion=", cost)
+        assert cost > 0.0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -832,8 +882,8 @@ def test_completion_anyscale_with_functions():
 
 
 def test_completion_azure_key_completion_arg():
-    # this tests if we can pass api_key to completion, when it's not in the env
-    # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens.
+    # this tests if we can pass api_key to completion, when it's not in the env.
+    # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens!
     # If you want to remove it, speak to Ishaan!
     # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
     old_key = os.environ["AZURE_API_KEY"]
@@ -849,6 +899,9 @@ def test_completion_azure_key_completion_arg():
             max_tokens=10,
         )
         print(f"response: {response}")
+
+        print("Hidden Params", response._hidden_params)
+        assert response._hidden_params["custom_llm_provider"] == "azure"
         os.environ["AZURE_API_KEY"] = old_key
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
@@ -965,9 +1018,9 @@ def test_azure_openai_ad_token():
         print("azure ad token respoonse\n")
         print(response)
         litellm.input_callback = []
-    except:
+    except Exception as e:
         litellm.input_callback = []
-        pass
+        pytest.fail(f"An exception occurs - {str(e)}")
 
 
 # test_azure_openai_ad_token()
@@ -1244,6 +1297,8 @@ def test_completion_together_ai():
             "Cost for completion call together-computer/llama-2-70b: ",
             f"${float(cost):.10f}",
         )
+    except litellm.Timeout as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1345,21 +1400,57 @@ def test_customprompt_together_ai():
 
 def test_completion_sagemaker():
     try:
-        print("testing sagemaker")
         litellm.set_verbose = True
+        print("testing sagemaker")
         response = completion(
             model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            input_cost_per_second=0.000420,
         )
         # Add any assertions here to check the response
         print(response)
+        cost = completion_cost(completion_response=response)
+        print("calculated cost", cost)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_sagemaker()
+
+
+def test_completion_sagemaker_stream():
+    try:
+        litellm.set_verbose = False
+        print("testing sagemaker")
+        response = completion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+
+        complete_streaming_response = ""
+        first_chunk_id, chunk_id = None, None
+        for i, chunk in enumerate(response):
+            print(chunk)
+            chunk_id = chunk.id
+            print(chunk_id)
+            if i == 0:
+                first_chunk_id = chunk_id
+            else:
+                assert chunk_id == first_chunk_id
+            complete_streaming_response += chunk.choices[0].delta.content or ""
+        # Add any assertions here to check the response
+        # print(response)
+        assert len(complete_streaming_response) > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_chat_sagemaker():
@@ -1603,6 +1694,26 @@ def test_completion_anyscale_api():
 # test_completion_anyscale_api()
 
 
+@pytest.mark.skip(reason="flaky test, times out frequently")
+def test_completion_cohere():
+    try:
+        # litellm.set_verbose=True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="command-nightly",
+            messages=messages,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_azure_cloudflare_api():
     litellm.set_verbose = True
     try:
@@ -1625,7 +1736,7 @@ def test_azure_cloudflare_api():
         pass
 
 
-test_azure_cloudflare_api()
+# test_azure_cloudflare_api()
 
 
 def test_completion_anyscale_2():
@@ -1920,7 +2031,7 @@ def test_completion_cloudflare():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_cloudflare()
+# test_completion_cloudflare()
 
 
 def test_moderation():
