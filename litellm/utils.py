@@ -4684,6 +4684,7 @@ def get_llm_provider(
                     get_secret("TOGETHER_API_KEY")
                     or get_secret("TOGETHER_AI_API_KEY")
                     or get_secret("TOGETHERAI_API_KEY")
+                    or get_secret("TOGETHER_AI_TOKEN")
                 )
             return model, custom_llm_provider, dynamic_api_key, api_base
         elif model.split("/", 1)[0] in litellm.provider_list:
