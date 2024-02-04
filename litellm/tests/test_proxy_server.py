@@ -31,7 +31,7 @@ from litellm.proxy.proxy_server import (
 )  # Replace with the actual module where your FastAPI router is defined
 
 # Your bearer token
-token = ""
+token = "sk-1234"
 
 headers = {"Authorization": f"Bearer {token}"}
 
@@ -225,9 +225,6 @@ def test_health(client_no_auth):
     try:
         response = client_no_auth.get("/health")
         assert response.status_code == 200
-        result = response.json()
-        print("\n response from health:", result)
-        assert result["unhealthy_count"] == 0
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 

@@ -78,7 +78,7 @@ class AnthropicConfig:
 
 
 # makes headers for API call
-def validate_environment(api_key):
+def validate_environment(api_key, user_headers):
     if api_key is None:
         raise ValueError(
             "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
@@ -89,6 +89,8 @@ def validate_environment(api_key):
         "content-type": "application/json",
         "x-api-key": api_key,
     }
+    if user_headers is not None and isinstance(user_headers, dict):
+        headers = {**headers, **user_headers}
     return headers
 
 
@@ -105,8 +107,9 @@ def completion(
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
+    headers={},
 ):
-    headers = validate_environment(api_key)
+    headers = validate_environment(api_key, headers)
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
@@ -139,7 +142,11 @@ def completion(
     logging_obj.pre_call(
         input=prompt,
         api_key=api_key,
-        additional_args={"complete_input_dict": data, "api_base": api_base},
+        additional_args={
+            "complete_input_dict": data,
+            "api_base": api_base,
+            "headers": headers,
+        },
     )
 
     ## COMPLETION CALL

@@ -1,5 +1,5 @@
 from typing import Optional, Union, Any
-import types, time, json
+import types, time, json, traceback
 import httpx
 from .base import BaseLLM
 from litellm.utils import (
@@ -221,6 +221,7 @@ class OpenAIChatCompletion(BaseLLM):
         headers: Optional[dict] = None,
         custom_prompt_dict: dict = {},
         client=None,
+        organization: Optional[str] = None,
     ):
         super().completion()
         exception_mapping_worked = False
@@ -254,6 +255,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                         else:
                             return self.acompletion(
@@ -266,6 +268,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                     elif optional_params.get("stream", False):
                         return self.streaming(
@@ -278,6 +281,7 @@ class OpenAIChatCompletion(BaseLLM):
                             timeout=timeout,
                             client=client,
                             max_retries=max_retries,
+                            organization=organization,
                         )
                     else:
                         if not isinstance(max_retries, int):
@@ -291,6 +295,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 http_client=litellm.client_session,
                                 timeout=timeout,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                         else:
                             openai_client = client
@@ -349,7 +354,7 @@ class OpenAIChatCompletion(BaseLLM):
             if hasattr(e, "status_code"):
                 raise OpenAIError(status_code=e.status_code, message=str(e))
             else:
-                raise OpenAIError(status_code=500, message=str(e))
+                raise OpenAIError(status_code=500, message=traceback.format_exc())
 
     async def acompletion(
         self,
@@ -358,6 +363,7 @@ class OpenAIChatCompletion(BaseLLM):
         timeout: float,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         logging_obj=None,
@@ -372,6 +378,7 @@ class OpenAIChatCompletion(BaseLLM):
                     http_client=litellm.aclient_session,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                 )
             else:
                 openai_aclient = client
@@ -412,6 +419,7 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -423,6 +431,7 @@ class OpenAIChatCompletion(BaseLLM):
                 http_client=litellm.client_session,
                 timeout=timeout,
                 max_retries=max_retries,
+                organization=organization,
             )
         else:
             openai_client = client
@@ -454,6 +463,7 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -467,6 +477,7 @@ class OpenAIChatCompletion(BaseLLM):
                     http_client=litellm.aclient_session,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                 )
             else:
                 openai_aclient = client
@@ -706,19 +717,34 @@ class OpenAIChatCompletion(BaseLLM):
 
             ## COMPLETION CALL
             response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
+            response = response.model_dump()  # type: ignore
             ## LOGGING
             logging_obj.post_call(
-                input=input,
+                input=prompt,
                 api_key=api_key,
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             raise e
         except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             if hasattr(e, "status_code"):
                 raise OpenAIError(status_code=e.status_code, message=str(e))
             else:
@@ -733,14 +759,22 @@ class OpenAIChatCompletion(BaseLLM):
         messages: Optional[list] = None,
         input: Optional[list] = None,
         prompt: Optional[str] = None,
+        organization: Optional[str] = None,
     ):
-        client = AsyncOpenAI(api_key=api_key, timeout=timeout)
+        client = AsyncOpenAI(
+            api_key=api_key, timeout=timeout, organization=organization
+        )
         if model is None and mode != "image_generation":
             raise Exception("model is not set")
 
         completion = None
 
         if mode == "completion":
+            completion = await client.completions.with_raw_response.create(
+                model=model,  # type: ignore
+                prompt=prompt,  # type: ignore
+            )
+        elif mode == "chat":
             if messages is None:
                 raise Exception("messages is not set")
             completion = await client.chat.completions.with_raw_response.create(
@@ -889,7 +923,7 @@ class OpenAITextCompletion(BaseLLM):
                         headers=headers,
                         model_response=model_response,
                         model=model,
-                        timeout=timeout
+                        timeout=timeout,
                     )
                 else:
                     return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, prompt=prompt, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout)  # type: ignore
@@ -901,14 +935,11 @@ class OpenAITextCompletion(BaseLLM):
                     headers=headers,
                     model_response=model_response,
                     model=model,
-                    timeout=timeout
+                    timeout=timeout,
                 )
             else:
                 response = httpx.post(
-                    url=f"{api_base}",
-                    json=data,
-                    headers=headers,
-                    timeout=timeout
+                    url=f"{api_base}", json=data, headers=headers, timeout=timeout
                 )
                 if response.status_code != 200:
                     raise OpenAIError(
@@ -944,7 +975,7 @@ class OpenAITextCompletion(BaseLLM):
         prompt: str,
         api_key: str,
         model: str,
-        timeout: float
+        timeout: float,
     ):
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
@@ -986,7 +1017,7 @@ class OpenAITextCompletion(BaseLLM):
         headers: dict,
         model_response: ModelResponse,
         model: str,
-        timeout: float
+        timeout: float,
     ):
         with httpx.stream(
             url=f"{api_base}",
@@ -1017,7 +1048,7 @@ class OpenAITextCompletion(BaseLLM):
         headers: dict,
         model_response: ModelResponse,
         model: str,
-        timeout: float
+        timeout: float,
     ):
         client = httpx.AsyncClient()
         async with client.stream(

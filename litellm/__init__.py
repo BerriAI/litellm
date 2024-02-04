@@ -1,11 +1,17 @@
 ### INIT VARIABLES ###
-import threading, requests
+import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
-from litellm._logging import set_verbose
+from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
 from litellm.proxy._types import KeyManagementSystem
 import httpx
+import dotenv
 
+dotenv.load_dotenv()
+#############################################
+if set_verbose == True:
+    _turn_on_debug()
+#############################################
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
@@ -58,6 +64,9 @@ cache: Optional[
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
+budget_duration: Optional[
+    str
+] = None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 _openai_completion_params = [
     "functions",
     "function_call",
@@ -136,6 +145,8 @@ model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/mai
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+default_key_generate_params: Optional[Dict] = None
+default_team_settings: Optional[List] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
@@ -155,6 +166,19 @@ _key_management_system: Optional[KeyManagementSystem] = None
 
 
 def get_model_cost_map(url: str):
+    if (
+        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
+        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
+    ):
+        import importlib.resources
+        import json
+
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window_backup.json"
+        ) as f:
+            content = json.load(f)
+            return content
+
     try:
         with requests.get(
             url, timeout=5
@@ -210,6 +234,7 @@ vertex_chat_models: List = []
 vertex_code_chat_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
+vertex_embedding_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
@@ -239,6 +264,8 @@ for key, value in model_cost.items():
         vertex_chat_models.append(key)
     elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
         vertex_code_chat_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-embedding-models":
+        vertex_embedding_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -475,7 +502,10 @@ bedrock_embedding_models: List = [
 ]
 
 all_embedding_models = (
-    open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+    open_ai_embedding_models
+    + cohere_embedding_models
+    + bedrock_embedding_models
+    + vertex_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -530,6 +560,7 @@ from .llms.bedrock import (
     AmazonAnthropicConfig,
     AmazonCohereConfig,
     AmazonLlamaConfig,
+    AmazonStabilityConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError

@@ -12,10 +12,12 @@ import time, logging, asyncio
 import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any
 from openai._models import BaseModel as OpenAIObject
+from litellm._logging import verbose_logger
 
 
 def print_verbose(print_statement):
     try:
+        verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except:
@@ -81,8 +83,13 @@ class InMemoryCache(BaseCache):
         self.cache_dict.clear()
         self.ttl_dict.clear()
 
+
     async def disconnect(self):
         pass
+
+    def delete_cache(self, key):
+        self.cache_dict.pop(key, None)
+        self.ttl_dict.pop(key, None)
 
 
 class RedisCache(BaseCache):
@@ -210,8 +217,13 @@ class RedisCache(BaseCache):
     def flush_cache(self):
         self.redis_client.flushall()
 
+
     async def disconnect(self):
         pass
+
+    def delete_cache(self, key):
+        self.redis_client.delete(key)
+
 
 
 class S3Cache(BaseCache):
@@ -227,11 +239,13 @@ class S3Cache(BaseCache):
         s3_aws_secret_access_key=None,
         s3_aws_session_token=None,
         s3_config=None,
+        s3_path=None,
         **kwargs,
     ):
         import boto3
 
         self.bucket_name = s3_bucket_name
+        self.key_prefix = s3_path.rstrip("/") + "/" if s3_path else ""
         # Create an S3 client with custom endpoint URL
         self.s3_client = boto3.client(
             "s3",
@@ -253,6 +267,8 @@ class S3Cache(BaseCache):
             ttl = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
             serialized_value = json.dumps(value)
+            key = self.key_prefix + key
+
             if ttl is not None:
                 cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
                 import datetime
@@ -294,6 +310,8 @@ class S3Cache(BaseCache):
         import boto3, botocore
 
         try:
+            key = self.key_prefix + key
+
             print_verbose(f"Get S3 Cache: key: {key}")
             # Download the data from S3
             cached_response = self.s3_client.get_object(
@@ -399,6 +417,12 @@ class DualCache(BaseCache):
             self.in_memory_cache.flush_cache()
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
+
+    def delete_cache(self, key):
+        if self.in_memory_cache is not None:
+            self.in_memory_cache.delete_cache(key)
+        if self.redis_cache is not None:
+            self.redis_cache.delete_cache(key)
 
 
 #### LiteLLM.Completion / Embedding Cache ####

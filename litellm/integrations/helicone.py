@@ -2,6 +2,7 @@
 #    On success, logs events to Helicone
 import dotenv, os
 import requests
+import litellm
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -56,6 +57,10 @@ class HeliconeLogger:
                 else "gpt-3.5-turbo"
             )
             provider_request = {"model": model, "messages": messages}
+            if isinstance(response_obj, litellm.EmbeddingResponse) or isinstance(
+                response_obj, litellm.ModelResponse
+            ):
+                response_obj = response_obj.json()
 
             if "claude" in model:
                 provider_request, response_obj = self.claude_mapping(

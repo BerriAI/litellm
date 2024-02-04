@@ -99,34 +99,66 @@ def pre_langfuse_setup():
     return
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_async():
+    # this tests time added to make langfuse logging calls, vs just acompletion calls
     try:
         pre_langfuse_setup()
         litellm.set_verbose = True
+
+        # Make 5 calls with an empty success_callback
+        litellm.success_callback = []
+        start_time_empty_callback = asyncio.run(make_async_calls())
+        print("done with no callback test")
+
+        print("starting langfuse test")
+        # Make 5 calls with success_callback set to "langfuse"
         litellm.success_callback = ["langfuse"]
+        start_time_langfuse = asyncio.run(make_async_calls())
+        print("done with langfuse test")
 
-        async def _test_langfuse():
-            response = await litellm.acompletion(
-                model="azure/chatgpt-v-2",
-                messages=[{"role": "user", "content": "This is a test"}],
-                max_tokens=100,
-                temperature=0.7,
-                timeout=5,
-                user="test_user",
-            )
-            await asyncio.sleep(1)
-            return response
+        # Compare the time for both scenarios
+        print(f"Time taken with success_callback='langfuse': {start_time_langfuse}")
+        print(f"Time taken with empty success_callback: {start_time_empty_callback}")
 
-        response = asyncio.run(_test_langfuse())
-        print(f"response: {response}")
+        # assert the diff is not more than 1 second - this was 5 seconds before the fix
+        assert abs(start_time_langfuse - start_time_empty_callback) < 1
 
-        # # check langfuse.log to see if there was a failed response
-        search_logs("langfuse.log")
     except litellm.Timeout as e:
         pass
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
+
+
+async def make_async_calls():
+    tasks = []
+    for _ in range(5):
+        task = asyncio.create_task(
+            litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=[{"role": "user", "content": "This is a test"}],
+                max_tokens=5,
+                temperature=0.7,
+                timeout=5,
+                user="langfuse_latency_test_user",
+                mock_response="It's simple to use and easy to get started",
+            )
+        )
+        tasks.append(task)
+
+    # Measure the start time before running the tasks
+    start_time = asyncio.get_event_loop().time()
+
+    # Wait for all tasks to complete
+    responses = await asyncio.gather(*tasks)
+
+    # Print the responses when tasks return
+    for idx, response in enumerate(responses):
+        print(f"Response from Task {idx + 1}: {response}")
+
+    # Calculate the total time taken
+    total_time = asyncio.get_event_loop().time() - start_time
+
+    return total_time
 
 
 # def test_langfuse_logging_async_text_completion():
@@ -245,7 +277,24 @@ def test_langfuse_logging_custom_generation_name():
         print(e)
 
 
-test_langfuse_logging_custom_generation_name()
+# test_langfuse_logging_custom_generation_name()
+
+
+@pytest.mark.skip(reason="beta test - checking langfuse output")
+def test_langfuse_logging_embedding():
+    try:
+        litellm.set_verbose = True
+        litellm.success_callback = ["langfuse"]
+        response = litellm.embedding(
+            model="text-embedding-ada-002",
+            input=["gm", "ishaan"],
+        )
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
+        print(e)
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
