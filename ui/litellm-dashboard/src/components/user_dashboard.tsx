@@ -13,12 +13,19 @@ import { jwtDecode } from "jwt-decode";
 // const proxyBaseUrl = null;
 const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
 
+type UserSpendData = {
+  spend: number;
+  max_budget?: number | null;
+}
+
 const UserDashboard = () => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
-  const [userSpendData, setUserSpendData] = useState<null | any[]>(null);
+  const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(null);
+
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
   const userID = searchParams.get("userID");
+  const viewSpend = searchParams.get("viewSpend");
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -99,6 +106,9 @@ const UserDashboard = () => {
     return null;
   }
 
+  if (userRole == null) {
+    setUserRole("App Owner")
+  }
   
   return (
     <div>
@@ -114,7 +124,6 @@ const UserDashboard = () => {
         />
         <ViewKeyTable
           userID={userID}
-          userRole={userRole}
           accessToken={accessToken}
           data={data}
           setData={setData}
