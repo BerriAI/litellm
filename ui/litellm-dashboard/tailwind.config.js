@@ -15,11 +15,11 @@ module.exports = {
         // light mode
         tremor: {
           brand: {
-            faint: colors.blue[50],
-            muted: colors.blue[200],
-            subtle: colors.blue[400],
-            DEFAULT: colors.blue[500],
-            emphasis: colors.blue[700],
+            faint: colors.indigo[50],
+            muted: colors.indigo[200],
+            subtle: colors.indigo[400],
+            DEFAULT: colors.indigo[500],
+            emphasis: colors.indigo[700],
             inverted: colors.white,
           },
           background: {
@@ -46,11 +46,11 @@ module.exports = {
         "dark-tremor": {
           brand: {
             faint: "#0B1229",
-            muted: colors.blue[950],
-            subtle: colors.blue[800],
-            DEFAULT: colors.blue[500],
-            emphasis: colors.blue[400],
-            inverted: colors.blue[950],
+            muted: colors.indigo[950],
+            subtle: colors.indigo[800],
+            DEFAULT: colors.indigo[500],
+            emphasis: colors.indigo[400],
+            inverted: colors.indigo[950],
           },
           background: {
             muted: "#131A2B",
