@@ -37,11 +37,11 @@ def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
         response = completion(
-            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
+            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check the, response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except Exception as e:
@@ -1369,7 +1369,7 @@ def test_customprompt_together_ai():
         print(litellm.success_callback)
         print(litellm._async_success_callback)
         response = completion(
-            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
+            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
             messages=messages,
             roles={
                 "system": {
@@ -1998,7 +1998,7 @@ def test_completion_together_ai_stream():
     messages = [{"content": user_message, "role": "user"}]
     try:
         response = completion(
-            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
+            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
             messages=messages,
             stream=True,
             max_tokens=5,
