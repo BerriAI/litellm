@@ -6,6 +6,7 @@ import {
   Badge,
   Card,
   Table,
+  Button,
   TableBody,
   TableCell,
   TableHead,
@@ -15,6 +16,7 @@ import {
   Title,
   Icon,
 } from "@tremor/react";
+import ViewKeySpendReport from "./view_key_spend_report";
 
 // Define the props type
 interface ViewKeyTableProps {
@@ -110,8 +112,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Icon
                     onClick={() => handleDelete(item.token)}
                     icon={TrashIcon}
-                    size="xs"
+                    size="sm"
                   />
+                </TableCell>
+                <TableCell>
+                  <ViewKeySpendReport token={item.token} accessToken={accessToken} keySpend={item.spend} keyBudget={item.max_budget} keyName={item.key_name} />
+                
                 </TableCell>
               </TableRow>
             );
