@@ -1079,7 +1079,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     metadata = (
         litellm_params.get("metadata", {}) or {}
     )  # if litellm_params['metadata'] == None
-    call_type = kwargs.get("call_type", "litellm.completion")
+    call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
     usage = response_obj["usage"]
     if type(usage) == litellm.Usage:
@@ -1118,6 +1118,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "completion_tokens": usage.get("completion_tokens", 0),
     }
 
+    verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
     json_fields = [
         field
         for field, field_type in LiteLLM_SpendLogs.__annotations__.items()
