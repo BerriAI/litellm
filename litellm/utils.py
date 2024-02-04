@@ -3455,7 +3455,11 @@ def completion_cost(
             else:
                 raise Exception(f"Model={model} not found in completion cost model map")
         # Calculate cost based on prompt_tokens, completion_tokens
-        if "togethercomputer" in model or "together_ai" in model:
+        if (
+            "togethercomputer" in model
+            or "together_ai" in model
+            or custom_llm_provider == "together_ai"
+        ):
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
             model = get_model_params_and_category(model)
