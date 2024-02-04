@@ -11,7 +11,7 @@ const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
-  userRole: string;
+  userRole: string | null;
   accessToken: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;

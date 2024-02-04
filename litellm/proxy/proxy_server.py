@@ -600,6 +600,24 @@ async def user_api_key_auth(
                     pass
                 elif allow_user_auth == True and route == "/key/delete":
                     pass
+                elif route == "/spend/logs":
+                    # check if user can access this route
+                    # user can only access this route if
+                    # - api_key they need logs for has the same user_id as the one used for auth
+                    query_params = request.query_params
+                    api_key = query_params.get(
+                        "api_key"
+                    )  # UI, will only pass hashed tokens
+                    token_info = await prisma_client.get_data(
+                        token=api_key, table_name="key", query_type="find_unique"
+                    )
+                    if secrets.compare_digest(token_info.user_id, valid_token.user_id):
+                        pass
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="user not allowed to access this key's info",
+                        )
                 else:
                     raise Exception(
                         f"Only master key can be used to generate, delete, update or get info for new keys/users. Value of allow_user_auth={allow_user_auth}"
