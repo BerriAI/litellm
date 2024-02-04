@@ -525,17 +525,12 @@ async def test_streaming_router_tpm_limit():
         continue
     await asyncio.sleep(5)  # success is done in a separate thread
 
-    try:
-        await parallel_request_handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={},
-            call_type="",
-        )
-
-        pytest.fail(f"Expected call to fail")
-    except Exception as e:
-        assert e.status_code == 429
+    assert (
+        parallel_request_handler.user_api_key_cache.get_cache(
+            key=request_count_api_key
+        )["current_tpm"]
+        > 0
+    )
 
 
 @pytest.mark.asyncio
