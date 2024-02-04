@@ -162,7 +162,11 @@ def test_cost_azure_embedding():
 
 def test_cost_openai_image_gen():
     cost = litellm.completion_cost(
-        model="dall-e-2", size="1024-x-1024", quality="standard", n=1
+        model="dall-e-2",
+        size="1024-x-1024",
+        quality="standard",
+        n=1,
+        call_type="image_generation",
     )
     assert cost == 0.019922944
 

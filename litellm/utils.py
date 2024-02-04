@@ -805,6 +805,7 @@ class Logging:
             "stream": self.stream,
             "user": user,
             "call_type": str(self.call_type),
+            "litellm_call_id": self.litellm_call_id,
             **self.optional_params,
             **additional_params,
         }
@@ -1058,6 +1059,7 @@ class Logging:
                 and (
                     isinstance(result, ModelResponse)
                     or isinstance(result, EmbeddingResponse)
+                    or isinstance(result, ImageResponse)
                 )
                 and self.stream != True
             ):  # handle streaming separately
@@ -1065,11 +1067,24 @@ class Logging:
                     if self.model_call_details.get("cache_hit", False) == True:
                         self.model_call_details["response_cost"] = 0.0
                     else:
-                        self.model_call_details[
-                            "response_cost"
-                        ] = litellm.completion_cost(
-                            completion_response=result,
-                        )
+                        result._hidden_params["optional_params"] = self.optional_params
+                        if (
+                            self.call_type == CallTypes.aimage_generation.value
+                            or self.call_type == CallTypes.image_generation.value
+                        ):
+                            self.model_call_details[
+                                "response_cost"
+                            ] = litellm.completion_cost(
+                                completion_response=result,
+                                model=self.model,
+                                call_type=self.call_type,
+                            )
+                        else:
+                            self.model_call_details[
+                                "response_cost"
+                            ] = litellm.completion_cost(
+                                completion_response=result, call_type=self.call_type
+                            )
                     verbose_logger.debug(
                         f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                     )
@@ -3354,6 +3369,16 @@ def completion_cost(
     messages: List = [],
     completion="",
     total_time=0.0,  # used for replicate, sagemaker
+    call_type: Literal[
+        "completion",
+        "acompletion",
+        "embedding",
+        "aembedding",
+        "atext_completion",
+        "text_completion",
+        "image_generation",
+        "aimage_generation",
+    ] = "completion",
     ### REGION ###
     custom_llm_provider=None,
     region_name=None,  # used for bedrock pricing
@@ -3412,6 +3437,19 @@ def completion_cost(
                 region_name = completion_response._hidden_params.get(
                     "region_name", region_name
                 )
+                size = completion_response._hidden_params.get(
+                    "optional_params", {}
+                ).get(
+                    "size", "1024-x-1024"
+                )  # openai default
+                quality = completion_response._hidden_params.get(
+                    "optional_params", {}
+                ).get(
+                    "quality", "standard"
+                )  # openai default
+                n = completion_response._hidden_params.get("optional_params", {}).get(
+                    "n", 1
+                )  # openai default
         else:
             if len(messages) > 0:
                 prompt_tokens = token_counter(model=model, messages=messages)
@@ -3423,7 +3461,10 @@ def completion_cost(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
-        if size is not None and n is not None:
+        if (
+            call_type == CallTypes.image_generation.value
+            or call_type == CallTypes.aimage_generation.value
+        ):
             ### IMAGE GENERATION COST CALCULATION ###
             image_gen_model_name = f"{size}/{model}"
             image_gen_model_name_with_quality = image_gen_model_name
