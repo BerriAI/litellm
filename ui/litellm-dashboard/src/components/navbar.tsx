@@ -4,7 +4,7 @@ import Link from 'next/link';
 import Image from 'next/image'
 import React, { useState } from 'react';
 import { useSearchParams } from "next/navigation";
-import { Button, Text, Metric,Title, TextInput, Grid, Col } from "@tremor/react";
+import { Button, Text, Metric,Title, TextInput, Grid, Col, Card } from "@tremor/react";
 
 // Define the props type
 interface NavbarProps {
@@ -24,9 +24,12 @@ const Navbar: React.FC<NavbarProps> = ({ userID, userRole }) => {
             </div>
             </div>
             <div className="text-right mx-4 my-2 absolute top-0 right-0">
-                <Button color="white">
-                <Title>{userID}</Title>
-                <Text>Role: {userRole}</Text>
+                <Button variant='secondary'>
+                {userID}
+                <p>
+                Role: {userRole}
+                </p>
+                
                 </Button>
             </div>
             
