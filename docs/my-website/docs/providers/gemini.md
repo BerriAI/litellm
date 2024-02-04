@@ -6,7 +6,7 @@
 # Gemini-Pro
 ## Sample Usage
 ```python
-import litellm
+from litellm import completion
 import os
 
 os.environ['GEMINI_API_KEY'] = ""
@@ -24,7 +24,7 @@ LiteLLM Supports the following image types passed in `url`
 ## Sample Usage
 ```python
 import os
-import litellm 
+import litellm
 from dotenv import load_dotenv
 
 # Load the environment variables from .env file

@@ -39,6 +39,8 @@ def test_timeout():
 
 def test_hanging_request_azure():
     litellm.set_verbose = True
+    import asyncio
+
     try:
         router = litellm.Router(
             model_list=[
@@ -58,13 +60,20 @@ def test_hanging_request_azure():
         )
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
-        response = router.completion(
-            model="azure-gpt",
-            messages=[{"role": "user", "content": f"what color is red {uuid.uuid4()}"}],
-            logit_bias={encoded: 100},
-            timeout=0.01,
-        )
-        print(response)
+
+        async def _test():
+            response = await router.acompletion(
+                model="azure-gpt",
+                messages=[
+                    {"role": "user", "content": f"what color is red {uuid.uuid4()}"}
+                ],
+                logit_bias={encoded: 100},
+                timeout=0.01,
+            )
+            print(response)
+            return response
+
+        response = asyncio.run(_test())
 
         if response.choices[0].message.content is not None:
             pytest.fail("Got a response, expected a timeout")

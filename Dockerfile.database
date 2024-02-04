@@ -56,4 +56,4 @@ EXPOSE 4000/tcp
 # # Set your entrypoint and command
 
 ENTRYPOINT ["litellm"]
-CMD ["--port", "4000"]
+CMD ["--port", "4000", "--run_gunicorn"]

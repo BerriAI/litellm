@@ -1,4 +1,4 @@
-# VertexAI - Google [Gemini]
+# VertexAI - Google [Gemini, Model Garden]
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -17,7 +17,28 @@ import litellm
 litellm.vertex_project = "hardy-device-38811" # Your Project ID
 litellm.vertex_location = "us-central1"  # proj location
 
-response = completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+response = litellm.completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+```
+
+## OpenAI Proxy Usage 
+
+1. Modify the config.yaml 
+
+```yaml
+litellm_settings: 
+  vertex_project: "hardy-device-38811" # Your Project ID
+  vertex_location: "us-central1" # proj location
+
+model_list: 
+  -model_name: team1-gemini-pro
+   litellm_params: 
+     model: gemini-pro
+```
+
+2. Start the proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
 ```
 
 ## Set Vertex Project & Vertex Location
@@ -46,16 +67,39 @@ os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
 # set directly on module 
 litellm.vertex_location = "us-central1 # Your Location
 ```
+## Model Garden
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| llama2   | `completion('vertex_ai/<endpoint_id>', messages)` |
+
+#### Using Model Garden
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = completion(
+  model="vertex_ai/<your-endpoint-id>", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
 
 ## Gemini Pro
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-pro   | `completion('gemini-pro', messages)` |
+| gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
 
 ## Gemini Pro Vision
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-pro-vision   | `completion('gemini-pro-vision', messages)` |
+| gemini-pro-vision   | `completion('gemini-pro-vision', messages)`, `completion('vertex_ai/gemini-pro-vision', messages)`|
+
+
+
 
 #### Using Gemini Pro Vision
 
@@ -92,6 +136,7 @@ response = litellm.completion(
 )
 print(response)
 ```
+
 
 ## Chat Models
 | Model Name       | Function Call                        |

@@ -1,3 +1,12 @@
+# +-----------------------------------------------+
+# |                                               |
+# |           NOT PROXY BUDGET MANAGER            |
+# |  proxy budget manager is in proxy_server.py   |
+# |                                               |
+# +-----------------------------------------------+
+#
+#  Thank you users! We ❤️ you! - Krrish & Ishaan
+
 import os, json, time
 import litellm
 from litellm.utils import ModelResponse
@@ -11,10 +20,12 @@ class BudgetManager:
         project_name: str,
         client_type: str = "local",
         api_base: Optional[str] = None,
+        headers: Optional[dict] = None,
     ):
         self.client_type = client_type
         self.project_name = project_name
         self.api_base = api_base or "https://api.litellm.ai"
+        self.headers = headers or {"Content-Type": "application/json"}
         ## load the data or init the initial dictionaries
         self.load_data()
 
@@ -43,7 +54,7 @@ class BudgetManager:
             url = self.api_base + "/get_budget"
             headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name}
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=self.headers, json=data)
             response = response.json()
             if response["status"] == "error":
                 self.user_dict = (
@@ -201,6 +212,6 @@ class BudgetManager:
             url = self.api_base + "/set_budget"
             headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name, "user_dict": self.user_dict}
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=self.headers, json=data)
             response = response.json()
             return response

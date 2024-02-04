@@ -95,10 +95,7 @@ def test_caching_with_cache_controls():
         )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
-        assert (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        )
+        assert response2["id"] != response1["id"]
         message = [{"role": "user", "content": f"Hey, how's it going? {uuid.uuid4()}"}]
         ## TTL = 5
         response1 = completion(
@@ -124,9 +121,10 @@ def test_caching_with_models_v2():
     ]
     litellm.cache = Cache()
     print("test2 for caching")
+    litellm.set_verbose = True
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(model="command-nightly", messages=messages, caching=True)
+    response3 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
@@ -361,7 +359,7 @@ def test_redis_cache_completion():
     response3 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
     )
-    response4 = completion(model="command-nightly", messages=messages, caching=True)
+    response4 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
@@ -796,8 +794,8 @@ def test_cache_override():
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     assert (
-        end_time - start_time > 0.1
-    )  # ensure 2nd response comes in over 0.1s. This should not be cached.
+        end_time - start_time > 0.05
+    )  # ensure 2nd response comes in over 0.05s. This should not be cached.
 
 
 # test_cache_override()

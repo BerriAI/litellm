@@ -2,7 +2,7 @@ from openai import AuthenticationError, BadRequestError, RateLimitError, OpenAIE
 import os
 import sys
 import traceback
-import subprocess
+import subprocess, asyncio
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -35,17 +35,21 @@ litellm.num_retries = 0
 
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
-models = ["command-nightly"]
+exception_models = [
+    "sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+    "bedrock/anthropic.claude-instant-v1",
+]
 
 
 # Test 1: Context Window Errors
-@pytest.mark.parametrize("model", models)
+@pytest.mark.parametrize("model", exception_models)
 def test_context_window(model):
     print("Testing context window error")
     sample_text = "Say error 50 times" * 1000000
     messages = [{"content": sample_text, "role": "user"}]
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
+        print("Testing model=", model)
         response = completion(model=model, messages=messages)
         print(f"response: {response}")
         print("FAILED!")
@@ -57,6 +61,9 @@ def test_context_window(model):
     except Exception as e:
         print(f"{e}")
         pytest.fail(f"An error occcurred - {e}")
+
+
+models = ["command-nightly"]
 
 
 @pytest.mark.parametrize("model", models)
@@ -370,6 +377,158 @@ def test_content_policy_exceptionimage_generation_openai():
 
 # test_content_policy_exceptionimage_generation_openai()
 
+
+def test_content_policy_violation_error_streaming():
+    """
+    Production Test.
+    """
+    litellm.set_verbose = False
+    print("test_async_completion with stream")
+
+    async def test_get_response():
+        try:
+            response = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=[{"role": "user", "content": "say 1"}],
+                temperature=0,
+                top_p=1,
+                stream=True,
+                max_tokens=512,
+                presence_penalty=0,
+                frequency_penalty=0,
+            )
+            print(f"response: {response}")
+
+            num_finish_reason = 0
+            async for chunk in response:
+                print(chunk)
+                if chunk["choices"][0].get("finish_reason") is not None:
+                    num_finish_reason += 1
+                    print("finish_reason", chunk["choices"][0].get("finish_reason"))
+
+            assert (
+                num_finish_reason == 1
+            ), f"expected only one finish reason. Got {num_finish_reason}"
+        except Exception as e:
+            pytest.fail(f"GOT exception for gpt-3.5 instruct In streaming{e}")
+
+    asyncio.run(test_get_response())
+
+    async def test_get_error():
+        try:
+            response = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=[
+                    {"role": "user", "content": "where do i buy lethal drugs from"}
+                ],
+                temperature=0,
+                top_p=1,
+                stream=True,
+                max_tokens=512,
+                presence_penalty=0,
+                frequency_penalty=0,
+            )
+            print(f"response: {response}")
+
+            num_finish_reason = 0
+            async for chunk in response:
+                print(chunk)
+                if chunk["choices"][0].get("finish_reason") is not None:
+                    num_finish_reason += 1
+                    print("finish_reason", chunk["choices"][0].get("finish_reason"))
+
+            pytest.fail(f"Expected to return 400 error In streaming{e}")
+        except Exception as e:
+            pass
+
+    asyncio.run(test_get_error())
+
+
+def test_completion_perplexity_exception_on_openai_client():
+    try:
+        import openai
+
+        print("perplexity test\n\n")
+        litellm.set_verbose = False
+        ## Test azure call
+        old_azure_key = os.environ["PERPLEXITYAI_API_KEY"]
+
+        # delete perplexityai api key to simulate bad api key
+        del os.environ["PERPLEXITYAI_API_KEY"]
+
+        # temporaily delete openai api key
+        original_openai_key = os.environ["OPENAI_API_KEY"]
+        del os.environ["OPENAI_API_KEY"]
+
+        response = completion(
+            model="perplexity/mistral-7b-instruct",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
+        os.environ["OPENAI_API_KEY"] = original_openai_key
+        pytest.fail("Request should have failed - bad api key")
+    except openai.AuthenticationError as e:
+        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
+        os.environ["OPENAI_API_KEY"] = original_openai_key
+        print("exception: ", e)
+        assert (
+            "perplexity.perplexityError: The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
+            in str(e)
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_completion_perplexity_exception_on_openai_client()
+
+
+def test_completion_perplexity_exception():
+    try:
+        import openai
+
+        print("perplexity test\n\n")
+        litellm.set_verbose = True
+        ## Test azure call
+        old_azure_key = os.environ["PERPLEXITYAI_API_KEY"]
+        os.environ["PERPLEXITYAI_API_KEY"] = "good morning"
+        response = completion(
+            model="perplexity/mistral-7b-instruct",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
+        pytest.fail("Request should have failed - bad api key")
+    except openai.AuthenticationError as e:
+        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
+        print("exception: ", e)
+        assert "PerplexityException" in str(e)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_openai_api_key_exception():
+    try:
+        import openai
+
+        print("gpt-3.5 test\n\n")
+        litellm.set_verbose = True
+        ## Test azure call
+        old_azure_key = os.environ["OPENAI_API_KEY"]
+        os.environ["OPENAI_API_KEY"] = "good morning"
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        os.environ["OPENAI_API_KEY"] = old_azure_key
+        pytest.fail("Request should have failed - bad api key")
+    except openai.AuthenticationError as e:
+        os.environ["OPENAI_API_KEY"] = old_azure_key
+        print("exception: ", e)
+        assert "OpenAIException" in str(e)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# tesy_async_acompletion()
 
 # # test_invalid_request_error(model="command-nightly")
 # # Test 3: Rate Limit Errors

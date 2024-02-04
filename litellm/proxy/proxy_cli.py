@@ -39,9 +39,16 @@ def is_port_in_use(port):
 
 
 @click.command()
-@click.option("--host", default="0.0.0.0", help="Host for the server to listen on.")
-@click.option("--port", default=8000, help="Port to bind the server to.")
-@click.option("--num_workers", default=1, help="Number of gunicorn workers to spin up")
+@click.option(
+    "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
+)
+@click.option("--port", default=8000, help="Port to bind the server to.", envvar="PORT")
+@click.option(
+    "--num_workers",
+    default=1,
+    help="Number of gunicorn workers to spin up",
+    envvar="NUM_WORKERS",
+)
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
@@ -62,7 +69,12 @@ def is_port_in_use(port):
 @click.option("--headers", default=None, help="headers for the API call")
 @click.option("--save", is_flag=True, type=bool, help="Save the model-specific config")
 @click.option(
-    "--debug", default=False, is_flag=True, type=bool, help="To debug the input"
+    "--debug",
+    default=False,
+    is_flag=True,
+    type=bool,
+    help="To debug the input",
+    envvar="DEBUG",
 )
 @click.option(
     "--detailed_debug",
@@ -70,6 +82,7 @@ def is_port_in_use(port):
     is_flag=True,
     type=bool,
     help="To view detailed debug logs",
+    envvar="DETAILED_DEBUG",
 )
 @click.option(
     "--use_queue",
@@ -144,6 +157,12 @@ def is_port_in_use(port):
     type=int,
     help="Number of requests to hit async endpoint with",
 )
+@click.option(
+    "--run_gunicorn",
+    default=False,
+    is_flag=True,
+    help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(
     host,
@@ -173,21 +192,32 @@ def run_server(
     use_queue,
     health,
     version,
+    run_gunicorn,
 ):
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry
+        from proxy_server import app, save_worker_config, usage_telemetry, ProxyConfig
     else:
         try:
-            from .proxy_server import app, save_worker_config, usage_telemetry
+            from .proxy_server import (
+                app,
+                save_worker_config,
+                usage_telemetry,
+                ProxyConfig,
+            )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
                 raise e
             else:
                 # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import app, save_worker_config, usage_telemetry
+                from proxy_server import (
+                    app,
+                    save_worker_config,
+                    usage_telemetry,
+                    ProxyConfig,
+                )
     feature_telemetry = usage_telemetry
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
@@ -343,7 +373,11 @@ def run_server(
         )
         try:
             import uvicorn
-            import gunicorn.app.base
+
+            if os.name == "nt":
+                pass
+            else:
+                import gunicorn.app.base
         except:
             raise ImportError(
                 "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
@@ -356,16 +390,16 @@ def run_server(
             read from there and save it to os.env['DATABASE_URL']
             """
             try:
-                import yaml
+                import yaml, asyncio
             except:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
                 )
 
-            if os.path.exists(config):
-                with open(config, "r") as config_file:
-                    config = yaml.safe_load(config_file)
-            general_settings = config.get("general_settings", {})
+            proxy_config = ProxyConfig()
+            _, _, general_settings = asyncio.run(
+                proxy_config.load_config(router=None, config_file_path=config)
+            )
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
@@ -381,86 +415,112 @@ def run_server(
                 os.environ["DATABASE_URL"] = database_url
 
         if os.getenv("DATABASE_URL", None) is not None:
-            # run prisma db push, before starting server
-            # Save the current working directory
-            original_dir = os.getcwd()
-            # set the working directory to where this script is
-            abspath = os.path.abspath(__file__)
-            dname = os.path.dirname(abspath)
-            os.chdir(dname)
             try:
-                subprocess.run(
-                    ["prisma", "db", "push", "--accept-data-loss"]
-                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-            finally:
-                os.chdir(original_dir)
+                subprocess.run(["prisma"], capture_output=True)
+                is_prisma_runnable = True
+            except FileNotFoundError:
+                is_prisma_runnable = False
+
+            if is_prisma_runnable:
+                for _ in range(4):
+                    # run prisma db push, before starting server
+                    # Save the current working directory
+                    original_dir = os.getcwd()
+                    # set the working directory to where this script is
+                    abspath = os.path.abspath(__file__)
+                    dname = os.path.dirname(abspath)
+                    os.chdir(dname)
+                    try:
+                        subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
+                        break  # Exit the loop if the subprocess succeeds
+                    except subprocess.CalledProcessError as e:
+                        print(f"Error: {e}")
+                        time.sleep(random.randrange(start=1, stop=5))
+                    finally:
+                        os.chdir(original_dir)
+            else:
+                print(
+                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
+                )
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-        _endpoint_str = f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
-        curl_command = (
-            _endpoint_str
-            + """
-        --header 'Content-Type: application/json' \\
-        --data ' {
-        "model": "gpt-3.5-turbo",
-        "messages": [
-            {
-            "role": "user",
-            "content": "what llm are you"
+
+        from litellm.proxy.proxy_server import app
+
+        if run_gunicorn == False:
+            uvicorn.run(app, host=host, port=port)  # run uvicorn
+        elif run_gunicorn == True:
+            import gunicorn.app.base
+
+            # Gunicorn Application Class
+            class StandaloneApplication(gunicorn.app.base.BaseApplication):
+                def __init__(self, app, options=None):
+                    self.options = options or {}  # gunicorn options
+                    self.application = app  # FastAPI app
+                    super().__init__()
+
+                    _endpoint_str = (
+                        f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
+                    )
+                    curl_command = (
+                        _endpoint_str
+                        + """
+                    --header 'Content-Type: application/json' \\
+                    --data ' {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [
+                        {
+                        "role": "user",
+                        "content": "what llm are you"
+                        }
+                    ]
+                    }'
+                    \n
+                    """
+                    )
+                    print()  # noqa
+                    print(  # noqa
+                        f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+                    )
+                    print(  # noqa
+                        f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
+                    )
+                    print(
+                        "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
+                    )  # noqa
+                    print(  # noqa
+                        f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
+                    )  # noqa
+
+                def load_config(self):
+                    # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
+                    config = {
+                        key: value
+                        for key, value in self.options.items()
+                        if key in self.cfg.settings and value is not None
+                    }
+                    for key, value in config.items():
+                        self.cfg.set(key.lower(), value)
+
+                def load(self):
+                    # gunicorn app function
+                    return self.application
+
+            print(
+                f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"
+            )
+            gunicorn_options = {
+                "bind": f"{host}:{port}",
+                "workers": num_workers,  # default is 1
+                "worker_class": "uvicorn.workers.UvicornWorker",
+                "preload": True,  # Add the preload flag,
+                "accesslog": "-",  # Log to stdout
+                "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
             }
-        ]
-        }'
-        \n
-        """
-        )
-        print()  # noqa
-        print(  # noqa
-            f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
-        )
-        print(  # noqa
-            f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
-        )
-        print(
-            "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
-        )  # noqa
-        print(  # noqa
-            f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
-        )  # noqa
+            StandaloneApplication(
+                app=app, options=gunicorn_options
+            ).run()  # Run gunicorn
 
-        uvicorn.run(
-            "litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers
-        )
-
-        # # Gunicorn Application Class
-        # class StandaloneApplication(gunicorn.app.base.BaseApplication):
-        #     def __init__(self, app, options=None):
-        #         self.options = options or {}  # gunicorn options
-        #         self.application = app  # FastAPI app
-        #         super().__init__()
-
-        #     def load_config(self):
-        #         # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
-        #         config = {
-        #             key: value
-        #             for key, value in self.options.items()
-        #             if key in self.cfg.settings and value is not None
-        #         }
-        #         for key, value in config.items():
-        #             self.cfg.set(key.lower(), value)
-
-        #     def load(self):
-        #         # gunicorn app function
-        #         return self.application
-
-        # gunicorn_options = {
-        #     "bind": f"{host}:{port}",
-        #     "workers": num_workers,  # default is 1
-        #     "worker_class": "uvicorn.workers.UvicornWorker",
-        #     "preload": True,  # Add the preload flag
-        # }
-        # from litellm.proxy.proxy_server import app
-
-        # StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
 
 if __name__ == "__main__":
