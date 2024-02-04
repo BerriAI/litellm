@@ -1,3 +1,7 @@
+"""
+Deprecated. We now do together ai calls via the openai client.
+Reference: https://docs.together.ai/docs/openai-api-compatibility
+"""
 import os, types
 import json
 from enum import Enum

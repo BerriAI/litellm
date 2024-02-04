@@ -791,6 +791,7 @@ def completion(
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
+            or custom_llm_provider == "together_ai"
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -1330,6 +1331,9 @@ def completion(
             or ("togethercomputer" in model)
             or (model in litellm.together_ai_models)
         ):
+            """
+            Deprecated. We now do together ai calls via the openai client - https://docs.together.ai/docs/openai-api-compatibility
+            """
             custom_llm_provider = "together_ai"
             together_ai_key = (
                 api_key
