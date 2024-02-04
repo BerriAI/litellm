@@ -174,16 +174,12 @@ curl 'http://0.0.0.0:8000/key/generate' \
 }
 ```
 
-### [Beta] Proxy UI
+### [Beta] Proxy UI ([Docs](https://docs.litellm.ai/docs/proxy/ui))
 
-A simple UI to add new models and let your users create keys. 
-
-Live here: https://dashboard.litellm.ai/
+A UI to create keys, track spend per key
 
 Code: https://github.com/BerriAI/litellm/tree/main/ui  
-
-  
-<img width="1672" alt="Screenshot 2023-12-26 at 8 33 53 AM" src="https://github.com/BerriAI/litellm/assets/17561003/274254d8-c5fe-4645-9123-100045a7fb21">
+![ui_3](https://github.com/BerriAI/litellm/assets/29436595/47c97d5e-b9be-4839-b28c-43d7f4f10033)
 
 ## Supported Providers ([Docs](https://docs.litellm.ai/docs/providers))
 | Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  | [Async Embedding](https://docs.litellm.ai/docs/embedding/supported_embedding)  | [Async Image Generation](https://docs.litellm.ai/docs/image_generation)  | 
