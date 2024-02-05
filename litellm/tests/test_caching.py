@@ -987,3 +987,28 @@ def test_cache_context_managers():
 
 
 # test_cache_context_managers()
+
+
+def test_redis_semantic_cache_completion():
+    litellm.set_verbose = False
+
+    random_number = random.randint(
+        1, 100000
+    )  # add a random number to ensure it's always adding / reading from cache
+    messages = [
+        {"role": "user", "content": f"write a one sentence poem about: {random_number}"}
+    ]
+    litellm.cache = Cache(
+        type="redis-semantic",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    print("test2 for Redis Caching - non streaming")
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=20)
+    # response2 = completion(
+    #     model="gpt-3.5-turbo", messages=messages,max_tokens=20
+    # )
+
+
+# test_redis_cache_completion()
