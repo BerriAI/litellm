@@ -270,6 +270,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 yield transformed_chunk
     except Exception as e:
         traceback.print_exc()
+        raise e
 
 
 async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
