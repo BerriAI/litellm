@@ -758,9 +758,10 @@ async def _PROXY_track_cost_callback(
             verbose_proxy_logger.info(
                 f"response_cost {response_cost}, for user_id {user_id}"
             )
-            if user_api_key and (
-                prisma_client is not None or custom_db_client is not None
-            ):
+            verbose_proxy_logger.debug(
+                f"user_api_key {user_api_key}, prisma_client: {prisma_client}, custom_db_client: {custom_db_client}"
+            )
+            if user_api_key is not None:
                 await update_database(
                     token=user_api_key,
                     response_cost=response_cost,
@@ -770,6 +771,8 @@ async def _PROXY_track_cost_callback(
                     start_time=start_time,
                     end_time=end_time,
                 )
+            else:
+                raise Exception("User API key missing from custom callback.")
         else:
             if kwargs["stream"] != True or (
                 kwargs["stream"] == True
@@ -4067,7 +4070,6 @@ def _has_user_setup_sso():
 async def shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     if prisma_client:
-
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
