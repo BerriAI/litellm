@@ -18,3 +18,10 @@ repos:
         language: system
         types: [python]
         files: ^litellm/
+-   repo: local
+    hooks:
+    -   id: check-files-match
+        name: Check if files match
+        entry: python3 ci_cd/check_files_match.py
+        language: system
+        files: model_prices_and_context_window.json model_prices_and_context_window_backup.json
