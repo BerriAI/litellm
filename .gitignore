@@ -43,3 +43,4 @@ ui/litellm-dashboard/package-lock.json
 deploy/charts/litellm-helm/*.tgz
 deploy/charts/litellm-helm/charts/*
 deploy/charts/*.tgz
+litellm/proxy/vertex_key.json
