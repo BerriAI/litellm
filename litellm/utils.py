@@ -3852,6 +3852,8 @@ def get_optional_params(
             and custom_llm_provider != "text-completion-openai"
             and custom_llm_provider != "azure"
             and custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "anyscale"
+            and custom_llm_provider != "together_ai"
         ):
             if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
                 # ollama actually supports json output
@@ -3870,11 +3872,6 @@ def get_optional_params(
                     optional_params[
                         "functions_unsupported_model"
                     ] = non_default_params.pop("functions")
-            elif (
-                custom_llm_provider == "anyscale"
-                and model == "mistralai/Mistral-7B-Instruct-v0.1"
-            ):  # anyscale just supports function calling with mistral
-                pass
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4087,6 +4084,8 @@ def get_optional_params(
             "top_p",
             "stop",
             "frequency_penalty",
+            "tools",
+            "tool_choice",
         ]
         _check_valid_arg(supported_params=supported_params)
 
@@ -4104,6 +4103,10 @@ def get_optional_params(
             ] = frequency_penalty  # https://docs.together.ai/reference/inference
         if stop is not None:
             optional_params["stop"] = stop
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in
         supported_params = [
