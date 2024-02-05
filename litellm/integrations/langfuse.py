@@ -214,6 +214,7 @@ class LangFuseLogger:
             "output": output,
             "user_id": metadata.get("trace_user_id", user_id),
             "id": metadata.get("trace_id", None),
+            "session_id": metadata.get("session_id", None),
         }
         cost = kwargs["response_cost"]
         print_verbose(f"trace: {cost}")
