@@ -5,7 +5,7 @@
         "max_output_tokens": 4096, 
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
-        "litellm_provider": "openai",
+        "litellm_provider": "opeai",
         "mode": "chat"
     },
     "gpt-4-0314": {
