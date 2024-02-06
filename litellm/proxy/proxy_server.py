@@ -1749,7 +1749,33 @@ async def async_data_generator(response, user_api_key_dict):
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        yield f"data: {str(e)}\n\n"
+        traceback.print_exc()
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e
+        )
+        verbose_proxy_logger.debug(
+            f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+        )
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if user_debug:
+            traceback.print_exc()
+
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            error_traceback = traceback.format_exc()
+            error_msg = f"{str(e)}\n\n{error_traceback}"
+
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 def select_data_generator(response, user_api_key_dict):
@@ -1757,7 +1783,7 @@ def select_data_generator(response, user_api_key_dict):
         # since boto3 - sagemaker does not support async calls, we should use a sync data_generator
         if hasattr(
             response, "custom_llm_provider"
-        ) and response.custom_llm_provider in ["sagemaker", "together_ai"]:
+        ) and response.custom_llm_provider in ["sagemaker"]:
             return data_generator(
                 response=response,
             )
@@ -2242,7 +2268,6 @@ async def chat_completion(
             selected_data_generator = select_data_generator(
                 response=response, user_api_key_dict=user_api_key_dict
             )
-
             return StreamingResponse(
                 selected_data_generator,
                 media_type="text/event-stream",
@@ -4064,16 +4089,16 @@ async def health_readiness():
             cache_type = {"type": cache_type, "index_info": index_info}
 
     if prisma_client is not None:  # if db passed in, check if it's connected
-        if prisma_client.db.is_connected() == True:
-            response_object = {"db": "connected"}
+        await prisma_client.health_check()  # test the db connection
+        response_object = {"db": "connected"}
 
-            return {
-                "status": "healthy",
-                "db": "connected",
-                "cache": cache_type,
-                "litellm_version": version,
-                "success_callbacks": litellm.success_callback,
-            }
+        return {
+            "status": "healthy",
+            "db": "connected",
+            "cache": cache_type,
+            "litellm_version": version,
+            "success_callbacks": litellm.success_callback,
+        }
     else:
         return {
             "status": "healthy",
