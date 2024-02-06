@@ -2348,7 +2348,9 @@ def client(original_function):
                     elif user_max_tokens + input_tokens > max_output_tokens:
                         user_max_tokens = max_output_tokens - input_tokens
                     print_verbose(f"user_max_tokens: {user_max_tokens}")
-                    kwargs["max_tokens"] = user_max_tokens
+                    kwargs["max_tokens"] = int(
+                        round(user_max_tokens)
+                    )  # make sure max tokens is always an int
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {str(e)}")
             # MODEL CALL
