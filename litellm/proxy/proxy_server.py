@@ -322,6 +322,7 @@ async def user_api_key_auth(
                 f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
             )
 
+        ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         is_master_key_valid = secrets.compare_digest(api_key, master_key)
         if is_master_key_valid:
@@ -454,6 +455,12 @@ async def user_api_key_auth(
                             if _user is None:
                                 continue
                             assert isinstance(_user, dict)
+                            # check if user is admin #
+                            if (
+                                _user.get("user_role", None) is not None
+                                and _user.get("user_role") == "proxy_admin"
+                            ):
+                                return UserAPIKeyAuth(api_key=master_key)
                             # Token exists, not expired now check if its in budget for the user
                             user_max_budget = _user.get("max_budget", None)
                             user_current_spend = _user.get("spend", None)
@@ -597,10 +604,13 @@ async def user_api_key_auth(
                     # check if user can access this route
                     query_params = request.query_params
                     user_id = query_params.get("user_id")
+                    verbose_proxy_logger.debug(
+                        f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
+                    )
                     if user_id != valid_token.user_id:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
-                            detail="user not allowed to access this key's info",
+                            detail="key not allowed to access this user's info",
                         )
                 elif route == "/user/update":
                     raise HTTPException(
@@ -1846,6 +1856,9 @@ async def startup_event():
 
     if prisma_client is not None and master_key is not None:
         # add master key to db
+        user_id = "default_user_id"
+        if os.getenv("PROXY_ADMIN_ID", None) is not None:
+            user_id = os.getenv("PROXY_ADMIN_ID")
         asyncio.create_task(
             generate_key_helper_fn(
                 duration=None,
@@ -1854,7 +1867,8 @@ async def startup_event():
                 config={},
                 spend=0,
                 token=master_key,
-                user_id="default_user_id",
+                user_id=user_id,
+                user_role="proxy_admin",
             )
         )
 
@@ -3380,12 +3394,13 @@ async def auth_callback(request: Request):
         result = await microsoft_sso.verify_and_process(request)
 
     # User is Authe'd in - generate key for the UI to access Proxy
-    user_id = getattr(result, "email", None)
+    user_email = getattr(result, "email", None)
+    user_id = getattr(result, "id", None)
     if user_id is None:
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
 
     response = await generate_key_helper_fn(
-        **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard", "user_email": user_email}  # type: ignore
     )
 
     key = response["token"]  # type: ignore
@@ -3393,10 +3408,25 @@ async def auth_callback(request: Request):
 
     litellm_dashboard_ui = "/ui/"
 
+    user_role = "app_owner"
+    if (
+        os.getenv("PROXY_ADMIN_ID", None) is not None
+        and os.environ["PROXY_ADMIN_ID"] == user_id
+    ):
+        # checks if user is admin
+        user_role = "app_admin"
+
     import jwt
 
     jwt_token = jwt.encode(
-        {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
+        {
+            "user_id": user_id,
+            "key": key,
+            "user_email": user_email,
+            "user_role": user_role,
+        },
+        "secret",
+        algorithm="HS256",
     )
     litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
 
@@ -3409,10 +3439,18 @@ async def auth_callback(request: Request):
     "/user/info", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
 )
 async def user_info(
-    user_id: str = fastapi.Query(..., description="User ID in the request parameters")
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="User ID in the request parameters"
+    )
 ):
     """
     Use this to get user information. (user row + all user key info)
+
+    Example request
+    ```
+    curl -X GET 'http://localhost:8000/user/info?user_id=krrish7%40berri.ai' \
+    --header 'Authorization: Bearer sk-1234'
+    ```
     """
     global prisma_client
     try:
@@ -3421,11 +3459,25 @@ async def user_info(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         ## GET USER ROW ##
-        user_info = await prisma_client.get_data(user_id=user_id)
+        if user_id is not None:
+            user_info = await prisma_client.get_data(user_id=user_id)
+        else:
+            user_info = None
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
-            user_id=user_id, table_name="key", query_type="find_all"
+            user_id=user_id,
+            table_name="key",
+            query_type="find_all",
+            expires=datetime.now(),
         )
+
+        if user_info is None:
+            ## make sure we still return a total spend ##
+            spend = 0
+            for k in keys:
+                spend += getattr(k, "spend", 0)
+            user_info = {"spend": spend}
+
         ## REMOVE HASHED TOKEN INFO before returning ##
         for key in keys:
             try:
