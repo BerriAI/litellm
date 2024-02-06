@@ -3320,6 +3320,10 @@ async def ahealth_check(
                 response = {}  # args like remaining ratelimit etc.
         return response
     except Exception as e:
+        if model not in litellm.model_cost and mode is None:
+            raise Exception(
+                "Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models"
+            )
         return {"error": str(e)}
 
 
