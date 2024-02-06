@@ -1006,6 +1006,7 @@ def test_redis_semantic_cache_completion():
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
         similarity_threshold=0.8,
+        redis_semantic_cache_embedding_model="text-embedding-ada-002",
     )
     response1 = completion(
         model="gpt-3.5-turbo",
