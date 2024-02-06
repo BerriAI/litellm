@@ -252,8 +252,14 @@ class LangFuseLogger:
             print_verbose(f"trace: {cost}")
             if supports_tags:
                 for key, value in metadata.items():
-                    tags.append(f"{key}:{value}")
+                    if key in [
+                        "user_api_key",
+                        "user_api_key_user_id",
+                    ]:
+                        tags.append(f"{key}:{value}")
                 if "cache_hit" in kwargs:
+                    if kwargs["cache_hit"] is None:
+                        kwargs["cache_hit"] = False
                     tags.append(f"cache_hit:{kwargs['cache_hit']}")
                 trace_params.update({"tags": tags})
 
