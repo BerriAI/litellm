@@ -1401,6 +1401,26 @@ class ProxyConfig:
 proxy_config = ProxyConfig()
 
 
+def _duration_in_seconds(duration: str):
+    match = re.match(r"(\d+)([smhd]?)", duration)
+    if not match:
+        raise ValueError("Invalid duration format")
+
+    value, unit = match.groups()
+    value = int(value)
+
+    if unit == "s":
+        return value
+    elif unit == "m":
+        return value * 60
+    elif unit == "h":
+        return value * 3600
+    elif unit == "d":
+        return value * 86400
+    else:
+        raise ValueError("Unsupported duration unit")
+
+
 async def generate_key_helper_fn(
     duration: Optional[str],
     models: list,
@@ -1434,25 +1454,6 @@ async def generate_key_helper_fn(
 
     if token is None:
         token = f"sk-{secrets.token_urlsafe(16)}"
-
-    def _duration_in_seconds(duration: str):
-        match = re.match(r"(\d+)([smhd]?)", duration)
-        if not match:
-            raise ValueError("Invalid duration format")
-
-        value, unit = match.groups()
-        value = int(value)
-
-        if unit == "s":
-            return value
-        elif unit == "m":
-            return value * 60
-        elif unit == "h":
-            return value * 3600
-        elif unit == "d":
-            return value * 86400
-        else:
-            raise ValueError("Unsupported duration unit")
 
     if duration is None:  # allow tokens that never expire
         expires = None
@@ -2673,6 +2674,36 @@ async def generate_key_fn(
                     setattr(data, key, litellm.default_key_generate_params.get(key, []))
                 elif key == "metadata" and value == {}:
                     setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+
+        # check if user set default key/generate params on config.yaml
+        if litellm.upperbound_key_generate_params is not None:
+            for elem in data:
+                # if key in litellm.upperbound_key_generate_params, use the min of value and litellm.upperbound_key_generate_params[key]
+                key, value = elem
+                if value is not None and key in litellm.upperbound_key_generate_params:
+                    # if value is float/int
+                    if key in [
+                        "max_budget",
+                        "max_parallel_requests",
+                        "tpm_limit",
+                        "rpm_limit",
+                    ]:
+                        if value > litellm.upperbound_key_generate_params[key]:
+                            # directly compare floats/ints
+                            setattr(
+                                data, key, litellm.upperbound_key_generate_params[key]
+                            )
+                    elif key == "budget_duration":
+                        # budgets are in 1s, 1m, 1h, 1d, 1m (30s, 30m, 30h, 30d, 30m)
+                        # compare the duration in seconds and max duration in seconds
+                        upperbound_budget_duration = _duration_in_seconds(
+                            duration=litellm.upperbound_key_generate_params[key]
+                        )
+                        user_set_budget_duration = _duration_in_seconds(duration=value)
+                        if user_set_budget_duration > upperbound_budget_duration:
+                            setattr(
+                                data, key, litellm.upperbound_key_generate_params[key]
+                            )
 
         data_json = data.json()  # type: ignore
 
