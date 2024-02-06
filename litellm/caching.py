@@ -471,9 +471,11 @@ class RedisSemanticCache(BaseCache):
         )
         results = await self.index.aquery(query)
         if results == None:
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
         if isinstance(results, list):
             if len(results) == 0:
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
         vector_distance = results[0]["vector_distance"]
@@ -485,6 +487,10 @@ class RedisSemanticCache(BaseCache):
         print_verbose(
             f"semantic cache: similarity threshold: {self.similarity_threshold}, similarity: {similarity}, prompt: {prompt}, closest_cached_prompt: {cached_prompt}"
         )
+
+        # update kwargs["metadata"] with similarity, don't rewrite the original metadata
+        kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+
         if similarity > self.similarity_threshold:
             # cache hit !
             cached_value = results[0]["response"]
@@ -968,7 +974,7 @@ class Cache:
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                 )
                 cached_result = await self.cache.async_get_cache(
-                    cache_key, messages=messages
+                    cache_key, *args, **kwargs
                 )
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
