@@ -12,6 +12,12 @@ repos:
        files: litellm/.*\.py
 -   repo: local
     hooks:
+    -   id: check-files-match
+        name: Check if files match
+        entry: python3 ci_cd/check_files_match.py
+        language: system
+-   repo: local
+    hooks:
     -   id: mypy
         name: mypy
         entry: python3 -m mypy --ignore-missing-imports
