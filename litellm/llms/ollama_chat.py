@@ -146,7 +146,12 @@ def get_ollama_response(
             optional_params[k] = v
 
     stream = optional_params.pop("stream", False)
-    data = {"model": model, "messages": messages, "options": optional_params}
+    data = {
+        "model": model,
+        "messages": messages,
+        "options": optional_params,
+        "stream": stream,
+    }
     ## LOGGING
     logging_obj.pre_call(
         input=None,
