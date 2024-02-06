@@ -636,6 +636,31 @@ async def user_api_key_auth(
                     raise Exception(
                         f"Only master key can be used to generate, delete, update or get info for new keys/users. Value of allow_user_auth={allow_user_auth}"
                     )
+
+        # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
+        # sso/login, ui/login, /key functions and /user functions
+        # this will never be allowed to call /chat/completions
+        token_team = getattr(valid_token, "team_id", None)
+        if token_team is not None:
+            if token_team == "litellm-dashboard":
+                # this token is only used for managing the ui
+                allowed_routes = [
+                    "/sso",
+                    "/login",
+                    "/key",
+                    "/spend",
+                    "/user",
+                ]
+                # check if the current route startswith any of the allowed routes
+                if any(
+                    route.startswith(allowed_route) for allowed_route in allowed_routes
+                ):
+                    # Do something if the current route starts with any of the allowed routes
+                    pass
+                else:
+                    raise Exception(
+                        f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
+                    )
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
         else:
             raise Exception(f"Invalid Key Passed to LiteLLM Proxy")
