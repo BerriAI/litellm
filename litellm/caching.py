@@ -15,9 +15,12 @@ from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement, level="DEBUG"):
     try:
-        verbose_logger.debug(print_statement)
+        if level == "INFO":
+            verbose_logger.info(print_statement)
+        else:
+            verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except:
@@ -124,7 +127,7 @@ class RedisCache(BaseCache):
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+            print_verbose("LiteLLM Caching: set() - Got exception from REDIS : ", e)
 
     async def async_set_cache(self, key, value, **kwargs):
         _redis_client = self.init_async_client()
@@ -135,9 +138,12 @@ class RedisCache(BaseCache):
             )
             try:
                 await redis_client.set(name=key, value=json.dumps(value), ex=ttl)
+                print_verbose(
+                    f"LiteLLM Caching: key={key} added to cache", level="INFO"
+                )
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
-                logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+                print_verbose("LiteLLM Caching: set() - Got exception from REDIS : ", e)
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         """
@@ -166,23 +172,28 @@ class RedisCache(BaseCache):
         except Exception as e:
             print_verbose(f"Error occurred in pipeline write - {str(e)}")
             # NON blocking - notify users Redis is throwing an exception
-            logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+            print_verbose("LiteLLM Caching: set() - Got exception from REDIS : ", e)
 
     def _get_cache_logic(self, cached_response: Any):
         """
         Common 'get_cache_logic' across sync + async redis client implementations
         """
+        print_verbose(f"original cached response: {cached_response}")
         if cached_response is None:
             return cached_response
-        # cached_response is in `b{} convert it to ModelResponse
-        cached_response = cached_response.decode("utf-8")  # Convert bytes to string
         try:
-            cached_response = json.loads(
-                cached_response
-            )  # Convert string to dictionary
-        except:
-            cached_response = ast.literal_eval(cached_response)
-        return cached_response
+            # cached_response is in `b{} convert it to ModelResponse
+            cached_response = cached_response.decode("utf-8")  # Convert bytes to string
+            try:
+                cached_response = json.loads(
+                    cached_response
+                )  # Convert string to dictionary
+            except:
+                cached_response = ast.literal_eval(cached_response)
+            return cached_response
+        except Exception as e:
+            print_verbose(f"LiteLLM Caching: get() Got exception from REDIS : {str(e)}")
+            return None
 
     def get_cache(self, key, **kwargs):
         try:
@@ -195,7 +206,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             traceback.print_exc()
-            logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
+            print_verbose("LiteLLM Caching: get() - Got exception from REDIS: ", e)
 
     async def async_get_cache(self, key, **kwargs):
         _redis_client = self.init_async_client()
@@ -211,7 +222,7 @@ class RedisCache(BaseCache):
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
                 traceback.print_exc()
-                logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
+                print_verbose("LiteLLM Caching: get() - Got exception from REDIS: ", e)
 
     def flush_cache(self):
         self.redis_client.flushall()
