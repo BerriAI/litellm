@@ -9,7 +9,7 @@ LiteLLM supports:
 - Redis Cache 
 - s3 Bucket Cache 
 
-## Quick Start - Redis, s3 Cache
+## Quick Start - Redis, s3 Cache, Semantic Cache
 <Tabs>
 
 <TabItem value="redis" label="redis cache">
@@ -80,6 +80,56 @@ litellm_settings:
 ```
 
 ### Step 2: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+</TabItem>
+
+
+<TabItem value="redis-sem" label="redis semantic cache">
+
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+
+### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: azure-embedding-model
+    litellm_params:
+      model: azure/azure-embedding-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache_params:
+    type: "redis-semantic"  
+    similarity_threshold: 0.8   # similarity threshold for semantic cache
+    redis_semantic_cache_embedding_model: azure-embedding-model # set this to a model_name set in model_list
+```
+
+### Step 2: Add Redis Credentials to .env
+Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
+
+  ```shell
+  REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
+  ## OR ## 
+  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+  REDIS_PORT = ""       # REDIS_PORT='18841'
+  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  ```
+
+**Additional kwargs**  
+You can pass in any additional redis.Redis arg, by storing the variable + value in your os environment, like this: 
+```shell
+REDIS_<redis-kwarg-name> = ""
+``` 
+
+### Step 3: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
