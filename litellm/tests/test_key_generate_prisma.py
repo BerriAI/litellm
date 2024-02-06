@@ -322,6 +322,87 @@ def test_call_with_user_over_budget(prisma_client):
         print(vars(e))
 
 
+def test_call_with_end_user_over_budget(prisma_client):
+    # Test if a user passed to /chat/completions is tracked & fails whe they cross their budget
+    # we only check this when litellm.max_user_budget is set
+    import random
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm, "max_user_budget", 0.00001)
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = GenerateKeyRequest()  # create a key with no budget
+            key = await new_user(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+            user = f"ishaan {random.randint(0, 10000)}"
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            async def return_body():
+                return_string = f'{{"model": "gemini-pro-vision", "user": "{user}"}}'
+                # return string as bytes
+                return return_string.encode()
+
+            request.body = return_body
+
+            # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
+            from litellm import ModelResponse, Choices, Message, Usage
+
+            resp = ModelResponse(
+                id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+                choices=[
+                    Choices(
+                        finish_reason=None,
+                        index=0,
+                        message=Message(
+                            content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                            role="assistant",
+                        ),
+                    )
+                ],
+                model="gpt-35-turbo",  # azure always has model written like this
+                usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
+            )
+            await track_cost_callback(
+                kwargs={
+                    "stream": False,
+                    "litellm_params": {
+                        "metadata": {
+                            "user_api_key": generated_key,
+                            "user_api_key_user_id": user,
+                        },
+                        "proxy_server_request": {
+                            "user": user,
+                        },
+                    },
+                    "response_cost": 10,
+                },
+                completion_response=resp,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+            await asyncio.sleep(5)
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+            pytest.fail(f"This should have failed!. They key crossed it's budget")
+
+        asyncio.run(test())
+    except Exception as e:
+        error_detail = e.message
+        assert "Authentication Error, ExceededBudget:" in error_detail
+        print(vars(e))
+
+
 def test_call_with_proxy_over_budget(prisma_client):
     # 5.1 Make a call with a proxy over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
