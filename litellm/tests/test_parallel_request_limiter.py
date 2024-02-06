@@ -306,6 +306,10 @@ async def test_normal_router_call():
 
 @pytest.mark.asyncio
 async def test_normal_router_tpm_limit():
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(level=logging.DEBUG)
     model_list = [
         {
             "model_name": "azure-model",
@@ -353,6 +357,7 @@ async def test_normal_router_tpm_limit():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
+    print("Test: Checking current_requests for precise_minute=", precise_minute)
 
     assert (
         parallel_request_handler.user_api_key_cache.get_cache(
@@ -366,6 +371,7 @@ async def test_normal_router_tpm_limit():
         model="azure-model",
         messages=[{"role": "user", "content": "Write me a paragraph on the moon"}],
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     await asyncio.sleep(1)  # success is done in a separate thread
     print(f"response: {response}")
