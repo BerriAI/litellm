@@ -379,6 +379,7 @@ async def test_normal_router_tpm_limit():
         )
 
     except Exception as e:
+        print("Exception on test_normal_router_tpm_limit", e)
         assert e.status_code == 429
 
 

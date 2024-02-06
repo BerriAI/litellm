@@ -44,6 +44,7 @@ from litellm.proxy.proxy_server import (
     info_key_fn,
     update_key_fn,
     generate_key_fn,
+    generate_key_helper_fn,
     spend_user_fn,
     spend_key_fn,
     view_spend_logs,
@@ -1278,6 +1279,40 @@ async def test_default_key_params(prisma_client):
         pytest.fail(f"Got exception {e}")
 
 
+@pytest.mark.asyncio()
+async def test_upperbound_key_params(prisma_client):
+    """
+    - create key
+    - get key info
+    - assert key_name is not null
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    litellm.upperbound_key_generate_params = {
+        "max_budget": 0.001,
+        "budget_duration": "1m",
+    }
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest(
+            max_budget=200000,
+            budget_duration="30d",
+        )
+        key = await generate_key_fn(request)
+        generated_key = key.key
+
+        result = await info_key_fn(key=generated_key)
+        key_info = result["info"]
+        # assert it used the upper bound for max_budget, and budget_duration
+        assert key_info["max_budget"] == 0.001
+        assert key_info["budget_duration"] == "1m"
+
+        print(result)
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+
 def test_get_bearer_token():
     from litellm.proxy.proxy_server import _get_bearer_token
 
@@ -1378,3 +1413,35 @@ async def test_user_api_key_auth_without_master_key(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
+
+
+@pytest.mark.asyncio
+async def test_key_with_no_permissions(prisma_client):
+    """
+    - create key
+    - get key info
+    - assert key_name is null
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": False})
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        response = await generate_key_helper_fn(
+            **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": "ishaan", "team_id": "litellm-dashboard"}  # type: ignore
+        )
+
+        print(response)
+        key = response["token"]
+
+        # make a /chat/completions call -> it should fail
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        # use generated key to auth in
+        result = await user_api_key_auth(request=request, api_key="Bearer " + key)
+        print("result from user auth with new key", result)
+        pytest.fail(f"This should have failed!. IT's an invalid key")
+    except Exception as e:
+        print("Got Exception", e)
+        print(e.message)
