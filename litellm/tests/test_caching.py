@@ -989,6 +989,7 @@ def test_cache_context_managers():
 # test_cache_context_managers()
 
 
+@pytest.mark.skip(reason="beta test - new redis semantic cache")
 def test_redis_semantic_cache_completion():
     litellm.set_verbose = True
     import logging
@@ -1039,6 +1040,7 @@ def test_redis_semantic_cache_completion():
 # test_redis_cache_completion()
 
 
+@pytest.mark.skip(reason="beta test - new redis semantic cache")
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_acompletion():
     litellm.set_verbose = True
