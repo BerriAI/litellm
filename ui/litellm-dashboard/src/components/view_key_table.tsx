@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { keyDeleteCall } from "./networking";
 import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import {
@@ -32,6 +32,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   data,
   setData,
 }) => {
+  const [isButtonClicked, setIsButtonClicked] = useState(false);
+
   const handleDelete = async (token: String) => {
     if (data == null) {
       return;
@@ -116,8 +118,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   />
                 </TableCell>
                 <TableCell>
-                  <ViewKeySpendReport token={item.token} accessToken={accessToken} keySpend={item.spend} keyBudget={item.max_budget} keyName={item.key_name} />
-                
+                  <ViewKeySpendReport
+                    token={item.token}
+                    accessToken={accessToken}
+                    keySpend={item.spend}
+                    keyBudget={item.max_budget}
+                    keyName={item.key_name}
+                  />
                 </TableCell>
               </TableRow>
             );

@@ -559,9 +559,20 @@ class PrismaClient:
                     # The asterisk before `user_id_list` unpacks the list into separate arguments
                     response = await self.db.query_raw(sql_query)
                 elif query_type == "find_all":
-                    response = await self.db.litellm_usertable.find_many(  # type: ignore
-                        order={"spend": "desc"},
-                    )
+                    if expires is not None:
+                        response = await self.db.litellm_usertable.find_many(  # type: ignore
+                            order={"spend": "desc"},
+                            where={  # type:ignore
+                                "OR": [
+                                    {"expires": None},  # type:ignore
+                                    {"expires": {"gt": expires}},  # type:ignore
+                                ],
+                            },
+                        )
+                    else:
+                        response = await self.db.litellm_usertable.find_many(  # type: ignore
+                            order={"spend": "desc"},
+                        )
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(
