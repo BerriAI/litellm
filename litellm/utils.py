@@ -983,9 +983,6 @@ class Logging:
             verbose_logger.debug(
                 f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n"
             )
-            verbose_logger.debug(
-                f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}"
-            )
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
