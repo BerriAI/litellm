@@ -73,10 +73,14 @@ litellm_settings:
     max_budget: 1.5000
     models: ["azure-gpt-3.5"]
     duration: None
+  cache: True          # set cache responses to True
+  cache_params:
+    type: "redis-semantic"
+    similarity_threshold: 0.8
+    redis_semantic_cache_embedding_model: azure-embedding-model
   upperbound_key_generate_params:
     max_budget: 100
-    duration: "30d"
-  # cache: True     
+    duration: "30d"   
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
