@@ -7,6 +7,7 @@ Cache LLM Responses
 LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
+- Redis Semantic Cache
 - s3 Bucket Cache 
 
 ## Quick Start - Redis, s3 Cache, Semantic Cache

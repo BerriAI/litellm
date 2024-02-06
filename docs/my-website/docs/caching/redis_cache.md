@@ -104,7 +104,7 @@ litellm.cache = Cache(
     host=os.environ["REDIS_HOST"],
     port=os.environ["REDIS_PORT"],
     password=os.environ["REDIS_PASSWORD"],
-    similarity_threshold=0.8,
+    similarity_threshold=0.8, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
     redis_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
 )
 response1 = completion(
