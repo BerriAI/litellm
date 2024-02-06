@@ -255,6 +255,7 @@ class LangFuseLogger:
                     if key in [
                         "user_api_key",
                         "user_api_key_user_id",
+                        "semantic-similarity",
                     ]:
                         tags.append(f"{key}:{value}")
                 if "cache_hit" in kwargs:
