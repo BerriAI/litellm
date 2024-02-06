@@ -36,6 +36,11 @@ def test_proxy_gunicorn_startup_direct_config():
         from litellm._logging import verbose_proxy_logger, verbose_router_logger
         import logging
 
+        # unset set DATABASE_URL in env for this test
+        # set prisma client to None
+        setattr(litellm.proxy.proxy_server, "prisma_client", None)
+        database_url = os.environ.pop("DATABASE_URL", None)
+
         verbose_proxy_logger.setLevel(level=logging.DEBUG)
         verbose_router_logger.setLevel(level=logging.DEBUG)
         filepath = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +54,10 @@ def test_proxy_gunicorn_startup_direct_config():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+    finally:
+        # restore DATABASE_URL after the test
+        if database_url is not None:
+            os.environ["DATABASE_URL"] = database_url
 
 
 def test_proxy_gunicorn_startup_config_dict():
@@ -58,6 +67,11 @@ def test_proxy_gunicorn_startup_config_dict():
 
         verbose_proxy_logger.setLevel(level=logging.DEBUG)
         verbose_router_logger.setLevel(level=logging.DEBUG)
+        # unset set DATABASE_URL in env for this test
+        # set prisma client to None
+        setattr(litellm.proxy.proxy_server, "prisma_client", None)
+        database_url = os.environ.pop("DATABASE_URL", None)
+
         filepath = os.path.dirname(os.path.abspath(__file__))
         # test with worker_config = config yaml
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
@@ -71,6 +85,10 @@ def test_proxy_gunicorn_startup_config_dict():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+    finally:
+        # restore DATABASE_URL after the test
+        if database_url is not None:
+            os.environ["DATABASE_URL"] = database_url
 
 
 # test_proxy_gunicorn_startup()
