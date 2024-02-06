@@ -544,13 +544,13 @@ def hf_test_completion_tgi():
 def test_completion_openai():
     try:
         litellm.set_verbose = True
+        litellm.drop_params = True
         print(f"api key: {os.environ['OPENAI_API_KEY']}")
         litellm.api_key = os.environ["OPENAI_API_KEY"]
         response = completion(
             model="gpt-3.5-turbo",
-            messages=messages,
+            messages=[{"role": "user", "content": "Hey"}],
             max_tokens=10,
-            request_timeout=1,
             metadata={"hi": "bye"},
         )
         print("This is the response object\n", response)
@@ -565,6 +565,7 @@ def test_completion_openai():
         assert len(response_str) > 1
 
         litellm.api_key = None
+        raise Exception("it works!")
     except Timeout as e:
         pass
     except Exception as e:
