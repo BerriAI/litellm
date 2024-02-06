@@ -1135,7 +1135,7 @@ class ProxyConfig:
 
                     verbose_proxy_logger.debug(f"passed cache type={cache_type}")
 
-                    if cache_type == "redis":
+                    if cache_type == "redis" or cache_type == "redis-semantic":
                         cache_host = litellm.get_secret("REDIS_HOST", None)
                         cache_port = litellm.get_secret("REDIS_PORT", None)
                         cache_password = litellm.get_secret("REDIS_PASSWORD", None)
@@ -1162,6 +1162,9 @@ class ProxyConfig:
                             f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}"
                         )
                         print()  # noqa
+                    if cache_type == "redis-semantic":
+                        # by default this should always be async
+                        cache_params.update({"redis_semantic_cache_use_async": True})
 
                     # users can pass os.environ/ variables on the proxy - we should read them from the env
                     for key, value in cache_params.items():
@@ -4067,7 +4070,6 @@ def _has_user_setup_sso():
 async def shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     if prisma_client:
-
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
