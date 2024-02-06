@@ -169,6 +169,8 @@ def map_finish_reason(
         return "stop"
     elif finish_reason == "SAFETY":  # vertex ai
         return "content_filter"
+    elif finish_reason == "STOP":  # vertex ai
+        return "stop"
     return finish_reason
 
 
@@ -1305,7 +1307,7 @@ class Logging:
                         )
                     if callback == "langfuse":
                         global langFuseLogger
-                        verbose_logger.debug("reaches langfuse for logging!")
+                        verbose_logger.debug("reaches langfuse for success logging!")
                         kwargs = {}
                         for k, v in self.model_call_details.items():
                             if (
@@ -6706,7 +6708,13 @@ def exception_type(
                         message=f"VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
-                        response=original_exception.response,
+                        response=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
                     )
                 elif (
                     "429 Quota exceeded" in error_str
@@ -8341,13 +8349,20 @@ class CustomStreamWrapper:
                 completion_obj["content"] = chunk.text
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
                 try:
-                    # print(chunk)
-                    if hasattr(chunk, "text"):
-                        # vertexAI chunks return
-                        # MultiCandidateTextGenerationResponse(text=' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', _prediction_response=Prediction(predictions=[{'candidates': [{'content': ' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', 'author': '1'}], 'citationMetadata': [{'citations': None}], 'safetyAttributes': [{'blocked': False, 'scores': None, 'categories': None}]}], deployed_model_id='', model_version_id=None, model_resource_name=None, explanations=None), is_blocked=False, safety_attributes={}, candidates=[ ```python
-                        # This Python code says "Hi" 100 times.
-                        # Create])
-                        completion_obj["content"] = chunk.text
+                    if hasattr(chunk, "candidates") == True:
+                        try:
+                            completion_obj["content"] = chunk.text
+                            if hasattr(chunk.candidates[0], "finish_reason"):
+                                model_response.choices[
+                                    0
+                                ].finish_reason = map_finish_reason(
+                                    chunk.candidates[0].finish_reason.name
+                                )
+                        except:
+                            if chunk.candidates[0].finish_reason.name == "SAFETY":
+                                raise Exception(
+                                    f"The response was blocked by VertexAI. {str(chunk)}"
+                                )
                     else:
                         completion_obj["content"] = str(chunk)
                 except StopIteration as e:
@@ -8636,7 +8651,6 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "ollama_chat"
                 or self.custom_llm_provider == "vertex_ai"
             ):
-                print_verbose(f"INSIDE ASYNC STREAMING!!!")
                 print_verbose(
                     f"value of async completion stream: {self.completion_stream}"
                 )
