@@ -1019,8 +1019,20 @@ def test_redis_semantic_cache_completion():
     )
     print(f"response1: {response1}")
 
-    assert response1.id == "chatcmpl-8p5GejSWLJ1pDI1lfhc6Idhwd2bDJ"
-    # assert response1.choices[0].message == 1
+    random_number = random.randint(1, 100000)
+
+    response2 = completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": f"write a one sentence poem about: {random_number}",
+            }
+        ],
+        max_tokens=20,
+    )
+    print(f"response2: {response1}")
+    assert response1.id == response2.id
 
 
 # test_redis_cache_completion()
@@ -1054,8 +1066,20 @@ async def test_redis_semantic_cache_acompletion():
                 "content": f"write a one sentence poem about: {random_number}",
             }
         ],
-        max_tokens=20,
+        max_tokens=5,
     )
     print(f"response1: {response1}")
 
-    assert response1.id == "chatcmpl-8pI86yvT7fvgLDjngZSKULy1iP1o5"
+    random_number = random.randint(1, 100000)
+    response2 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": f"write a one sentence poem about: {random_number}",
+            }
+        ],
+        max_tokens=5,
+    )
+    print(f"response2: {response2}")
+    assert response1.id == response2.id
