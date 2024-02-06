@@ -990,7 +990,7 @@ def test_cache_context_managers():
 
 
 def test_redis_semantic_cache_completion():
-    litellm.set_verbose = False
+    litellm.set_verbose = True
 
     random_number = random.randint(
         1, 100000
@@ -1003,6 +1003,7 @@ def test_redis_semantic_cache_completion():
         host=os.environ["REDIS_HOST"],
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
+        similarity_threshold=0.5,
     )
     print("test2 for Redis Caching - non streaming")
     response1 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=20)
