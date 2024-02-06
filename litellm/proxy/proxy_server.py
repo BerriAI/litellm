@@ -652,8 +652,13 @@ async def user_api_key_auth(
                     "/user",
                 ]
                 # check if the current route startswith any of the allowed routes
-                if any(
-                    route.startswith(allowed_route) for allowed_route in allowed_routes
+                if (
+                    route is not None
+                    and isinstance(route, str)
+                    and any(
+                        route.startswith(allowed_route)
+                        for allowed_route in allowed_routes
+                    )
                 ):
                     # Do something if the current route starts with any of the allowed routes
                     pass
