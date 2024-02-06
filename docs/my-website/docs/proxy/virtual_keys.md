@@ -352,6 +352,22 @@ Request Params:
 }
 ```
 
+## Upperbound /key/generate params
+Use this, if you need to control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
+
+Set `litellm_settings:upperbound_key_generate_params`:
+```yaml
+litellm_settings:
+  upperbound_key_generate_params:
+    max_budget: 100 # upperbound of $100, for all /key/generate requests
+    duration: "30d" # upperbound of 30 days for all /key/generate requests
+```
+
+** Expected Behavior **
+
+- Send a `/key/generate` request with `max_budget=200`
+- Key will be created with `max_budget=100` since 100 is the upper bound
+
 ## Default /key/generate params
 Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
 
