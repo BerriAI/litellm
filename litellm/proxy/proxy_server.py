@@ -1076,6 +1076,19 @@ class ProxyConfig:
                 database_type == "dynamo_db" or database_type == "dynamodb"
             ):
                 database_args = general_settings.get("database_args", None)
+                ### LOAD FROM os.environ/ ###
+                for k, v in database_args.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        database_args[k] = litellm.get_secret(v)
+                    if isinstance(k, str) and k == "aws_web_identity_token":
+                        if os.path.exists(v):
+                            with open(v, "r") as file:
+                                token_content = file.read()
+                                database_args[k] = json.loads(token_content)
+                        else:
+                            verbose_proxy_logger.info(
+                                f"DynamoDB Loading - {v} is not a valid file path"
+                            )
                 custom_db_client = DBClient(
                     custom_db_args=database_args, custom_db_type=database_type
                 )
