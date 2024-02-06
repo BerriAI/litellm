@@ -77,7 +77,7 @@ litellm_settings:
   cache_params:
     type: "redis-semantic"
     similarity_threshold: 0.8
-    redis_semantic_cache_embedding_model: azure-embedding-model
+    redis_semantic_cache_use_async: True
   # cache: True
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
