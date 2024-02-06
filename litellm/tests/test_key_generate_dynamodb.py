@@ -490,8 +490,13 @@ def test_dynamo_db_migration(custom_db_client):
     try:
 
         async def test():
+            request = GenerateKeyRequest(max_budget=1)
+            key = await generate_key_fn(request)
+            print(key)
+
+            generated_key = key.key
             bearer_token = (
-                "Bearer " + "sk-elJDL2pOEjcAuC7zD4psAg"
+                "Bearer " + generated_key
             )  # this works with ishaan's db, it's a never expiring key
 
             request = Request(scope={"type": "http"})
@@ -508,4 +513,4 @@ def test_dynamo_db_migration(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
+        pytest.fail(f"An exception occurred - {traceback.format_exc()}")
