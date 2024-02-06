@@ -149,12 +149,20 @@ class ProxyLogging:
         if request_data is not None:
             model = request_data.get("model", "")
             messages = request_data.get("messages", "")
-            # try casting messages to str and get the first 100 characters, else mark as None
-            try:
+            trace_id = request_data.get("metadata", {}).get(
+                "trace_id", None
+            )  # get langfuse trace id
+            if trace_id is not None:
                 messages = str(messages)
-                messages = messages[:10000]
-            except:
-                messages = None
+                messages = messages[:100]
+                messages = f"{messages}\nLangfuse Trace Id: {trace_id}"
+            else:
+                # try casting messages to str and get the first 100 characters, else mark as None
+                try:
+                    messages = str(messages)
+                    messages = messages[:10000]
+                except:
+                    messages = None
 
             request_info = f"\nRequest Model: {model}\nMessages: {messages}"
         else:
