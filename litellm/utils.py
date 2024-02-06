@@ -980,11 +980,8 @@ class Logging:
             self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
-            verbose_logger.debug(
+            print_verbose(
                 f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n"
-            )
-            verbose_logger.debug(
-                f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}"
             )
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -1636,34 +1633,6 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-                if callback == "langfuse":
-                    global langFuseLogger
-                    print_verbose("reaches Async langfuse for logging!")
-                    kwargs = {}
-                    for k, v in self.model_call_details.items():
-                        if (
-                            k != "original_response"
-                        ):  # copy.deepcopy raises errors as this could be a coroutine
-                            kwargs[k] = v
-                    # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                    if self.stream:
-                        if "complete_streaming_response" not in kwargs:
-                            return
-                        else:
-                            print_verbose(
-                                "reaches Async langfuse for streaming logging!"
-                            )
-                            result = kwargs["complete_streaming_response"]
-                    if langFuseLogger is None:
-                        langFuseLogger = LangFuseLogger()
-                    await langFuseLogger._async_log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        user_id=kwargs.get("user", None),
-                        print_verbose=print_verbose,
-                    )
             except:
                 print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
@@ -1788,9 +1757,37 @@ class Logging:
                             response_obj=result,
                             kwargs=self.model_call_details,
                         )
+                    elif callback == "langfuse":
+                        global langFuseLogger
+                        verbose_logger.debug("reaches langfuse for logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if langFuseLogger is None or (
+                            self.langfuse_public_key != langFuseLogger.public_key
+                            and self.langfuse_secret != langFuseLogger.secret_key
+                        ):
+                            langFuseLogger = LangFuseLogger(
+                                langfuse_public_key=self.langfuse_public_key,
+                                langfuse_secret=self.langfuse_secret,
+                            )
+                        langFuseLogger.log_event(
+                            start_time=start_time,
+                            end_time=end_time,
+                            response_obj=None,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                            status_message=str(exception),
+                            level="ERROR",
+                            kwargs=self.model_call_details,
+                        )
                 except Exception as e:
                     print_verbose(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {traceback.format_exc()}"
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {str(e)}"
                     )
                     print_verbose(
                         f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
@@ -3860,6 +3857,8 @@ def get_optional_params(
             and custom_llm_provider != "text-completion-openai"
             and custom_llm_provider != "azure"
             and custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "anyscale"
+            and custom_llm_provider != "together_ai"
         ):
             if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
                 # ollama actually supports json output
@@ -3878,11 +3877,6 @@ def get_optional_params(
                     optional_params[
                         "functions_unsupported_model"
                     ] = non_default_params.pop("functions")
-            elif (
-                custom_llm_provider == "anyscale"
-                and model == "mistralai/Mistral-7B-Instruct-v0.1"
-            ):  # anyscale just supports function calling with mistral
-                pass
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4095,6 +4089,8 @@ def get_optional_params(
             "top_p",
             "stop",
             "frequency_penalty",
+            "tools",
+            "tool_choice",
         ]
         _check_valid_arg(supported_params=supported_params)
 
@@ -4112,6 +4108,10 @@ def get_optional_params(
             ] = frequency_penalty  # https://docs.together.ai/reference/inference
         if stop is not None:
             optional_params["stop"] = stop
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in
         supported_params = [
