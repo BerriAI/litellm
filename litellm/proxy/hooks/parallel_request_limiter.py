@@ -130,7 +130,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 "current_rpm": current["current_rpm"] + 1,
             }
 
-            self.print_verbose(f"updated_value in success call: {new_val}")
+            self.print_verbose(
+                f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
+            )
             self.user_api_key_cache.set_cache(
                 request_count_api_key, new_val, ttl=60
             )  # store in cache for 1 min.
