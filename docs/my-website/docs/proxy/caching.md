@@ -211,9 +211,10 @@ litellm_settings:
 
 The proxy support 3 cache-controls:
 
-- `ttl`: Will cache the response for the user-defined amount of time (in seconds).
-- `s-maxage`: Will only accept cached responses that are within user-defined range (in seconds).
-- `no-cache`: Will not return a cached response, but instead call the actual endpoint. 
+- `ttl`: *Optional(int)* - Will cache the response for the user-defined amount of time (in seconds).
+- `s-maxage`: *Optional(int)* Will only accept cached responses that are within user-defined range (in seconds).
+- `no-cache`: *Optional(bool)* Will not return a cached response, but instead call the actual endpoint. 
+- `no-store`: *Optional(bool)* Will not cache the response. 
 
 [Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
 
