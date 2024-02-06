@@ -531,6 +531,9 @@ class RedisSemanticCache(BaseCache):
             return None
         pass
 
+    async def _index_info(self):
+        return await self.index.ainfo()
+
 
 class S3Cache(BaseCache):
     def __init__(
