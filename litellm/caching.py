@@ -270,7 +270,10 @@ class RedisSemanticCache(BaseCache):
             redis_url = "redis://:" + password + "@" + host + ":" + port
         print_verbose(f"redis semantic-cache redis_url: {redis_url}")
         self.index.connect(redis_url=redis_url)
-        self.index.create(overwrite=False)  # don't overwrite existing index
+        try:
+            self.index.create(overwrite=False)  # don't overwrite existing index
+        except Exception as e:
+            print_verbose(f"Got exception creating semantic cache index: {str(e)}")
 
     def _get_cache_logic(self, cached_response: Any):
         """
