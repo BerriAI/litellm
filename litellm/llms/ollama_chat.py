@@ -320,11 +320,15 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 model_response["choices"][0]["message"] = message
             else:
                 model_response["choices"][0]["message"] = response_json["message"]
+
             model_response["created"] = int(time.time())
-            model_response["model"] = "ollama/" + data["model"]
+            model_response["model"] = "ollama_chat/" + data["model"]
             prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=data["messages"]))  # type: ignore
             completion_tokens = response_json.get(
-                "eval_count", litellm.token_counter(text=response_json["message"])
+                "eval_count",
+                litellm.token_counter(
+                    text=response_json["message"]["content"], count_response_tokens=True
+                ),
             )
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
