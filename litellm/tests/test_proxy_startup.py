@@ -33,6 +33,11 @@ def test_proxy_gunicorn_startup_direct_config():
     Test both approaches
     """
     try:
+        from litellm._logging import verbose_proxy_logger, verbose_router_logger
+        import logging
+
+        verbose_proxy_logger.setLevel(level=logging.DEBUG)
+        verbose_router_logger.setLevel(level=logging.DEBUG)
         filepath = os.path.dirname(os.path.abspath(__file__))
         # test with worker_config = config yaml
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
@@ -48,6 +53,11 @@ def test_proxy_gunicorn_startup_direct_config():
 
 def test_proxy_gunicorn_startup_config_dict():
     try:
+        from litellm._logging import verbose_proxy_logger, verbose_router_logger
+        import logging
+
+        verbose_proxy_logger.setLevel(level=logging.DEBUG)
+        verbose_router_logger.setLevel(level=logging.DEBUG)
         filepath = os.path.dirname(os.path.abspath(__file__))
         # test with worker_config = config yaml
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
