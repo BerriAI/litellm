@@ -998,7 +998,7 @@ def test_redis_semantic_cache_completion():
 
     random_number = random.randint(
         1, 100000
-    )  # add a random number to ensure it's always adding / reading from cache
+    )  # add a random number to ensure it's always adding /reading from cache
 
     print("testing semantic caching")
     litellm.cache = Cache(
