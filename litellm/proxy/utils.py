@@ -472,8 +472,6 @@ class PrismaClient:
         reset_at: Optional[datetime] = None,
     ):
         try:
-            print_verbose("PrismaClient: get_data")
-
             response: Any = None
             if token is not None or (table_name is not None and table_name == "key"):
                 # check if plain text or hash
@@ -884,6 +882,21 @@ class PrismaClient:
                 self.proxy_logging_obj.failure_handler(original_exception=e)
             )
             raise e
+
+    async def health_check(self):
+        """
+        Health check endpoint for the prisma client
+        """
+        sql_query = """
+            SELECT 1
+            FROM "LiteLLM_VerificationToken"
+            LIMIT 1
+            """
+
+        # Execute the raw query
+        # The asterisk before `user_id_list` unpacks the list into separate arguments
+        response = await self.db.query_raw(sql_query)
+        return response
 
 
 class DBClient:

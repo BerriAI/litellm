@@ -4051,16 +4051,16 @@ async def health_readiness():
         cache_type = litellm.cache.type
 
     if prisma_client is not None:  # if db passed in, check if it's connected
-        if prisma_client.db.is_connected() == True:
-            response_object = {"db": "connected"}
+        await prisma_client.health_check()  # test the db connection
+        response_object = {"db": "connected"}
 
-            return {
-                "status": "healthy",
-                "db": "connected",
-                "cache": cache_type,
-                "litellm_version": version,
-                "success_callbacks": litellm.success_callback,
-            }
+        return {
+            "status": "healthy",
+            "db": "connected",
+            "cache": cache_type,
+            "litellm_version": version,
+            "success_callbacks": litellm.success_callback,
+        }
     else:
         return {
             "status": "healthy",
