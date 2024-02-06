@@ -266,21 +266,30 @@ class RedisSemanticCache(BaseCache):
         if redis_url is None:
             # if no url passed, check if host, port and password are passed, if not raise an Exception
             if host is None or port is None or password is None:
-                raise Exception(f"Redis host, port, and password must be provided")
+                # try checking env for host, port and password
+                import os
+
+                host = os.getenv("REDIS_HOST")
+                port = os.getenv("REDIS_PORT")
+                password = os.getenv("REDIS_PASSWORD")
+                if host is None or port is None or password is None:
+                    raise Exception("Redis host, port, and password must be provided")
+
             redis_url = "redis://:" + password + "@" + host + ":" + port
         print_verbose(f"redis semantic-cache redis_url: {redis_url}")
         if use_async == False:
             self.index = SearchIndex.from_dict(schema)
             self.index.connect(redis_url=redis_url)
+            try:
+                self.index.create(overwrite=False)  # don't overwrite existing index
+            except Exception as e:
+                print_verbose(f"Got exception creating semantic cache index: {str(e)}")
         elif use_async == True:
             schema["index"]["name"] = "litellm_semantic_cache_index_async"
             self.index = SearchIndex.from_dict(schema)
             self.index.connect(redis_url=redis_url, use_async=True)
-        try:
-            self.index.create(overwrite=False)  # don't overwrite existing index
-        except Exception as e:
-            print_verbose(f"Got exception creating semantic cache index: {str(e)}")
 
+    #
     def _get_cache_logic(self, cached_response: Any):
         """
         Common 'get_cache_logic' across sync + async redis client implementations
@@ -397,6 +406,10 @@ class RedisSemanticCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         import numpy as np
 
+        try:
+            await self.index.acreate(overwrite=False)  # don't overwrite existing index
+        except Exception as e:
+            print_verbose(f"Got exception creating semantic cache index: {str(e)}")
         print_verbose(f"async redis semantic-cache set_cache, kwargs: {kwargs}")
 
         # get the prompt
