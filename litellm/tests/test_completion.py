@@ -565,7 +565,6 @@ def test_completion_openai():
         assert len(response_str) > 1
 
         litellm.api_key = None
-        raise Exception("it works!")
     except Timeout as e:
         pass
     except Exception as e:
