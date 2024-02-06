@@ -146,6 +146,7 @@ suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
+upperbound_key_generate_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
