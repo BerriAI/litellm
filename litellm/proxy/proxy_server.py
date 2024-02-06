@@ -4051,7 +4051,17 @@ async def health_readiness():
 
     cache_type = None
     if litellm.cache is not None:
+        from litellm.caching import RedisSemanticCache
+
         cache_type = litellm.cache.type
+
+        if isinstance(litellm.cache.cache, RedisSemanticCache):
+            # ping the cache
+            try:
+                index_info = await litellm.cache.cache._index_info()
+            except Exception as e:
+                index_info = "index does not exist - error: " + str(e)
+            cache_type = {"type": cache_type, "index_info": index_info}
 
     if prisma_client is not None:  # if db passed in, check if it's connected
         if prisma_client.db.is_connected() == True:
