@@ -3,6 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # [BETA] Admin UI
+### **Create + delete keys through a UI**
 
 :::info
 
@@ -10,9 +11,7 @@ This is in beta, so things may change. If you have feedback, [let us know](https
 
 :::
 
-Create + delete keys through a UI
-
-<Image img={require('../../img/ui_3.gif')} />  
+<Image img={require('../../img/litellm_ui_create_key.png')} />  
 
 
 
@@ -35,10 +34,11 @@ litellm --config /path/to/config.yaml
 http://0.0.0.0:8000/ui # <proxy_base_url>/ui
 ```
 
-### 3. Create Key
 
-<Image img={require('../../img/litellm_ui_create_key.png')} />  
+## Get Admin UI Link on Swagger 
+Your Proxy Swagger is available on the root of the Proxy: e.g.: `http://localhost:4000/`
 
+<Image img={require('../../img/ui_link.png')} />
 
 ## Setup SSO/Auth for UI
 
@@ -97,16 +97,20 @@ MICROSOFT_TENANT="5a39737
 
 </Tabs>
 
-## 2. Start Proxy Server
+## See Admin view w/ SSO 
 
-```shell
-litellm --config proxy_config.yaml --port 4000
+You just need to set Proxy Admin ID
 
-# start proxy on port 4000
+### Step 1: Copy your ID from the UI 
+
+<Image img={require('../../img/litellm_ui_copy_id.png')} />
+
+### Step 2: Set it in your .env as the PROXY_ADMIN_ID 
+
+```env
+export PROXY_ADMIN_ID="116544810872468347480"
 ```
 
-## 3. Get Admin UI Link to you on Swagger 
+### Step 3: See all proxy keys
 
-Your Proxy Swagger is available on the root of the Proxy: `http://localhost:4000/`
-
-<Image img={require('../../img/ui_link.png')} />
+<Image img={require('../../img/litellm_ui_admin.png')} />
