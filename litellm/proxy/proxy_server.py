@@ -91,6 +91,7 @@ from litellm.proxy.utils import (
     reset_budget,
     hash_token,
     html_form,
+    _read_request_body,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -370,8 +371,9 @@ async def user_api_key_auth(
             # Run checks for
             # 1. If token can call model
             # 2. If user_id for this token is in budget
-            # 3. If token is expired
-            # 4. If token spend is under Budget for the token
+            # 3. If 'user' passed to /chat/completions, /embeddings endpoint is in budget
+            # 4. If token is expired
+            # 5. If token spend is under Budget for the token
 
             # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
@@ -430,11 +432,24 @@ async def user_api_key_auth(
                 )
 
             # Check 2. If user_id for this token is in budget
-            ## Check 2.5 If global proxy is in budget
+            ## Check 2.1 If global proxy is in budget
+            ## Check 2.2 [OPTIONAL - checked only if litellm.max_user_budget is not None] If 'user' passed in /chat/completions is in budget
             if valid_token.user_id is not None:
+                user_id_list = [
+                    valid_token.user_id,
+                    litellm_proxy_budget_name,
+                ]
+                if (
+                    litellm.max_user_budget is not None
+                ):  # Check if 'user' passed in /chat/completions is in budget, only checked if litellm.max_user_budget is set
+                    request_data = await _read_request_body(request=request)
+                    user_passed_to_chat_completions = request_data.get("user", None)
+                    if user_passed_to_chat_completions is not None:
+                        user_id_list.append(user_passed_to_chat_completions)
+
                 if prisma_client is not None:
                     user_id_information = await prisma_client.get_data(
-                        user_id_list=[valid_token.user_id, litellm_proxy_budget_name],
+                        user_id_list=user_id_list,
                         table_name="user",
                         query_type="find_all",
                     )
@@ -459,7 +474,7 @@ async def user_api_key_auth(
                             user_current_spend = _user.get("spend", None)
 
                             verbose_proxy_logger.debug(
-                                f"user_max_budget: {user_max_budget}; user_current_spend: {user_current_spend}"
+                                f"user_id: {_user.get('user_id', None)}; user_max_budget: {user_max_budget}; user_current_spend: {user_current_spend}"
                             )
 
                             if (
@@ -852,9 +867,13 @@ async def update_database(
                     f"Updating existing_spend_obj: {existing_spend_obj}"
                 )
                 if existing_spend_obj is None:
+                    # if user does not exist in LiteLLM_UserTable, create a new user
                     existing_spend = 0
+                    max_user_budget = None
+                    if litellm.max_user_budget is not None:
+                        max_user_budget = litellm.max_user_budget
                     existing_spend_obj = LiteLLM_UserTable(
-                        user_id=id, spend=0, max_budget=None, user_email=None
+                        user_id=id, spend=0, max_budget=max_user_budget, user_email=None
                     )
                 else:
                     existing_spend = existing_spend_obj.spend
