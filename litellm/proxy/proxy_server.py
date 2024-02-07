@@ -3079,8 +3079,7 @@ async def view_spend_logs(
                 query_type="find_unique",
                 key_val={"key": "request_id", "value": request_id},
             )
-            response = LiteLLM_SpendLogs_ResponseObject(response=[spend_log])
-            return response
+            return [spend_log]
         elif user_id is not None:
             spend_log = await prisma_client.get_data(
                 table_name="spend",
