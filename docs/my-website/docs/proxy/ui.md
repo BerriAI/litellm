@@ -37,14 +37,10 @@ http://0.0.0.0:8000/ui # <proxy_base_url>/ui
 
 ### 3. Create Key
 
-<Image img={require('../../img/litellm_ui_login.png')} />  
+<Image img={require('../../img/litellm_ui_create_key.png')} />  
 
-### 1. Start the proxy
-```
-litellm --config /path/to/config.yaml
-```
 
-## 1. Setup SSO/Auth for UI
+## Setup SSO/Auth for UI
 
 <Tabs>
 

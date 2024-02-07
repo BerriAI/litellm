@@ -650,9 +650,26 @@ async def user_api_key_auth(
                 elif route == "/model/info":
                     # /model/info just shows models user has access to
                     pass
-                elif allow_user_auth == True and route == "/key/generate":
-                    pass
+                elif route == "/key/generate":
+                    """
+                    Make sure user can only create a key for themselves
+                    - if user_id passed in -> check if it matches the user id for that key
+                    """
+                    request_data = await _read_request_body(request=request)
+                    user_id_passed_to_key_generate = request_data.get("user_id", None)
+                    if (
+                        user_id_passed_to_key_generate is not None
+                        and user_id_passed_to_key_generate != valid_token.user_id
+                    ):
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="key not allowed to crea this user's info",
+                        )
                 elif allow_user_auth == True and route == "/key/delete":
+                    """
+                    [TODO] Make sure user can only delete a key for themselves
+                    - if user_id passed in -> check if it matches the user id for that key
+                    """
                     pass
                 elif route == "/spend/logs":
                     # check if user can access this route
