@@ -73,7 +73,7 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/delete` : `/key/delete`;
     console.log("in keyDeleteCall:", user_key);
-
+    message.info("Making key delete request");
     const response = await fetch(url, {
       method: "POST",
       headers: {
