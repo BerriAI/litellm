@@ -5,6 +5,7 @@ import random
 from datetime import datetime
 import importlib
 from dotenv import load_dotenv
+import urllib.parse as urlparse
 
 sys.path.append(os.getcwd())
 
@@ -15,6 +16,15 @@ from importlib import resources
 import shutil
 
 telemetry = None
+
+
+def append_query_params(url, params):
+    parsed_url = urlparse.urlparse(url)
+    parsed_query = urlparse.parse_qs(parsed_url.query)
+    parsed_query.update(params)
+    encoded_query = urlparse.urlencode(parsed_query, doseq=True)
+    modified_url = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
+    return modified_url
 
 
 def run_ollama_serve():
@@ -416,6 +426,12 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None:
             try:
+                ### add connection pool + pool timeout args
+                params = {"connection_limit": 500, "pool_timeout": 60}
+                database_url = os.getenv("DATABASE_URL")
+                modified_url = append_query_params(database_url, params)
+                os.environ["DATABASE_URL"] = modified_url
+                ###
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
@@ -520,7 +536,6 @@ def run_server(
             StandaloneApplication(
                 app=app, options=gunicorn_options
             ).run()  # Run gunicorn
-
 
 
 if __name__ == "__main__":
