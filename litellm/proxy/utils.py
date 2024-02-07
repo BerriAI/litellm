@@ -399,13 +399,7 @@ class PrismaClient:
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
 
-        self.db = Prisma(
-            http={
-                "limits": httpx.Limits(
-                    max_connections=1000, max_keepalive_connections=100
-                )
-            }
-        )  # Client to connect to Prisma db
+        self.db = Prisma()  # Client to connect to Prisma db
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
