@@ -10,7 +10,7 @@ This is in beta, so things may change. If you have feedback, [let us know](https
 
 :::
 
-Allow your users to create, view their own keys through a UI
+Create + delete keys through a UI
 
 <Image img={require('../../img/ui_3.gif')} />  
 
@@ -18,7 +18,29 @@ Allow your users to create, view their own keys through a UI
 
 ## Quick Start
 
-## 1. Setup SSO/Auth for UI
+- Requires proxy master key to be set 
+- Requires db connected 
+
+Follow [setup](./virtual_keys.md#setup)
+
+### 1. Start the proxy
+```bash
+litellm --config /path/to/config.yaml
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### 2. Go to UI 
+```bash
+http://0.0.0.0:8000/ui # <proxy_base_url>/ui
+```
+
+### 3. Create Key
+
+<Image img={require('../../img/litellm_ui_create_key.png')} />  
+
+
+## Setup SSO/Auth for UI
 
 <Tabs>
 
@@ -88,36 +110,3 @@ litellm --config proxy_config.yaml --port 4000
 Your Proxy Swagger is available on the root of the Proxy: `http://localhost:4000/`
 
 <Image img={require('../../img/ui_link.png')} />
-
-
-
-
-<!-- You can use our hosted UI (https://dashboard.litellm.ai/) or [self-host your own](https://github.com/BerriAI/litellm/tree/main/ui). 
-
-If you self-host, you need to save the UI url in your proxy environment as `LITELLM_HOSTED_UI`. 
-
-Connect your proxy to your UI, by entering: 
-1. The hosted proxy URL 
-2. Accepted email subdomains
-3. [OPTIONAL] Allowed admin emails 
-
-<Image img={require('../../img/admin_dashboard.png')} />  
-
-## What users will see? 
-
-### Auth 
-
-<Image img={require('../../img/user_auth_screen.png')} />  
-
-### Create Keys 
-
-<Image img={require('../../img/user_create_key_screen.png')} />  
-
-### Spend Per Key
-
-<Image img={require('../../img/spend_per_api_key.png')} />  
-
-### Spend Per User
-
-<Image img={require('../../img/spend_per_user.png')} />   -->
-
