@@ -1252,7 +1252,12 @@ async def _read_request_body(request):
     import ast, json
 
     request_data = {}
+    if request is None:
+        return request_data
     body = await request.body()
+
+    if body == b"" or body is None:
+        return request_data
     body_str = body.decode()
     try:
         request_data = ast.literal_eval(body_str)
