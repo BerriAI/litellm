@@ -114,3 +114,9 @@ export PROXY_ADMIN_ID="116544810872468347480"
 ### Step 3: See all proxy keys
 
 <Image img={require('../../img/litellm_ui_admin.png')} />
+
+:::info
+
+If you don't see all your keys this could be due to a cached token. So just re-login and it should work.
+
+:::
