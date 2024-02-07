@@ -17,7 +17,7 @@ LiteLLM supports:
 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 
-### Step 1: Add `cache` to the config.yaml
+#### Step 1: Add `cache` to the config.yaml
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -32,7 +32,7 @@ litellm_settings:
   cache: True          # set cache responses to True, litellm defaults to using a redis cache
 ```
 
-### Step 2: Add Redis Credentials to .env
+#### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
   ```shell
@@ -50,7 +50,7 @@ REDIS_<redis-kwarg-name> = ""
 ``` 
 
 [**See how it's read from the environment**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/_redis.py#L40)
-### Step 3: Run proxy with config
+#### Step 3: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
@@ -58,7 +58,7 @@ $ litellm --config /path/to/config.yaml
 
 <TabItem value="s3" label="s3 cache">
 
-### Step 1: Add `cache` to the config.yaml
+#### Step 1: Add `cache` to the config.yaml
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -80,7 +80,7 @@ litellm_settings:
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
 ```
 
-### Step 2: Run proxy with config
+#### Step 2: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
@@ -91,7 +91,7 @@ $ litellm --config /path/to/config.yaml
 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 
-### Step 1: Add `cache` to the config.yaml
+#### Step 1: Add `cache` to the config.yaml
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -113,7 +113,7 @@ litellm_settings:
     redis_semantic_cache_embedding_model: azure-embedding-model # set this to a model_name set in model_list
 ```
 
-### Step 2: Add Redis Credentials to .env
+#### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
   ```shell
@@ -130,7 +130,7 @@ You can pass in any additional redis.Redis arg, by storing the variable + value 
 REDIS_<redis-kwarg-name> = ""
 ``` 
 
-### Step 3: Run proxy with config
+#### Step 3: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml
 ```

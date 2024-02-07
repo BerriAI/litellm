@@ -149,12 +149,20 @@ class ProxyLogging:
         if request_data is not None:
             model = request_data.get("model", "")
             messages = request_data.get("messages", "")
-            # try casting messages to str and get the first 100 characters, else mark as None
-            try:
+            trace_id = request_data.get("metadata", {}).get(
+                "trace_id", None
+            )  # get langfuse trace id
+            if trace_id is not None:
                 messages = str(messages)
-                messages = messages[:10000]
-            except:
-                messages = None
+                messages = messages[:100]
+                messages = f"{messages}\nLangfuse Trace Id: {trace_id}"
+            else:
+                # try casting messages to str and get the first 100 characters, else mark as None
+                try:
+                    messages = str(messages)
+                    messages = messages[:10000]
+                except:
+                    messages = None
 
             request_info = f"\nRequest Model: {model}\nMessages: {messages}"
         else:
@@ -466,8 +474,6 @@ class PrismaClient:
         reset_at: Optional[datetime] = None,
     ):
         try:
-            print_verbose("PrismaClient: get_data")
-
             response: Any = None
             if token is not None or (table_name is not None and table_name == "key"):
                 # check if plain text or hash
@@ -553,9 +559,20 @@ class PrismaClient:
                     # The asterisk before `user_id_list` unpacks the list into separate arguments
                     response = await self.db.query_raw(sql_query)
                 elif query_type == "find_all":
-                    response = await self.db.litellm_usertable.find_many(  # type: ignore
-                        order={"spend": "desc"},
-                    )
+                    if expires is not None:
+                        response = await self.db.litellm_usertable.find_many(  # type: ignore
+                            order={"spend": "desc"},
+                            where={  # type:ignore
+                                "OR": [
+                                    {"expires": None},  # type:ignore
+                                    {"expires": {"gt": expires}},  # type:ignore
+                                ],
+                            },
+                        )
+                    else:
+                        response = await self.db.litellm_usertable.find_many(  # type: ignore
+                            order={"spend": "desc"},
+                        )
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(
@@ -878,6 +895,21 @@ class PrismaClient:
                 self.proxy_logging_obj.failure_handler(original_exception=e)
             )
             raise e
+
+    async def health_check(self):
+        """
+        Health check endpoint for the prisma client
+        """
+        sql_query = """
+            SELECT 1
+            FROM "LiteLLM_VerificationToken"
+            LIMIT 1
+            """
+
+        # Execute the raw query
+        # The asterisk before `user_id_list` unpacks the list into separate arguments
+        response = await self.db.query_raw(sql_query)
+        return response
 
 
 class DBClient:
@@ -1205,6 +1237,28 @@ async def reset_budget(prisma_client: PrismaClient):
             await prisma_client.update_data(
                 query_type="update_many", data_list=users_to_reset, table_name="user"
             )
+
+
+async def _read_request_body(request):
+    """
+    Asynchronous function to read the request body and parse it as JSON or literal data.
+
+    Parameters:
+    - request: The request object to read the body from
+
+    Returns:
+    - dict: Parsed request data as a dictionary
+    """
+    import ast, json
+
+    request_data = {}
+    body = await request.body()
+    body_str = body.decode()
+    try:
+        request_data = ast.literal_eval(body_str)
+    except:
+        request_data = json.loads(body_str)
+    return request_data
 
 
 # LiteLLM Admin UI - Non SSO Login
