@@ -1124,7 +1124,7 @@ class ProxyConfig:
         # load existing config
         config = await self.get_config()
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
-        litellm_settings = config.get("litellm_settings", None)
+        litellm_settings = config.get("litellm_settings", {})
         all_teams_config = litellm_settings.get("default_team_settings", None)
         team_config: dict = {}
         if all_teams_config is None:
