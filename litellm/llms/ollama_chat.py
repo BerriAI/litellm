@@ -230,7 +230,7 @@ def get_ollama_response(
     model_response["model"] = "ollama/" + model
     prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
     completion_tokens = response_json.get(
-        "eval_count", litellm.token_counter(text=response_json["message"])
+        "eval_count", litellm.token_counter(text=response_json["message"]["content"])
     )
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
