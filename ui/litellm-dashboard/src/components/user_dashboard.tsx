@@ -6,21 +6,25 @@ import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import ViewUserSpend from "./view_user_spend";
 import EnterProxyUrl from "./enter_proxy_url";
+import { message } from "antd";
 import Navbar from "./navbar";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
-const proxyBaseUrl = null;
-// const proxyBaseUrl = "http://localhost:4000" // http://localhost:4000
+const isLocal = process.env.NODE_ENV === "development";
+console.log("isLocal:", isLocal);
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
 type UserSpendData = {
   spend: number;
   max_budget?: number | null;
-}
+};
 
 const UserDashboard = () => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
-  const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(null);
+  const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
+    null
+  );
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
@@ -30,19 +34,19 @@ const UserDashboard = () => {
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
-
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
       return "Undefined Role";
     }
-  
+    console.log(`Received user role: ${userRole}`);
     switch (userRole.toLowerCase()) {
       case "app_owner":
         return "App Owner";
       case "demo_app_owner":
-          return "AppOwner";
-      case "admin":
+        return "App Owner";
+      case "app_admin":
         return "Admin";
       case "app_user":
         return "App User";
@@ -53,7 +57,7 @@ const UserDashboard = () => {
 
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
-    if (token){
+    if (token) {
       const decoded = jwtDecode(token) as { [key: string]: any };
       if (decoded) {
         // cast decoded to dictionary
@@ -71,17 +75,19 @@ const UserDashboard = () => {
         } else {
           console.log("User role not defined");
         }
+
+        if (decoded.user_email) {
+          setUserEmail(decoded.user_email);
+        } else {
+          console.log(`User Email is not set ${decoded}`);
+        }
       }
     }
-    if (userID && accessToken  && !data) {
+    if (userID && accessToken && userRole && !data) {
       const fetchData = async () => {
         try {
-          const response = await userInfoCall(
-            accessToken,
-            userID
-          );
-          console.log("Response:", response);
-          setUserSpendData(response["user_info"])
+          const response = await userInfoCall(accessToken, userID, userRole);
+          setUserSpendData(response["user_info"]);
           setData(response["keys"]); // Assuming this is the correct path to your data
         } catch (error) {
           console.error("There was an error fetching the data", error);
@@ -93,52 +99,44 @@ const UserDashboard = () => {
   }, [userID, token, accessToken, data]);
 
   if (userID == null || token == null) {
-
-  
     // Now you can construct the full URL
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/sso/key/generate` : `/sso/key/generate`;
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/sso/key/generate`
+      : `/sso/key/generate`;
     console.log("Full URL:", url);
     window.location.href = url;
 
     return null;
-  }
-  else if (accessToken == null) {
+  } else if (accessToken == null) {
     return null;
   }
 
   if (userRole == null) {
-    setUserRole("App Owner")
+    setUserRole("App Owner");
   }
-  
+
   return (
     <div>
-      <Navbar
-        userID={userID}
-        userRole={userRole}
-      />
+      <Navbar userID={userID} userRole={userRole} userEmail={userEmail} />
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
-      <Col numColSpan={1}>
-        <ViewUserSpend
-          userID={userID}
-          userSpendData={userSpendData}
-        />
-        <ViewKeyTable
-          userID={userID}
-          accessToken={accessToken}
-          data={data}
-          setData={setData}
-        />
-        <CreateKey
-          userID={userID}
-          userRole={userRole}
-          accessToken={accessToken}
-          data={data}
-          setData={setData}
-        />
-      </Col>
-    </Grid>
+        <Col numColSpan={1}>
+          <ViewUserSpend userID={userID} userSpendData={userSpendData} />
+          <ViewKeyTable
+            userID={userID}
+            accessToken={accessToken}
+            data={data}
+            setData={setData}
+          />
+          <CreateKey
+            userID={userID}
+            userRole={userRole}
+            accessToken={accessToken}
+            data={data}
+            setData={setData}
+          />
+        </Col>
+      </Grid>
     </div>
-
   );
 };
 

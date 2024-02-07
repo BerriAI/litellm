@@ -513,4 +513,4 @@ def test_dynamo_db_migration(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
+        pytest.fail(f"An exception occurred - {traceback.format_exc()}")

@@ -13,6 +13,7 @@ Requirements:
 You can set budgets at 3 levels: 
 - For the proxy 
 - For a user 
+- For a 'user' passed to `/chat/completions`, `/embeddings` etc
 - For a key
 
 
@@ -115,6 +116,61 @@ curl --location 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
+```
+
+</TabItem>
+<TabItem value="per-user-chat" label="For 'user' passed to /chat/completions">
+
+Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
+
+**Step 1. Modify config.yaml**
+Define `litellm.max_user_budget`
+```yaml
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  max_budget: 10      # global budget for proxy 
+  max_user_budget: 0.0001 # budget for 'user' passed to /chat/completions
+```
+
+2. Make a /chat/completions call, pass 'user' - First call Works 
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "user": "ishaan3",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
+```
+
+3. Make a /chat/completions call, pass 'user' - Call Fails, since 'ishaan3' over budget
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "user": "ishaan3",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
+```
+
+Error
+```shell
+{"error":{"message":"Authentication Error, ExceededBudget: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
 ```
 
 </TabItem>
