@@ -4358,7 +4358,7 @@ def get_optional_params(
         if frequency_penalty is not None:
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
-            optional_params["stop_sequences"] = stop
+            optional_params["stop"] = stop
     elif custom_llm_provider == "ollama_chat":
         supported_params = [
             "max_tokens",
@@ -4381,7 +4381,7 @@ def get_optional_params(
         if frequency_penalty is not None:
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
-            optional_params["stop_sequences"] = stop
+            optional_params["stop"] = stop
     elif custom_llm_provider == "nlp_cloud":
         supported_params = [
             "max_tokens",
