@@ -431,9 +431,9 @@ async def test_key_info_spend_values_image_generation():
 @pytest.mark.asyncio
 async def test_key_with_budgets():
     """
-    - Create key with budget and 5s duration
+    - Create key with budget and 5min duration
     - Get 'reset_at' value
-    - wait 5s
+    - wait 10min (budget reset runs every 10mins.)
     - Check if value updated
     """
     from litellm.proxy.utils import hash_token
@@ -449,8 +449,8 @@ async def test_key_with_budgets():
         reset_at_init_value = key_info["info"]["budget_reset_at"]
         reset_at_new_value = None
         i = 0
+        await asyncio.sleep(610)
         while i < 3:
-            await asyncio.sleep(30)
             key_info = await get_key_info(session=session, get_key=key, call_key=key)
             reset_at_new_value = key_info["info"]["budget_reset_at"]
             try:
@@ -458,6 +458,7 @@ async def test_key_with_budgets():
                 break
             except:
                 i + 1
+                await asyncio.sleep(5)
         assert reset_at_init_value != reset_at_new_value
 
 
@@ -481,7 +482,7 @@ async def test_key_crossing_budget():
 
         response = await chat_completion(session=session, key=key)
         print("response 1: ", response)
-        await asyncio.sleep(2)
+        await asyncio.sleep(10)
         try:
             response = await chat_completion(session=session, key=key)
             pytest.fail("Should have failed - Key crossed it's budget")
@@ -490,7 +491,7 @@ async def test_key_crossing_budget():
 
 
 @pytest.mark.asyncio
-async def test_key_zinfo_spend_values_sagemaker():
+async def test_key_info_spend_values_sagemaker():
     """
     Tests the sync streaming loop to ensure spend is correctly calculated.
     - create key

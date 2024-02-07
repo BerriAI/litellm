@@ -113,7 +113,7 @@ class LangFuseLogger:
             elif response_obj is not None:
                 input = prompt
                 output = response_obj["choices"][0]["message"].json()
-            print(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
+            print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             if self._is_langfuse_v2():
                 self._log_langfuse_v2(
                     user_id,

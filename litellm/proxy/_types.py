@@ -391,6 +391,10 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    metadata: Optional[Json] = {}
+    metadata: Optional[dict] = {}
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
+
+
+class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
+    response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
