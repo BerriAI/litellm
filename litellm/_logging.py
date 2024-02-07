@@ -3,7 +3,7 @@ import logging
 set_verbose = False
 
 # Create a handler for the logger (you may need to adapt this based on your needs)
-handler = logging.FileHandler("log_file.txt")
+handler = logging.StreamHandler()
 handler.setLevel(logging.DEBUG)
 
 # Create a formatter and set it for the handler

@@ -432,10 +432,18 @@ async def user_api_key_auth(
             # Check 2. If user_id for this token is in budget
             ## Check 2.5 If global proxy is in budget
             if valid_token.user_id is not None:
-                user_id_information = user_api_key_cache.get_cache(
-                    key=valid_token.user_id
-                )
-                if user_id_information is None:
+                user_id_list = [valid_token.user_id, litellm_proxy_budget_name]
+                user_id_information = None
+                for id in user_id_list:
+                    value = user_api_key_cache.get_cache(key=id)
+                    if value is not None:
+                        if user_id_information is None:
+                            user_id_information = []
+                        user_id_information.append(value)
+                if user_id_information is None or (
+                    isinstance(user_id_information, list)
+                    and len(user_id_information) < 2
+                ):
                     if prisma_client is not None:
                         user_id_information = await prisma_client.get_data(
                             user_id_list=[
@@ -445,13 +453,14 @@ async def user_api_key_auth(
                             table_name="user",
                             query_type="find_all",
                         )
+                        for _id in user_id_information:
+                            user_api_key_cache.set_cache(
+                                key=_id["user_id"], value=_id, ttl=600
+                            )
                     if custom_db_client is not None:
                         user_id_information = await custom_db_client.get_data(
                             key=valid_token.user_id, table_name="user"
                         )
-                    user_api_key_cache.set_cache(
-                        key=valid_token.user_id, value=user_id_information, ttl=600
-                    )
 
                 verbose_proxy_logger.debug(
                     f"user_id_information: {user_id_information}"
@@ -878,6 +887,12 @@ async def update_database(
 
                     # Calculate the new cost by adding the existing cost and response_cost
                     existing_spend_obj.spend = existing_spend + response_cost
+
+                    valid_token = user_api_key_cache.get_cache(key=id)
+                    if valid_token is not None and isinstance(valid_token, dict):
+                        user_api_key_cache.set_cache(
+                            key=id, value=existing_spend_obj.json()
+                        )
 
                     verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
                     data_list.append(existing_spend_obj)
