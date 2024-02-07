@@ -444,7 +444,7 @@ async def user_api_key_auth(
                     user_passed_to_chat_completions = request_data.get("user", None)
                     if user_passed_to_chat_completions is not None:
                         user_id_list.append(user_passed_to_chat_completions)
-                
+
                 user_id_information = None
                 for id in user_id_list:
                     value = user_api_key_cache.get_cache(key=id)
@@ -473,7 +473,6 @@ async def user_api_key_auth(
                         user_id_information = await custom_db_client.get_data(
                             key=valid_token.user_id, table_name="user"
                         )
-                
 
                 verbose_proxy_logger.debug(
                     f"user_id_information: {user_id_information}"
@@ -884,57 +883,67 @@ async def update_database(
             """
             user_ids = [user_id, litellm_proxy_budget_name]
             data_list = []
-            for id in user_ids:
-                if id is None:
-                    continue
-                if prisma_client is not None:
-                    existing_spend_obj = await prisma_client.get_data(user_id=id)
-                elif custom_db_client is not None and id != litellm_proxy_budget_name:
-                    existing_spend_obj = await custom_db_client.get_data(
-                        key=id, table_name="user"
-                    )
-                verbose_proxy_logger.debug(
-                    f"Updating existing_spend_obj: {existing_spend_obj}"
-                )
-                if existing_spend_obj is None:
-                    # if user does not exist in LiteLLM_UserTable, create a new user
-                    existing_spend = 0
-                    max_user_budget = None
-                    if litellm.max_user_budget is not None:
-                        max_user_budget = litellm.max_user_budget
-                    existing_spend_obj = LiteLLM_UserTable(
-                        user_id=id, spend=0, max_budget=max_user_budget, user_email=None
+            try:
+                for id in user_ids:
+                    if id is None:
+                        continue
+                    if prisma_client is not None:
+                        existing_spend_obj = await prisma_client.get_data(user_id=id)
+                    elif (
+                        custom_db_client is not None and id != litellm_proxy_budget_name
+                    ):
+                        existing_spend_obj = await custom_db_client.get_data(
+                            key=id, table_name="user"
+                        )
+                    verbose_proxy_logger.debug(
+                        f"Updating existing_spend_obj: {existing_spend_obj}"
                     )
                     if existing_spend_obj is None:
+                        # if user does not exist in LiteLLM_UserTable, create a new user
                         existing_spend = 0
+                        max_user_budget = None
+                        if litellm.max_user_budget is not None:
+                            max_user_budget = litellm.max_user_budget
                         existing_spend_obj = LiteLLM_UserTable(
-                            user_id=id, spend=0, max_budget=None, user_email=None
+                            user_id=id,
+                            spend=0,
+                            max_budget=max_user_budget,
+                            user_email=None,
                         )
-                    else:
-                        existing_spend = existing_spend_obj.spend
+                        if existing_spend_obj is None:
+                            existing_spend = 0
+                            existing_spend_obj = LiteLLM_UserTable(
+                                user_id=id, spend=0, max_budget=None, user_email=None
+                            )
+                        else:
+                            existing_spend = existing_spend_obj.spend
 
-                    # Calculate the new cost by adding the existing cost and response_cost
-                    existing_spend_obj.spend = existing_spend + response_cost
+                        # Calculate the new cost by adding the existing cost and response_cost
+                        existing_spend_obj.spend = existing_spend + response_cost
 
-                    valid_token = user_api_key_cache.get_cache(key=id)
-                    if valid_token is not None and isinstance(valid_token, dict):
-                        user_api_key_cache.set_cache(
-                            key=id, value=existing_spend_obj.json()
+                        valid_token = user_api_key_cache.get_cache(key=id)
+                        if valid_token is not None and isinstance(valid_token, dict):
+                            user_api_key_cache.set_cache(
+                                key=id, value=existing_spend_obj.json()
+                            )
+
+                        verbose_proxy_logger.debug(
+                            f"new cost: {existing_spend_obj.spend}"
                         )
+                        data_list.append(existing_spend_obj)
 
-                    verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
-                    data_list.append(existing_spend_obj)
-
-                # Update the cost column for the given user id
-                if prisma_client is not None:
-                    await prisma_client.update_data(
-                        data_list=data_list, query_type="update_many", table_name="user"
-                    )
-                elif custom_db_client is not None and user_id is not None:
-                    new_spend = data_list[0].spend
-                    await custom_db_client.update_data(
-                        key=user_id, value={"spend": new_spend}, table_name="user"
-                    )
+                    # Update the cost column for the given user id
+                    if prisma_client is not None:
+                        await prisma_client.update_data(
+                            data_list=data_list,
+                            query_type="update_many",
+                            table_name="user",
+                        )
+                    elif custom_db_client is not None and user_id is not None:
+                        new_spend = data_list[0].spend
+                        await custom_db_client.update_data(
+                            key=user_id, value={"spend": new_spend}, table_name="user"
+                        )
             except Exception as e:
                 verbose_proxy_logger.info(f"Update User DB call failed to execute")
 
