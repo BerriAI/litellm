@@ -27,6 +27,7 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 Get your Langfuse API Keys from https://cloud.langfuse.com/
 ```python
 litellm.success_callback = ["langfuse"]
+litellm.failure_callback = ["langfuse"] # logs errors to langfuse
 ```
 ```python
 # pip install langfuse 
