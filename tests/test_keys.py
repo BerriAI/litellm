@@ -490,7 +490,7 @@ async def test_key_crossing_budget():
 
 
 @pytest.mark.asyncio
-async def test_key_zinfo_spend_values_sagemaker():
+async def test_key_info_spend_values_sagemaker():
     """
     Tests the sync streaming loop to ensure spend is correctly calculated.
     - create key
