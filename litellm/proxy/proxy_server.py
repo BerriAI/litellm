@@ -841,6 +841,10 @@ async def update_database(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}"
         )
 
+        ### [TODO] STEP 1: GET KEY + USER SPEND ### (key, user)
+
+        ### [TODO] STEP 2: UPDATE SPEND ### (key, user, spend logs)
+
         ### UPDATE USER SPEND ###
         async def _update_user_db():
             """
@@ -1922,7 +1926,7 @@ async def startup_event():
     ### START BUDGET SCHEDULER ###
     scheduler = AsyncIOScheduler()
     interval = random.randint(
-        7, 14
+        597, 605
     )  # random interval, so multiple workers avoid resetting budget at the same time
     scheduler.add_job(reset_budget, "interval", seconds=interval, args=[prisma_client])
     scheduler.start()

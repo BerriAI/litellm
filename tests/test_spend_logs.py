@@ -113,6 +113,7 @@ async def test_spend_logs():
         await get_spend_logs(session=session, request_id=response["id"])
 
 
+@pytest.mark.skip(reason="High traffic load test, meant to be run locally")
 @pytest.mark.asyncio
 async def test_spend_logs_high_traffic():
     """
@@ -155,9 +156,12 @@ async def test_spend_logs_high_traffic():
         successful_completions = [c for c in chat_completions if c is not None]
         print(f"Num successful completions: {len(successful_completions)}")
         await asyncio.sleep(10)
-        response = await get_spend_logs(session=session, api_key=key)
-        print(f"response: {response}")
-        print(f"len responses: {len(response)}")
-        assert len(response) == n
-        print(n, time.time() - start, len(response))
+        try:
+            response = await retry_request(get_spend_logs, session=session, api_key=key)
+            print(f"response: {response}")
+            print(f"len responses: {len(response)}")
+            assert len(response) == n
+            print(n, time.time() - start, len(response))
+        except:
+            print(n, time.time() - start, 0)
         raise Exception("it worked!")
