@@ -910,27 +910,20 @@ async def update_database(
                             max_budget=max_user_budget,
                             user_email=None,
                         )
-                        if existing_spend_obj is None:
-                            existing_spend = 0
-                            existing_spend_obj = LiteLLM_UserTable(
-                                user_id=id, spend=0, max_budget=None, user_email=None
-                            )
-                        else:
-                            existing_spend = existing_spend_obj.spend
+                    else:
+                        existing_spend = existing_spend_obj.spend
 
-                        # Calculate the new cost by adding the existing cost and response_cost
-                        existing_spend_obj.spend = existing_spend + response_cost
+                    # Calculate the new cost by adding the existing cost and response_cost
+                    existing_spend_obj.spend = existing_spend + response_cost
 
-                        valid_token = user_api_key_cache.get_cache(key=id)
-                        if valid_token is not None and isinstance(valid_token, dict):
-                            user_api_key_cache.set_cache(
-                                key=id, value=existing_spend_obj.json()
-                            )
-
-                        verbose_proxy_logger.debug(
-                            f"new cost: {existing_spend_obj.spend}"
+                    valid_token = user_api_key_cache.get_cache(key=id)
+                    if valid_token is not None and isinstance(valid_token, dict):
+                        user_api_key_cache.set_cache(
+                            key=id, value=existing_spend_obj.json()
                         )
-                        data_list.append(existing_spend_obj)
+
+                    verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
+                    data_list.append(existing_spend_obj)
 
                     # Update the cost column for the given user id
                     if prisma_client is not None:
