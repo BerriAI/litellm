@@ -1889,6 +1889,7 @@ async def startup_event():
         user_id = "default_user_id"
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
             user_id = os.getenv("PROXY_ADMIN_ID")
+
         asyncio.create_task(
             generate_key_helper_fn(
                 duration=None,
@@ -1899,6 +1900,10 @@ async def startup_event():
                 token=master_key,
                 user_id=user_id,
                 user_role="proxy_admin",
+                query_type="update_data",
+                update_key_values={
+                    "user_role": "proxy_admin",
+                },
             )
         )
 
@@ -3461,7 +3466,6 @@ async def auth_callback(request: Request):
     response = await generate_key_helper_fn(
         **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard", "user_email": user_email}  # type: ignore
     )
-
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
