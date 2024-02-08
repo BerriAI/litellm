@@ -83,7 +83,7 @@ def prisma_client():
     from litellm.proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
-    params = {"connection_limit": 500, "pool_timeout": 60}
+    params = {"connection_limit": 100, "pool_timeout": 60}
     database_url = os.getenv("DATABASE_URL")
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
@@ -1611,13 +1611,13 @@ async def test_proxy_load_test_db(prisma_client):
         result = await user_api_key_auth(request=request, api_key=bearer_token)
         print("result from user auth with new key", result)
         # update spend using track_cost callback, make 2nd request, it should fail
-        n = 1000
+        n = 5000
         tasks = [
             track_cost_callback_helper_fn(generated_key=generated_key, user_id=user_id)
             for _ in range(n)
         ]
         completions = await asyncio.gather(*tasks)
-        await asyncio.sleep(10)
+        await asyncio.sleep(120)
         try:
             # call spend logs
             spend_logs = await view_spend_logs(api_key=generated_key)

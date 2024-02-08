@@ -1274,6 +1274,48 @@ async def failed_transaction_writer(
     - Batch writes them to the table
     - Sets value in cache to None
     """
+    ### UPDATE USER DB ###
+    existing_list = await user_api_key_cache.async_get_cache(
+        key="Failed_USER_DB_Transactions"
+    )
+    if existing_list is not None and isinstance(existing_list, list):
+        try:
+            async with prisma_client.db.tx(
+                max_wait=timedelta(seconds=10), timeout=timedelta(seconds=30)
+            ) as transaction:
+                async with transaction.batch_() as batcher:
+                    for item in existing_list:  # [..., (response_cost, user_id)]
+                        batcher.litellm_usertable.update(
+                            where={"user_id": item[1]},
+                            data={"spend": {"increment": item[0]}},
+                        )
+            await user_api_key_cache.async_set_cache(
+                key="Failed_USER_DB_Transactions", value=None
+            )
+        except Exception as e:
+            pass
+
+    ### UPDATE KEYS DB ###
+    existing_list = await user_api_key_cache.async_get_cache(
+        key="Failed_Keys_DB_Transactions"
+    )
+    if existing_list is not None and isinstance(existing_list, list):
+        try:
+            async with prisma_client.db.tx(
+                max_wait=timedelta(seconds=10), timeout=timedelta(seconds=30)
+            ) as transaction:
+                async with transaction.batch_() as batcher:
+                    for item in existing_list:  # [..., (response_cost, token)]
+                        batcher.litellm_verificationtoken.update(
+                            where={"token": item[1]},
+                            data={"spend": {"increment": item[0]}},
+                        )
+            await user_api_key_cache.async_set_cache(
+                key="Failed_Keys_DB_Transactions", value=None
+            )
+        except Exception as e:
+            pass
+
     ### UPDATE SPEND LOGS DB ###
     existing_list = await user_api_key_cache.async_get_cache(
         key="Failed_Spend_Logs_DB_Transactions"

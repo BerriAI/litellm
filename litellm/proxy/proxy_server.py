@@ -1948,12 +1948,6 @@ async def startup_event():
         597, 605
     )  # random interval, so multiple workers avoid resetting budget at the same time
     scheduler.add_job(reset_budget, "interval", seconds=interval, args=[prisma_client])
-    scheduler.add_job(
-        failed_transaction_writer,
-        "interval",
-        seconds=10,
-        args=[prisma_client, user_api_key_cache],
-    )
     scheduler.start()
 
 
