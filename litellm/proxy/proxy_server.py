@@ -809,14 +809,13 @@ async def _PROXY_track_cost_callback(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         user_id = proxy_server_request.get("body", {}).get("user", None)
+        user_id = user_id or kwargs["litellm_params"]["metadata"].get(
+            "user_api_key_user_id", None
+        )
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
-            )
-
-            user_id = user_id or kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_user_id", None
             )
 
             if kwargs.get("cache_hit", False) == True:
@@ -853,7 +852,9 @@ async def _PROXY_track_cost_callback(
                 )
     except Exception as e:
         error_msg = f"error in tracking cost callback - {traceback.format_exc()}"
-        error_msg += f"\n Args to _PROXY_track_cost_callback\n kwargs: {kwargs}\n completion_response: {completion_response}"
+        model = kwargs.get("model", "")
+        metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+        error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
         user_id = user_id or "not-found"
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -864,9 +865,7 @@ async def _PROXY_track_cost_callback(
                 error_message=error_msg,
             )
         )
-        verbose_proxy_logger.debug(
-            f"error in tracking cost callback - {traceback.format_exc()}"
-        )
+        verbose_proxy_logger.debug(f"error in tracking cost callback - {error_msg}")
 
 
 async def update_database(
