@@ -911,6 +911,26 @@ class PrismaClient:
         response = await self.db.query_raw(sql_query)
         return response
 
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,  # base exception to catch for the backoff
+        max_tries=3,  # maximum number of retries
+        max_time=10,  # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
+    async def sql_executor(self, sql_query):
+        """
+        Executes sql queries against the prisma client
+        """
+
+        # Execute the raw query
+        # The asterisk before `user_id_list` unpacks the list into separate arguments
+        try:
+            response = await self.db.query_raw(sql_query)
+            return response
+        except Exception as e:
+            raise e
+
 
 class DBClient:
     """
