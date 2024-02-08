@@ -1382,6 +1382,36 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "s3":
+                        global s3Logger
+                        if s3Logger is None:
+                            s3Logger = S3Logger()
+                        if self.stream:
+                            if "complete_streaming_response" in self.model_call_details:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - Completed Stream Response"
+                                )
+                                s3Logger.log_event(
+                                    kwargs=self.model_call_details,
+                                    response_obj=self.model_call_details[
+                                        "complete_streaming_response"
+                                    ],
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    print_verbose=print_verbose,
+                                )
+                            else:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - No complete stream response as yet"
+                                )
+                        else:
+                            s3Logger.log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                print_verbose=print_verbose,
+                            )
                     if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -1618,36 +1648,6 @@ class Logging:
                             )
                     else:
                         await dynamoLogger._async_log_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            print_verbose=print_verbose,
-                        )
-                if callback == "s3":
-                    global s3Logger
-                    if s3Logger is None:
-                        s3Logger = S3Logger()
-                    if self.stream:
-                        if "complete_streaming_response" in self.model_call_details:
-                            print_verbose(
-                                "S3Logger Logger: Got Stream Event - Completed Stream Response"
-                            )
-                            await s3Logger._async_log_event(
-                                kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "complete_streaming_response"
-                                ],
-                                start_time=start_time,
-                                end_time=end_time,
-                                print_verbose=print_verbose,
-                            )
-                        else:
-                            print_verbose(
-                                "S3Logger Logger: Got Stream Event - No complete stream response as yet"
-                            )
-                    else:
-                        await s3Logger._async_log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
                             start_time=start_time,
@@ -2007,11 +2007,6 @@ def client(original_function):
                     elif callback == "dynamodb":
                         # dynamo is an async callback, it's used for the proxy and needs to be async
                         # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                        litellm._async_success_callback.append(callback)
-                        removed_async_items.append(index)
-                    elif callback == "s3":
-                        # s3 is an async callback, it's used for the proxy and needs to be async
-                        # we only support async s3 logging for acompletion/aembedding since that's used on proxy
                         litellm._async_success_callback.append(callback)
                         removed_async_items.append(index)
 
