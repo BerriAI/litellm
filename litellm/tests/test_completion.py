@@ -1743,7 +1743,7 @@ def test_azure_cloudflare_api():
 
 def test_completion_anyscale_2():
     try:
-        # litellm.set_verbose= True
+        # litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You're a good bot"},
             {
