@@ -92,6 +92,7 @@ from litellm.proxy.utils import (
     hash_token,
     html_form,
     _read_request_body,
+    failed_transaction_writer,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -866,6 +867,7 @@ async def update_database(
     start_time=None,
     end_time=None,
 ):
+    global user_api_key_cache
     try:
         verbose_proxy_logger.info(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}"
@@ -883,28 +885,54 @@ async def update_database(
             """
             Update user row + proxy budget
             """
-            user_ids = [user_id, litellm_proxy_budget_name]
-            user_ids_str = ", ".join(
-                f"'{id}'" for id in user_ids
-            )  # Enclose each id in single quotes
-            sql_query = f"""
-                    UPDATE "LiteLLM_UserTable"
-                    SET spend = spend + {response_cost}
-                    WHERE user_id IN ({user_ids_str})
-                    """
-            await prisma_client.sql_executor(sql_query=sql_query)
+            try:
+                user_ids = [user_id, litellm_proxy_budget_name]
+                user_ids_str = ", ".join(
+                    f"'{id}'" for id in user_ids
+                )  # Enclose each id in single quotes
+                sql_query = f"""
+                        UPDATE "LiteLLM_UserTable"
+                        SET spend = spend + {response_cost}
+                        WHERE user_id IN ({user_ids_str})
+                        """
+                await prisma_client.sql_executor(sql_query=sql_query)
+            except:
+                ### add failed transactions to queue ###
+                existing_list = await user_api_key_cache.async_get_cache(
+                    key="Failed_USER_DB_Transactions"
+                )
+                if existing_list is None:
+                    existing_list = []
+                existing_list.append(
+                    (response_cost, user_id), (response_cost, litellm_proxy_budget_name)
+                )
+                await user_api_key_cache.async_set_cache(
+                    key="Failed_USER_DB_Transactions", value=existing_list
+                )
 
         ### UPDATE KEY SPEND ###
         async def _update_key_db():
             """
             Update key row
             """
-            sql_query = f"""
-                    UPDATE "LiteLLM_VerificationToken"
-                    SET spend = spend + {response_cost}
-                    WHERE token = '{token}'
-                    """
-            await prisma_client.sql_executor(sql_query=sql_query)
+            try:
+                sql_query = f"""
+                        UPDATE "LiteLLM_VerificationToken"
+                        SET spend = spend + {response_cost}
+                        WHERE token = '{token}'
+                        """
+                await prisma_client.sql_executor(sql_query=sql_query)
+            except:
+                ### add failed transactions to queue ###
+                existing_list = await user_api_key_cache.async_get_cache(
+                    key="Failed_Keys_DB_Transactions"
+                )
+                if existing_list is None:
+                    existing_list = []
+                existing_list.append((response_cost, token))
+                await user_api_key_cache.async_set_cache(
+                    key="Failed_Keys_DB_Transactions", value=existing_list
+                )
 
         ### UPDATE SPEND LOGS ###
         async def _insert_spend_log_to_db():
@@ -918,6 +946,16 @@ async def update_database(
                     await custom_db_client.insert_data(payload, table_name="spend")
             except Exception as e:
                 verbose_proxy_logger.info(f"Update Spend Logs DB failed to execute")
+                ### add failed transactions to queue ###
+                existing_list = await user_api_key_cache.async_get_cache(
+                    key="Failed_Spend_Logs_DB_Transactions"
+                )
+                if existing_list is None:
+                    existing_list = []
+                existing_list.append((payload))
+                await user_api_key_cache.async_set_cache(
+                    key="Failed_Spend_Logs_DB_Transactions", value=existing_list
+                )
 
         asyncio.create_task(_update_user_db())
         asyncio.create_task(_update_key_db())
@@ -1910,6 +1948,12 @@ async def startup_event():
         597, 605
     )  # random interval, so multiple workers avoid resetting budget at the same time
     scheduler.add_job(reset_budget, "interval", seconds=interval, args=[prisma_client])
+    scheduler.add_job(
+        failed_transaction_writer,
+        "interval",
+        seconds=10,
+        args=[prisma_client, user_api_key_cache],
+    )
     scheduler.start()
 
 

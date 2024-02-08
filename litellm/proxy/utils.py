@@ -1259,6 +1259,37 @@ async def reset_budget(prisma_client: PrismaClient):
             )
 
 
+@backoff.on_exception(
+    backoff.expo,
+    Exception,  # base exception to catch for the backoff
+    max_tries=3,  # maximum number of retries
+    max_time=10,  # maximum total time to retry for
+    on_backoff=on_backoff,  # specifying the function to call on backoff
+)
+async def failed_transaction_writer(
+    prisma_client: PrismaClient, user_api_key_cache: DualCache
+):
+    """
+    - Checks cache for failed transactions
+    - Batch writes them to the table
+    - Sets value in cache to None
+    """
+    ### UPDATE SPEND LOGS DB ###
+    existing_list = await user_api_key_cache.async_get_cache(
+        key="Failed_Spend_Logs_DB_Transactions"
+    )
+    if existing_list is not None and isinstance(existing_list, list):
+        try:
+            await prisma_client.db.litellm_spendlogs.create_many(
+                data=existing_list, skip_duplicates=True
+            )
+            await user_api_key_cache.async_set_cache(
+                key="Failed_Spend_Logs_DB_Transactions", value=None
+            )
+        except Exception as e:
+            pass
+
+
 async def _read_request_body(request):
     """
     Asynchronous function to read the request body and parse it as JSON or literal data.
