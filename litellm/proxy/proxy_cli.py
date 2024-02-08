@@ -176,18 +176,8 @@ def run_server(
 ):
     global feature_telemetry
     args = locals()
-    if local:
-        from proxy_server import app, save_worker_config, usage_telemetry
-    else:
-        try:
-            from .proxy_server import app, save_worker_config, usage_telemetry
-        except ImportError as e:
-            if "litellm[proxy]" in str(e):
-                # user is missing a proxy dependency, ask them to pip install litellm[proxy]
-                raise e
-            else:
-                # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import app, save_worker_config, usage_telemetry
+    from proxy_server import app, save_worker_config, usage_telemetry
+
     feature_telemetry = usage_telemetry
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
@@ -414,7 +404,7 @@ def run_server(
                 )
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-        from litellm.proxy.proxy_server import app
+        from proxy_server import app
 
         if os.name == "nt":
             uvicorn.run(app, host=host, port=port)  # run uvicorn
