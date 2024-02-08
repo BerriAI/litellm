@@ -1508,7 +1508,7 @@ class Logging:
                     # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = litellm.completion_cost(
                         completion_response=complete_streaming_response,
-                        base_model=base_model,
+                        model=base_model,
                     )
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
