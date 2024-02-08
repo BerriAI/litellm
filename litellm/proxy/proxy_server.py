@@ -3455,10 +3455,25 @@ async def login(request: Request):
 
         litellm_dashboard_ui = "/ui/"
 
+        user_role = "app_owner"
+        if (
+            os.getenv("PROXY_ADMIN_ID", None) is not None
+            and os.environ["PROXY_ADMIN_ID"] == user_id
+        ):
+            # checks if user is admin
+            user_role = "app_admin"
+
         import jwt
 
         jwt_token = jwt.encode(
-            {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
+            {
+                "user_id": user_id,
+                "key": key,
+                "user_email": user_id,
+                "user_role": user_role,
+            },
+            "secret",
+            algorithm="HS256",
         )
         litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
 
