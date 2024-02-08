@@ -121,6 +121,71 @@ def test_s3_logging():
 # test_s3_logging()
 
 
+def test_s3_logging_async():
+    # this tests time added to make s3 logging calls, vs just acompletion calls
+    try:
+        litellm.set_verbose = True
+        # Make 5 calls with an empty success_callback
+        litellm.success_callback = []
+        start_time_empty_callback = asyncio.run(make_async_calls())
+        print("done with no callback test")
+
+        print("starting s3 logging load test")
+        # Make 5 calls with success_callback set to "langfuse"
+        litellm.success_callback = ["s3"]
+        litellm.s3_callback_params = {
+            "s3_bucket_name": "litellm-logs",
+            "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+            "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        }
+        start_time_s3 = asyncio.run(make_async_calls())
+        print("done with s3 test")
+
+        # Compare the time for both scenarios
+        print(f"Time taken with success_callback='s3': {start_time_s3}")
+        print(f"Time taken with empty success_callback: {start_time_empty_callback}")
+
+        # assert the diff is not more than 1 second
+        assert abs(start_time_s3 - start_time_empty_callback) < 1
+
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
+
+
+async def make_async_calls():
+    tasks = []
+    for _ in range(5):
+        task = asyncio.create_task(
+            litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=[{"role": "user", "content": "This is a test"}],
+                max_tokens=5,
+                temperature=0.7,
+                timeout=5,
+                user="langfuse_latency_test_user",
+                mock_response="It's simple to use and easy to get started",
+            )
+        )
+        tasks.append(task)
+
+    # Measure the start time before running the tasks
+    start_time = asyncio.get_event_loop().time()
+
+    # Wait for all tasks to complete
+    responses = await asyncio.gather(*tasks)
+
+    # Print the responses when tasks return
+    for idx, response in enumerate(responses):
+        print(f"Response from Task {idx + 1}: {response}")
+
+    # Calculate the total time taken
+    total_time = asyncio.get_event_loop().time() - start_time
+
+    return total_time
+
+
 def test_s3_logging_r2():
     # all s3 requests need to be in one test function
     # since we are modifying stdout, and pytests runs tests in parallel
