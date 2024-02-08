@@ -197,7 +197,7 @@ response = completion(
 
 ### SSO Login (AWS Profile)
 - Set `AWS_PROFILE` environment variable
-- Make bedrock completion call 
+- Make bedrock completion call
 ```python
 import os
 from litellm import completion
@@ -208,11 +208,24 @@ response = completion(
 )
 ```
 
-### STS based Auth 
+or pass `aws_profile_name`:
+
+```python
+import os
+from litellm import completion
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            aws_profile_name="dev-profile",
+)
+```
+
+### STS based Auth
 
 - Set `aws_role_name` and `aws_session_name` in completion() / embedding() function
 
-Make the bedrock completion call 
+Make the bedrock completion call
 ```python
 from litellm import completion
 
