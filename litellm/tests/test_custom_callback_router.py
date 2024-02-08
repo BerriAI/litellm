@@ -269,14 +269,15 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["model"], str)
 
             # checking we use base_model for azure cost calculation
-            base_model = (
-                kwargs.get("litellm_params", {})
-                .get("metadata", {})
-                .get("model_info", {})
-                .get("base_model", None)
+            base_model = litellm.utils._get_base_model_from_metadata(
+                model_call_details=kwargs
             )
 
-            if kwargs["model"] == "chatgpt-v-2" and base_model is not None:
+            if (
+                kwargs["model"] == "chatgpt-v-2"
+                and base_model is not None
+                and kwargs["stream"] != True
+            ):
                 # when base_model is set for azure, we should use pricing for the base_model
                 # this checks response_cost == litellm.cost_per_token(model=base_model)
                 assert isinstance(kwargs["response_cost"], float)
