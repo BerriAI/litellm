@@ -7,10 +7,8 @@ model_list:
       api_version: "2023-07-01-preview"
     model_info:
       mode: chat
-      input_cost_per_token: 0.0.00006
-      output_cost_per_token: 0.00003
       max_tokens: 4096
-      base_model: gpt-3.5-turbo
+      base_model: azure/gpt-4-1106-preview
   - model_name: gpt-4
     litellm_params:
       model: azure/chatgpt-v-2
@@ -74,11 +72,6 @@ litellm_settings:
     max_budget: 1.5000
     models: ["azure-gpt-3.5"]
     duration: None
-  cache: True          # set cache responses to True
-  cache_params:
-    type: "redis-semantic"
-    similarity_threshold: 0.8
-    redis_semantic_cache_embedding_model: azure-embedding-model
   upperbound_key_generate_params:
     max_budget: 100
     duration: "30d"   
