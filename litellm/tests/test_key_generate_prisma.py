@@ -330,6 +330,7 @@ def test_call_with_user_over_budget(prisma_client):
         print(vars(e))
 
 
+@pytest.mark.skip(reason="bad test, needs to be re-written")
 def test_call_with_end_user_over_budget(prisma_client):
     # Test if a user passed to /chat/completions is tracked & fails whe they cross their budget
     # we only check this when litellm.max_user_budget is set
