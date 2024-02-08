@@ -495,7 +495,6 @@ class RedisSemanticCache(BaseCache):
             )
         else:
             # convert to embedding
-            user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", "")
             embedding_response = await litellm.aembedding(
                 model=self.embedding_model,
                 input=prompt,
