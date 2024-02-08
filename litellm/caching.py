@@ -427,10 +427,16 @@ class RedisSemanticCache(BaseCache):
             else []
         )
         if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
             embedding_response = await llm_router.aembedding(
                 model=self.embedding_model,
                 input=prompt,
                 cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
             )
         else:
             # convert to embedding
@@ -476,13 +482,20 @@ class RedisSemanticCache(BaseCache):
             else []
         )
         if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
             embedding_response = await llm_router.aembedding(
                 model=self.embedding_model,
                 input=prompt,
                 cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
             )
         else:
             # convert to embedding
+            user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", "")
             embedding_response = await litellm.aembedding(
                 model=self.embedding_model,
                 input=prompt,
