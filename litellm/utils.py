@@ -1079,10 +1079,20 @@ class Logging:
                                 call_type=self.call_type,
                             )
                         else:
+                            # check if base_model set on azure
+                            base_model = (
+                                self.model_call_details.get("litellm_params", {})
+                                .get("metadata", {})
+                                .get("model_info", {})
+                                .get("base_model", None)
+                            )
+                            # base_model defaults to None if not set on model_info
                             self.model_call_details[
                                 "response_cost"
                             ] = litellm.completion_cost(
-                                completion_response=result, call_type=self.call_type
+                                completion_response=result,
+                                call_type=self.call_type,
+                                model=base_model,
                             )
                     verbose_logger.debug(
                         f"Model={self.model}; cost={self.model_call_details['response_cost']}"
@@ -1158,10 +1168,19 @@ class Logging:
                     if self.model_call_details.get("cache_hit", False) == True:
                         self.model_call_details["response_cost"] = 0.0
                     else:
+                        # check if base_model set on azure
+                        base_model = (
+                            self.model_call_details.get("litellm_params", {})
+                            .get("metadata", {})
+                            .get("model_info", {})
+                            .get("base_model", None)
+                        )
+                        # base_model defaults to None if not set on model_info
                         self.model_call_details[
                             "response_cost"
                         ] = litellm.completion_cost(
                             completion_response=complete_streaming_response,
+                            model=base_model,
                         )
                     verbose_logger.debug(
                         f"Model={self.model}; cost={self.model_call_details['response_cost']}"
@@ -1479,8 +1498,17 @@ class Logging:
                 if self.model_call_details.get("cache_hit", False) == True:
                     self.model_call_details["response_cost"] = 0.0
                 else:
+                    # check if base_model set on azure
+                    base_model = (
+                        self.model_call_details.get("litellm_params", {})
+                        .get("metadata", {})
+                        .get("model_info", {})
+                        .get("base_model", None)
+                    )
+                    # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = litellm.completion_cost(
                         completion_response=complete_streaming_response,
+                        base_model=base_model,
                     )
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
