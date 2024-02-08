@@ -1080,11 +1080,8 @@ class Logging:
                             )
                         else:
                             # check if base_model set on azure
-                            base_model = (
-                                self.model_call_details.get("litellm_params", {})
-                                .get("metadata", {})
-                                .get("model_info", {})
-                                .get("base_model", None)
+                            base_model = _get_base_model_from_metadata(
+                                model_call_details=self.model_call_details
                             )
                             # base_model defaults to None if not set on model_info
                             self.model_call_details[
@@ -1169,11 +1166,8 @@ class Logging:
                         self.model_call_details["response_cost"] = 0.0
                     else:
                         # check if base_model set on azure
-                        base_model = (
-                            self.model_call_details.get("litellm_params", {})
-                            .get("metadata", {})
-                            .get("model_info", {})
-                            .get("base_model", None)
+                        base_model = _get_base_model_from_metadata(
+                            model_call_details=self.model_call_details
                         )
                         # base_model defaults to None if not set on model_info
                         self.model_call_details[
@@ -1499,11 +1493,8 @@ class Logging:
                     self.model_call_details["response_cost"] = 0.0
                 else:
                     # check if base_model set on azure
-                    base_model = (
-                        self.model_call_details.get("litellm_params", {})
-                        .get("metadata", {})
-                        .get("model_info", {})
-                        .get("base_model", None)
+                    base_model = _get_base_model_from_metadata(
+                        model_call_details=self.model_call_details
                     )
                     # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = litellm.completion_cost(
@@ -9259,3 +9250,21 @@ def get_logging_id(start_time, response_obj):
         return response_id
     except:
         return None
+
+
+def _get_base_model_from_metadata(model_call_details=None):
+    if model_call_details is None:
+        return None
+    litellm_params = model_call_details.get("litellm_params", {})
+
+    if litellm_params is not None:
+        metadata = litellm_params.get("metadata", {})
+
+        if metadata is not None:
+            model_info = metadata.get("model_info", {})
+
+            if model_info is not None:
+                base_model = model_info.get("base_model", None)
+                if base_model is not None:
+                    return base_model
+    return None
