@@ -34,8 +34,11 @@ LiteLLM manages:
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
+## Install dependencies 
+`pip3 install litellm[proxy]`
+
 ## Example Proxy Server
-`python3 ./litellm/proxy/proxy_cli.py --api_base http://localhost:3030`
+`python3 ./litellm/proxy/proxy_cli.py --api_base http://localhost:3030 --port 25565` 
 
 ``
 
