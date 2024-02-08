@@ -66,6 +66,7 @@ def test_s3_logging():
         response = asyncio.run(_test())
         expected_keys.append(response.id)
         print(f"response: {response}")
+        time.sleep(5)  # wait 5s for logs to land
 
         import boto3
 
