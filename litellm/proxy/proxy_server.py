@@ -2004,12 +2004,15 @@ async def startup_event():
         )
 
     ### START BUDGET SCHEDULER ###
-    scheduler = AsyncIOScheduler()
-    interval = random.randint(
-        597, 605
-    )  # random interval, so multiple workers avoid resetting budget at the same time
-    scheduler.add_job(reset_budget, "interval", seconds=interval, args=[prisma_client])
-    scheduler.start()
+    if prisma_client is not None:
+        scheduler = AsyncIOScheduler()
+        interval = random.randint(
+            597, 605
+        )  # random interval, so multiple workers avoid resetting budget at the same time
+        scheduler.add_job(
+            reset_budget, "interval", seconds=interval, args=[prisma_client]
+        )
+        scheduler.start()
 
 
 #### API ENDPOINTS ####
