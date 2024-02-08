@@ -852,8 +852,20 @@ async def _PROXY_track_cost_callback(
                     f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                 )
     except Exception as e:
+        error_msg = f"error in tracking cost callback - {traceback.format_exc()}"
+        error_msg += f"\n Args to _PROXY_track_cost_callback\n kwargs: {kwargs}\n completion_response: {completion_response}"
+        user_id = user_id or "not-found"
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                user_max_budget=0,
+                user_current_spend=0,
+                type="failed_tracking",
+                user_info=user_id,
+                error_message=error_msg,
+            )
+        )
         verbose_proxy_logger.debug(
-            f"error in tracking cost callback - {traceback.format_exc}"
+            f"error in tracking cost callback - {traceback.format_exc()}"
         )
 
 
