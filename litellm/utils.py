@@ -2786,6 +2786,12 @@ def client(original_function):
                                 result, *args, **kwargs
                             )
                         )
+                    elif isinstance(litellm.cache.cache, S3Cache):
+                        threading.Thread(
+                            target=litellm.cache.add_cache,
+                            args=(result,) + args,
+                            kwargs=kwargs,
+                        ).start()
                     else:
                         asyncio.create_task(
                             litellm.cache.async_add_cache(
