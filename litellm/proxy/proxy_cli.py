@@ -427,7 +427,7 @@ def run_server(
         if os.getenv("DATABASE_URL", None) is not None:
             try:
                 ### add connection pool + pool timeout args
-                params = {"connection_limit": 500, "pool_timeout": 60}
+                params = {"connection_limit": 100, "pool_timeout": 60}
                 database_url = os.getenv("DATABASE_URL")
                 modified_url = append_query_params(database_url, params)
                 os.environ["DATABASE_URL"] = modified_url
