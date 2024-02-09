@@ -162,3 +162,32 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
     throw error;
   }
 };
+
+
+
+export const spendUsersCall = async (accessToken: String, userID: String) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/users` : `/spend/users`;
+    console.log("in spendUsersCall:", url);
+    const response = await fetch(`${url}/?user_id=${userID}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get spend for user", error);
+    throw error;
+  }
+};
+
