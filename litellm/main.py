@@ -31,6 +31,7 @@ from litellm.utils import (
     get_llm_provider,
     get_api_key,
     mock_completion_streaming_obj,
+    async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     token_counter,
     Usage,
@@ -307,6 +308,7 @@ def mock_completion(
     messages: List,
     stream: Optional[bool] = False,
     mock_response: str = "This is a mock request",
+    logging=None,
     **kwargs,
 ):
     """
@@ -335,6 +337,15 @@ def mock_completion(
         model_response = ModelResponse(stream=stream)
         if stream is True:
             # don't try to access stream object,
+            if kwargs.get("acompletion", False) == True:
+                return CustomStreamWrapper(
+                    completion_stream=async_mock_completion_streaming_obj(
+                        model_response, mock_response=mock_response, model=model
+                    ),
+                    model=model,
+                    custom_llm_provider="openai",
+                    logging_obj=logging,
+                )
             response = mock_completion_streaming_obj(
                 model_response, mock_response=mock_response, model=model
             )
@@ -717,7 +728,12 @@ def completion(
         )
         if mock_response:
             return mock_completion(
-                model, messages, stream=stream, mock_response=mock_response
+                model,
+                messages,
+                stream=stream,
+                mock_response=mock_response,
+                logging=logging,
+                acompletion=acompletion,
             )
         if custom_llm_provider == "azure":
             # azure configs
@@ -846,7 +862,6 @@ def completion(
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     organization=organization,
-                    custom_llm_provider=custom_llm_provider,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
