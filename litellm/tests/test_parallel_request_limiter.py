@@ -292,6 +292,7 @@ async def test_normal_router_call():
         model="azure-model",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     await asyncio.sleep(1)  # success is done in a separate thread
     print(f"response: {response}")
@@ -450,6 +451,7 @@ async def test_streaming_router_call():
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         stream=True,
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     async for chunk in response:
         continue
@@ -526,6 +528,7 @@ async def test_streaming_router_tpm_limit():
         messages=[{"role": "user", "content": "Write me a paragraph on the moon"}],
         stream=True,
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     async for chunk in response:
         continue
