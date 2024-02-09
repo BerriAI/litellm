@@ -120,7 +120,7 @@ const UserDashboard = () => {
       <Navbar userID={userID} userRole={userRole} userEmail={userEmail} />
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
         <Col numColSpan={1}>
-          <ViewUserSpend userID={userID} userSpendData={userSpendData} />
+          <ViewUserSpend userID={userID} userSpendData={userSpendData} userRole={userRole} accessToken={accessToken}/>
           <ViewKeyTable
             userID={userID}
             accessToken={accessToken}
