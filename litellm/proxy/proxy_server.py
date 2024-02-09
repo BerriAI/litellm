@@ -809,14 +809,13 @@ async def _PROXY_track_cost_callback(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         user_id = proxy_server_request.get("body", {}).get("user", None)
+        user_id = user_id or kwargs["litellm_params"]["metadata"].get(
+            "user_api_key_user_id", None
+        )
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
-            )
-
-            user_id = user_id or kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_user_id", None
             )
 
             if kwargs.get("cache_hit", False) == True:
@@ -852,9 +851,21 @@ async def _PROXY_track_cost_callback(
                     f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                 )
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"error in tracking cost callback - {traceback.format_exc}"
+        error_msg = f"error in tracking cost callback - {traceback.format_exc()}"
+        model = kwargs.get("model", "")
+        metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+        error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
+        user_id = user_id or "not-found"
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                user_max_budget=0,
+                user_current_spend=0,
+                type="failed_tracking",
+                user_info=user_id,
+                error_message=error_msg,
+            )
         )
+        verbose_proxy_logger.debug(f"error in tracking cost callback - {error_msg}")
 
 
 async def update_database(
@@ -2004,12 +2015,15 @@ async def startup_event():
         )
 
     ### START BUDGET SCHEDULER ###
-    scheduler = AsyncIOScheduler()
-    interval = random.randint(
-        597, 605
-    )  # random interval, so multiple workers avoid resetting budget at the same time
-    scheduler.add_job(reset_budget, "interval", seconds=interval, args=[prisma_client])
-    scheduler.start()
+    if prisma_client is not None:
+        scheduler = AsyncIOScheduler()
+        interval = random.randint(
+            597, 605
+        )  # random interval, so multiple workers avoid resetting budget at the same time
+        scheduler.add_job(
+            reset_budget, "interval", seconds=interval, args=[prisma_client]
+        )
+        scheduler.start()
 
 
 #### API ENDPOINTS ####
@@ -3001,7 +3015,16 @@ async def info_key_fn(
     tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def spend_key_fn():
+async def spend_key_fn(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
     """
     View all keys created, ordered by spend
 
@@ -3018,9 +3041,41 @@ async def spend_key_fn():
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+        if (
+            start_date is not None
+            and isinstance(start_date, str)
+            and end_date is not None
+            and isinstance(end_date, str)
+        ):
+            # Convert the date strings to datetime objects
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-        return key_info
+            # SQL query
+            response = await prisma_client.db.litellm_spendlogs.group_by(
+                by=["api_key", "startTime"],
+                where={
+                    "startTime": {
+                        "gte": start_date_obj,  # Greater than or equal to Start Date
+                        "lte": end_date_obj,  # Less than or equal to End Date
+                    }
+                },
+                sum={
+                    "spend": True,
+                },
+            )
+
+            # TODO: Execute SQL query and return the results
+
+            return {
+                "message": "This is your SQL query",
+                "response": response,
+            }
+        else:
+            key_info = await prisma_client.get_data(
+                table_name="key", query_type="find_all"
+            )
+            return key_info
 
     except Exception as e:
         raise HTTPException(
@@ -3441,10 +3496,25 @@ async def login(request: Request):
 
         litellm_dashboard_ui = "/ui/"
 
+        user_role = "app_owner"
+        if (
+            os.getenv("PROXY_ADMIN_ID", None) is not None
+            and os.environ["PROXY_ADMIN_ID"] == user_id
+        ):
+            # checks if user is admin
+            user_role = "app_admin"
+
         import jwt
 
         jwt_token = jwt.encode(
-            {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
+            {
+                "user_id": user_id,
+                "key": key,
+                "user_email": user_id,
+                "user_role": user_role,
+            },
+            "secret",
+            algorithm="HS256",
         )
         litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
 

@@ -10,6 +10,14 @@
 # import asyncio
 # from litellm import Router, Timeout
 # import time
+# from litellm.caching import Cache
+# import litellm
+
+# litellm.cache = Cache(
+#     type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+# )
+
+# ### Test calling router with s3 Cache
 
 
 # async def call_acompletion(semaphore, router: Router, input_data):

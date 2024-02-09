@@ -198,10 +198,17 @@ class ProxyLogging:
 
     async def budget_alerts(
         self,
-        type: Literal["token_budget", "user_budget", "user_and_proxy_budget"],
+        type: Literal[
+            "token_budget",
+            "user_budget",
+            "user_and_proxy_budget",
+            "failed_budgets",
+            "failed_tracking",
+        ],
         user_max_budget: float,
         user_current_spend: float,
         user_info=None,
+        error_message="",
     ):
         if self.alerting is None:
             # do nothing if alerting is not switched on
@@ -221,6 +228,15 @@ class ProxyLogging:
             max_budget = token_info["max_budget"]
             user_id = token_info["user_id"]
             user_info = f"""\nToken: {token}\nSpend: ${spend}\nMax Budget: ${max_budget}\nUser ID: {user_id}"""
+        elif type == "failed_tracking":
+            user_id = str(user_info)
+            user_info = f"\nUser ID: {user_id}\n Error {error_message}"
+            message = "Failed Tracking Cost for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="High",
+            )
+            return
         else:
             user_info = str(user_info)
         # percent of max_budget left to spend
