@@ -1576,7 +1576,7 @@ class Logging:
                             # only add to cache once we have a complete streaming response
                             litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    print_verbose(f"Async success callbacks: CustomLogger")
+                    print_verbose(f"Async success callbacks: {callback}")
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
                             await callback.async_log_success_event(
@@ -8816,6 +8816,14 @@ def mock_completion_streaming_obj(model_response, mock_response, model):
     for i in range(0, len(mock_response), 3):
         completion_obj = {"role": "assistant", "content": mock_response[i : i + 3]}
         model_response.choices[0].delta = completion_obj
+        yield model_response
+
+
+async def async_mock_completion_streaming_obj(model_response, mock_response, model):
+    for i in range(0, len(mock_response), 3):
+        completion_obj = Delta(role="assistant", content=mock_response)
+        model_response.choices[0].delta = completion_obj
+        model_response.choices[0].finish_reason = "stop"
         yield model_response
 
 
