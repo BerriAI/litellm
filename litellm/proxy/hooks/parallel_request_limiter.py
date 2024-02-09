@@ -125,7 +125,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # ------------
 
             new_val = {
-                "current_requests": current["current_requests"] - 1,
+                "current_requests": max(current["current_requests"] - 1, 0),
                 "current_tpm": current["current_tpm"] + total_tokens,
                 "current_rpm": current["current_rpm"] + 1,
             }
@@ -183,7 +183,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val = {
-                    "current_requests": current["current_requests"] - 1,
+                    "current_requests": max(current["current_requests"] - 1, 0),
                     "current_tpm": current["current_tpm"],
                     "current_rpm": current["current_rpm"],
                 }
