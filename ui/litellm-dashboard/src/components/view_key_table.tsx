@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall } from "./networking";
-import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { StatusOnlineIcon, TrashIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import {
   Badge,
   Card,
@@ -35,6 +35,31 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  const handleSort = () => {
+    if (data == null) {
+      return;
+    }
+    // Toggle the sort direction
+    const newSortDirection = sortDirection === "asc" ? "desc" : "asc";
+    setSortDirection(newSortDirection);
+
+    // Sort the data based on the spend column
+    const sortedData = [...data].sort((a, b) => {
+      const spendA = parseFloat(a.spend) || 0;
+      const spendB = parseFloat(b.spend) || 0;
+
+      if (newSortDirection === "asc") {
+        return spendA - spendB;
+      } else {
+        return spendB - spendA;
+      }
+    });
+
+    // Update the state with the sorted data
+    setData(sortedData);
+  };
 
   const handleDelete = async (token: string) => {
     if (data == null) {
@@ -72,21 +97,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setKeyToDelete(null);
   };
 
-  // const handleDelete = async (token: String) => {
-  //   if (data == null) {
-  //     return;
-  //   }
-  //   try {
-  //     await keyDeleteCall(accessToken, token);
-  //     // Successfully completed the deletion. Update the state to trigger a rerender.
-  //     const filteredData = data.filter((item) => item.token !== token);
-  //     setData(filteredData);
-  //   } catch (error) {
-  //     console.error("Error deleting the key:", error);
-  //     // Handle any error situations, such as displaying an error message to the user.
-  //   }
-  // };
-
   if (data == null) {
     return;
   }
@@ -99,7 +109,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
-            <TableHeaderCell>Spend (USD)</TableHeaderCell>
+            <TableHeaderCell>
+            Spend (USD)
+
+            {
+              sortDirection === "asc" ? (
+                
+                <Button variant="light" onClick={handleSort} icon={ChevronDownIcon} size="sm"></Button>
+              ) : (
+                <Button variant="light" onClick={handleSort} icon={ChevronUpIcon} size="sm"></Button>
+              )
+            }
+
+
+
+            </TableHeaderCell>
+            
             <TableHeaderCell>Key Budget (USD)</TableHeaderCell>
             <TableHeaderCell>Team ID</TableHeaderCell>
             <TableHeaderCell>Metadata</TableHeaderCell>
@@ -171,7 +196,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     keyBudget={item.max_budget}
                     keyName={item.key_name}
                   />
-                </TableCell>
+                  </TableCell>
               </TableRow>
             );
           })}
