@@ -3041,12 +3041,7 @@ async def spend_key_fn(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if start_date is None and end_date is None:
-            key_info = await prisma_client.get_data(
-                table_name="key", query_type="find_all"
-            )
-            return key_info
-        elif (
+        if (
             start_date is not None
             and isinstance(start_date, str)
             and end_date is not None
@@ -3076,6 +3071,11 @@ async def spend_key_fn(
                 "message": "This is your SQL query",
                 "response": response,
             }
+        else:
+            key_info = await prisma_client.get_data(
+                table_name="key", query_type="find_all"
+            )
+            return key_info
 
     except Exception as e:
         raise HTTPException(
