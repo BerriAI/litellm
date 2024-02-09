@@ -6,6 +6,7 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 :::info
 
+- 🔑 [UI to Generate, Edit, Delete Keys (with SSO)](https://docs.litellm.ai/docs/proxy/ui)
 - [Deploy LiteLLM Proxy with Key Management](https://docs.litellm.ai/docs/proxy/deploy#deploy-with-database)
 - Dockerfile.database for LiteLLM Proxy + Key Management [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile.database)
 
