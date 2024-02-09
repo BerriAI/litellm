@@ -304,7 +304,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             data = deployment["litellm_params"].copy()
             kwargs["model_info"] = deployment.get("model_info", {})
@@ -376,7 +379,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -451,7 +457,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -526,7 +535,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -654,7 +666,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -780,7 +795,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -1406,7 +1424,6 @@ class Router:
                 max_retries_env_name = max_retries.replace("os.environ/", "")
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
-
 
             # proxy support
             import os

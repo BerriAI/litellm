@@ -116,6 +116,28 @@ def mistral_instruct_pt(messages):
     return prompt
 
 
+def mistral_api_pt(messages):
+    """
+    - handles scenario where content is list and not string
+    - content list is just text, and no images
+    - if image passed in, then just return as is (user-intended)
+
+    Motivation: mistral api doesn't support content as a list
+    """
+    new_messages = []
+    for m in messages:
+        texts = ""
+        if isinstance(m["content"], list):
+            for c in m["content"]:
+                if c["type"] == "image_url":
+                    return messages
+                elif c["type"] == "text" and isinstance(c["text"], str):
+                    texts += c["text"]
+        new_m = {"role": m["role"], "content": texts}
+        new_messages.append(new_m)
+    return new_messages
+
+
 # Falcon prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def falcon_instruct_pt(messages):
     prompt = ""
@@ -612,6 +634,8 @@ def prompt_factory(
             return _gemini_vision_convert_messages(messages=messages)
         else:
             return gemini_text_image_pt(messages=messages)
+    elif custom_llm_provider == "mistral":
+        return mistral_api_pt(messages=messages)
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
