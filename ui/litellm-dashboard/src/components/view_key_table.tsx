@@ -65,6 +65,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Key Budget (USD)</TableHeaderCell>
             <TableHeaderCell>Team ID</TableHeaderCell>
             <TableHeaderCell>Metadata</TableHeaderCell>
+            <TableHeaderCell>Models</TableHeaderCell>
+            <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
             <TableHeaderCell>Expires</TableHeaderCell>
           </TableRow>
         </TableHead>
@@ -102,6 +104,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 </TableCell>
                 <TableCell>
                   <Text>{JSON.stringify(item.metadata)}</Text>
+                </TableCell>
+                <TableCell>
+                  <Text>{JSON.stringify(item.models)}</Text>
+                </TableCell>
+                <TableCell>
+                  <Text>TPM Limit: {item.tpm_limit? item.tpm_limit : "Unlimited"} <br></br> RPM Limit: {item.rpm_limit? item.rpm_limit : "Unlimited"}</Text>
                 </TableCell>
                 <TableCell>
                   {item.expires != null ? (
