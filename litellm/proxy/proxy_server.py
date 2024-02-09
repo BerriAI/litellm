@@ -3015,7 +3015,16 @@ async def info_key_fn(
     tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def spend_key_fn():
+async def spend_key_fn(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
     """
     View all keys created, ordered by spend
 
@@ -3032,9 +3041,41 @@ async def spend_key_fn():
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+        if start_date is None and end_date is None:
+            key_info = await prisma_client.get_data(
+                table_name="key", query_type="find_all"
+            )
+            return key_info
+        elif (
+            start_date is not None
+            and isinstance(start_date, str)
+            and end_date is not None
+            and isinstance(end_date, str)
+        ):
+            # Convert the date strings to datetime objects
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-        return key_info
+            # SQL query
+            response = await prisma_client.db.litellm_spendlogs.group_by(
+                by=["api_key", "startTime"],
+                where={
+                    "startTime": {
+                        "gte": start_date_obj,  # Greater than or equal to Start Date
+                        "lte": end_date_obj,  # Less than or equal to End Date
+                    }
+                },
+                sum={
+                    "spend": True,
+                },
+            )
+
+            # TODO: Execute SQL query and return the results
+
+            return {
+                "message": "This is your SQL query",
+                "response": response,
+            }
 
     except Exception as e:
         raise HTTPException(
