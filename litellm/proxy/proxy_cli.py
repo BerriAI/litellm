@@ -424,14 +424,25 @@ def run_server(
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
 
-        if os.getenv("DATABASE_URL", None) is not None:
+        if (
+            os.getenv("DATABASE_URL", None) is not None
+            or os.getenv("DIRECT_URL", None) is not None
+        ):
             try:
-                ### add connection pool + pool timeout args
-                params = {"connection_limit": 100, "pool_timeout": 60}
-                database_url = os.getenv("DATABASE_URL")
-                modified_url = append_query_params(database_url, params)
-                os.environ["DATABASE_URL"] = modified_url
-                ###
+                if os.getenv("DATABASE_URL", None) is not None:
+                    ### add connection pool + pool timeout args
+                    params = {"connection_limit": 100, "pool_timeout": 60}
+                    database_url = os.getenv("DATABASE_URL")
+                    modified_url = append_query_params(database_url, params)
+                    os.environ["DATABASE_URL"] = modified_url
+                    ###
+                if os.getenv("DIRECT_URL", None) is not None:
+                    ### add connection pool + pool timeout args
+                    params = {"connection_limit": 100, "pool_timeout": 60}
+                    database_url = os.getenv("DIRECT_URL")
+                    modified_url = append_query_params(database_url, params)
+                    os.environ["DIRECT_URL"] = modified_url
+                    ###
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
