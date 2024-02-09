@@ -369,7 +369,6 @@ def completion(
 
             # private endpoint
             else:
-                print("private endpoint", model)
                 client = aiplatform.PrivateEndpoint(
                     endpoint_name=model,
                     project=vertex_project,
@@ -571,7 +570,6 @@ def completion(
                 request_str += (
                     f"client.predict(instances={instances})\n"
                 )
-                print("instances", instances)
                 response = client.predict(
                     instances=instances,
                 ).predictions
