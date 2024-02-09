@@ -1079,10 +1079,17 @@ class Logging:
                                 call_type=self.call_type,
                             )
                         else:
+                            # check if base_model set on azure
+                            base_model = _get_base_model_from_metadata(
+                                model_call_details=self.model_call_details
+                            )
+                            # base_model defaults to None if not set on model_info
                             self.model_call_details[
                                 "response_cost"
                             ] = litellm.completion_cost(
-                                completion_response=result, call_type=self.call_type
+                                completion_response=result,
+                                call_type=self.call_type,
+                                model=base_model,
                             )
                     verbose_logger.debug(
                         f"Model={self.model}; cost={self.model_call_details['response_cost']}"
@@ -1158,10 +1165,16 @@ class Logging:
                     if self.model_call_details.get("cache_hit", False) == True:
                         self.model_call_details["response_cost"] = 0.0
                     else:
+                        # check if base_model set on azure
+                        base_model = _get_base_model_from_metadata(
+                            model_call_details=self.model_call_details
+                        )
+                        # base_model defaults to None if not set on model_info
                         self.model_call_details[
                             "response_cost"
                         ] = litellm.completion_cost(
                             completion_response=complete_streaming_response,
+                            model=base_model,
                         )
                     verbose_logger.debug(
                         f"Model={self.model}; cost={self.model_call_details['response_cost']}"
@@ -1369,6 +1382,36 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "s3":
+                        global s3Logger
+                        if s3Logger is None:
+                            s3Logger = S3Logger()
+                        if self.stream:
+                            if "complete_streaming_response" in self.model_call_details:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - Completed Stream Response"
+                                )
+                                s3Logger.log_event(
+                                    kwargs=self.model_call_details,
+                                    response_obj=self.model_call_details[
+                                        "complete_streaming_response"
+                                    ],
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    print_verbose=print_verbose,
+                                )
+                            else:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - No complete stream response as yet"
+                                )
+                        else:
+                            s3Logger.log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                print_verbose=print_verbose,
+                            )
                     if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -1479,8 +1522,14 @@ class Logging:
                 if self.model_call_details.get("cache_hit", False) == True:
                     self.model_call_details["response_cost"] = 0.0
                 else:
+                    # check if base_model set on azure
+                    base_model = _get_base_model_from_metadata(
+                        model_call_details=self.model_call_details
+                    )
+                    # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = litellm.completion_cost(
                         completion_response=complete_streaming_response,
+                        model=base_model,
                     )
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
@@ -1527,7 +1576,7 @@ class Logging:
                             # only add to cache once we have a complete streaming response
                             litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    print_verbose(f"Async success callbacks: CustomLogger")
+                    print_verbose(f"Async success callbacks: {callback}")
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
                             await callback.async_log_success_event(
@@ -1599,36 +1648,6 @@ class Logging:
                             )
                     else:
                         await dynamoLogger._async_log_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            print_verbose=print_verbose,
-                        )
-                if callback == "s3":
-                    global s3Logger
-                    if s3Logger is None:
-                        s3Logger = S3Logger()
-                    if self.stream:
-                        if "complete_streaming_response" in self.model_call_details:
-                            print_verbose(
-                                "S3Logger Logger: Got Stream Event - Completed Stream Response"
-                            )
-                            await s3Logger._async_log_event(
-                                kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "complete_streaming_response"
-                                ],
-                                start_time=start_time,
-                                end_time=end_time,
-                                print_verbose=print_verbose,
-                            )
-                        else:
-                            print_verbose(
-                                "S3Logger Logger: Got Stream Event - No complete stream response as yet"
-                            )
-                    else:
-                        await s3Logger._async_log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
                             start_time=start_time,
@@ -1988,11 +2007,6 @@ def client(original_function):
                     elif callback == "dynamodb":
                         # dynamo is an async callback, it's used for the proxy and needs to be async
                         # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                        litellm._async_success_callback.append(callback)
-                        removed_async_items.append(index)
-                    elif callback == "s3":
-                        # s3 is an async callback, it's used for the proxy and needs to be async
-                        # we only support async s3 logging for acompletion/aembedding since that's used on proxy
                         litellm._async_success_callback.append(callback)
                         removed_async_items.append(index)
 
@@ -2767,6 +2781,12 @@ def client(original_function):
                                 result, *args, **kwargs
                             )
                         )
+                    elif isinstance(litellm.cache.cache, S3Cache):
+                        threading.Thread(
+                            target=litellm.cache.add_cache,
+                            args=(result,) + args,
+                            kwargs=kwargs,
+                        ).start()
                     else:
                         asyncio.create_task(
                             litellm.cache.async_add_cache(
@@ -4358,7 +4378,7 @@ def get_optional_params(
         if frequency_penalty is not None:
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
-            optional_params["stop_sequences"] = stop
+            optional_params["stop"] = stop
     elif custom_llm_provider == "ollama_chat":
         supported_params = [
             "max_tokens",
@@ -4381,7 +4401,7 @@ def get_optional_params(
         if frequency_penalty is not None:
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
-            optional_params["stop_sequences"] = stop
+            optional_params["stop"] = stop
     elif custom_llm_provider == "nlp_cloud":
         supported_params = [
             "max_tokens",
@@ -8799,6 +8819,14 @@ def mock_completion_streaming_obj(model_response, mock_response, model):
         yield model_response
 
 
+async def async_mock_completion_streaming_obj(model_response, mock_response, model):
+    for i in range(0, len(mock_response), 3):
+        completion_obj = Delta(role="assistant", content=mock_response)
+        model_response.choices[0].delta = completion_obj
+        model_response.choices[0].finish_reason = "stop"
+        yield model_response
+
+
 ########## Reading Config File ############################
 def read_config_args(config_path) -> dict:
     try:
@@ -9231,3 +9259,21 @@ def get_logging_id(start_time, response_obj):
         return response_id
     except:
         return None
+
+
+def _get_base_model_from_metadata(model_call_details=None):
+    if model_call_details is None:
+        return None
+    litellm_params = model_call_details.get("litellm_params", {})
+
+    if litellm_params is not None:
+        metadata = litellm_params.get("metadata", {})
+
+        if metadata is not None:
+            model_info = metadata.get("model_info", {})
+
+            if model_info is not None:
+                base_model = model_info.get("base_model", None)
+                if base_model is not None:
+                    return base_model
+    return None

@@ -356,6 +356,7 @@ def init_bedrock_client(
     aws_region_name: Optional[str] = None,
     aws_bedrock_runtime_endpoint: Optional[str] = None,
     aws_session_name: Optional[str] = None,
+    aws_profile_name: Optional[str] = None,
     aws_role_name: Optional[str] = None,
     timeout: Optional[int] = None,
 ):
@@ -371,6 +372,7 @@ def init_bedrock_client(
         aws_region_name,
         aws_bedrock_runtime_endpoint,
         aws_session_name,
+        aws_profile_name,
         aws_role_name,
     ]
 
@@ -385,6 +387,7 @@ def init_bedrock_client(
         aws_region_name,
         aws_bedrock_runtime_endpoint,
         aws_session_name,
+        aws_profile_name,
         aws_role_name,
     ) = params_to_check
 
@@ -446,6 +449,15 @@ def init_bedrock_client(
             service_name="bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+        )
+    elif aws_profile_name is not None:
+        # uses auth values from AWS profile usually stored in ~/.aws/credentials
+
+        client = boto3.Session(profile_name=aws_profile_name).client(
+            service_name="bedrock-runtime",
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
@@ -523,6 +535,7 @@ def completion(
         aws_region_name = optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
+        aws_profile_name = optional_params.pop("aws_profile_name", None)
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )
@@ -539,6 +552,7 @@ def completion(
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
                 aws_role_name=aws_role_name,
                 aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
             )
 
         model = model
@@ -725,6 +739,8 @@ def completion(
             try:
                 if len(outputText) > 0:
                     model_response["choices"][0]["message"]["content"] = outputText
+                else:
+                    raise Exception()
             except:
                 raise BedrockError(
                     message=json.dumps(outputText),

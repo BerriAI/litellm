@@ -266,37 +266,33 @@ class LangFuseLogger:
 
             trace = self.Langfuse.trace(**trace_params)
 
-            if level == "ERROR":
-                trace.generation(
-                    level="ERROR",  # can be any of DEBUG, DEFAULT, WARNING or ERROR
-                    status_message=output,  # can be any string (e.g. stringified stack trace or error body)
-                )
-                print(f"SUCCESSFULLY LOGGED ERROR")
-            else:
-                # get generation_id
-                generation_id = None
-                if (
-                    response_obj is not None
-                    and response_obj.get("id", None) is not None
-                ):
-                    generation_id = litellm.utils.get_logging_id(
-                        start_time, response_obj
-                    )
-                trace.generation(
-                    name=generation_name,
-                    id=metadata.get("generation_id", generation_id),
-                    startTime=start_time,
-                    endTime=end_time,
-                    model=kwargs["model"],
-                    modelParameters=optional_params,
-                    input=input,
-                    output=output,
-                    usage={
-                        "prompt_tokens": response_obj["usage"]["prompt_tokens"],
-                        "completion_tokens": response_obj["usage"]["completion_tokens"],
-                        "total_cost": cost if supports_costs else None,
-                    },
-                    metadata=metadata,
-                )
+            generation_id = None
+            usage = None
+            if response_obj is not None and response_obj.get("id", None) is not None:
+                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+                usage = {
+                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
+                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                    "total_cost": cost if supports_costs else None,
+                }
+
+            generation_params = {
+                "name": generation_name,
+                "id": metadata.get("generation_id", generation_id),
+                "startTime": start_time,
+                "endTime": end_time,
+                "model": kwargs["model"],
+                "modelParameters": optional_params,
+                "input": input,
+                "output": output,
+                "usage": usage,
+                "metadata": metadata,
+                "level": level,
+            }
+
+            if output is not None and isinstance(output, str) and level == "ERROR":
+                generation_params["statusMessage"] = output
+
+            trace.generation(**generation_params)
         except Exception as e:
             print(f"Langfuse Layer Error - {traceback.format_exc()}")

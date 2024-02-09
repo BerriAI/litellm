@@ -696,6 +696,58 @@ def test_s3_cache_acompletion_stream_azure():
 # test_s3_cache_acompletion_stream_azure()
 
 
+@pytest.mark.asyncio
+async def test_s3_cache_acompletion_azure():
+    import asyncio
+    import logging
+    import tracemalloc
+
+    tracemalloc.start()
+    logging.basicConfig(level=logging.DEBUG)
+
+    try:
+        litellm.set_verbose = True
+        random_word = generate_random_word()
+        messages = [
+            {
+                "role": "user",
+                "content": f"write a one sentence poem about: {random_word}",
+            }
+        ]
+        litellm.cache = Cache(
+            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+        )
+        print("s3 Cache: test for caching, streaming + completion")
+
+        response1 = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+        )
+        print(response1)
+
+        time.sleep(2)
+
+        response2 = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+        )
+
+        print(response2)
+
+        assert response1.id == response2.id
+
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+    except Exception as e:
+        print(e)
+        raise e
+
+
 # test_redis_cache_acompletion_stream_bedrock()
 # redis cache with custom keys
 def custom_get_cache_key(*args, **kwargs):
