@@ -110,6 +110,29 @@ def test_completion_mistral_api():
 # test_completion_mistral_api()
 
 
+def test_completion_mistral_api_modified_input():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="mistral/mistral-tiny",
+            max_tokens=5,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hey, how's it going?"}],
+                }
+            ],
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+        cost = litellm.completion_cost(completion_response=response)
+        print("cost to make mistral completion=", cost)
+        assert cost > 0.0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_claude2_1():
     try:
         print("claude2.1 test request")
@@ -1495,6 +1518,33 @@ def test_completion_chat_sagemaker_mistral():
 
 
 # test_completion_chat_sagemaker_mistral()
+
+
+def test_completion_bedrock_titan_null_response():
+    try:
+        response = completion(
+            model="bedrock/amazon.titan-text-lite-v1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello!",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you?",
+                },
+                {
+                    "role": "user",
+                    "content": "What model are you?",
+                },
+            ],
+        )
+        # Add any assertions here to check the response
+        pytest.fail(f"Expected to fail")
+    except Exception as e:
+        pass
+
+
 def test_completion_bedrock_titan():
     try:
         response = completion(
