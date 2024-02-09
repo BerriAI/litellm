@@ -1590,6 +1590,7 @@ def completion(
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging,
+                timeout=timeout,
             )
 
             if "stream" in optional_params and optional_params["stream"] == True:
