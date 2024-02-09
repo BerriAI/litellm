@@ -157,6 +157,9 @@ print(response)
 ```
 
 ## Proxy Key Management ([Docs](https://docs.litellm.ai/docs/proxy/virtual_keys))
+UI on `/ui` on your proxy server 
+![ui_3](https://github.com/BerriAI/litellm/assets/29436595/47c97d5e-b9be-4839-b28c-43d7f4f10033)
+
 Track Spend, Set budgets and create virtual keys for the proxy
 `POST /key/generate`
 
@@ -175,13 +178,6 @@ curl 'http://0.0.0.0:8000/key/generate' \
     "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
 }
 ```
-
-### [Beta] Proxy UI ([Docs](https://docs.litellm.ai/docs/proxy/ui))
-
-A UI to create keys, track spend per key
-
-Code: https://github.com/BerriAI/litellm/tree/main/ui  
-![ui_3](https://github.com/BerriAI/litellm/assets/29436595/47c97d5e-b9be-4839-b28c-43d7f4f10033)
 
 ## Supported Providers ([Docs](https://docs.litellm.ai/docs/providers))
 | Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  | [Async Embedding](https://docs.litellm.ai/docs/embedding/supported_embedding)  | [Async Image Generation](https://docs.litellm.ai/docs/image_generation)  | 
