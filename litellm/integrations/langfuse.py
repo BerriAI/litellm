@@ -275,19 +275,24 @@ class LangFuseLogger:
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
                 }
-            trace.generation(
-                name=generation_name,
-                id=metadata.get("generation_id", generation_id),
-                startTime=start_time,
-                endTime=end_time,
-                model=kwargs["model"],
-                modelParameters=optional_params,
-                input=input,
-                output=output,
-                usage=usage,
-                metadata=metadata,
-                level=level,
-                status_message=output,
-            )
+
+            generation_params = {
+                "name": generation_name,
+                "id": metadata.get("generation_id", generation_id),
+                "startTime": start_time,
+                "endTime": end_time,
+                "model": kwargs["model"],
+                "modelParameters": optional_params,
+                "input": input,
+                "output": output,
+                "usage": usage,
+                "metadata": metadata,
+                "level": level,
+            }
+
+            if output is not None and isinstance(output, str) and level == "ERROR":
+                generation_params["statusMessage"] = output
+
+            trace.generation(**generation_params)
         except Exception as e:
             print(f"Langfuse Layer Error - {traceback.format_exc()}")
