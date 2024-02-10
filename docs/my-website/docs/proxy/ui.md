@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] Admin UI
+# 🔑 [BETA] Admin UI 
 ### **Create + delete keys through a UI**
 
 :::info

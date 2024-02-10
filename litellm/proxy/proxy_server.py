@@ -2433,8 +2433,15 @@ async def chat_completion(
     response_class=ORJSONResponse,
     tags=["embeddings"],
 )
+@router.post(
+    "/openai/deployments/{model:path}/embeddings",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["embeddings"],
+)  # azure compatible endpoint
 async def embeddings(
     request: Request,
+    model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
@@ -2458,6 +2465,7 @@ async def embeddings(
         data["model"] = (
             general_settings.get("embedding_model", None)  # server default
             or user_model  # model name passed via cli args
+            or model  # for azure deployments
             or data["model"]  # default passed in http request
         )
         if user_model:

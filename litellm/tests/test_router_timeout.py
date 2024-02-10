@@ -85,3 +85,47 @@ def test_router_timeouts():
 
         print("Response:", response)
         print("********** TOKENS USED SO FAR = ", total_tokens_used)
+
+
+@pytest.mark.asyncio
+async def test_router_timeouts_bedrock():
+    import openai
+
+    # Model list for OpenAI and Anthropic models
+    model_list = [
+        {
+            "model_name": "bedrock",
+            "litellm_params": {
+                "model": "bedrock/anthropic.claude-instant-v1",
+                "timeout": 0.001,
+            },
+            "tpm": 80000,
+        },
+    ]
+
+    # Configure router
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing",
+        debug_level="DEBUG",
+        set_verbose=True,
+    )
+
+    litellm.set_verbose = True
+    try:
+        response = await router.acompletion(
+            model="bedrock",
+            messages=[{"role": "user", "content": "hello, who are u"}],
+        )
+        print(response)
+        pytest.fail("Did not raise error `openai.APITimeoutError`")
+    except openai.APITimeoutError as e:
+        print(
+            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
+        )
+        print(type(e))
+        pass
+    except Exception as e:
+        pytest.fail(
+            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
+        )
