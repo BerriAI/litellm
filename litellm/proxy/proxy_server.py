@@ -1866,7 +1866,7 @@ def select_data_generator(response, user_api_key_dict):
         # since boto3 - sagemaker does not support async calls, we should use a sync data_generator
         if hasattr(
             response, "custom_llm_provider"
-        ) and response.custom_llm_provider in ["sagemaker"]:
+        ) and response.custom_llm_provider in ["sagemaker", "bedrock"]:
             return data_generator(
                 response=response,
             )
