@@ -483,7 +483,7 @@ class PrismaClient:
     )
     async def get_data(
         self,
-        token: Optional[str] = None,
+        token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
         user_id_list: Optional[list] = None,
         key_val: Optional[dict] = None,
@@ -497,12 +497,13 @@ class PrismaClient:
             if token is not None or (table_name is not None and table_name == "key"):
                 # check if plain text or hash
                 if token is not None:
-                    hashed_token = token
-                    if token.startswith("sk-"):
-                        hashed_token = self.hash_token(token=token)
-                    verbose_proxy_logger.debug(
-                        f"PrismaClient: find_unique for token: {hashed_token}"
-                    )
+                    if isinstance(token, str):
+                        hashed_token = token
+                        if token.startswith("sk-"):
+                            hashed_token = self.hash_token(token=token)
+                        verbose_proxy_logger.debug(
+                            f"PrismaClient: find_unique for token: {hashed_token}"
+                        )
                 if query_type == "find_unique":
                     response = await self.db.litellm_verificationtoken.find_unique(
                         where={"token": hashed_token}
@@ -540,8 +541,25 @@ class PrismaClient:
                             if isinstance(r.expires, datetime):
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all":
+                    where_filter: dict = {}
+                    if token is not None:
+                        where_filter["token"] = {}
+                        if isinstance(token, str):
+                            if token.startswith("sk-"):
+                                token = self.hash_token(token=token)
+                            where_filter["token"]["in"] = [token]
+                        elif isinstance(token, list):
+                            hashed_tokens = []
+                            for t in token:
+                                assert isinstance(t, str)
+                                if t.startswith("sk-"):
+                                    new_token = self.hash_token(token=t)
+                                    hashed_tokens.append(new_token)
+                                else:
+                                    hashed_tokens.append(new_token)
+                            where_filter["token"]["in"] = hashed_tokens
                     response = await self.db.litellm_verificationtoken.find_many(
-                        order={"spend": "desc"},
+                        order={"spend": "desc"}, where=where_filter  # type: ignore
                     )
                 if response is not None:
                     return response

@@ -187,7 +187,7 @@ class UpdateKeyRequest(GenerateKeyRequest):
     metadata: Optional[dict] = None
 
 
-class DeleteKeyRequest(LiteLLMBase):
+class KeyRequest(LiteLLMBase):
     keys: List
 
 
