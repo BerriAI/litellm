@@ -179,6 +179,26 @@ export const userSpendLogsCall = async (
       url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
     }
     const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
 
 export const spendUsersCall = async (accessToken: String, userID: String) => {
   try {
