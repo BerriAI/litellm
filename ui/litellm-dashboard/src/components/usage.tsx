@@ -187,6 +187,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
       };
       fetchData();
     }
+    if (topKeys.length > 0) {
+      /**
+       * get the key alias / secret names for the created keys
+       * Use that for the key name instead of token hash for easier association
+       */
+    }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
   topUsers.forEach((obj) => {
