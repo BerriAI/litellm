@@ -10,10 +10,12 @@ import { jwtDecode } from "jwt-decode";
 const CreateKeyPage = () => {
   const [userRole, setUserRole] = useState<null | string>(null);
   const [userEmail, setUserEmail] = useState<null | string>(null);
-  const [page, setPage] = useState("api-keys");
   const searchParams = useSearchParams();
+
   const userID = searchParams.get("userID");
   const token = searchParams.get("token");
+
+  const [page, setPage] = useState("api-keys");
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
