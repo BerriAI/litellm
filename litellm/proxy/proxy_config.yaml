@@ -29,6 +29,7 @@ model_list:
   - model_name: BEDROCK_GROUP
     litellm_params:
       model: bedrock/cohere.command-text-v14
+      timeout: 0.0001
   - model_name: tg-ai
     litellm_params:
       model: together_ai/mistralai/Mistral-7B-Instruct-v0.1
