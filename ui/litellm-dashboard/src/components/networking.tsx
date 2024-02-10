@@ -179,6 +179,12 @@ export const userSpendLogsCall = async (
       url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
     }
     const response = await fetch(url, {
+
+export const spendUsersCall = async (accessToken: String, userID: String) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/users` : `/spend/users`;
+    console.log("in spendUsersCall:", url);
+    const response = await fetch(`${url}/?user_id=${userID}`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -195,7 +201,7 @@ export const userSpendLogsCall = async (
     console.log(data);
     return data;
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to get spend for user", error);
     throw error;
   }
 };
