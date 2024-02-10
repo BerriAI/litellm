@@ -163,7 +163,22 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
   }
 };
 
-
+export const userSpendLogsCall = async (
+  accessToken: String,
+  token: String,
+  userRole: String,
+  userID: String,
+  startTime: String,
+  endTime: String
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs` : `/spend/logs`;
+    if (userRole == "App Owner") {
+      url = `${url}/?user_id=${userID}&start_date=${startTime}&end_date=${endTime}`;
+    } else {
+      url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
+    }
+    const response = await fetch(url, {
 
 export const spendUsersCall = async (accessToken: String, userID: String) => {
   try {
@@ -190,4 +205,3 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
     throw error;
   }
 };
-
