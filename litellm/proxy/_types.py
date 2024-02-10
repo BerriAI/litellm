@@ -188,7 +188,7 @@ class UpdateKeyRequest(GenerateKeyRequest):
 
 
 class KeyRequest(LiteLLMBase):
-    keys: List
+    keys: List[str]
 
 
 class NewUserRequest(GenerateKeyRequest):

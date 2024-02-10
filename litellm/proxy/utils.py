@@ -556,7 +556,7 @@ class PrismaClient:
                                     new_token = self.hash_token(token=t)
                                     hashed_tokens.append(new_token)
                                 else:
-                                    hashed_tokens.append(new_token)
+                                    hashed_tokens.append(t)
                             where_filter["token"]["in"] = hashed_tokens
                     response = await self.db.litellm_verificationtoken.find_many(
                         order={"spend": "desc"}, where=where_filter  # type: ignore

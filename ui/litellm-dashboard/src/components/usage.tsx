@@ -2,7 +2,7 @@ import { BarChart, Card, Title } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 import { Grid, Col, Text, LineChart } from "@tremor/react";
-import { userSpendLogsCall } from "./networking";
+import { userSpendLogsCall, keyInfoCall } from "./networking";
 import { start } from "repl";
 
 interface UsagePageProps {
@@ -79,7 +79,7 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
 
   spendKeys.sort((a, b) => Number(b.spend) - Number(a.spend));
 
-  const topKeys = spendKeys.slice(0, 5);
+  const topKeys = spendKeys.slice(0, 5).map((k) => k.key);
   console.log(`topKeys: ${Object.keys(topKeys[0])}`);
   return topKeys;
 }
@@ -168,18 +168,29 @@ const UsagePage: React.FC<UsagePageProps> = ({
     if (accessToken && token && userRole && userID) {
       const fetchData = async () => {
         try {
-          const response = await userSpendLogsCall(
+          await userSpendLogsCall(
             accessToken,
             token,
             userRole,
             userID,
             startTime,
             endTime
-          );
-
-          setTopKeys(getTopKeys(response));
-          setTopUsers(getTopUsers(response));
-          setKeySpendData(response);
+          ).then(async (response) => {
+            const topKeysResponse = await keyInfoCall(
+              accessToken,
+              getTopKeys(response)
+            );
+            const filtered_keys = topKeysResponse["info"].map((k: any) => ({
+              key: (k["key_name"] || k["key_alias"] || k["token"]).substring(
+                0,
+                7
+              ),
+              spend: k["spend"],
+            }));
+            setTopKeys(filtered_keys);
+            setTopUsers(getTopUsers(response));
+            setKeySpendData(response);
+          });
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
@@ -187,19 +198,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
       };
       fetchData();
     }
-    if (topKeys.length > 0) {
-      /**
-       * get the key alias / secret names for the created keys
-       * Use that for the key name instead of token hash for easier association
-       */
-    }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
-  topUsers.forEach((obj) => {
-    Object.values(obj).forEach((value) => {
-      console.log(value);
-    });
-  });
   return (
     <div style={{ width: "100%" }}>
       <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
@@ -227,7 +227,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               index="key"
               categories={["spend"]}
               colors={["blue"]}
-              yAxisWidth={200}
+              yAxisWidth={80}
               tickGap={5}
               layout="vertical"
               showXAxis={false}
