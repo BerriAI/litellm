@@ -20,7 +20,21 @@ type UserSpendData = {
   max_budget?: number | null;
 };
 
-const UserDashboard = () => {
+interface UserDashboardProps {
+  userID: string | null;
+  userRole: string | null;
+  userEmail: string | null;
+  setUserRole: React.Dispatch<React.SetStateAction<string | null>>;
+  setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
+}
+
+const UserDashboard: React.FC<UserDashboardProps> = ({
+  userID,
+  userRole,
+  setUserRole,
+  userEmail,
+  setUserEmail,
+}) => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
     null
@@ -28,13 +42,10 @@ const UserDashboard = () => {
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
-  const userID = searchParams.get("userID");
   const viewSpend = searchParams.get("viewSpend");
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
@@ -84,17 +95,29 @@ const UserDashboard = () => {
       }
     }
     if (userID && accessToken && userRole && !data) {
-      const fetchData = async () => {
-        try {
-          const response = await userInfoCall(accessToken, userID, userRole);
-          setUserSpendData(response["user_info"]);
-          setData(response["keys"]); // Assuming this is the correct path to your data
-        } catch (error) {
-          console.error("There was an error fetching the data", error);
-          // Optionally, update your UI to reflect the error state here as well
-        }
-      };
-      fetchData();
+      const cachedData = localStorage.getItem("userData");
+      const cachedSpendData = localStorage.getItem("userSpendData");
+      if (cachedData && cachedSpendData) {
+        setData(JSON.parse(cachedData));
+        setUserSpendData(JSON.parse(cachedSpendData));
+      } else {
+        const fetchData = async () => {
+          try {
+            const response = await userInfoCall(accessToken, userID, userRole);
+            setUserSpendData(response["user_info"]);
+            setData(response["keys"]); // Assuming this is the correct path to your data
+            localStorage.setItem("userData", JSON.stringify(response["keys"]));
+            localStorage.setItem(
+              "userSpendData",
+              JSON.stringify(response["user_info"])
+            );
+          } catch (error) {
+            console.error("There was an error fetching the data", error);
+            // Optionally, update your UI to reflect the error state here as well
+          }
+        };
+        fetchData();
+      }
     }
   }, [userID, token, accessToken, data]);
 
@@ -117,7 +140,6 @@ const UserDashboard = () => {
 
   return (
     <div>
-      <Navbar userID={userID} userRole={userRole} userEmail={userEmail} />
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
         <Col numColSpan={1}>
           <ViewUserSpend userID={userID} userSpendData={userSpendData} />
