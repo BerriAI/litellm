@@ -187,7 +187,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
       };
       fetchData();
     }
-  }, [accessToken, token, userRole, userID]);
+  }, [accessToken, token, userRole, userID, startTime, endTime]);
 
   topUsers.forEach((obj) => {
     Object.values(obj).forEach((value) => {

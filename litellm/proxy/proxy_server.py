@@ -3563,7 +3563,7 @@ async def login(request: Request):
 
         key = response["token"]  # type: ignore
 
-        litellm_dashboard_ui = "/ui/"
+        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "/") + "ui/"
 
         import jwt
 

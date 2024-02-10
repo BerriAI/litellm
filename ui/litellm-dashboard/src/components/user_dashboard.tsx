@@ -8,7 +8,7 @@ import ViewUserSpend from "./view_user_spend";
 import EnterProxyUrl from "./enter_proxy_url";
 import { message } from "antd";
 import Navbar from "./navbar";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -43,6 +43,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
   const viewSpend = searchParams.get("viewSpend");
+  const router = useRouter();
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -119,7 +120,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchData();
       }
     }
-  }, [userID, token, accessToken, data]);
+  }, [userID, token, accessToken, data, userRole]);
 
   if (userID == null || token == null) {
     // Now you can construct the full URL
@@ -142,7 +143,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     <div>
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
         <Col numColSpan={1}>
-          <ViewUserSpend userID={userID} userSpendData={userSpendData} userRole={userRole} accessToken={accessToken}/>
+          <ViewUserSpend
+            userID={userID}
+            userSpendData={userSpendData}
+            userRole={userRole}
+            accessToken={accessToken}
+          />
           <ViewKeyTable
             userID={userID}
             accessToken={accessToken}
