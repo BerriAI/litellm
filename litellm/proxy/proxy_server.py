@@ -3185,7 +3185,7 @@ async def view_spend_logs(
 
             # SQL query
             response = await prisma_client.db.litellm_spendlogs.group_by(
-                by=["startTime"],
+                by=["api_key", "startTime"],
                 where=filter_query,  # type: ignore
                 sum={
                     "spend": True,
@@ -3205,8 +3205,12 @@ async def view_spend_logs(
                     date = dt_object.date()
                     if date not in result:
                         result[date] = {}
+                    api_key = record["api_key"]
                     result[date]["spend"] = (
                         result[date].get("spend", 0) + record["_sum"]["spend"]
+                    )
+                    result[date][api_key] = (
+                        result[date].get(api_key, 0) + record["_sum"]["spend"]
                     )
                 return_list = []
                 final_date = None
