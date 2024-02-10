@@ -162,3 +162,40 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
     throw error;
   }
 };
+
+export const userSpendLogsCall = async (
+  accessToken: String,
+  token: String,
+  userRole: String,
+  userID: String,
+  startTime: String,
+  endTime: String
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs` : `/spend/logs`;
+    if (userRole == "App Owner") {
+      url = `${url}/?user_id=${userID}&start_date=${startTime}&end_date=${endTime}`;
+    } else {
+      url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
+    }
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
