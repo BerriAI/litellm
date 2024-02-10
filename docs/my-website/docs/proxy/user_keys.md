@@ -51,7 +51,7 @@ response = client.chat.completions.create(
 print(response)
 ```
 </TabItem>
-<TabItem>
+<TabItem value="LlamaIndex" label="LlamaIndex">
 
 ```python
 import os, dotenv
