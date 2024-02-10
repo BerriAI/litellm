@@ -89,7 +89,7 @@ module.exports = {
         "tremor-full": "9999px",
       },
       fontSize: {
-        "tremor-label": ["0.75rem", { lineHeight: "1rem" }],
+        "tremor-label": ["0.75rem", { lineHeight: "0.4rem" }],
         "tremor-default": ["0.875rem", { lineHeight: "1.25rem" }],
         "tremor-title": ["1.125rem", { lineHeight: "1.75rem" }],
         "tremor-metric": ["1.875rem", { lineHeight: "2.25rem" }],
