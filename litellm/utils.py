@@ -6643,6 +6643,13 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
+                if "Connect timeout on endpoint URL" in error_str:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"BedrockException: Timeout Error - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                    )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
