@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use with Langchain, OpenAI SDK, Curl
+# Use with Langchain, OpenAI SDK, LlamaIndex, Curl
 
 :::info
 
@@ -51,6 +51,42 @@ response = client.chat.completions.create(
 print(response)
 ```
 </TabItem>
+<TabItem value="LlamaIndex" label="LlamaIndex">
+
+```python
+import os, dotenv
+
+from llama_index.llms import AzureOpenAI
+from llama_index.embeddings import AzureOpenAIEmbedding
+from llama_index import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
+
+llm = AzureOpenAI(
+    engine="azure-gpt-3.5",               # model_name on litellm proxy
+    temperature=0.0,
+    azure_endpoint="http://0.0.0.0:4000", # litellm proxy endpoint
+    api_key="sk-1234",                    # litellm proxy API Key
+    api_version="2023-07-01-preview",
+)
+
+embed_model = AzureOpenAIEmbedding(
+    deployment_name="azure-embedding-model",
+    azure_endpoint="http://0.0.0.0:4000",
+    api_key="sk-1234",
+    api_version="2023-07-01-preview",
+)
+
+
+documents = SimpleDirectoryReader("llama_index_data").load_data()
+service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model)
+index = VectorStoreIndex.from_documents(documents, service_context=service_context)
+
+query_engine = index.as_query_engine()
+response = query_engine.query("What did the author do growing up?")
+print(response)
+
+```
+</TabItem>
+
 <TabItem value="Curl" label="Curl Request">
 
 Pass `metadata` as part of the request body
