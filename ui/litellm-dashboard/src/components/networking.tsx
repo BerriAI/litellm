@@ -200,6 +200,36 @@ export const userSpendLogsCall = async (
   }
 };
 
+export const keyInfoCall = async (accessToken: String, keys: String[]) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/key/info`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        keys: keys,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const spendUsersCall = async (accessToken: String, userID: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/users` : `/spend/users`;

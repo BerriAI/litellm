@@ -2954,11 +2954,75 @@ async def delete_key_fn(data: KeyRequest):
         )
 
 
+@router.post(
+    "/v2/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def info_key_fn_v2(
+    data: Optional[KeyRequest] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Retrieve information about a list of keys.
+    Parameters:
+        keys: Optional[list] = body parameter representing the key(s) in the request
+        user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+    Returns:
+        Dict containing the key and its associated information
+    
+    Example Curl:
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info" \
+-H "Authorization: Bearer sk-1234" \
+-d {"keys": ["sk-1", "sk-2", "sk-3"]}
+    ```
+    """
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+        if data is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Malformed request. No keys passed in."},
+            )
+
+        key_info = await prisma_client.get_data(
+            token=data.keys, table_name="key", query_type="find_all"
+        )
+        filtered_key_info = []
+        for k in key_info:
+            try:
+                k = k.model_dump()  # noqa
+            except:
+                # if using pydantic v1
+                k = k.dict()
+            filtered_key_info.append(k)
+        return {"key": data.keys, "info": filtered_key_info}
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
 @router.get(
     "/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 async def info_key_fn(
-    data: Optional[KeyRequest] = None,
     key: Optional[str] = fastapi.Query(
         default=None, description="Key in the request parameters"
     ),
@@ -2997,24 +3061,11 @@ async def info_key_fn(
             raise Exception(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if key is None and data is None:
+        if key is None:
             key_info = await prisma_client.get_data(token=user_api_key_dict.api_key)
 
         if key is not None:  # single key
             key_info = await prisma_client.get_data(token=key)
-        elif data is not None:  # list of keys
-            key_info = await prisma_client.get_data(
-                token=data.keys, table_name="key", query_type="find_all"
-            )
-            filtered_key_info = []
-            for k in key_info:
-                try:
-                    k = k.model_dump()  # noqa
-                except:
-                    # if using pydantic v1
-                    k = k.dict()
-                filtered_key_info.append(k)
-            return {"key": data.keys, "info": filtered_key_info}
         return {"key": key, "info": key_info}
     except Exception as e:
         if isinstance(e, HTTPException):
