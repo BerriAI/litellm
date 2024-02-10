@@ -3023,16 +3023,7 @@ async def info_key_fn(
     tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def spend_key_fn(
-    start_date: Optional[str] = fastapi.Query(
-        default=None,
-        description="Time from which to start viewing key spend",
-    ),
-    end_date: Optional[str] = fastapi.Query(
-        default=None,
-        description="Time till which to view key spend",
-    ),
-):
+async def spend_key_fn():
     """
     View all keys created, ordered by spend
 
@@ -3049,41 +3040,8 @@ async def spend_key_fn(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if (
-            start_date is not None
-            and isinstance(start_date, str)
-            and end_date is not None
-            and isinstance(end_date, str)
-        ):
-            # Convert the date strings to datetime objects
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
-
-            # SQL query
-            response = await prisma_client.db.litellm_spendlogs.group_by(
-                by=["api_key", "startTime"],
-                where={
-                    "startTime": {
-                        "gte": start_date_obj,  # Greater than or equal to Start Date
-                        "lte": end_date_obj,  # Less than or equal to End Date
-                    }
-                },
-                sum={
-                    "spend": True,
-                },
-            )
-
-            # TODO: Execute SQL query and return the results
-
-            return {
-                "message": "This is your SQL query",
-                "response": response,
-            }
-        else:
-            key_info = await prisma_client.get_data(
-                table_name="key", query_type="find_all"
-            )
-            return key_info
+        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+        return key_info
 
     except Exception as e:
         raise HTTPException(
@@ -3165,6 +3123,14 @@ async def view_spend_logs(
         default=None,
         description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
     ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
 ):
     """
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
@@ -3201,7 +3167,93 @@ async def view_spend_logs(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         spend_logs = []
-        if api_key is not None and isinstance(api_key, str):
+        if (
+            start_date is not None
+            and isinstance(start_date, str)
+            and end_date is not None
+            and isinstance(end_date, str)
+        ):
+            # Convert the date strings to datetime objects
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+            filter_query = {
+                "startTime": {
+                    "gte": start_date_obj,  # Greater than or equal to Start Date
+                    "lte": end_date_obj,  # Less than or equal to End Date
+                }
+            }
+
+            if api_key is not None and isinstance(api_key, str):
+                filter_query["api_key"] = api_key  # type: ignore
+            elif request_id is not None and isinstance(request_id, str):
+                filter_query["request_id"] = request_id  # type: ignore
+            elif user_id is not None and isinstance(user_id, str):
+                filter_query["user"] = user_id  # type: ignore
+
+            # SQL query
+            response = await prisma_client.db.litellm_spendlogs.group_by(
+                by=["api_key", "user", "model", "startTime"],
+                where=filter_query,  # type: ignore
+                sum={
+                    "spend": True,
+                },
+            )
+
+            if (
+                isinstance(response, list)
+                and len(response) > 0
+                and isinstance(response[0], dict)
+            ):
+                result: dict = {}
+                for record in response:
+                    dt_object = datetime.strptime(
+                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"
+                    )  # type: ignore
+                    date = dt_object.date()
+                    if date not in result:
+                        result[date] = {"users": {}, "models": {}}
+                    api_key = record["api_key"]
+                    user_id = record["user"]
+                    model = record["model"]
+                    result[date]["spend"] = (
+                        result[date].get("spend", 0) + record["_sum"]["spend"]
+                    )
+                    result[date][api_key] = (
+                        result[date].get(api_key, 0) + record["_sum"]["spend"]
+                    )
+                    result[date]["users"][user_id] = (
+                        result[date]["users"].get(user_id, 0) + record["_sum"]["spend"]
+                    )
+                    result[date]["models"][model] = (
+                        result[date]["models"].get(model, 0) + record["_sum"]["spend"]
+                    )
+                return_list = []
+                final_date = None
+                for k, v in sorted(result.items()):
+                    return_list.append({**v, "startTime": k})
+                    final_date = k
+
+                end_date_date = end_date_obj.date()
+                if final_date is not None and final_date < end_date_date:
+                    current_date = final_date + timedelta(days=1)
+                    while current_date <= end_date_date:
+                        # Represent current_date as string because original response has it this way
+                        return_list.append(
+                            {
+                                "startTime": current_date,
+                                "spend": 0,
+                                "users": {},
+                                "models": {},
+                            }
+                        )  # If no data, will stay as zero
+                        current_date += timedelta(days=1)  # Move on to the next day
+
+                return return_list
+
+            return response
+
+        elif api_key is not None and isinstance(api_key, str):
             if api_key.startswith("sk-"):
                 hashed_token = prisma_client.hash_token(token=api_key)
             else:
@@ -3486,12 +3538,22 @@ async def login(request: Request):
     if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
         password, ui_password
     ):
+        user_role = "app_owner"
         user_id = username
-        # User is Authe'd in - generate key for the UI to access Proxy
+        key_user_id = user_id
+        if (
+            os.getenv("PROXY_ADMIN_ID", None) is not None
+            and os.environ["PROXY_ADMIN_ID"] == user_id
+        ) or user_id == "admin":
+            # checks if user is admin
+            user_role = "app_admin"
+            key_user_id = os.getenv("PROXY_ADMIN_ID", "default_user_id")
+
+        # Admin is Authe'd in - generate key for the UI to access Proxy
 
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
-                **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+                **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
             )
         else:
             response = {
@@ -3500,17 +3562,8 @@ async def login(request: Request):
             }
 
         key = response["token"]  # type: ignore
-        user_id = response["user_id"]  # type: ignore
 
         litellm_dashboard_ui = "/ui/"
-
-        user_role = "app_owner"
-        if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None
-            and os.environ["PROXY_ADMIN_ID"] == user_id
-        ):
-            # checks if user is admin
-            user_role = "app_admin"
 
         import jwt
 

@@ -240,7 +240,10 @@ class ProxyLogging:
         else:
             user_info = str(user_info)
         # percent of max_budget left to spend
-        percent_left = (user_max_budget - user_current_spend) / user_max_budget
+        if user_max_budget > 0:
+            percent_left = (user_max_budget - user_current_spend) / user_max_budget
+        else:
+            percent_left = 0
         verbose_proxy_logger.debug(
             f"Budget Alerts: Percent left: {percent_left} for {user_info}"
         )
