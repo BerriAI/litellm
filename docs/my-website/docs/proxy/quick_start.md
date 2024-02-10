@@ -8,16 +8,8 @@ Quick start CLI, Config, Docker
 LiteLLM Server manages:
 
 * **Unified Interface**: Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
+* **Cost tracking**: Authentication, Spend Tracking & Budgets [Virtual Keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
 * **Load Balancing**: between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model) - LiteLLM proxy can handle 1.5k+ requests/second during load tests.
-* **Cost tracking**: Authentication & Spend Tracking [Virtual Keys](#managing-auth---virtual-keys)
-
-[**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
-
-
-#### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
-
-
-View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
 $ pip install 'litellm[proxy]'
@@ -221,8 +213,38 @@ $ litellm --model command-nightly
 
 </Tabs>
 
+## Quick Start - LiteLLM Proxy + Config.yaml
+The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
 
-### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
+### Create a Config for LiteLLM Proxy
+Example config
+
+```yaml
+model_list: 
+  - model_name: gpt-3.5-turbo # user-facing model alias
+    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-api-endpoint>
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+  - model_name: vllm-model
+    litellm_params:
+      model: openai/<your-model-name>
+      api_base: <your-api-base> # e.g. http://0.0.0.0:3000
+```
+
+### Run proxy with config
+
+```shell
+litellm --config your_config.yaml
+```
+
+
+## Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -329,37 +351,6 @@ print(query_result[:5])
 ```
 </TabItem>
 </Tabs>
-
-
-## Quick Start - LiteLLM Proxy + Config.yaml
-The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
-
-### Create a Config for LiteLLM Proxy
-Example config
-
-```yaml
-model_list: 
-  - model_name: gpt-3.5-turbo # user-facing model alias
-    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
-      model: azure/<your-deployment-name>
-      api_base: <your-azure-api-endpoint>
-      api_key: <your-azure-api-key>
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/gpt-turbo-small-ca
-      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
-      api_key: <your-azure-api-key>
-  - model_name: vllm-model
-    litellm_params:
-      model: openai/<your-model-name>
-      api_base: <your-api-base> # e.g. http://0.0.0.0:3000
-```
-
-### Run proxy with config
-
-```shell
-litellm --config your_config.yaml
-```
 
 [**More Info**](./configs.md)
 

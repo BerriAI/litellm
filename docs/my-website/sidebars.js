@@ -98,7 +98,7 @@ const sidebars = {
       link: {
         type: 'generated-index',
         title: '💥 OpenAI Proxy Server',
-        description: `Proxy Server to call 100+ LLMs in a unified interface, load balance deployments, track costs per user`,
+        description: `Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: '/simple_proxy',
       },
       items: [
