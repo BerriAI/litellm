@@ -10,6 +10,12 @@ There's 2 ways to track cost:
 
 By default, the response cost is accessible in the logging object via `kwargs["response_cost"]` on success (sync + async). [**Learn More**](../observability/custom_callback.md)
 
+:::info
+
+LiteLLM already has pricing for any model in our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). 
+
+:::
+
 ## Quick Start 
 
 Register custom pricing for sagemaker completion model. 
