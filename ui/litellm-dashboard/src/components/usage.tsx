@@ -27,7 +27,13 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
 
   // Convert the object into an array of key-value pairs
   const entries: [string, number][] = Object.entries(value)
-    .filter(([key]) => key !== "spend" && key !== "startTime")
+    .filter(
+      ([key]) =>
+        key !== "spend" &&
+        key !== "startTime" &&
+        key !== "models" &&
+        key !== "users"
+    )
     .map(([key, value]) => [key, value as number]); // Type assertion to specify the value as number
 
   // Sort the array based on the float value in descending order
@@ -53,25 +59,67 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
       ))}
     </div>
   );
-
-  //   return (
-  //     <div className="w-56 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
-  //       {payload.map((category: any, idx: number) => {
-  //         <div key={idx} className="flex flex-1 space-x-2.5">
-  //           <div
-  //             className={`flex w-1 flex-col bg-${category.color}-500 rounded`}
-  //           />
-  //           <div className="space-y-1">
-  //             <p className="text-tremor-content">{category.dataKey}</p>
-  //             <p className="font-medium text-tremor-content-emphasis">
-  //               {category.value} bpm
-  //             </p>
-  //           </div>
-  //         </div>;
-  //       })}
-  //     </div>
-  //   );
 };
+
+function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
+  const spendKeys: { key: string; spend: unknown }[] = [];
+
+  data.forEach((dict) => {
+    Object.entries(dict).forEach(([key, value]) => {
+      if (
+        key !== "spend" &&
+        key !== "startTime" &&
+        key !== "models" &&
+        key !== "users"
+      ) {
+        spendKeys.push({ key, spend: value });
+      }
+    });
+  });
+
+  spendKeys.sort((a, b) => Number(b.spend) - Number(a.spend));
+
+  const topKeys = spendKeys.slice(0, 5);
+  console.log(`topKeys: ${Object.keys(topKeys[0])}`);
+  return topKeys;
+}
+type DataDict = { [key: string]: unknown };
+type UserData = { user_id: string; spend: number };
+function getTopUsers(data: Array<DataDict>): UserData[] {
+  const userSpend: { [key: string]: number } = {};
+
+  data.forEach((dict) => {
+    const payload: DataDict = dict["users"] as DataDict;
+    Object.entries(payload).forEach(([user_id, value]) => {
+      if (
+        user_id === "" ||
+        user_id === undefined ||
+        user_id === null ||
+        user_id == "None"
+      ) {
+        return;
+      }
+
+      if (!userSpend[user_id]) {
+        userSpend[user_id] = 0;
+      }
+      userSpend[user_id] += value as number;
+    });
+  });
+
+  const spendUsers: UserData[] = Object.entries(userSpend).map(
+    ([user_id, spend]) => ({
+      user_id,
+      spend,
+    })
+  );
+
+  spendUsers.sort((a, b) => b.spend - a.spend);
+
+  const topKeys = spendUsers.slice(0, 5);
+  console.log(`topKeys: ${Object.values(topKeys[0])}`);
+  return topKeys;
+}
 
 const UsagePage: React.FC<UsagePageProps> = ({
   accessToken,
@@ -81,7 +129,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
 }) => {
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
-  const [keyCategories, setKeyCategories] = useState<string[]>([]);
+  const [topKeys, setTopKeys] = useState<any[]>([]);
+  const [topUsers, setTopUsers] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -128,23 +177,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
             endTime
           );
 
-          const uniqueKeys: Set<string> = new Set();
-
-          response.forEach((item: any) => {
-            Object.keys(item).forEach((key) => {
-              if (key !== "spend" && key !== "startTime") {
-                uniqueKeys.add(key);
-              }
-            });
-          });
-          let uniqueKeysList = Array.from(uniqueKeys);
-          setKeyCategories(uniqueKeysList);
+          setTopKeys(getTopKeys(response));
+          setTopUsers(getTopUsers(response));
           setKeySpendData(response);
-          // localStorage.setItem("keySpendData", JSON.stringify(response));
-          // localStorage.setItem(
-          //   "keyCategories",
-          //   JSON.stringify(uniqueKeysList)
-          // );
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
@@ -153,10 +188,16 @@ const UsagePage: React.FC<UsagePageProps> = ({
       fetchData();
     }
   }, [accessToken, token, userRole, userID]);
+
+  topUsers.forEach((obj) => {
+    Object.values(obj).forEach((value) => {
+      console.log(value);
+    });
+  });
   return (
     <div style={{ width: "100%" }}>
-      <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
-        <Col numColSpan={1}>
+      <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
+        <Col numColSpan={2}>
           <Card>
             <Title>Monthly Spend</Title>
             <BarChart
@@ -168,6 +209,39 @@ const UsagePage: React.FC<UsagePageProps> = ({
               yAxisWidth={100}
               tickGap={5}
               customTooltip={customTooltip}
+            />
+          </Card>
+        </Col>
+        <Col numColSpan={1}>
+          <Card>
+            <Title>Top API Keys</Title>
+            <BarChart
+              className="mt-4 h-40"
+              data={topKeys}
+              index="key"
+              categories={["spend"]}
+              colors={["blue"]}
+              yAxisWidth={200}
+              tickGap={5}
+              layout="vertical"
+              showXAxis={false}
+              showLegend={false}
+            />
+          </Card>
+        </Col>
+        <Col numColSpan={1}>
+          <Card>
+            <Title>Top Users</Title>
+            <BarChart
+              className="mt-4 h-40"
+              data={topUsers}
+              index="user_id"
+              categories={["spend"]}
+              colors={["blue"]}
+              yAxisWidth={200}
+              layout="vertical"
+              showXAxis={false}
+              showLegend={false}
             />
           </Card>
         </Col>

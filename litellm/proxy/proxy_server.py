@@ -3185,7 +3185,7 @@ async def view_spend_logs(
 
             # SQL query
             response = await prisma_client.db.litellm_spendlogs.group_by(
-                by=["api_key", "startTime"],
+                by=["api_key", "user", "model", "startTime"],
                 where=filter_query,  # type: ignore
                 sum={
                     "spend": True,
@@ -3204,13 +3204,21 @@ async def view_spend_logs(
                     )  # type: ignore
                     date = dt_object.date()
                     if date not in result:
-                        result[date] = {}
+                        result[date] = {"users": {}, "models": {}}
                     api_key = record["api_key"]
+                    user_id = record["user"]
+                    model = record["model"]
                     result[date]["spend"] = (
                         result[date].get("spend", 0) + record["_sum"]["spend"]
                     )
                     result[date][api_key] = (
                         result[date].get(api_key, 0) + record["_sum"]["spend"]
+                    )
+                    result[date]["users"][user_id] = (
+                        result[date]["users"].get(user_id, 0) + record["_sum"]["spend"]
+                    )
+                    result[date]["models"][model] = (
+                        result[date]["models"].get(model, 0) + record["_sum"]["spend"]
                     )
                 return_list = []
                 final_date = None
@@ -3224,7 +3232,12 @@ async def view_spend_logs(
                     while current_date <= end_date_date:
                         # Represent current_date as string because original response has it this way
                         return_list.append(
-                            {"startTime": current_date, "spend": 0}
+                            {
+                                "startTime": current_date,
+                                "spend": 0,
+                                "users": {},
+                                "models": {},
+                            }
                         )  # If no data, will stay as zero
                         current_date += timedelta(days=1)  # Move on to the next day
 
