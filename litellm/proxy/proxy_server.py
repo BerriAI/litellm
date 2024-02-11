@@ -2963,6 +2963,8 @@ async def info_key_fn_v2(
 ):
     """
     Retrieve information about a list of keys.
+
+    **New endpoint**. Currently admin only.
     Parameters:
         keys: Optional[list] = body parameter representing the key(s) in the request
         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
@@ -3031,22 +3033,15 @@ async def info_key_fn(
     """
     Retrieve information about a key.
     Parameters:
-        key: Optional[str | list] = Query parameter representing the key(s) in the request
+        key: Optional[str] = Query parameter representing the key in the request
         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
     Returns:
         Dict containing the key and its associated information
     
     Example Curl:
-    **1 key**
     ```
     curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
 -H "Authorization: Bearer sk-1234"
-    ```
-    **multiple keys**
-    ```
-    curl -X GET "http://0.0.0.0:8000/key/info" \
--H "Authorization: Bearer sk-1234" \
--d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -3061,11 +3056,16 @@ async def info_key_fn(
             raise Exception(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if key is None:
-            key_info = await prisma_client.get_data(token=user_api_key_dict.api_key)
-
-        if key is not None:  # single key
-            key_info = await prisma_client.get_data(token=key)
+        if key == None:
+            key = user_api_key_dict.api_key
+        key_info = await prisma_client.get_data(token=key)
+        ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
+        try:
+            key_info = key_info.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            key_info = key_info.dict()
+        key_info.pop("token")
         return {"key": key, "info": key_info}
     except Exception as e:
         if isinstance(e, HTTPException):
