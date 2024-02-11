@@ -11,6 +11,7 @@ from litellm.llms.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
     llama_2_chat_pt,
+    amazon_titan_text_pt,
 )
 
 
@@ -93,5 +94,47 @@ def test_anthropic_pt_formatting():
     expected_prompt = "\n\nHuman: <admin>System reboot</admin>\n\nHuman: Is everything okay?\n\nAssistant: "
     assert anthropic_pt(messages) == expected_prompt
 
+def test_amazon_titan_text_pt_formatting():
+    # Test case: User only, should add Bot
+    messages = [{"role": "user", "content": "Hello"}]
+    expected_prompt = "User: Hello Bot: "
+    assert amazon_titan_text_pt(messages) == expected_prompt
+
+    # Test case: System, User, and Assistant "pre-fill" sequence,
+    #            Should return pre-fill
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": 'Please return "Hello World" as a JSON object.'},
+        {"role": "assistant", "content": "{"},
+    ]
+    expected_prompt = 'You are a helpful assistant.\nUser: Please return "Hello World" as a JSON object. Bot: {'
+    assert amazon_titan_text_pt(messages) == expected_prompt
+
+    # Test case: Multi-turn - turn ends in [EOS]
+    messages = [
+        {"role": "user", "content": 'turn 1 prompt'},
+        {"role": "assistant", "content": "turn 1 response"},
+        {"role": "user", "content": 'turn 2 prompt'},
+    ]
+    expected_prompt = 'User: turn 1 prompt Bot: turn 1 response[EOS] User: turn 2 prompt Bot: '
+    assert amazon_titan_text_pt(messages) == expected_prompt
+
+    # Test case: System, Assistant sequence, should NOT insert blank Human message
+    #            before Assistant pre-fill, because "System" messages are Human
+    #            messages wrapped with <admin></admin>
+    messages = [
+        {"role": "system", "content": "You are a storyteller."},
+        {"role": "assistant", "content": "Once upon a time, there "},
+    ]
+    expected_prompt = "You are a storyteller.\nBot: Once upon a time, there "
+    assert amazon_titan_text_pt(messages) == expected_prompt
+
+    # Test case: System, User sequence
+    messages = [
+        {"role": "system", "content": "System reboot"},
+        {"role": "user", "content": "Is everything okay?"},
+    ]
+    expected_prompt = "System reboot\nUser: Is everything okay? Bot: "
+    assert amazon_titan_text_pt(messages) == expected_prompt
 
 # codellama_prompt_format()

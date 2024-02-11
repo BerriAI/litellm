@@ -421,6 +421,40 @@ def anthropic_pt(
         prompt += f"{AnthropicConstants.AI_PROMPT.value}"
     return prompt
 
+def amazon_titan_text_pt(messages: list,
+):
+    class AmazonTitanTextConstants(Enum):
+        HUMAN_PROMPT = "User: "
+        AI_PROMPT = "Bot: "
+        END_OF_TURN = "[EOS]"
+
+    prompt = ""
+    system = ""
+    turn_open = False
+    message_count = len(messages)
+    formatted_messages = []
+    
+    for idx, message in enumerate(messages):
+        role = message['role']
+        content = message['content']
+        if role == 'system':
+            system += f"{content}\n"
+            turn_open = True
+        elif role == 'user':
+            formatted_messages.append(f"{AmazonTitanTextConstants.HUMAN_PROMPT.value}{content}")
+            turn_open = True
+        elif role == 'assistant':
+            formatted_message =  f"{AmazonTitanTextConstants.AI_PROMPT.value}{content}"
+            # if turn is open, close it with marker unless its last message
+            if turn_open and idx != message_count - 1:
+                formatted_message += AmazonTitanTextConstants.END_OF_TURN.value
+                turn_open = False
+            formatted_messages.append(formatted_message)
+    prompt = " ".join(formatted_messages)
+    prompt = f"{system}{prompt}"
+    if messages[-1]["role"] != "assistant":
+        prompt += f" {AmazonTitanTextConstants.AI_PROMPT.value}"
+    return prompt 
 
 def _load_image_from_url(image_url):
     try:
@@ -624,6 +658,8 @@ def prompt_factory(
             return claude_2_1_pt(messages=messages)
         else:
             return anthropic_pt(messages=messages)
+    elif custom_llm_provider == "amazon_titan_text":
+        return amazon_titan_text_pt(messages=messages)
     elif custom_llm_provider == "together_ai":
         prompt_format, chat_template = get_model_info(token=api_key, model=model)
         return format_prompt_togetherai(
