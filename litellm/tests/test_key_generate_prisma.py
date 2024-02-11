@@ -59,7 +59,7 @@ from litellm.proxy._types import (
     NewUserRequest,
     GenerateKeyRequest,
     DynamoDBArgs,
-    DeleteKeyRequest,
+    KeyRequest,
     UpdateKeyRequest,
     GenerateKeyRequest,
 )
@@ -740,7 +740,7 @@ def test_delete_key(prisma_client):
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
 
-            delete_key_request = DeleteKeyRequest(keys=[generated_key])
+            delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
             result_delete_key = await delete_key_fn(data=delete_key_request)
@@ -778,7 +778,7 @@ def test_delete_key_auth(prisma_client):
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
 
-            delete_key_request = DeleteKeyRequest(keys=[generated_key])
+            delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
             result_delete_key = await delete_key_fn(data=delete_key_request)
@@ -839,7 +839,7 @@ def test_generate_and_call_key_info(prisma_client):
             }
 
             # cleanup - delete key
-            delete_key_request = DeleteKeyRequest(keys=[generated_key])
+            delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
             await delete_key_fn(data=delete_key_request)
@@ -908,7 +908,7 @@ def test_generate_and_update_key(prisma_client):
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
 
             # cleanup - delete key
-            delete_key_request = DeleteKeyRequest(keys=[generated_key])
+            delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
             await delete_key_fn(data=delete_key_request)
