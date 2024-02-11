@@ -24,17 +24,11 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
 
   const value = payload[0].payload;
   const date = value["startTime"];
-
+  const model_values = value["models"];
   // Convert the object into an array of key-value pairs
-  const entries: [string, number][] = Object.entries(value)
-    .filter(
-      ([key]) =>
-        key !== "spend" &&
-        key !== "startTime" &&
-        key !== "models" &&
-        key !== "users"
-    )
-    .map(([key, value]) => [key, value as number]); // Type assertion to specify the value as number
+  const entries: [string, number][] = Object.entries(model_values).map(
+    ([key, value]) => [key, value as number]
+  ); // Type assertion to specify the value as number
 
   // Sort the array based on the float value in descending order
   entries.sort((a, b) => b[1] - a[1]);
@@ -48,10 +42,12 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
       {topEntries.map(([key, value]) => (
         <div key={key} className="flex flex-1 space-x-10">
           <div className="p-2">
-            <p className="text-tremor-content">
-              Token: {key.substring(0, 4)}{" "}
-              <span className="font-medium text-tremor-content-emphasis">
-                Spend: {value}
+            <p className="text-tremor-content text-xs">
+              {key}
+              {":"}
+              <span className="text-xs text-tremor-content-emphasis">
+                {" "}
+                {value ? (value < 0.01 ? "<$0.01" : value.toFixed(2)) : ""}
               </span>
             </p>
           </div>
