@@ -173,6 +173,20 @@ def is_port_in_use(port):
     is_flag=True,
     help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
 )
+@click.option(
+    "--ssl_keyfile_path",
+    default=None,
+    type=str,
+    help="Path to the SSL keyfile. Use this when you want to provide SSL certificate when starting proxy",
+    envvar="SSL_KEYFILE_PATH",
+)
+@click.option(
+    "--ssl_certfile_path",
+    default=None,
+    type=str,
+    help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
+    envvar="SSL_CERTFILE_PATH",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(
     host,
@@ -203,6 +217,8 @@ def run_server(
     health,
     version,
     run_gunicorn,
+    ssl_keyfile_path,
+    ssl_certfile_path,
 ):
     global feature_telemetry
     args = locals()
@@ -475,7 +491,19 @@ def run_server(
         from litellm.proxy.proxy_server import app
 
         if run_gunicorn == False:
-            uvicorn.run(app, host=host, port=port)  # run uvicorn
+            if ssl_certfile_path is not None and ssl_keyfile_path is not None:
+                print(
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                )
+                uvicorn.run(
+                    app,
+                    host=host,
+                    port=port,
+                    ssl_keyfile=ssl_keyfile_path,
+                    ssl_certfile=ssl_certfile_path,
+                )  # run uvicorn
+            else:
+                uvicorn.run(app, host=host, port=port)  # run uvicorn
         elif run_gunicorn == True:
             import gunicorn.app.base
 
@@ -544,6 +572,14 @@ def run_server(
                 "accesslog": "-",  # Log to stdout
                 "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
             }
+
+            if ssl_certfile_path is not None and ssl_keyfile_path is not None:
+                print(
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                )
+                gunicorn_options["certfile"] = ssl_certfile_path
+                gunicorn_options["keyfile"] = ssl_keyfile_path
+
             StandaloneApplication(
                 app=app, options=gunicorn_options
             ).run()  # Run gunicorn
