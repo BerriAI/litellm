@@ -492,6 +492,19 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="anthropic"
             )
+    if provider == "amazon" and model.startswith("titan-text"):
+        if model in custom_prompt_dict:
+            model_prompt_details = custom_prompt_dict[model]
+            prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],
+                final_prompt_value=model_prompt_details["final_prompt_value"],
+                messages=messages,
+            )
+        else:
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="amazon_titan_text"
+            )
     else:
         prompt = ""
         for message in messages:
