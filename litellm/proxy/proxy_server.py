@@ -92,6 +92,7 @@ from litellm.proxy.utils import (
     hash_token,
     html_form,
     _read_request_body,
+    _is_valid_team_configs,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -2294,6 +2295,9 @@ async def chat_completion(
                 pass
             else:
                 team_id = team_config.pop("team_id", None)
+                _is_valid_team_configs(
+                    team_id=team_id, team_config=team_config, request_data=data
+                )
                 data["metadata"]["team_id"] = team_id
                 data = {
                     **team_config,
