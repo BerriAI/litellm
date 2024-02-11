@@ -116,6 +116,20 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 </TabItem>
 </Tabs>
 
+## Setting SSL Certification 
+
+Use this, If you need to set ssl certificates for your on prem litellm proxy
+
+Pass `ssl_keyfile_path` (Path to the SSL keyfile) and `ssl_certfile_path` (Path to the SSL certfile) when starting litellm proxy 
+
+```shell
+docker run ghcr.io/berriai/litellm:main-latest \
+    --ssl_keyfile_path ssl_test/keyfile.key \
+    --ssl_certfile_path ssl_test/certfile.crt
+```
+
+Provide an ssl certificate when starting litellm proxy server 
+
 ## Platform-specific Guide
 
 
