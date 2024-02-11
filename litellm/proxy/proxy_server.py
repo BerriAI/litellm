@@ -2,7 +2,7 @@ import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import Optional, List, Callable
 import secrets, subprocess
 import hashlib, uuid
 import warnings
@@ -1294,9 +1294,31 @@ class ProxyConfig:
                         f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                     )
                 elif key == "callbacks":
-                    litellm.callbacks = [
-                        get_instance_fn(value=value, config_file_path=config_file_path)
-                    ]
+                    if isinstance(value, list):
+                        imported_list = []
+                        for callback in value:  # ["presidio", <my-custom-callback>]
+                            if isinstance(callback, str) and callback == "presidio":
+                                from litellm.proxy.hooks.presidio_pii_masking import (
+                                    _OPTIONAL_PresidioPIIMasking,
+                                )
+
+                                pii_masking_object = _OPTIONAL_PresidioPIIMasking()
+                                imported_list.append(pii_masking_object)
+                            else:
+                                imported_list.append(
+                                    get_instance_fn(
+                                        value=callback,
+                                        config_file_path=config_file_path,
+                                    )
+                                )
+                        litellm.callbacks = imported_list  # type: ignore
+                    else:
+                        litellm.callbacks = [
+                            get_instance_fn(
+                                value=value,
+                                config_file_path=config_file_path,
+                            )
+                        ]
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
                     )
