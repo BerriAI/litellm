@@ -187,6 +187,13 @@ def is_port_in_use(port):
     help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
     envvar="SSL_CERTFILE_PATH",
 )
+@click.option(
+    "--ssl_ca_bundle_path",
+    default=None,
+    type=str,
+    help="Path to the SSL CA Bundle. Use this when you want to provide a CA bundle when starting proxy",
+    envvar="SSL_CA_BUNDLE_PATH",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(
     host,
@@ -219,6 +226,7 @@ def run_server(
     run_gunicorn,
     ssl_keyfile_path,
     ssl_certfile_path,
+    ssl_ca_bundle_path,
 ):
     global feature_telemetry
     args = locals()
@@ -502,6 +510,16 @@ def run_server(
                     ssl_keyfile=ssl_keyfile_path,
                     ssl_certfile=ssl_certfile_path,
                 )  # run uvicorn
+            elif ssl_ca_bundle_path is not None:
+                print(
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with CA Bundle: {ssl_ca_bundle_path}\033[0m\n"
+                )
+                uvicorn.run(
+                    app,
+                    host=host,
+                    port=port,
+                    ssl_ca_certs=ssl_ca_bundle_path,
+                )  # run uvicorn
             else:
                 uvicorn.run(app, host=host, port=port)  # run uvicorn
         elif run_gunicorn == True:
@@ -579,7 +597,13 @@ def run_server(
                 )
                 gunicorn_options["certfile"] = ssl_certfile_path
                 gunicorn_options["keyfile"] = ssl_keyfile_path
-
+                
+            if ssl_ca_bundle_path is not None:
+                print(
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with CA Bundle: {ssl_ca_bundle_path}\033[0m\n"
+                )
+                gunicorn_options["ca_certs"] = ssl_ca_bundle_path
+                
             StandaloneApplication(
                 app=app, options=gunicorn_options
             ).run()  # Run gunicorn
