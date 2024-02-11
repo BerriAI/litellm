@@ -178,6 +178,7 @@ export const userSpendLogsCall = async (
     } else {
       url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
     }
+    message.info("Making spend logs request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -193,6 +194,7 @@ export const userSpendLogsCall = async (
 
     const data = await response.json();
     console.log(data);
+    message.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
