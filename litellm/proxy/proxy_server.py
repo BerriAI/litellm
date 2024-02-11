@@ -1310,7 +1310,14 @@ class ProxyConfig:
                                         config_file_path=config_file_path,
                                     )
                                 )
-                    litellm.callbacks = imported_list  # type: ignore
+                        litellm.callbacks = imported_list  # type: ignore
+                    else:
+                        litellm.callbacks = [
+                            get_instance_fn(
+                                value=callback,
+                                config_file_path=config_file_path,
+                            )
+                        ]
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
                     )
