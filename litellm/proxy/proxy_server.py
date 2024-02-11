@@ -1314,7 +1314,7 @@ class ProxyConfig:
                     else:
                         litellm.callbacks = [
                             get_instance_fn(
-                                value=callback,
+                                value=value,
                                 config_file_path=config_file_path,
                             )
                         ]
