@@ -92,7 +92,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
-        call_type: Literal["completion", "embeddings"],
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
