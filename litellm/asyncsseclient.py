@@ -79,7 +79,10 @@ class Event:
                 # If we already have some data, then join to it with a newline.
                 # Else this is it.
                 if msg.data:
-                    msg.data = f'{msg.data}\n{value}'
+                    if value == '\n':
+                        msg.data = f'{msg.data}\n \n' # Add a space to make it a valid line
+                    else:
+                        msg.data = f'{msg.data}\n{value}'
                 else:
                     msg.data = value
             elif name == 'event':
@@ -126,6 +129,7 @@ async def asyncsseclient(
                 await session.close()
             lines = []
             async for line in response.content:
+                print(f"line: [{line}]")
                 line = line.decode('utf8')
 
                 if line in {'\n', '\r', '\r\n'}:
