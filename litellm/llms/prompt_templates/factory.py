@@ -97,20 +97,53 @@ def ollama_pt(
         )
     return prompt
 
+'''
+Test the mistral instruct prompt
+
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.1")
+messages = [
+        {"role": "user", "content": "bbbbbb"},
+        {"role": "assistant", "content" : "aaaaa"},
+        {"role": "user", "content" : "bbbb"},
+        {"role": "assistant", "content" : "aaaaa"},
+        {"role": "user", "content" : "bbbbb"},
+        {"role": "assistant", "content" : "aaaaa"}
+]
+prompt = tokenizer.apply_chat_template(messages, tokenize=False)
+print(prompt)
+
+Result: <s>[INST] bbbbbb [/INST]aaaaa</s> [INST] bbbb [/INST]aaaaa</s> [INST] bbbbb [/INST]aaaaa</s>
+'''
 
 def mistral_instruct_pt(messages):
+    num_messages = len(messages)
+    if num_messages == 1:
+        return f"[INST] {messages[0]['content']} [/INST]"
+    
+    if messages[num_messages - 1]['role'] == 'user':
+        previous_round_messages = messages[:num_messages - 1]
+    else:
+        previous_round_messages = messages
+        
     prompt = custom_prompt(
         initial_prompt_value="<s>",
         role_dict={
-            "system": {"pre_message": "[INST]", "post_message": "[/INST]"},
-            "user": {"pre_message": "[INST]", "post_message": "[/INST]"},
-            "assistant": {"pre_message": "[INST]", "post_message": "[/INST]"},
+            "system": {
+                "pre_message": "[INST] \n",
+                "post_message": " [/INST]\n",
+            },
+            "user": {"pre_message": "[INST] ", "post_message": " [/INST]\n"},
+            "assistant": {"pre_message": " ", "post_message": "</s>"},
         },
         final_prompt_value="</s>",
-        messages=messages,
+        messages=previous_round_messages,
     )
-    return prompt
+    
+    if messages[num_messages - 1]['role'] == 'user':
+        prompt += f"[INST] {messages[num_messages - 1]['content']} [/INST]"
 
+    return prompt
 
 # Falcon prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def falcon_instruct_pt(messages):
