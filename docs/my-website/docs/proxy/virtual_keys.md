@@ -353,7 +353,8 @@ Request Params:
 }
 ```
 
-## Upperbound /key/generate params
+## Advanced 
+### Upperbound /key/generate params
 Use this, if you need to control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
 
 Set `litellm_settings:upperbound_key_generate_params`:
@@ -369,7 +370,7 @@ litellm_settings:
 - Send a `/key/generate` request with `max_budget=200`
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
-## Default /key/generate params
+### Default /key/generate params
 Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
 
 When a `/key/generate` request does not specify `max_budget`, it will use the `max_budget` specified in `default_key_generate_params`
@@ -384,7 +385,46 @@ litellm_settings:
     metadata: {"setting":"default"}
     team_id: "core-infra"
 ```
-## Set Budgets - Per Key
+
+### Restrict models by `team_id`
+`litellm-dev` can only access `azure-gpt-3.5`
+
+```yaml
+litellm_settings:
+  default_team_settings:
+    - team_id: litellm-dev
+      models: ["azure-gpt-3.5"]
+```
+
+#### Create key with team_id="litellm-dev"
+```shell
+curl --location 'http://localhost:4000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data-raw '{"team_id": "litellm-dev"}'
+```
+
+#### Use Key to call invalid model - Fails 
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-qo992IjKOC2CHKZGRoJIGA' \
+    --data '{
+        "model": "BEDROCK_GROUP",
+        "messages": [
+            {
+                "role": "user",
+                "content": "hi"
+            }
+        ]
+    }'
+```
+
+```shell
+{"error":{"message":"Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n\nTraceback (most recent call last):\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/proxy_server.py\", line 2298, in chat_completion\n    _is_valid_team_configs(\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/utils.py\", line 1296, in _is_valid_team_configs\n    raise Exception(\nException: Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n","type":"None","param":"None","code":500}}%            
+```         
+
+### Set Budgets - Per Key
 
 Set `max_budget` in (USD $) param in the `key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
 
@@ -430,7 +470,7 @@ Expected Response from `/chat/completions` when key has crossed budget
 ```
 
 
-## Set Budgets - Per User
+### Set Budgets - Per User
 
 LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
 
@@ -455,7 +495,7 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 }
 ```
 
-## Tracking Spend 
+### Tracking Spend 
 
 You can get spend for a key by using the `/key/info` endpoint. 
 
@@ -490,13 +530,13 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
 ```
 
 
-## Custom Auth 
+### Custom Auth 
 
 You can now override the default api key auth. 
 
 Here's how: 
 
-### 1. Create a custom auth file. 
+#### 1. Create a custom auth file. 
 
 Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
 
@@ -513,7 +553,7 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
         raise Exception
 ```
 
-### 2. Pass the filepath (relative to the config.yaml)
+#### 2. Pass the filepath (relative to the config.yaml)
 
 Pass the filepath to the config.yaml 
 
@@ -534,16 +574,16 @@ general_settings:
 
 [**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
 
-### 3. Start the proxy
+#### 3. Start the proxy
 ```shell
 $ litellm --config /path/to/config.yaml 
 ```
 
-## Custom /key/generate
+### Custom /key/generate
 
 If you need to add custom logic before generating a Proxy API Key (Example Validating `team_id`)
 
-### 1. Write a custom `custom_generate_key_fn`
+#### 1. Write a custom `custom_generate_key_fn`
 
 
 The input to the custom_generate_key_fn function is a single parameter: `data` [(Type: GenerateKeyRequest)](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py#L125)
@@ -609,7 +649,7 @@ async def custom_generate_key_fn(data: GenerateKeyRequest)-> dict:
 ```
 
 
-### 2. Pass the filepath (relative to the config.yaml)
+#### 2. Pass the filepath (relative to the config.yaml)
 
 Pass the filepath to the config.yaml 
 
@@ -631,18 +671,18 @@ general_settings:
 
 
 
-## [BETA] Dynamo DB 
+### [BETA] Dynamo DB 
 
 Only live in `v1.16.21.dev1`. 
 
-### Step 1. Save keys to env
+#### Step 1. Save keys to env
 
 ```shell
 AWS_ACCESS_KEY_ID = "your-aws-access-key-id"
 AWS_SECRET_ACCESS_KEY = "your-aws-secret-access-key"
 ```
 
-### Step 2. Add details to config 
+#### Step 2. Add details to config 
 
 ```yaml
 general_settings: 
@@ -657,7 +697,7 @@ general_settings:
   }
 ```
 
-### Step 3. Generate Key
+#### Step 3. Generate Key
 
 ```bash
 curl --location 'http://0.0.0.0:8000/key/generate' \
