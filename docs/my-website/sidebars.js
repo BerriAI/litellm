@@ -116,6 +116,7 @@ const sidebars = {
         "proxy/model_management",
         "proxy/health",
         "proxy/debugging",
+        "proxy/pii_masking",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
