@@ -2376,8 +2376,8 @@ async def chat_completion(
             response = await litellm.acompletion(**data)
         else:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"message": "Invalid model name passed in"},
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid model name passed in"},
             )
 
         # Post Call Processing
@@ -2439,7 +2439,12 @@ async def chat_completion(
             traceback.print_exc()
 
         if isinstance(e, HTTPException):
-            raise e
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
@@ -2593,8 +2598,8 @@ async def embeddings(
             response = await litellm.aembedding(**data)
         else:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"message": "Invalid model name passed in"},
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid model name passed in"},
             )
 
         ### ALERTING ###
@@ -2613,7 +2618,12 @@ async def embeddings(
         )
         traceback.print_exc()
         if isinstance(e, HTTPException):
-            raise e
+            raise ProxyException(
+                message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
@@ -2733,8 +2743,8 @@ async def image_generation(
             response = await litellm.aimage_generation(**data)
         else:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"message": "Invalid model name passed in"},
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid model name passed in"},
             )
 
         ### ALERTING ###
@@ -2753,7 +2763,12 @@ async def image_generation(
         )
         traceback.print_exc()
         if isinstance(e, HTTPException):
-            raise e
+            raise ProxyException(
+                message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
