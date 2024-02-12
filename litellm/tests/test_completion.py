@@ -1356,6 +1356,8 @@ def test_completion_together_ai_mixtral():
         )
     except litellm.Timeout as e:
         pass
+    except litellm.ServiceUnavailableError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
