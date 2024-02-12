@@ -20,7 +20,10 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage }) => {
           <Menu.Item key="1" onClick={() => setPage("api-keys")}>
             API Keys
           </Menu.Item>
-          <Menu.Item key="2" onClick={() => setPage("usage")}>
+          <Menu.Item key="2" onClick={() => setPage("models")}>
+            Models
+          </Menu.Item>
+          <Menu.Item key="3" onClick={() => setPage("usage")}>
             Usage
           </Menu.Item>
         </Menu>
