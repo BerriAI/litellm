@@ -301,11 +301,6 @@ def completion(
                 gapic_content_types.SafetySetting(x) for x in safety_settings
             ]
 
-        ## Custom model deployed on private endpoint
-        private = False
-        if "private" in optional_params:
-            private = optional_params.pop("private")
-
         # vertexai does not use an API key, it looks for credentials.json in the environment
 
         prompt = " ".join(
@@ -348,32 +343,30 @@ def completion(
             llm_model = CodeChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"llm_model = CodeChatModel.from_pretrained({model})\n"
-        else:  # assume vertex model garden
+        elif model == "private":
+            mode = "private"
+            if "model_id" in optional_params:
+                model = optional_params.pop("model_id")
+            # private endpoint requires a dict instead of JSON
+            instances = [optional_params.copy()]
+            instances[0]["prompt"] = prompt
+            llm_model = aiplatform.PrivateEndpoint(
+                endpoint_name=model,
+                project=vertex_project,
+                location=vertex_location,
+            )
+            request_str += f"llm_model = aiplatform.PrivateEndpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
+        else:  # assume vertex model garden on public endpoint
             mode = "custom"
 
-            instances = [optional_params]
+            instances = [optional_params.copy()]
             instances[0]["prompt"] = prompt
-            if not private:
-                # private endpoint requires a string to be passed in
-                instances = [
-                    json_format.ParseDict(instance_dict, Value())
-                    for instance_dict in instances
-                ]
-                client = aiplatform.gapic.PredictionServiceClient(
-                    client_options=client_options
-                )
-                llm_model = client.endpoint_path(
-                project=vertex_project, location=vertex_location, endpoint=model
-                )
-                request_str += f"llm_model = client.endpoint_path(project={vertex_project}, location={vertex_location}, endpoint={model})\n"
-
-            # private endpoint
-            else:
-                client = aiplatform.PrivateEndpoint(
-                    endpoint_name=model,
-                    project=vertex_project,
-                    location=vertex_location,
-                )
+            instances = [
+                json_format.ParseDict(instance_dict, Value())
+                for instance_dict in instances
+            ]
+            # Will determine the API used based on async parameter
+            llm_model = None
 
         if acompletion == True:
             data = {
@@ -555,24 +548,51 @@ def completion(
                     "request_str": request_str,
                 },
             )
+            llm_model = aiplatform.gapic.PredictionServiceClient(
+                client_options=client_options
+            )
+            request_str += f"llm_model = aiplatform.gapic.PredictionServiceClient(client_options={client_options})\n"
+            endpoint_path = llm_model.endpoint_path(
+                project=vertex_project, location=vertex_location, endpoint=model
+            )
+            request_str += (
+                f"llm_model.predict(endpoint={endpoint_path}, instances={instances}, **{optional_params})\n"
+            )
+            response = llm_model.predict(
+                endpoint=endpoint_path,
+                instances=instances,
+                **optional_params,
+            ).predictions
 
-            # public endpoint
-            if not private:
-                request_str += (
-                    f"client.predict(endpoint={llm_model}, instances={instances})\n"
-                )
-                response = client.predict(
-                    endpoint=llm_model,
-                    instances=instances,
-                ).predictions
-            # private endpoint
-            else:
-                request_str += (
-                    f"client.predict(instances={instances})\n"
-                )
-                response = client.predict(
-                    instances=instances,
-                ).predictions
+            completion_response = response[0]
+            if (
+                isinstance(completion_response, str)
+                and "\nOutput:\n" in completion_response
+            ):
+                completion_response = completion_response.split("\nOutput:\n", 1)[1]
+            if "stream" in optional_params and optional_params["stream"] == True:
+                response = TextStreamer(completion_response)
+                return response
+        elif mode == "private":
+            """
+            Vertex AI Model Garden deployed on private endpoint
+            """
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=None,
+                additional_args={
+                    "complete_input_dict": optional_params,
+                    "request_str": request_str,
+                },
+            )
+            request_str += (
+                f"llm_model.predict(instances={instances}, **{optional_params})\n"
+            )
+            response = llm_model.predict(
+                instances=instances,
+                **optional_params,
+            ).predictions
 
             completion_response = response[0]
             if (
@@ -747,11 +767,6 @@ async def async_completion(
             Vertex AI Model Garden
             """
             from google.cloud import aiplatform
-
-            private = False
-            if 'private' in optional_params:
-                private = optional_params.pop('private')
-
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -762,34 +777,37 @@ async def async_completion(
                 },
             )
 
-            # public endpoint
-            if not private:
-                async_client = aiplatform.gapic.PredictionServiceAsyncClient(
+            llm_model = aiplatform.gapic.PredictionServiceAsyncClient(
                 client_options=client_options
-                )
-                llm_model = async_client.endpoint_path(
-                    project=vertex_project, location=vertex_location, endpoint=model
-                )
-                request_str += (
-                    f"client.predict(endpoint={llm_model}, instances={instances})\n"
-                )
-                response_obj = await async_client.predict(
-                    endpoint=llm_model,
-                    instances=instances,
-                )
-            # private endpoint
-            else:
-                async_client = aiplatform.PrivateEndpoint(
-                    endpoint_name=model,
-                    project=vertex_project,
-                    location=vertex_location,
-                )
-                request_str += (
-                    f"client.predict(instances={instances})\n"
-                )
-                response_obj = await async_client.predict(
-                    instances=instances,
-                )
+            )
+            request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options})\n"
+            endpoint_path = llm_model.endpoint_path(
+                project=vertex_project, location=vertex_location, endpoint=model
+            )
+            request_str += (
+                f"llm_model.predict(endpoint={endpoint_path}, instances={instances}, **{optional_params})\n"
+            )
+            response_obj = await llm_model.predict(
+                endpoint=endpoint_path,
+                instances=instances,
+                **optional_params,
+            )
+            response = response_obj.predictions
+            completion_response = response[0]
+            if (
+                isinstance(completion_response, str)
+                and "\nOutput:\n" in completion_response
+            ):
+                completion_response = completion_response.split("\nOutput:\n", 1)[1]
+ 
+        elif mode == "private":
+            request_str += (
+                f"llm_model.predict(instances={instances}, **{optional_params})\n"
+            )
+            response_obj = await llm_model.predict_async(
+                instances=instances,
+                **optional_params,
+            )
 
             response = response_obj.predictions
             completion_response = response[0]
@@ -798,6 +816,7 @@ async def async_completion(
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
+
         ## LOGGING
         logging_obj.post_call(
             input=prompt, api_key=None, original_response=completion_response
@@ -938,10 +957,7 @@ async def async_streaming(
         response = llm_model.predict_streaming_async(prompt, **optional_params)
     elif mode == "custom":
         from google.cloud import aiplatform
-
-        private = False
-        if 'private' in optional_params:
-            private = optional_params.pop('private')
+        stream = optional_params.pop("stream", None)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -952,30 +968,22 @@ async def async_streaming(
                 "request_str": request_str,
             },
         )
-        # public endpoint
-        if not private:
-            async_client = aiplatform.gapic.PredictionServiceAsyncClient(
-                client_options=client_options
-            )
-            llm_model = async_client.endpoint_path(
-                project=vertex_project, location=vertex_location, endpoint=model
-            )
-
-            request_str += f"client.predict(endpoint={llm_model}, instances={instances})\n"
-            response_obj = await async_client.predict(
-                endpoint=llm_model,
-                instances=instances,
-            )
-        else:
-            async_client = aiplatform.PrivateEndpoint(
-                endpoint_name=model,
-                project=vertex_project,
-                location=vertex_location,
-            )
-            request_str += f"client.predict(instances={instances})\n"
-            response_obj = await async_client.predict(
-                instances=instances,
-            )
+        async_client = aiplatform.gapic.PredictionServiceAsyncClient(
+            client_options=client_options
+        )
+        request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options})\n"
+        llm_model = async_client.endpoint_path(
+            project=vertex_project, location=vertex_location, endpoint=model
+        )
+        endpoint_path = llm_model.endpoint_path(
+            project=vertex_project, location=vertex_location, endpoint=model
+        )
+        request_str += f"client.predict(endpoint={endpoint_path}, instances={instances})\n"
+        response_obj = await async_client.predict(
+            endpoint=endpoint_path,
+            instances=instances,
+            **optional_params,
+        )
 
         response = response_obj.predictions
         completion_response = response[0]
@@ -984,8 +992,26 @@ async def async_streaming(
             and "\nOutput:\n" in completion_response
         ):
             completion_response = completion_response.split("\nOutput:\n", 1)[1]
-        if "stream" in optional_params and optional_params["stream"] == True:
+        if stream:
             response = TextStreamer(completion_response)
+
+    elif mode == "private":
+        stream = optional_params.pop("stream", None)
+        request_str += f"llm_model.predict(instances={instances}, **{optional_params})\n"
+        response_obj = await async_client.predict(
+            instances=instances,
+            **optional_params,
+        )
+        response = response_obj.predictions
+        completion_response = response[0]
+        if (
+            isinstance(completion_response, str)
+            and "\nOutput:\n" in completion_response
+        ):
+            completion_response = completion_response.split("\nOutput:\n", 1)[1]
+        if stream:
+            response = TextStreamer(completion_response)
+
     streamwrapper = CustomStreamWrapper(
         completion_stream=response,
         model=model,
