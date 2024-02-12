@@ -89,7 +89,7 @@ def completion(
     if "stream" in optional_params and optional_params["stream"] == True:
         return handle_stream(submit_job(api_base, get_random_job_id(), prompt, model, user_api_key, temperature, max_tokens, use_stream=True))
     else:
-        result = submit_job(api_base, get_random_job_id(), prompt, model, user_api_key, use_stream=False)
+        result = submit_job(api_base, get_random_job_id(), prompt, model, user_api_key, temperature, max_tokens, use_stream=False)
         model_response["ended"] = int(
             time.time()
         )
