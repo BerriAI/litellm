@@ -132,7 +132,6 @@ async def asyncsseclient(
                 await session.close()
             lines = []
             async for line in response.content:
-                print(f"line: [{line}]")
                 line = line.decode('utf8')
 
                 if line in {'\n', '\r', '\r\n'}:
