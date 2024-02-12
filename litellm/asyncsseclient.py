@@ -79,12 +79,15 @@ class Event:
                 # If we already have some data, then join to it with a newline.
                 # Else this is it.
                 if msg.data:
-                    if value == '\n':
-                        msg.data = f'{msg.data}\n \n' # Add a space to make it a valid line
+                    if value == '':
+                        msg.data = f'{msg.data}\n\n'
                     else:
                         msg.data = f'{msg.data}\n{value}'
                 else:
-                    msg.data = value
+                    if value == '':
+                        msg.data = '\n'
+                    else:
+                        msg.data = value
             elif name == 'event':
                 msg.event = value
             elif name == 'id':
