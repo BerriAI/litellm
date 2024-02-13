@@ -14,6 +14,7 @@ interface CreateKeyProps {
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
+  userModels: string[];
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
 
@@ -22,6 +23,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   userRole,
   accessToken,
   data,
+  userModels,
   setData,
 }) => {
   const [form] = Form.useForm();
@@ -42,20 +44,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       message.info("Making API Call");
-      // Check if "models" exists and is not an empty string
-      if (formValues.models && formValues.models.trim() !== '') {
-        // Format the "models" field as an array
-        formValues.models = formValues.models.split(',').map((model: string) => model.trim());
-      } else {
-        // If "models" is undefined or an empty string, set it to an empty array
-        formValues.models = [];
-      }
       setIsModalVisible(true);
       const response = await keyCreateCall(accessToken, userID, formValues);
       setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
       setApiKey(response["key"]);
       message.success("API Key Created");
       form.resetFields();
+      localStorage.removeItem("userData" + userID)
     } catch (error) {
       console.error("Error creating the key:", error);
     }
@@ -90,13 +85,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             >
               <Input placeholder="ai_team" />
             </Form.Item>
-
             <Form.Item
-              label="Models (Comma Separated). Eg: gpt-3.5-turbo,gpt-4"
-              name="models"
+            label="Models"
+            name="models"
+          >
+            <Select
+              mode="multiple"
+              placeholder="Select models"
+              style={{ width: '100%' }}
             >
-              <Input placeholder="gpt-4,gpt-3.5-turbo" />
-            </Form.Item>
+              {userModels.map((model) => (
+                <Option key={model} value={model}>
+                  {model}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
             
 
             <Form.Item
