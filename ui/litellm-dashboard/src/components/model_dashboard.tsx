@@ -3,7 +3,7 @@ import { Card, Title, Subtitle, Table, TableHead, TableRow, TableCell, TableBody
 import { modelInfoCall } from "./networking";
 
 interface ModelDashboardProps {
-  accessToken: string;
+  accessToken: string | null;
   token: string | null;
   userRole: string | null;
   userID: string | null;
@@ -18,6 +18,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelData, setModelData] = useState<any>({ data: [] });
 
   useEffect(() => {
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
     const fetchData = async () => {
       try {
         // Replace with your actual API call for model data
