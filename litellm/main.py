@@ -264,6 +264,7 @@ async def acompletion(
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "ollama_chat"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "sagemaker"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -1553,6 +1554,7 @@ def completion(
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging,
+                acompletion=acompletion,
             )
             if (
                 "stream" in optional_params and optional_params["stream"] == True
