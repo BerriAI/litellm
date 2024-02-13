@@ -74,6 +74,7 @@ general_settings:
     "ssl_verify": False,
     "aws_role_name": "<your-aws_role_name>",
     "aws_session_name": "<your-aws_session_name>",
+    "aws_web_identity_token": "os.environ/AWS_WEB_IDENTITY_TOKEN"
   }
 
 
