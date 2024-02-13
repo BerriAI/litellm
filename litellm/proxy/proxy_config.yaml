@@ -15,11 +15,8 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
   - model_name: anthropic-claude-v2.1
     litellm_params:
-      aws_region_name: eu-central-1
       model: bedrock/anthropic.claude-v2:1
       timeout: 300 # sets a 5 minute timeout
-      input_cost_per_token: 0.00000800
-      output_cost_per_token: 0.00002400
   - model_name: anthropic-claude-v2
     litellm_params:
       model: bedrock/anthropic.claude-v2
@@ -38,7 +35,7 @@ model_list:
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   success_callback: ['langfuse']
-  max_budget: 10      # global budget for proxy 
+  max_budget: 50      # global budget for proxy 
   max_user_budget: 0.0001
   budget_duration: 30d    # global budget duration, will reset after 30d
   default_key_generate_params:
