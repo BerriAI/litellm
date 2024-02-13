@@ -3741,6 +3741,9 @@ async def auth_callback(request: Request):
                 param="GOOGLE_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        verbose_proxy_logger.debug(
+            f"Google SSO Credentials: google_client_id={google_client_id}; redirect_uri={redirect_url}; google_client_secret={google_client_secret}"
+        )
         google_sso = GoogleSSO(
             client_id=google_client_id,
             redirect_uri=redirect_url,
@@ -3768,6 +3771,9 @@ async def auth_callback(request: Request):
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        verbose_proxy_logger.debug(
+            f"Microsoft SSO Credentials: microsoft_client_id={microsoft_client_id}; microsoft_client_secret={microsoft_client_secret}; microsoft_tenant={microsoft_tenant}; redirect_url={redirect_url}"
+        )
         microsoft_sso = MicrosoftSSO(
             client_id=microsoft_client_id,
             client_secret=microsoft_client_secret,
