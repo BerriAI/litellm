@@ -15,7 +15,7 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 
 ```yaml
 litellm_settings: 
-    litellm.callbacks = ["presidio"] 
+    callbacks = ["presidio", ...] # e.g. ["presidio", custom_callbacks.proxy_handler_instance]
 ```
 
 ## Start proxy 
