@@ -85,7 +85,7 @@ class TokenIterator:
                         response_obj["is_finished"] = True
                     response_obj["text"] = line_data["token"]["text"]
                     return response_obj
-                chunk = await anext(self.byte_iterator)
+                chunk = await self.byte_iterator.__anext__()
                 self.buffer.seek(0, io.SEEK_END)
                 self.buffer.write(chunk["PayloadPart"]["Bytes"])
         except StopAsyncIteration as e:
@@ -368,10 +368,8 @@ async def async_streaming(
         except Exception as e:
             raise SagemakerError(status_code=500, message=f"{str(e)}")
         response = response["Body"]
-        # filtered_response = TokenIterator(stream=response, acompletion=True)
         async for chunk in response:
             yield chunk
-        # return
 
 
 async def async_completion(
