@@ -116,6 +116,7 @@ const sidebars = {
         "proxy/model_management",
         "proxy/health",
         "proxy/debugging",
+        "proxy/pii_masking",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
@@ -124,6 +125,7 @@ const sidebars = {
             "proxy/reliability",
           ]
         },
+        "proxy/caching",
         {
           "type": "category",
           "label": "Logging, Alerting, Caching",
@@ -131,7 +133,6 @@ const sidebars = {
             "proxy/logging", 
             "proxy/alerting",
             "proxy/streaming_logging",
-            "proxy/caching",
           ]
         },
         {

@@ -94,7 +94,7 @@ print(response)
 
 ```
 
-### Set Custom Trace ID, Trace User ID
+### Set Custom Trace ID, Trace User ID and Tags
 
 Pass `trace_id`, `trace_user_id` in `metadata`
 
@@ -124,6 +124,7 @@ response = completion(
       "trace_id": "trace-id22",                     # set langfuse Trace ID
       "trace_user_id": "user-id2",                  # set langfuse Trace User ID
       "session_id": "session-1",                    # set langfuse Session ID
+      "tags": ["tag1", "tag2"]                      # set langfuse Tags
   },
 )
 

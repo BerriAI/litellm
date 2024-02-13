@@ -2,8 +2,10 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔑 [BETA] Admin UI 
+# 🔑 [BETA] Proxy UI 
 ### **Create + delete keys through a UI**
+
+[Let users create their own keys](#setup-ssoauth-for-ui)
 
 :::info
 
@@ -40,11 +42,7 @@ Your Proxy Swagger is available on the root of the Proxy: e.g.: `http://localhos
 
 <Image img={require('../../img/ui_link.png')} />
 
-## Setup SSO/Auth for UI
-
-<Tabs>
-
-<TabItem value="username" label="Quick Start - Username, Password">
+## Change default username + password
 
 Set the following in your .env on the Proxy
 
@@ -55,8 +53,26 @@ UI_PASSWORD=langchain
 
 On accessing the LiteLLM UI, you will be prompted to enter your username, password
 
-</TabItem>
 
+## Setup SSO/Auth for UI
+
+### Step 1: Set upperbounds for keys
+Control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
+
+```yaml
+litellm_settings:
+  upperbound_key_generate_params:
+    max_budget: 100 # upperbound of $100, for all /key/generate requests
+    duration: "30d" # upperbound of 30 days for all /key/generate requests
+```
+
+** Expected Behavior **
+
+- Send a `/key/generate` request with `max_budget=200`
+- Key will be created with `max_budget=100` since 100 is the upper bound
+
+### Step 2: Setup Oauth Client
+<Tabs>
 <TabItem value="google" label="Google SSO">
 
 - Create a new Oauth 2.0 Client on https://console.cloud.google.com/ 
@@ -97,7 +113,10 @@ MICROSOFT_TENANT="5a39737
 
 </Tabs>
 
-## See Admin view w/ SSO 
+### Step 3. Test flow
+<Image img={require('../../img/litellm_ui_3.gif')} />
+
+## Set Admin view w/ SSO 
 
 You just need to set Proxy Admin ID
 
