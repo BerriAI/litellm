@@ -3954,7 +3954,6 @@ async def add_new_model(model_params: ModelParams):
         )
 
 
-#### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use /model/info
 @router.get(
     "/model/info",
     description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
@@ -3987,6 +3986,14 @@ async def model_info_v1(
         # read litellm model_prices_and_context_window.json to get the following:
         # input_cost_per_token, output_cost_per_token, max_tokens
         litellm_model_info = get_litellm_model_info(model=model)
+        if litellm_model_info == {}:
+            # use litellm_param model_name to get model_info
+            litellm_params = model.get("litellm_params", {})
+            litellm_model = litellm_params.get("model", None)
+            try:
+                litellm_model_info = litellm.get_model_info(model=litellm_model)
+            except:
+                litellm_model_info = {}
         for k, v in litellm_model_info.items():
             if k not in model_info:
                 model_info[k] = v
