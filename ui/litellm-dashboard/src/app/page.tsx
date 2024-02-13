@@ -3,6 +3,7 @@ import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Navbar from "../components/navbar";
 import UserDashboard from "../components/user_dashboard";
+import ModelDashboard from "@/components/model_dashboard";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
@@ -80,7 +81,15 @@ const CreateKeyPage = () => {
               userEmail={userEmail}
               setUserEmail={setUserEmail}
             />
-          ) : (
+          ) : page == "models" ? (
+            <ModelDashboard
+              userID={userID}
+              userRole={userRole}
+              token={token}
+              accessToken={accessToken}
+            />
+          )
+          : (
             <Usage
               userID={userID}
               userRole={userRole}
