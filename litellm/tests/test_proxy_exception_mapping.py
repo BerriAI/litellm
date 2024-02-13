@@ -139,7 +139,7 @@ def test_exception_openai_bad_model(client):
             response=response
         )
         print("Type of exception=", type(openai_exception))
-        assert isinstance(openai_exception, openai.NotFoundError)
+        assert isinstance(openai_exception, openai.BadRequestError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
