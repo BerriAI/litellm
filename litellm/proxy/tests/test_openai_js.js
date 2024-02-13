@@ -4,25 +4,29 @@ const openai = require('openai');
 process.env.DEBUG=false;
 async function runOpenAI() {
   const client = new openai.OpenAI({
-    apiKey: 'sk-JkKeNi6WpWDngBsghJ6B9g',
-    baseURL: 'http://0.0.0.0:8000'
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
   });
+
+
 
   try {
     const response = await client.chat.completions.create({
-      model: 'sagemaker',
+      model: 'anthropic-claude-v2.1',
       stream: true,
-      max_tokens: 1000,
       messages: [
         {
           role: 'user',
-          content: 'write a 20 pg essay about YC ',
+          content: 'write a 20 pg essay about YC '.repeat(6000),
         },
       ],
     });
 
     console.log(response);
+    let original = '';
     for await (const chunk of response) {
+      original += chunk.choices[0].delta.content;
+      console.log(original);
       console.log(chunk);
       console.log(chunk.choices[0].delta.content);
     }
