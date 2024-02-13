@@ -231,7 +231,7 @@ class LangFuseLogger:
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
             if supports_tags:
-                metadata_tags = metadata["tags"]
+                metadata_tags = metadata.get("tags", [])
                 tags = metadata_tags
 
             generation_name = metadata.get("generation_name", None)
@@ -278,7 +278,7 @@ class LangFuseLogger:
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
-                }       
+                }
             generation_params = {
                 "name": generation_name,
                 "id": metadata.get("generation_id", generation_id),
