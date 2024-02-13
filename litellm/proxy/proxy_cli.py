@@ -570,6 +570,7 @@ def run_server(
                 "worker_class": "uvicorn.workers.UvicornWorker",
                 "preload": True,  # Add the preload flag,
                 "accesslog": "-",  # Log to stdout
+                "timeout": 600,  # default to very high number, bedrock/anthropic.claude-v2:1 can take 30+ seconds for the 1st chunk to come in
                 "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
             }
 
