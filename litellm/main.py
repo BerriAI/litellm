@@ -1562,7 +1562,7 @@ def completion(
                 print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
                 from .llms.sagemaker import TokenIterator
 
-                tokenIterator = TokenIterator(model_response)
+                tokenIterator = TokenIterator(model_response, acompletion=acompletion)
                 response = CustomStreamWrapper(
                     completion_stream=tokenIterator,
                     model=model,
