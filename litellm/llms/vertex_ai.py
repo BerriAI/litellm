@@ -997,8 +997,6 @@ async def async_streaming(
         stream = optional_params.pop("stream", None)
         _ = instances[0].pop("stream", None)
         request_str += f"llm_model.predict_async(instances={instances}, **{optional_params})\n"
-        print("instances", instances)
-        print("optional_params", optional_params)
         response_obj = await llm_model.predict_async(
             instances=instances,
             **optional_params,
