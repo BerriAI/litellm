@@ -43,6 +43,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
     // Set the key to delete and open the confirmation modal
     setKeyToDelete(token);
+    localStorage.removeItem("userData" + userID)
     setIsDeleteModalOpen(true);
   };
 
@@ -71,21 +72,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setIsDeleteModalOpen(false);
     setKeyToDelete(null);
   };
-
-  // const handleDelete = async (token: String) => {
-  //   if (data == null) {
-  //     return;
-  //   }
-  //   try {
-  //     await keyDeleteCall(accessToken, token);
-  //     // Successfully completed the deletion. Update the state to trigger a rerender.
-  //     const filteredData = data.filter((item) => item.token !== token);
-  //     setData(filteredData);
-  //   } catch (error) {
-  //     console.error("Error deleting the key:", error);
-  //     // Handle any error situations, such as displaying an error message to the user.
-  //   }
-  // };
 
   if (data == null) {
     return;
@@ -147,7 +133,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Text>{JSON.stringify(item.models)}</Text>
                 </TableCell>
                 <TableCell>
-                  <Text>TPM Limit: {item.tpm_limit? item.tpm_limit : "Unlimited"} <br></br> RPM Limit: {item.rpm_limit? item.rpm_limit : "Unlimited"}</Text>
+                  <Text>
+                    TPM Limit: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
+                    <br></br> RPM Limit:{" "}
+                    {item.rpm_limit ? item.rpm_limit : "Unlimited"}
+                  </Text>
                 </TableCell>
                 <TableCell>
                   {item.expires != null ? (
@@ -180,12 +170,18 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       {isDeleteModalOpen && (
         <div className="fixed z-10 inset-0 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
+            <div
+              className="fixed inset-0 transition-opacity"
+              aria-hidden="true"
+            >
               <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
             </div>
 
             {/* Modal Panel */}
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
               &#8203;
             </span>
 
@@ -194,9 +190,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                 <div className="sm:flex sm:items-start">
                   <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Key</h3>
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">
+                      Delete Key
+                    </h3>
                     <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this key ?</p>
+                      <p className="text-sm text-gray-500">
+                        Are you sure you want to delete this key ?
+                      </p>
                     </div>
                   </div>
                 </div>

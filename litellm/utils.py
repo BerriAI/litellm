@@ -866,7 +866,11 @@ class Logging:
                 curl_command += additional_args.get("request_str", None)
             elif api_base == "":
                 curl_command = self.model_call_details
-            print_verbose(f"\033[92m{curl_command}\033[0m\n")
+
+            # only print verbose if verbose logger is not set
+            if verbose_logger.level == 0:
+                # this means verbose logger was not switched on - user is in litellm.set_verbose=True
+                print_verbose(f"\033[92m{curl_command}\033[0m\n")
             verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -6642,6 +6646,13 @@ def exception_type(
                         model=model,
                         llm_provider="bedrock",
                         response=original_exception.response,
+                    )
+                if "Connect timeout on endpoint URL" in error_str:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"BedrockException: Timeout Error - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
                     )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:

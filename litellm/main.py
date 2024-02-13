@@ -10,6 +10,7 @@
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union
 from functools import partial
+
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
@@ -1590,6 +1591,7 @@ def completion(
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging,
+                timeout=timeout,
             )
 
             if "stream" in optional_params and optional_params["stream"] == True:

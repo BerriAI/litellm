@@ -389,7 +389,7 @@ class Router:
             model_name = data["model"]
             for k, v in self.default_litellm_params.items():
                 if (
-                    k not in kwargs
+                    k not in kwargs and v is not None
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
                 elif k == "metadata":
@@ -409,13 +409,24 @@ class Router:
             else:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
+
+            timeout = (
+                data.get(
+                    "timeout", None
+                )  # timeout set on litellm_params for this deployment
+                or self.timeout  # timeout set on router
+                or kwargs.get(
+                    "timeout", None
+                )  # this uses default_litellm_params when nothing is set
+            )
+
             response = await litellm.acompletion(
                 **{
                     **data,
                     "messages": messages,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": self.timeout,
+                    "timeout": timeout,
                     **kwargs,
                 }
             )
