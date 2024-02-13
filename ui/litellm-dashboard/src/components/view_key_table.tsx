@@ -43,6 +43,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
     // Set the key to delete and open the confirmation modal
     setKeyToDelete(token);
+    localStorage.removeItem("userData" + userID)
     setIsDeleteModalOpen(true);
   };
 
