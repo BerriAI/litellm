@@ -47,6 +47,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  let userModels = ["gpt-4", "bedrock"];
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
@@ -158,6 +159,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           <CreateKey
             userID={userID}
             userRole={userRole}
+            userModels={userModels}
             accessToken={accessToken}
             data={data}
             setData={setData}
