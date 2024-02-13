@@ -50,6 +50,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setApiKey(response["key"]);
       message.success("API Key Created");
       form.resetFields();
+      localStorage.removeItem("userData" + userID)
     } catch (error) {
       console.error("Error creating the key:", error);
     }
