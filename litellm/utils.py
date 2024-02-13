@@ -8765,8 +8765,8 @@ class CustomStreamWrapper:
                             )
                         )
 
-                        self.response_uptil_now += processed_chunk.choices[0].delta.get(
-                            "content", ""
+                        self.response_uptil_now += (
+                            processed_chunk.choices[0].delta.get("content", "") or ""
                         )
                         self.rules.post_call_rules(
                             input=self.response_uptil_now, model=self.model
