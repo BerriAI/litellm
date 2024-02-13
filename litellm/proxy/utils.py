@@ -92,7 +92,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
-        call_type: Literal["completion", "embeddings"],
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -240,7 +240,10 @@ class ProxyLogging:
         else:
             user_info = str(user_info)
         # percent of max_budget left to spend
-        percent_left = (user_max_budget - user_current_spend) / user_max_budget
+        if user_max_budget > 0:
+            percent_left = (user_max_budget - user_current_spend) / user_max_budget
+        else:
+            percent_left = 0
         verbose_proxy_logger.debug(
             f"Budget Alerts: Percent left: {percent_left} for {user_info}"
         )
@@ -480,7 +483,7 @@ class PrismaClient:
     )
     async def get_data(
         self,
-        token: Optional[str] = None,
+        token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
         user_id_list: Optional[list] = None,
         key_val: Optional[dict] = None,
@@ -494,12 +497,13 @@ class PrismaClient:
             if token is not None or (table_name is not None and table_name == "key"):
                 # check if plain text or hash
                 if token is not None:
-                    hashed_token = token
-                    if token.startswith("sk-"):
-                        hashed_token = self.hash_token(token=token)
-                    verbose_proxy_logger.debug(
-                        f"PrismaClient: find_unique for token: {hashed_token}"
-                    )
+                    if isinstance(token, str):
+                        hashed_token = token
+                        if token.startswith("sk-"):
+                            hashed_token = self.hash_token(token=token)
+                        verbose_proxy_logger.debug(
+                            f"PrismaClient: find_unique for token: {hashed_token}"
+                        )
                 if query_type == "find_unique":
                     response = await self.db.litellm_verificationtoken.find_unique(
                         where={"token": hashed_token}
@@ -537,8 +541,25 @@ class PrismaClient:
                             if isinstance(r.expires, datetime):
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all":
+                    where_filter: dict = {}
+                    if token is not None:
+                        where_filter["token"] = {}
+                        if isinstance(token, str):
+                            if token.startswith("sk-"):
+                                token = self.hash_token(token=token)
+                            where_filter["token"]["in"] = [token]
+                        elif isinstance(token, list):
+                            hashed_tokens = []
+                            for t in token:
+                                assert isinstance(t, str)
+                                if t.startswith("sk-"):
+                                    new_token = self.hash_token(token=t)
+                                    hashed_tokens.append(new_token)
+                                else:
+                                    hashed_tokens.append(t)
+                            where_filter["token"]["in"] = hashed_tokens
                     response = await self.db.litellm_verificationtoken.find_many(
-                        order={"spend": "desc"},
+                        order={"spend": "desc"}, where=where_filter  # type: ignore
                     )
                 if response is not None:
                     return response
@@ -1280,6 +1301,20 @@ async def _read_request_body(request):
     except:
         request_data = json.loads(body_str)
     return request_data
+
+
+def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
+    if team_id is None or team_config is None or request_data is None:
+        return
+    # check if valid model called for team
+    if "models" in team_config:
+        valid_models = team_config.pop("models")
+        model_in_request = request_data["model"]
+        if model_in_request not in valid_models:
+            raise Exception(
+                f"Invalid model for team {team_id}: {model_in_request}.  Valid models for team are: {valid_models}\n"
+            )
+    return
 
 
 # LiteLLM Admin UI - Non SSO Login

@@ -526,6 +526,7 @@ def completion(
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
+    timeout=None,
 ):
     exception_mapping_worked = False
     try:
@@ -553,6 +554,7 @@ def completion(
                 aws_role_name=aws_role_name,
                 aws_session_name=aws_session_name,
                 aws_profile_name=aws_profile_name,
+                timeout=timeout,
             )
 
         model = model

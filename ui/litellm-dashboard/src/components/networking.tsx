@@ -137,6 +137,41 @@ export const userInfoCall = async (
   }
 };
 
+
+
+export const modelInfoCall = async (
+  accessToken: String,
+  userID: String,
+  userRole: String
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/info` : `/model/info`;
+
+    message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const keySpendLogsCall = async (accessToken: String, token: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs` : `/spend/logs`;
@@ -163,7 +198,74 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
   }
 };
 
+export const userSpendLogsCall = async (
+  accessToken: String,
+  token: String,
+  userRole: String,
+  userID: String,
+  startTime: String,
+  endTime: String
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs` : `/spend/logs`;
+    if (userRole == "App Owner") {
+      url = `${url}/?user_id=${userID}&start_date=${startTime}&end_date=${endTime}`;
+    } else {
+      url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
+    }
+    message.info("Making spend logs request");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
 
+    const data = await response.json();
+    console.log(data);
+    message.success("Spend Logs received");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const keyInfoCall = async (accessToken: String, keys: String[]) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/key/info`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        keys: keys,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
 
 export const spendUsersCall = async (accessToken: String, userID: String) => {
   try {
@@ -190,4 +292,3 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
     throw error;
   }
 };
-

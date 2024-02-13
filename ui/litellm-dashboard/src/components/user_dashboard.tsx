@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { userInfoCall } from "./networking";
+import { userInfoCall, modelInfoCall } from "./networking";
 import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
@@ -8,7 +8,7 @@ import ViewUserSpend from "./view_user_spend";
 import EnterProxyUrl from "./enter_proxy_url";
 import { message } from "antd";
 import Navbar from "./navbar";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -20,7 +20,21 @@ type UserSpendData = {
   max_budget?: number | null;
 };
 
-const UserDashboard = () => {
+interface UserDashboardProps {
+  userID: string | null;
+  userRole: string | null;
+  userEmail: string | null;
+  setUserRole: React.Dispatch<React.SetStateAction<string | null>>;
+  setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
+}
+
+const UserDashboard: React.FC<UserDashboardProps> = ({
+  userID,
+  userRole,
+  setUserRole,
+  userEmail,
+  setUserEmail,
+}) => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
     null
@@ -28,13 +42,12 @@ const UserDashboard = () => {
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams();
-  const userID = searchParams.get("userID");
   const viewSpend = searchParams.get("viewSpend");
+  const router = useRouter();
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userModels, setUserModels] = useState<string[]>([]);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
@@ -84,19 +97,48 @@ const UserDashboard = () => {
       }
     }
     if (userID && accessToken && userRole && !data) {
-      const fetchData = async () => {
-        try {
-          const response = await userInfoCall(accessToken, userID, userRole);
-          setUserSpendData(response["user_info"]);
-          setData(response["keys"]); // Assuming this is the correct path to your data
-        } catch (error) {
-          console.error("There was an error fetching the data", error);
-          // Optionally, update your UI to reflect the error state here as well
-        }
-      };
-      fetchData();
+      const cachedData = localStorage.getItem("userData" + userID);
+      const cachedSpendData = localStorage.getItem("userSpendData" + userID);
+      const cachedUserModels = localStorage.getItem("userModels" + userID);
+      if (cachedData && cachedSpendData && cachedUserModels) {
+        setData(JSON.parse(cachedData));
+        setUserSpendData(JSON.parse(cachedSpendData));
+        setUserModels(JSON.parse(cachedUserModels));
+
+      } else {
+        const fetchData = async () => {
+          try {
+            const response = await userInfoCall(accessToken, userID, userRole);
+            setUserSpendData(response["user_info"]);
+            setData(response["keys"]); // Assuming this is the correct path to your data
+            localStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
+            localStorage.setItem(
+              "userSpendData" + userID,
+              JSON.stringify(response["user_info"])
+            );
+
+            const model_info = await modelInfoCall(accessToken, userID, userRole);
+            console.log("model_info:", model_info);
+            // loop through model_info["data"] and create an array of element.model_name
+            let available_model_names = model_info["data"].map((element: { model_name: string; }) => element.model_name);
+            console.log("available_model_names:", available_model_names);
+            setUserModels(available_model_names);
+
+            console.log("userModels:", userModels);
+
+            localStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
+
+
+            
+          } catch (error) {
+            console.error("There was an error fetching the data", error);
+            // Optionally, update your UI to reflect the error state here as well
+          }
+        };
+        fetchData();
+      }
     }
-  }, [userID, token, accessToken, data]);
+  }, [userID, token, accessToken, data, userRole]);
 
   if (userID == null || token == null) {
     // Now you can construct the full URL
@@ -117,10 +159,14 @@ const UserDashboard = () => {
 
   return (
     <div>
-      <Navbar userID={userID} userRole={userRole} userEmail={userEmail} />
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
         <Col numColSpan={1}>
-          <ViewUserSpend userID={userID} userSpendData={userSpendData} userRole={userRole} accessToken={accessToken}/>
+          <ViewUserSpend
+            userID={userID}
+            userSpendData={userSpendData}
+            userRole={userRole}
+            accessToken={accessToken}
+          />
           <ViewKeyTable
             userID={userID}
             accessToken={accessToken}
@@ -130,6 +176,7 @@ const UserDashboard = () => {
           <CreateKey
             userID={userID}
             userRole={userRole}
+            userModels={userModels}
             accessToken={accessToken}
             data={data}
             setData={setData}

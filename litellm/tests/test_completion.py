@@ -71,7 +71,7 @@ def test_completion_claude():
             messages=messages,
             request_timeout=10,
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check response args
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
@@ -1355,6 +1355,8 @@ def test_completion_together_ai_mixtral():
             f"${float(cost):.10f}",
         )
     except litellm.Timeout as e:
+        pass
+    except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

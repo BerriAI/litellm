@@ -2,7 +2,7 @@ import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import Optional, List, Callable
 import secrets, subprocess
 import hashlib, uuid
 import warnings
@@ -92,6 +92,7 @@ from litellm.proxy.utils import (
     hash_token,
     html_form,
     _read_request_body,
+    _is_valid_team_configs,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -690,6 +691,7 @@ async def user_api_key_auth(
                     "/key",
                     "/spend",
                     "/user",
+                    "/model/info",
                 ]
                 # check if the current route startswith any of the allowed routes
                 if (
@@ -1293,9 +1295,31 @@ class ProxyConfig:
                         f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                     )
                 elif key == "callbacks":
-                    litellm.callbacks = [
-                        get_instance_fn(value=value, config_file_path=config_file_path)
-                    ]
+                    if isinstance(value, list):
+                        imported_list = []
+                        for callback in value:  # ["presidio", <my-custom-callback>]
+                            if isinstance(callback, str) and callback == "presidio":
+                                from litellm.proxy.hooks.presidio_pii_masking import (
+                                    _OPTIONAL_PresidioPIIMasking,
+                                )
+
+                                pii_masking_object = _OPTIONAL_PresidioPIIMasking()
+                                imported_list.append(pii_masking_object)
+                            else:
+                                imported_list.append(
+                                    get_instance_fn(
+                                        value=callback,
+                                        config_file_path=config_file_path,
+                                    )
+                                )
+                        litellm.callbacks = imported_list  # type: ignore
+                    else:
+                        litellm.callbacks = [
+                            get_instance_fn(
+                                value=value,
+                                config_file_path=config_file_path,
+                            )
+                        ]
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
                     )
@@ -2294,6 +2318,9 @@ async def chat_completion(
                 pass
             else:
                 team_id = team_config.pop("team_id", None)
+                _is_valid_team_configs(
+                    team_id=team_id, team_config=team_config, request_data=data
+                )
                 data["metadata"]["team_id"] = team_id
                 data = {
                     **team_config,
@@ -2346,8 +2373,13 @@ async def chat_completion(
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
             response = await llm_router.acompletion(**data, specific_deployment=True)
-        else:  # router is not set
+        elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.acompletion(**data)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid model name passed in"},
+            )
 
         # Post Call Processing
         data["litellm_status"] = "success"  # used for alerting
@@ -2408,7 +2440,12 @@ async def chat_completion(
             traceback.print_exc()
 
         if isinstance(e, HTTPException):
-            raise e
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
@@ -2433,8 +2470,15 @@ async def chat_completion(
     response_class=ORJSONResponse,
     tags=["embeddings"],
 )
+@router.post(
+    "/openai/deployments/{model:path}/embeddings",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["embeddings"],
+)  # azure compatible endpoint
 async def embeddings(
     request: Request,
+    model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
@@ -2458,6 +2502,7 @@ async def embeddings(
         data["model"] = (
             general_settings.get("embedding_model", None)  # server default
             or user_model  # model name passed via cli args
+            or model  # for azure deployments
             or data["model"]  # default passed in http request
         )
         if user_model:
@@ -2550,8 +2595,13 @@ async def embeddings(
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
             response = await llm_router.aembedding(**data, specific_deployment=True)
-        else:
+        elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.aembedding(**data)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid model name passed in"},
+            )
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
@@ -2569,7 +2619,12 @@ async def embeddings(
         )
         traceback.print_exc()
         if isinstance(e, HTTPException):
-            raise e
+            raise ProxyException(
+                message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
@@ -2685,8 +2740,13 @@ async def image_generation(
             response = await llm_router.aimage_generation(
                 **data
             )  # ensure this goes the llm_router, router will do the correct alias mapping
-        else:
+        elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.aimage_generation(**data)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid model name passed in"},
+            )
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
@@ -2704,7 +2764,12 @@ async def image_generation(
         )
         traceback.print_exc()
         if isinstance(e, HTTPException):
-            raise e
+            raise ProxyException(
+                message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
@@ -2886,7 +2951,7 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
 @router.post(
     "/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def delete_key_fn(data: DeleteKeyRequest):
+async def delete_key_fn(data: KeyRequest):
     """
     Delete a key from the key management system.
 
@@ -2928,6 +2993,73 @@ async def delete_key_fn(data: DeleteKeyRequest):
         )
 
         return {"deleted_keys": keys}
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.post(
+    "/v2/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def info_key_fn_v2(
+    data: Optional[KeyRequest] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Retrieve information about a list of keys.
+
+    **New endpoint**. Currently admin only.
+    Parameters:
+        keys: Optional[list] = body parameter representing the key(s) in the request
+        user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+    Returns:
+        Dict containing the key and its associated information
+    
+    Example Curl:
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info" \
+-H "Authorization: Bearer sk-1234" \
+-d {"keys": ["sk-1", "sk-2", "sk-3"]}
+    ```
+    """
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+        if data is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Malformed request. No keys passed in."},
+            )
+
+        key_info = await prisma_client.get_data(
+            token=data.keys, table_name="key", query_type="find_all"
+        )
+        filtered_key_info = []
+        for k in key_info:
+            try:
+                k = k.model_dump()  # noqa
+            except:
+                # if using pydantic v1
+                k = k.dict()
+            filtered_key_info.append(k)
+        return {"key": data.keys, "info": filtered_key_info}
+
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -3015,16 +3147,7 @@ async def info_key_fn(
     tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def spend_key_fn(
-    start_date: Optional[str] = fastapi.Query(
-        default=None,
-        description="Time from which to start viewing key spend",
-    ),
-    end_date: Optional[str] = fastapi.Query(
-        default=None,
-        description="Time till which to view key spend",
-    ),
-):
+async def spend_key_fn():
     """
     View all keys created, ordered by spend
 
@@ -3041,41 +3164,8 @@ async def spend_key_fn(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if (
-            start_date is not None
-            and isinstance(start_date, str)
-            and end_date is not None
-            and isinstance(end_date, str)
-        ):
-            # Convert the date strings to datetime objects
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
-
-            # SQL query
-            response = await prisma_client.db.litellm_spendlogs.group_by(
-                by=["api_key", "startTime"],
-                where={
-                    "startTime": {
-                        "gte": start_date_obj,  # Greater than or equal to Start Date
-                        "lte": end_date_obj,  # Less than or equal to End Date
-                    }
-                },
-                sum={
-                    "spend": True,
-                },
-            )
-
-            # TODO: Execute SQL query and return the results
-
-            return {
-                "message": "This is your SQL query",
-                "response": response,
-            }
-        else:
-            key_info = await prisma_client.get_data(
-                table_name="key", query_type="find_all"
-            )
-            return key_info
+        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+        return key_info
 
     except Exception as e:
         raise HTTPException(
@@ -3157,6 +3247,14 @@ async def view_spend_logs(
         default=None,
         description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
     ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
 ):
     """
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
@@ -3193,7 +3291,93 @@ async def view_spend_logs(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         spend_logs = []
-        if api_key is not None and isinstance(api_key, str):
+        if (
+            start_date is not None
+            and isinstance(start_date, str)
+            and end_date is not None
+            and isinstance(end_date, str)
+        ):
+            # Convert the date strings to datetime objects
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+            filter_query = {
+                "startTime": {
+                    "gte": start_date_obj,  # Greater than or equal to Start Date
+                    "lte": end_date_obj,  # Less than or equal to End Date
+                }
+            }
+
+            if api_key is not None and isinstance(api_key, str):
+                filter_query["api_key"] = api_key  # type: ignore
+            elif request_id is not None and isinstance(request_id, str):
+                filter_query["request_id"] = request_id  # type: ignore
+            elif user_id is not None and isinstance(user_id, str):
+                filter_query["user"] = user_id  # type: ignore
+
+            # SQL query
+            response = await prisma_client.db.litellm_spendlogs.group_by(
+                by=["api_key", "user", "model", "startTime"],
+                where=filter_query,  # type: ignore
+                sum={
+                    "spend": True,
+                },
+            )
+
+            if (
+                isinstance(response, list)
+                and len(response) > 0
+                and isinstance(response[0], dict)
+            ):
+                result: dict = {}
+                for record in response:
+                    dt_object = datetime.strptime(
+                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"
+                    )  # type: ignore
+                    date = dt_object.date()
+                    if date not in result:
+                        result[date] = {"users": {}, "models": {}}
+                    api_key = record["api_key"]
+                    user_id = record["user"]
+                    model = record["model"]
+                    result[date]["spend"] = (
+                        result[date].get("spend", 0) + record["_sum"]["spend"]
+                    )
+                    result[date][api_key] = (
+                        result[date].get(api_key, 0) + record["_sum"]["spend"]
+                    )
+                    result[date]["users"][user_id] = (
+                        result[date]["users"].get(user_id, 0) + record["_sum"]["spend"]
+                    )
+                    result[date]["models"][model] = (
+                        result[date]["models"].get(model, 0) + record["_sum"]["spend"]
+                    )
+                return_list = []
+                final_date = None
+                for k, v in sorted(result.items()):
+                    return_list.append({**v, "startTime": k})
+                    final_date = k
+
+                end_date_date = end_date_obj.date()
+                if final_date is not None and final_date < end_date_date:
+                    current_date = final_date + timedelta(days=1)
+                    while current_date <= end_date_date:
+                        # Represent current_date as string because original response has it this way
+                        return_list.append(
+                            {
+                                "startTime": current_date,
+                                "spend": 0,
+                                "users": {},
+                                "models": {},
+                            }
+                        )  # If no data, will stay as zero
+                        current_date += timedelta(days=1)  # Move on to the next day
+
+                return return_list
+
+            return response
+
+        elif api_key is not None and isinstance(api_key, str):
             if api_key.startswith("sk-"):
                 hashed_token = prisma_client.hash_token(token=api_key)
             else:
@@ -3478,12 +3662,22 @@ async def login(request: Request):
     if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
         password, ui_password
     ):
+        user_role = "app_owner"
         user_id = username
-        # User is Authe'd in - generate key for the UI to access Proxy
+        key_user_id = user_id
+        if (
+            os.getenv("PROXY_ADMIN_ID", None) is not None
+            and os.environ["PROXY_ADMIN_ID"] == user_id
+        ) or user_id == "admin":
+            # checks if user is admin
+            user_role = "app_admin"
+            key_user_id = os.getenv("PROXY_ADMIN_ID", "default_user_id")
+
+        # Admin is Authe'd in - generate key for the UI to access Proxy
 
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
-                **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+                **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
             )
         else:
             response = {
@@ -3492,17 +3686,8 @@ async def login(request: Request):
             }
 
         key = response["token"]  # type: ignore
-        user_id = response["user_id"]  # type: ignore
 
-        litellm_dashboard_ui = "/ui/"
-
-        user_role = "app_owner"
-        if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None
-            and os.environ["PROXY_ADMIN_ID"] == user_id
-        ):
-            # checks if user is admin
-            user_role = "app_admin"
+        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "/") + "ui/"
 
         import jwt
 
@@ -3799,7 +3984,6 @@ async def add_new_model(model_params: ModelParams):
         )
 
 
-#### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use /model/info
 @router.get(
     "/model/info",
     description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
@@ -3832,6 +4016,28 @@ async def model_info_v1(
         # read litellm model_prices_and_context_window.json to get the following:
         # input_cost_per_token, output_cost_per_token, max_tokens
         litellm_model_info = get_litellm_model_info(model=model)
+
+        # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
+        if litellm_model_info == {}:
+            # use litellm_param model_name to get model_info
+            litellm_params = model.get("litellm_params", {})
+            litellm_model = litellm_params.get("model", None)
+            try:
+                litellm_model_info = litellm.get_model_info(model=litellm_model)
+            except:
+                litellm_model_info = {}
+        # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
+        if litellm_model_info == {}:
+            # use litellm_param model_name to get model_info
+            litellm_params = model.get("litellm_params", {})
+            litellm_model = litellm_params.get("model", None)
+            split_model = litellm_model.split("/")
+            if len(split_model) > 0:
+                litellm_model = split_model[-1]
+            try:
+                litellm_model_info = litellm.get_model_info(model=litellm_model)
+            except:
+                litellm_model_info = {}
         for k, v in litellm_model_info.items():
             if k not in model_info:
                 model_info[k] = v

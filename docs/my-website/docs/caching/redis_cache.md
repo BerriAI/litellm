@@ -5,6 +5,12 @@ import TabItem from '@theme/TabItem';
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching.py)
 
+:::info
+
+Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+
+:::
+
 ## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic Cache
 
 
