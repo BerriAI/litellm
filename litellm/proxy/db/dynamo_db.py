@@ -61,10 +61,18 @@ class DynamoDBWrapper(CustomDB):
         import boto3, os
 
         sts_client = boto3.client("sts")
-        assumed_role = sts_client.assume_role_with_web_identity(
+
+        # call 1
+        non_used_assumed_role = sts_client.assume_role_with_web_identity(
             RoleArn=self.database_arguments.aws_role_name,
             RoleSessionName=self.database_arguments.aws_session_name,
             WebIdentityToken=self.database_arguments.aws_web_identity_token,
+        )
+
+        # call 2
+        assumed_role = sts_client.assume_role(
+            RoleArn=self.database_arguments.assume_role_aws_role_name,
+            RoleSessionName=self.database_arguments.assume_role_aws_session_name,
         )
 
         aws_access_key_id = assumed_role["Credentials"]["AccessKeyId"]
