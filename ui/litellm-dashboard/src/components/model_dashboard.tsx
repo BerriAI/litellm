@@ -87,22 +87,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     <div style={{ width: "100%" }}>
     <Grid className="gap-2 p-10 h-[75vh] w-full">
       <Card>
-        <Title>Available Models</Title>
         <Table className="mt-5">
           <TableHead>
             <TableRow>
-              <TableCell>Model Name</TableCell>
-              <TableCell>Provider</TableCell>
-              <TableCell>Input Price per token ($)</TableCell>
-              <TableCell>Output Price per token ($)</TableCell>
-              <TableCell>Max Tokens</TableCell>
+              <TableCell><Title>Model Name </Title></TableCell>
+              <TableCell><Title>Provider</Title></TableCell>
+              <TableCell><Title>Input Price per token ($)</Title></TableCell>
+              <TableCell><Title>Output Price per token ($)</Title></TableCell>
+              <TableCell><Title>Max Tokens</Title></TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {modelData.data.map((model: any) => (
               <TableRow key={model.model_name}>
 
-                <TableCell><p>{model.model_name}</p></TableCell>
+                <TableCell><Title>{model.model_name}</Title></TableCell>
                 <TableCell>{model.provider}</TableCell>
                 <TableCell>{model.input_cost}</TableCell>
                 <TableCell>{model.output_cost}</TableCell>
