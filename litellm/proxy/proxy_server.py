@@ -1081,14 +1081,19 @@ class ProxyConfig:
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         database_args[k] = litellm.get_secret(v)
                     if isinstance(k, str) and k == "aws_web_identity_token":
-                        if os.path.exists(v):
-                            with open(v, "r") as file:
+                        value = database_args[k]
+                        verbose_proxy_logger.debug(
+                            f"Loading AWS Web Identity Token from file: {value}"
+                        )
+                        if os.path.exists(value):
+                            with open(value, "r") as file:
                                 token_content = file.read()
-                                database_args[k] = json.loads(token_content)
+                                database_args[k] = token_content
                         else:
                             verbose_proxy_logger.info(
-                                f"DynamoDB Loading - {v} is not a valid file path"
+                                f"DynamoDB Loading - {value} is not a valid file path"
                             )
+                verbose_proxy_logger.debug(f"database_args: {database_args}")
                 custom_db_client = DBClient(
                     custom_db_args=database_args, custom_db_type=database_type
                 )
