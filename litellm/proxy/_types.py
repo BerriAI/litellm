@@ -215,6 +215,8 @@ class DynamoDBArgs(LiteLLMBase):
     aws_policy_arns: Optional[List[str]] = None
     aws_policy: Optional[str] = None
     aws_duration_seconds: Optional[int] = None
+    assume_role_aws_role_name: Optional[str] = None
+    assume_role_aws_session_name: Optional[str] = None
 
 
 class ConfigGeneralSettings(LiteLLMBase):
