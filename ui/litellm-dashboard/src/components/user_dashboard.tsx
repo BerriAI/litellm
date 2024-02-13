@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { userInfoCall } from "./networking";
+import { userInfoCall, modelInfoCall } from "./networking";
 import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
@@ -47,7 +47,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  let userModels = ["gpt-4", "bedrock"];
+  let userModels = [""];
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
@@ -113,6 +113,18 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               "userSpendData",
               JSON.stringify(response["user_info"])
             );
+
+            const model_info = await modelInfoCall(accessToken, userID, userRole);
+            console.log("model_info:", model_info);
+            // loop through model_info["data"] and create an array of element.model_name
+            model_info.forEach((model: any) => {
+              userModels.push(model.model_name);
+            })
+
+            console.log("userModels:", userModels);
+
+
+            
           } catch (error) {
             console.error("There was an error fetching the data", error);
             // Optionally, update your UI to reflect the error state here as well
