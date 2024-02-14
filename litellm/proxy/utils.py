@@ -11,6 +11,7 @@ from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm import ModelResponse, EmbeddingResponse, ImageResponse
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.integrations.custom_logger import CustomLogger
@@ -376,6 +377,28 @@ class ProxyLogging:
             except Exception as e:
                 raise e
         return
+
+    async def post_call_success_hook(
+        self,
+        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """
+        Allow user to modify outgoing data
+
+        Covers:
+        1. /chat/completions
+        """
+        new_response = copy.deepcopy(response)
+        for callback in litellm.callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    await callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict, response=new_response
+                    )
+            except Exception as e:
+                raise e
+        return new_response
 
 
 ### DB CONNECTOR ###

@@ -164,6 +164,8 @@ secret_manager_client: Optional[
 ] = None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional[KeyManagementSystem] = None
+#### PII MASKING ####
+output_parse_pii: bool = False
 #############################################
 
 
