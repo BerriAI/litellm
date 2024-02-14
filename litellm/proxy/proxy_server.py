@@ -3831,6 +3831,14 @@ async def google_login(request: Request):
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        verbose_proxy_logger.debug(
+            f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
+        )
+
+        verbose_proxy_logger.debug(
+            f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
+        )
+
         discovery = DiscoveryDocument(
             authorization_endpoint=generic_authorization_endpoint,
             token_endpoint=generic_token_endpoint,
