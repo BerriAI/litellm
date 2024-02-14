@@ -3955,6 +3955,7 @@ async def auth_callback(request: Request):
     global general_settings
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
 
     # get url from request
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
@@ -4010,6 +4011,77 @@ async def auth_callback(request: Request):
             allow_insecure_http=True,
         )
         result = await microsoft_sso.verify_and_process(request)
+    elif generic_client_id is not None:
+        # make generic sso provider
+        from fastapi_sso.sso.generic import create_provider, DiscoveryDocument
+
+        generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
+        generic_authorization_endpoint = os.getenv(
+            "GENERIC_AUTHORIZATION_ENDPOINT", None
+        )
+        generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
+        generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
+        if generic_client_secret is None:
+            raise ProxyException(
+                message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="GENERIC_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if generic_authorization_endpoint is None:
+            raise ProxyException(
+                message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
+                type="auth_error",
+                param="GENERIC_AUTHORIZATION_ENDPOINT",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if generic_token_endpoint is None:
+            raise ProxyException(
+                message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
+                type="auth_error",
+                param="GENERIC_TOKEN_ENDPOINT",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if generic_userinfo_endpoint is None:
+            raise ProxyException(
+                message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
+                type="auth_error",
+                param="GENERIC_USERINFO_ENDPOINT",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        verbose_proxy_logger.debug(
+            f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
+        )
+
+        verbose_proxy_logger.debug(
+            f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
+        )
+
+        discovery = DiscoveryDocument(
+            authorization_endpoint=generic_authorization_endpoint,
+            token_endpoint=generic_token_endpoint,
+            userinfo_endpoint=generic_userinfo_endpoint,
+        )
+
+        SSOProvider = create_provider(name="oidc", discovery_document=discovery)
+        generic_sso = SSOProvider(
+            client_id=generic_client_id,
+            client_secret=generic_client_secret,
+            redirect_uri=redirect_url,
+            allow_insecure_http=True,
+        )
+        verbose_proxy_logger.debug(f"calling generic_sso.verify_and_process")
+
+        request_body = await request.body()
+
+        request_query_params = request.query_params
+
+        # get "code" from query params
+        code = request_query_params.get("code")
+
+        result = await generic_sso.verify_and_process(request)
+        verbose_proxy_logger.debug(f"generic result: {result}")
 
     # User is Authe'd in - generate key for the UI to access Proxy
     user_email = getattr(result, "email", None)
