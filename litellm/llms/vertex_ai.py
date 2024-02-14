@@ -437,8 +437,9 @@ def completion(
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
-                for k, v in function_call.args.items():
-                    args_dict[k] = v
+                if function_call.args is not None:
+                    for k, v in function_call.args.items():
+                        args_dict[k] = v
                 args_str = json.dumps(args_dict)
                 message = litellm.Message(
                     content=None,
