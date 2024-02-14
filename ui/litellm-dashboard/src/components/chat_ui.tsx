@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 import { Card, Title, Table, TableHead, TableRow, TableCell, TableBody, Grid, Tab,
     TabGroup,
     TabList,
@@ -7,7 +8,7 @@ import { Card, Title, Table, TableHead, TableRow, TableCell, TableBody, Grid, Ta
     TabPanels, } from "@tremor/react";
 import { modelInfoCall } from "./networking";
 import openai from "openai";
-
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 
 
 interface ChatUIProps {
@@ -106,7 +107,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID })
           <TabGroup>
             <TabList className="mt-4">
                 <Tab>Chat</Tab>
-                <Tab>Proxy Usage</Tab>
+                <Tab>API Reference</Tab>
             </TabList>
 
             <TabPanels>
@@ -157,9 +158,126 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID })
                     </div>
                 </TabPanel>
                 <TabPanel>
-                    <Metric>
-                        Usage
-                    </Metric>
+                    <TabGroup>
+                        <TabList>
+                            <Tab>OpenAI Python SDK</Tab>
+                            <Tab>LlamaIndex</Tab>
+                            <Tab>Langchain Py</Tab>
+                        </TabList>
+                        <TabPanels>
+                        <TabPanel>
+                    
+                    <SyntaxHighlighter language="python">
+            {`
+import openai
+client = openai.OpenAI(
+    api_key="your_api_key",
+    base_url="http://0.0.0.0:4000" # proxy base url
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo", # model to use from Models Tab
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-openai-client",
+            "generation_id": "openai-client-gen-id22",
+            "trace_id": "openai-client-trace-id22",
+            "trace_user_id": "openai-client-user-id2"
+        }
+    }
+)
+
+print(response)
+            `}
+        </SyntaxHighlighter>
+     </TabPanel>
+     <TabPanel>
+                    
+                    <SyntaxHighlighter language="python">
+            {`
+import os, dotenv
+
+from llama_index.llms import AzureOpenAI
+from llama_index.embeddings import AzureOpenAIEmbedding
+from llama_index import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
+
+llm = AzureOpenAI(
+    engine="azure-gpt-3.5",               # model_name on litellm proxy
+    temperature=0.0,
+    azure_endpoint="http://0.0.0.0:4000", # litellm proxy endpoint
+    api_key="sk-1234",                    # litellm proxy API Key
+    api_version="2023-07-01-preview",
+)
+
+embed_model = AzureOpenAIEmbedding(
+    deployment_name="azure-embedding-model",
+    azure_endpoint="http://0.0.0.0:4000",
+    api_key="sk-1234",
+    api_version="2023-07-01-preview",
+)
+
+
+documents = SimpleDirectoryReader("llama_index_data").load_data()
+service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model)
+index = VectorStoreIndex.from_documents(documents, service_context=service_context)
+
+query_engine = index.as_query_engine()
+response = query_engine.query("What did the author do growing up?")
+print(response)
+
+            `}
+        </SyntaxHighlighter>
+     </TabPanel>
+     <TabPanel>
+                    
+                    <SyntaxHighlighter language="python">
+            {`
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-langchain-client",
+            "generation_id": "langchain-client-gen-id22",
+            "trace_id": "langchain-client-trace-id22",
+            "trace_user_id": "langchain-client-user-id2"
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+
+            `}
+        </SyntaxHighlighter>
+     </TabPanel>
+        </TabPanels>
+        </TabGroup>
+                    
                 </TabPanel>
             </TabPanels>
         </TabGroup>
