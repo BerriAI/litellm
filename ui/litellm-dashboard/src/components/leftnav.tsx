@@ -24,7 +24,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage }) => {
             Models
           </Menu.Item>
           <Menu.Item key="3" onClick={() => setPage("llm-playground")}>
-            Playground
+            Chat UI
           </Menu.Item>
           <Menu.Item key="4" onClick={() => setPage("usage")}>
             Usage
