@@ -2798,7 +2798,7 @@ async def image_generation(
             )
 
 
-#### KEY MANAGEMENT ####
+#### KEY MANAGEMENT #####
 
 
 @router.post(
@@ -3157,6 +3157,9 @@ async def info_key_fn(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+#### SPEND MANAGEMENT #####
 
 
 @router.get(
@@ -3944,6 +3947,60 @@ async def user_update(data: UpdateUserRequest):
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+#### TEAM MANAGEMENT ####
+
+
+@router.post(
+    "/team/new", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def new_team():
+    """
+    Create a new team
+
+    Parameters:
+    - team_alias: Optional[str] - User defined team alias
+    - team_id: Optional[str] - The team id of the user. If none passed, we'll generate it.
+    - team_admins: list - A list of user IDs that will be owning the team
+    - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+
+    Returns:
+    - key: (str) The generated api key
+    - expires: (datetime) Datetime object for when key expires.
+    - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
+    """
+    pass
+
+
+@router.post(
+    "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def update_team():
+    """
+    update team and members
+    """
+    pass
+
+
+@router.post(
+    "/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def delete_team():
+    """
+    delete team and team keys
+    """
+    pass
+
+
+@router.post(
+    "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def info_team():
+    """
+    get info on team + related keys
+    """
+    pass
 
 
 #### MODEL MANAGEMENT ####
