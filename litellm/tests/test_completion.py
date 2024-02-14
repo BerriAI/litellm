@@ -1545,9 +1545,9 @@ def test_completion_bedrock_titan_null_response():
             ],
         )
         # Add any assertions here to check the response
-        pytest.fail(f"Expected to fail")
+        print(f"response: {response}")
     except Exception as e:
-        pass
+        pytest.fail(f"An error occurred - {str(e)}")
 
 
 def test_completion_bedrock_titan():
