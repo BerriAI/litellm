@@ -27,6 +27,7 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 Get your Langfuse API Keys from https://cloud.langfuse.com/
 ```python
 litellm.success_callback = ["langfuse"]
+litellm.failure_callback = ["langfuse"] # logs errors to langfuse
 ```
 ```python
 # pip install langfuse 
@@ -93,7 +94,7 @@ print(response)
 
 ```
 
-### Set Custom Trace ID, Trace User ID
+### Set Custom Trace ID, Trace User ID and Tags
 
 Pass `trace_id`, `trace_user_id` in `metadata`
 
@@ -122,6 +123,8 @@ response = completion(
       "generation_id": "gen-id22",                  # set langfuse Generation ID 
       "trace_id": "trace-id22",                     # set langfuse Trace ID
       "trace_user_id": "user-id2",                  # set langfuse Trace User ID
+      "session_id": "session-1",                    # set langfuse Session ID
+      "tags": ["tag1", "tag2"]                      # set langfuse Tags
   },
 )
 

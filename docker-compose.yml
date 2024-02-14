@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    volumes:
+      - ./proxy_server_config.yaml:/app/proxy_server_config.yaml # mount your litellm config.yaml
+    ports:
+      - "4000:4000"
+    environment:
+      - AZURE_API_KEY=sk-123
+  litellm-ui:
+    image: ghcr.io/berriai/litellm-ui:main-latest
+
+
+

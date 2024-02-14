@@ -8,7 +8,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import litellm
-import time, logging
+import time, logging, asyncio
 import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any
 from openai._models import BaseModel as OpenAIObject
@@ -28,7 +28,16 @@ class BaseCache:
     def set_cache(self, key, value, **kwargs):
         raise NotImplementedError
 
+    async def async_set_cache(self, key, value, **kwargs):
+        raise NotImplementedError
+
     def get_cache(self, key, **kwargs):
+        raise NotImplementedError
+
+    async def async_get_cache(self, key, **kwargs):
+        raise NotImplementedError
+
+    async def disconnect(self):
         raise NotImplementedError
 
 
@@ -42,6 +51,16 @@ class InMemoryCache(BaseCache):
         self.cache_dict[key] = value
         if "ttl" in kwargs:
             self.ttl_dict[key] = time.time() + kwargs["ttl"]
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self.set_cache(key=key, value=value, **kwargs)
+
+    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+        for cache_key, cache_value in cache_list:
+            if ttl is not None:
+                self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
+            else:
+                self.set_cache(key=cache_key, value=cache_value)
 
     def get_cache(self, key, **kwargs):
         if key in self.cache_dict:
@@ -57,17 +76,26 @@ class InMemoryCache(BaseCache):
             return cached_response
         return None
 
+    async def async_get_cache(self, key, **kwargs):
+        return self.get_cache(key=key, **kwargs)
+
     def flush_cache(self):
         self.cache_dict.clear()
         self.ttl_dict.clear()
 
+    async def disconnect(self):
+        pass
+
+    def delete_cache(self, key):
+        self.cache_dict.pop(key, None)
+        self.ttl_dict.pop(key, None)
+
 
 class RedisCache(BaseCache):
-    def __init__(self, host=None, port=None, password=None, **kwargs):
-        import redis
+    # if users don't provider one, use the default litellm cache
 
-        # if users don't provider one, use the default litellm cache
-        from ._redis import get_redis_client
+    def __init__(self, host=None, port=None, password=None, **kwargs):
+        from ._redis import get_redis_client, get_redis_connection_pool
 
         redis_kwargs = {}
         if host is not None:
@@ -78,17 +106,83 @@ class RedisCache(BaseCache):
             redis_kwargs["password"] = password
 
         redis_kwargs.update(kwargs)
-
         self.redis_client = get_redis_client(**redis_kwargs)
+        self.redis_kwargs = redis_kwargs
+        self.async_redis_conn_pool = get_redis_connection_pool()
+
+    def init_async_client(self):
+        from ._redis import get_redis_async_client
+
+        return get_redis_async_client(
+            connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
+        )
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
-        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}")
+        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
         try:
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+
+    async def async_set_cache(self, key, value, **kwargs):
+        _redis_client = self.init_async_client()
+        async with _redis_client as redis_client:
+            ttl = kwargs.get("ttl", None)
+            print_verbose(
+                f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
+            )
+            try:
+                await redis_client.set(name=key, value=json.dumps(value), ex=ttl)
+            except Exception as e:
+                # NON blocking - notify users Redis is throwing an exception
+                logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+
+    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+        """
+        Use Redis Pipelines for bulk write operations
+        """
+        _redis_client = self.init_async_client()
+        try:
+            async with _redis_client as redis_client:
+                async with redis_client.pipeline(transaction=True) as pipe:
+                    # Iterate through each key-value pair in the cache_list and set them in the pipeline.
+                    for cache_key, cache_value in cache_list:
+                        print_verbose(
+                            f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
+                        )
+                        # Set the value with a TTL if it's provided.
+                        if ttl is not None:
+                            pipe.setex(cache_key, ttl, json.dumps(cache_value))
+                        else:
+                            pipe.set(cache_key, json.dumps(cache_value))
+                    # Execute the pipeline and return the results.
+                    results = await pipe.execute()
+
+            print_verbose(f"pipeline results: {results}")
+            # Optionally, you could process 'results' to make sure that all set operations were successful.
+            return results
+        except Exception as e:
+            print_verbose(f"Error occurred in pipeline write - {str(e)}")
+            # NON blocking - notify users Redis is throwing an exception
+            logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+
+    def _get_cache_logic(self, cached_response: Any):
+        """
+        Common 'get_cache_logic' across sync + async redis client implementations
+        """
+        if cached_response is None:
+            return cached_response
+        # cached_response is in `b{} convert it to ModelResponse
+        cached_response = cached_response.decode("utf-8")  # Convert bytes to string
+        try:
+            cached_response = json.loads(
+                cached_response
+            )  # Convert string to dictionary
+        except:
+            cached_response = ast.literal_eval(cached_response)
+        return cached_response
 
     def get_cache(self, key, **kwargs):
         try:
@@ -97,25 +191,360 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"Got Redis Cache: key: {key}, cached_response {cached_response}"
             )
-            if cached_response != None:
-                # cached_response is in `b{} convert it to ModelResponse
-                cached_response = cached_response.decode(
-                    "utf-8"
-                )  # Convert bytes to string
-                try:
-                    cached_response = json.loads(
-                        cached_response
-                    )  # Convert string to dictionary
-                except:
-                    cached_response = ast.literal_eval(cached_response)
-                return cached_response
+            return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             traceback.print_exc()
             logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
 
+    async def async_get_cache(self, key, **kwargs):
+        _redis_client = self.init_async_client()
+        async with _redis_client as redis_client:
+            try:
+                print_verbose(f"Get Redis Cache: key: {key}")
+                cached_response = await redis_client.get(key)
+                print_verbose(
+                    f"Got Async Redis Cache: key: {key}, cached_response {cached_response}"
+                )
+                response = self._get_cache_logic(cached_response=cached_response)
+                return response
+            except Exception as e:
+                # NON blocking - notify users Redis is throwing an exception
+                traceback.print_exc()
+                logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
+
     def flush_cache(self):
         self.redis_client.flushall()
+
+    async def disconnect(self):
+        pass
+
+    def delete_cache(self, key):
+        self.redis_client.delete(key)
+
+
+class RedisSemanticCache(BaseCache):
+    def __init__(
+        self,
+        host=None,
+        port=None,
+        password=None,
+        redis_url=None,
+        similarity_threshold=None,
+        use_async=False,
+        embedding_model="text-embedding-ada-002",
+        **kwargs,
+    ):
+        from redisvl.index import SearchIndex
+        from redisvl.query import VectorQuery
+
+        print_verbose(
+            "redis semantic-cache initializing INDEX - litellm_semantic_cache_index"
+        )
+        if similarity_threshold is None:
+            raise Exception("similarity_threshold must be provided, passed None")
+        self.similarity_threshold = similarity_threshold
+        self.embedding_model = embedding_model
+        schema = {
+            "index": {
+                "name": "litellm_semantic_cache_index",
+                "prefix": "litellm",
+                "storage_type": "hash",
+            },
+            "fields": {
+                "text": [{"name": "response"}],
+                "text": [{"name": "prompt"}],
+                "vector": [
+                    {
+                        "name": "litellm_embedding",
+                        "dims": 1536,
+                        "distance_metric": "cosine",
+                        "algorithm": "flat",
+                        "datatype": "float32",
+                    }
+                ],
+            },
+        }
+        if redis_url is None:
+            # if no url passed, check if host, port and password are passed, if not raise an Exception
+            if host is None or port is None or password is None:
+                # try checking env for host, port and password
+                import os
+
+                host = os.getenv("REDIS_HOST")
+                port = os.getenv("REDIS_PORT")
+                password = os.getenv("REDIS_PASSWORD")
+                if host is None or port is None or password is None:
+                    raise Exception("Redis host, port, and password must be provided")
+
+            redis_url = "redis://:" + password + "@" + host + ":" + port
+        print_verbose(f"redis semantic-cache redis_url: {redis_url}")
+        if use_async == False:
+            self.index = SearchIndex.from_dict(schema)
+            self.index.connect(redis_url=redis_url)
+            try:
+                self.index.create(overwrite=False)  # don't overwrite existing index
+            except Exception as e:
+                print_verbose(f"Got exception creating semantic cache index: {str(e)}")
+        elif use_async == True:
+            schema["index"]["name"] = "litellm_semantic_cache_index_async"
+            self.index = SearchIndex.from_dict(schema)
+            self.index.connect(redis_url=redis_url, use_async=True)
+
+    #
+    def _get_cache_logic(self, cached_response: Any):
+        """
+        Common 'get_cache_logic' across sync + async redis client implementations
+        """
+        if cached_response is None:
+            return cached_response
+
+        # check if cached_response is bytes
+        if isinstance(cached_response, bytes):
+            cached_response = cached_response.decode("utf-8")
+
+        try:
+            cached_response = json.loads(
+                cached_response
+            )  # Convert string to dictionary
+        except:
+            cached_response = ast.literal_eval(cached_response)
+        return cached_response
+
+    def set_cache(self, key, value, **kwargs):
+        import numpy as np
+
+        print_verbose(f"redis semantic-cache set_cache, kwargs: {kwargs}")
+
+        # get the prompt
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+
+        # create an embedding for prompt
+        embedding_response = litellm.embedding(
+            model=self.embedding_model,
+            input=prompt,
+            cache={"no-store": True, "no-cache": True},
+        )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        # make the embedding a numpy array, convert to bytes
+        embedding_bytes = np.array(embedding, dtype=np.float32).tobytes()
+        value = str(value)
+        assert isinstance(value, str)
+
+        new_data = [
+            {"response": value, "prompt": prompt, "litellm_embedding": embedding_bytes}
+        ]
+
+        # Add more data
+        keys = self.index.load(new_data)
+
+        return
+
+    def get_cache(self, key, **kwargs):
+        print_verbose(f"sync redis semantic-cache get_cache, kwargs: {kwargs}")
+        from redisvl.query import VectorQuery
+        import numpy as np
+
+        # query
+
+        # get the messages
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+
+        # convert to embedding
+        embedding_response = litellm.embedding(
+            model=self.embedding_model,
+            input=prompt,
+            cache={"no-store": True, "no-cache": True},
+        )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        query = VectorQuery(
+            vector=embedding,
+            vector_field_name="litellm_embedding",
+            return_fields=["response", "prompt", "vector_distance"],
+            num_results=1,
+        )
+
+        results = self.index.query(query)
+        if results == None:
+            return None
+        if isinstance(results, list):
+            if len(results) == 0:
+                return None
+
+        vector_distance = results[0]["vector_distance"]
+        vector_distance = float(vector_distance)
+        similarity = 1 - vector_distance
+        cached_prompt = results[0]["prompt"]
+
+        # check similarity, if more than self.similarity_threshold, return results
+        print_verbose(
+            f"semantic cache: similarity threshold: {self.similarity_threshold}, similarity: {similarity}, prompt: {prompt}, closest_cached_prompt: {cached_prompt}"
+        )
+        if similarity > self.similarity_threshold:
+            # cache hit !
+            cached_value = results[0]["response"]
+            print_verbose(
+                f"got a cache hit, similarity: {similarity}, Current prompt: {prompt}, cached_prompt: {cached_prompt}"
+            )
+            return self._get_cache_logic(cached_response=cached_value)
+        else:
+            # cache miss !
+            return None
+
+        pass
+
+    async def async_set_cache(self, key, value, **kwargs):
+        import numpy as np
+        from litellm.proxy.proxy_server import llm_router, llm_model_list
+
+        try:
+            await self.index.acreate(overwrite=False)  # don't overwrite existing index
+        except Exception as e:
+            print_verbose(f"Got exception creating semantic cache index: {str(e)}")
+        print_verbose(f"async redis semantic-cache set_cache, kwargs: {kwargs}")
+
+        # get the prompt
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+        # create an embedding for prompt
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding
+            embedding_response = await litellm.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        # make the embedding a numpy array, convert to bytes
+        embedding_bytes = np.array(embedding, dtype=np.float32).tobytes()
+        value = str(value)
+        assert isinstance(value, str)
+
+        new_data = [
+            {"response": value, "prompt": prompt, "litellm_embedding": embedding_bytes}
+        ]
+
+        # Add more data
+        keys = await self.index.aload(new_data)
+        return
+
+    async def async_get_cache(self, key, **kwargs):
+        print_verbose(f"async redis semantic-cache get_cache, kwargs: {kwargs}")
+        from redisvl.query import VectorQuery
+        import numpy as np
+        from litellm.proxy.proxy_server import llm_router, llm_model_list
+
+        # query
+
+        # get the messages
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding
+            embedding_response = await litellm.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        query = VectorQuery(
+            vector=embedding,
+            vector_field_name="litellm_embedding",
+            return_fields=["response", "prompt", "vector_distance"],
+        )
+        results = await self.index.aquery(query)
+        if results == None:
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+            return None
+        if isinstance(results, list):
+            if len(results) == 0:
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+                return None
+
+        vector_distance = results[0]["vector_distance"]
+        vector_distance = float(vector_distance)
+        similarity = 1 - vector_distance
+        cached_prompt = results[0]["prompt"]
+
+        # check similarity, if more than self.similarity_threshold, return results
+        print_verbose(
+            f"semantic cache: similarity threshold: {self.similarity_threshold}, similarity: {similarity}, prompt: {prompt}, closest_cached_prompt: {cached_prompt}"
+        )
+
+        # update kwargs["metadata"] with similarity, don't rewrite the original metadata
+        kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+
+        if similarity > self.similarity_threshold:
+            # cache hit !
+            cached_value = results[0]["response"]
+            print_verbose(
+                f"got a cache hit, similarity: {similarity}, Current prompt: {prompt}, cached_prompt: {cached_prompt}"
+            )
+            return self._get_cache_logic(cached_response=cached_value)
+        else:
+            # cache miss !
+            return None
+        pass
+
+    async def _index_info(self):
+        return await self.index.ainfo()
 
 
 class S3Cache(BaseCache):
@@ -195,6 +624,9 @@ class S3Cache(BaseCache):
             # NON blocking - notify users S3 is throwing an exception
             print_verbose(f"S3 Caching: set_cache() - Got exception from S3: {e}")
 
+    async def async_set_cache(self, key, value, **kwargs):
+        self.set_cache(key=key, value=value, **kwargs)
+
     def get_cache(self, key, **kwargs):
         import boto3, botocore
 
@@ -237,7 +669,13 @@ class S3Cache(BaseCache):
             traceback.print_exc()
             print_verbose(f"S3 Caching: get_cache() - Got exception from S3: {e}")
 
+    async def async_get_cache(self, key, **kwargs):
+        return self.get_cache(key=key, **kwargs)
+
     def flush_cache(self):
+        pass
+
+    async def disconnect(self):
         pass
 
 
@@ -304,15 +742,22 @@ class DualCache(BaseCache):
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
 
+    def delete_cache(self, key):
+        if self.in_memory_cache is not None:
+            self.in_memory_cache.delete_cache(key)
+        if self.redis_cache is not None:
+            self.redis_cache.delete_cache(key)
+
 
 #### LiteLLM.Completion / Embedding Cache ####
 class Cache:
     def __init__(
         self,
-        type: Optional[Literal["local", "redis", "s3"]] = "local",
+        type: Optional[Literal["local", "redis", "redis-semantic", "s3"]] = "local",
         host: Optional[str] = None,
         port: Optional[str] = None,
         password: Optional[str] = None,
+        similarity_threshold: Optional[float] = None,
         supported_call_types: Optional[
             List[Literal["completion", "acompletion", "embedding", "aembedding"]]
         ] = ["completion", "acompletion", "embedding", "aembedding"],
@@ -327,16 +772,20 @@ class Cache:
         s3_aws_secret_access_key: Optional[str] = None,
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
+        redis_semantic_cache_use_async=False,
+        redis_semantic_cache_embedding_model="text-embedding-ada-002",
         **kwargs,
     ):
         """
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Can be "local" or "redis". Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", or "s3". Defaults to "local".
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
             port (int, optional): The port number for the Redis cache. Required if type is "redis".
             password (str, optional): The password for the Redis cache. Required if type is "redis".
+            similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic"
+
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
@@ -348,9 +797,19 @@ class Cache:
         """
         if type == "redis":
             self.cache: BaseCache = RedisCache(host, port, password, **kwargs)
-        if type == "local":
+        elif type == "redis-semantic":
+            self.cache = RedisSemanticCache(
+                host,
+                port,
+                password,
+                similarity_threshold=similarity_threshold,
+                use_async=redis_semantic_cache_use_async,
+                embedding_model=redis_semantic_cache_embedding_model,
+                **kwargs,
+            )
+        elif type == "local":
             self.cache = InMemoryCache()
-        if type == "s3":
+        elif type == "s3":
             self.cache = S3Cache(
                 s3_bucket_name=s3_bucket_name,
                 s3_region_name=s3_region_name,
@@ -476,6 +935,45 @@ class Cache:
             }
             time.sleep(0.02)
 
+    def _get_cache_logic(
+        self,
+        cached_result: Optional[Any],
+        max_age: Optional[float],
+    ):
+        """
+        Common get cache logic across sync + async implementations
+        """
+        # Check if a timestamp was stored with the cached response
+        if (
+            cached_result is not None
+            and isinstance(cached_result, dict)
+            and "timestamp" in cached_result
+        ):
+            timestamp = cached_result["timestamp"]
+            current_time = time.time()
+
+            # Calculate age of the cached response
+            response_age = current_time - timestamp
+
+            # Check if the cached response is older than the max-age
+            if max_age is not None and response_age > max_age:
+                return None  # Cached response is too old
+
+            # If the response is fresh, or there's no max-age requirement, return the cached response
+            # cached_response is in `b{} convert it to ModelResponse
+            cached_response = cached_result.get("response")
+            try:
+                if isinstance(cached_response, dict):
+                    pass
+                else:
+                    cached_response = json.loads(
+                        cached_response  # type: ignore
+                    )  # Convert string to dictionary
+            except:
+                cached_response = ast.literal_eval(cached_response)  # type: ignore
+            return cached_response
+        return cached_result
+
     def get_cache(self, *args, **kwargs):
         """
         Retrieves the cached result for the given arguments.
@@ -488,6 +986,7 @@ class Cache:
             The cached result if it exists, otherwise None.
         """
         try:  # never block execution
+            messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
@@ -497,55 +996,44 @@ class Cache:
                 max_age = cache_control_args.get(
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                 )
-                cached_result = self.cache.get_cache(cache_key)
-                # Check if a timestamp was stored with the cached response
-                if (
-                    cached_result is not None
-                    and isinstance(cached_result, dict)
-                    and "timestamp" in cached_result
-                    and max_age is not None
-                ):
-                    timestamp = cached_result["timestamp"]
-                    current_time = time.time()
-
-                    # Calculate age of the cached response
-                    response_age = current_time - timestamp
-
-                    # Check if the cached response is older than the max-age
-                    if response_age > max_age:
-                        print_verbose(
-                            f"Cached response for key {cache_key} is too old. Max-age: {max_age}s, Age: {response_age}s"
-                        )
-                        return None  # Cached response is too old
-
-                    # If the response is fresh, or there's no max-age requirement, return the cached response
-                    # cached_response is in `b{} convert it to ModelResponse
-                    cached_response = cached_result.get("response")
-                    try:
-                        if isinstance(cached_response, dict):
-                            pass
-                        else:
-                            cached_response = json.loads(
-                                cached_response
-                            )  # Convert string to dictionary
-                    except:
-                        cached_response = ast.literal_eval(cached_response)
-                    return cached_response
-                return cached_result
+                cached_result = self.cache.get_cache(cache_key, messages=messages)
+                return self._get_cache_logic(
+                    cached_result=cached_result, max_age=max_age
+                )
         except Exception as e:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def add_cache(self, result, *args, **kwargs):
+    async def async_get_cache(self, *args, **kwargs):
         """
-        Adds a result to the cache.
+        Async get cache implementation.
 
-        Args:
-            *args: args to litellm.completion() or embedding()
-            **kwargs: kwargs to litellm.completion() or embedding()
+        Used for embedding calls in async wrapper
+        """
+        try:  # never block execution
+            messages = kwargs.get("messages", [])
+            if "cache_key" in kwargs:
+                cache_key = kwargs["cache_key"]
+            else:
+                cache_key = self.get_cache_key(*args, **kwargs)
+            if cache_key is not None:
+                cache_control_args = kwargs.get("cache", {})
+                max_age = cache_control_args.get(
+                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
+                )
+                cached_result = await self.cache.async_get_cache(
+                    cache_key, *args, **kwargs
+                )
+                return self._get_cache_logic(
+                    cached_result=cached_result, max_age=max_age
+                )
+        except Exception as e:
+            print_verbose(f"An exception occurred: {traceback.format_exc()}")
+            return None
 
-        Returns:
-            None
+    def _add_cache_logic(self, result, *args, **kwargs):
+        """
+        Common implementation across sync + async add_cache functions
         """
         try:
             if "cache_key" in kwargs:
@@ -564,14 +1052,82 @@ class Cache:
                         if k == "ttl":
                             kwargs["ttl"] = v
                 cached_data = {"timestamp": time.time(), "response": result}
-                self.cache.set_cache(cache_key, cached_data, **kwargs)
+                return cache_key, cached_data, kwargs
+            else:
+                raise Exception("cache key is None")
+        except Exception as e:
+            raise e
+
+    def add_cache(self, result, *args, **kwargs):
+        """
+        Adds a result to the cache.
+
+        Args:
+            *args: args to litellm.completion() or embedding()
+            **kwargs: kwargs to litellm.completion() or embedding()
+
+        Returns:
+            None
+        """
+        try:
+            cache_key, cached_data, kwargs = self._add_cache_logic(
+                result=result, *args, **kwargs
+            )
+            self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             traceback.print_exc()
             pass
 
-    async def _async_add_cache(self, result, *args, **kwargs):
-        self.add_cache(result, *args, **kwargs)
+    async def async_add_cache(self, result, *args, **kwargs):
+        """
+        Async implementation of add_cache
+        """
+        try:
+            cache_key, cached_data, kwargs = self._add_cache_logic(
+                result=result, *args, **kwargs
+            )
+            await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            traceback.print_exc()
+
+    async def async_add_cache_pipeline(self, result, *args, **kwargs):
+        """
+        Async implementation of add_cache for Embedding calls
+
+        Does a bulk write, to prevent using too many clients
+        """
+        try:
+            cache_list = []
+            for idx, i in enumerate(kwargs["input"]):
+                preset_cache_key = litellm.cache.get_cache_key(
+                    *args, **{**kwargs, "input": i}
+                )
+                kwargs["cache_key"] = preset_cache_key
+                embedding_response = result.data[idx]
+                cache_key, cached_data, kwargs = self._add_cache_logic(
+                    result=embedding_response,
+                    *args,
+                    **kwargs,
+                )
+                cache_list.append((cache_key, cached_data))
+            if hasattr(self.cache, "async_set_cache_pipeline"):
+                await self.cache.async_set_cache_pipeline(cache_list=cache_list)
+            else:
+                tasks = []
+                for val in cache_list:
+                    tasks.append(
+                        self.cache.async_set_cache(cache_key, cached_data, **kwargs)
+                    )
+                await asyncio.gather(*tasks)
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            traceback.print_exc()
+
+    async def disconnect(self):
+        if hasattr(self.cache, "disconnect"):
+            await self.cache.disconnect()
 
 
 def enable_cache(

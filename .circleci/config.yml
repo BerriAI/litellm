@@ -147,12 +147,18 @@ jobs:
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
-              --num_workers 8
+              --num_workers 8 \
+              --detailed_debug \
+              --run_gunicorn \
       - run:
           name: Install curl and dockerize
           command: |

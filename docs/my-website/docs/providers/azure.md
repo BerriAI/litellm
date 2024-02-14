@@ -74,6 +74,8 @@ response = litellm.completion(
 | gpt-4-32k            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-4-32k-0314            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4-32k-0613            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-1106-preview            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-0125-preview            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-3.5-turbo    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-0301    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-0613    | `completion('azure/<your deployment name>', messages)` |
