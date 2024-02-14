@@ -166,9 +166,9 @@ class ProxyException(Exception):
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     return JSONResponse(
-        status_code=int(exc.code)
-        if exc.code
-        else status.HTTP_500_INTERNAL_SERVER_ERROR,
+        status_code=(
+            int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
+        ),
         content={
             "error": {
                 "message": exc.message,
@@ -1885,24 +1885,7 @@ async def async_data_generator(response, user_api_key_dict):
 
 
 def select_data_generator(response, user_api_key_dict):
-    try:
-        # since boto3 - sagemaker does not support async calls, we should use a sync data_generator
-        if hasattr(
-            response, "custom_llm_provider"
-        ) and response.custom_llm_provider in ["sagemaker"]:
-            return data_generator(
-                response=response,
-            )
-        else:
-            # default to async_data_generator
-            return async_data_generator(
-                response=response, user_api_key_dict=user_api_key_dict
-            )
-    except:
-        # worst case - use async_data_generator
-        return async_data_generator(
-            response=response, user_api_key_dict=user_api_key_dict
-        )
+    return async_data_generator(response=response, user_api_key_dict=user_api_key_dict)
 
 
 def get_litellm_model_info(model: dict = {}):
@@ -4483,9 +4466,11 @@ async def get_routes():
             "path": getattr(route, "path", None),
             "methods": getattr(route, "methods", None),
             "name": getattr(route, "name", None),
-            "endpoint": getattr(route, "endpoint", None).__name__
-            if getattr(route, "endpoint", None)
-            else None,
+            "endpoint": (
+                getattr(route, "endpoint", None).__name__
+                if getattr(route, "endpoint", None)
+                else None
+            ),
         }
         routes.append(route_info)
 
