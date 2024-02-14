@@ -123,6 +123,10 @@ def test_vertex_ai():
             print(response)
             assert type(response.choices[0].message.content) == str
             assert len(response.choices[0].message.content) > 1
+            print(
+                f"response.choices[0].finish_reason: {response.choices[0].finish_reason}"
+            )
+            assert response.choices[0].finish_reason in litellm._openai_finish_reasons
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
