@@ -696,7 +696,9 @@ general_settings:
     "region_name": "us-west-2" 
     "user_table_name": "your-user-table",
     "key_table_name": "your-token-table",
-    "config_table_name": "your-config-table"
+    "config_table_name": "your-config-table",
+    "aws_role_name": "your-aws_role_name",
+    "aws_session_name": "your-aws_session_name",
   }
 ```
 

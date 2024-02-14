@@ -477,8 +477,8 @@ def init_bedrock_client(
 
 
 def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
-    # handle anthropic prompts using anthropic constants
-    if provider == "anthropic":
+    # handle anthropic prompts and amazon titan prompts
+    if provider == "anthropic" or provider == "amazon":
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
@@ -490,7 +490,7 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
             )
         else:
             prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="anthropic"
+                model=model, messages=messages, custom_llm_provider="bedrock"
             )
     else:
         prompt = ""
@@ -623,6 +623,7 @@ def completion(
                     "textGenerationConfig": inference_params,
                 }
             )
+
         else:
             data = json.dumps({})
 
