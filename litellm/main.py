@@ -2962,8 +2962,11 @@ def text_completion(
 
 
 ##### Moderation #######################
-@client
-def moderation(input: str, model: str, api_key: Optional[str] = None, **kwargs):
+
+
+def moderation(
+    input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
+):
     # only supports open ai for now
     api_key = (
         api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
