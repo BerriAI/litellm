@@ -63,6 +63,22 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
+    async def async_post_call_streaming_hook(
+        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+    ):
+        """
+        Returns streaming chunk before their returned to user
+        """
+        pass
+
+    async def async_post_call_success_hook(
+        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+    ):
+        """
+        Returns llm response before it's returned to user
+        """
+        pass
+
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 
     def log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
