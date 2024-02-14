@@ -2093,10 +2093,6 @@ def test_completion_cloudflare():
 
 
 def test_moderation():
-    import openai
-
-    openai.api_type = "azure"
-    openai.api_version = "GM"
     response = litellm.moderation(input="i'm ishaan cto of litellm")
     print(response)
     output = response.results[0]

@@ -2961,16 +2961,39 @@ def text_completion(
 
 
 ##### Moderation #######################
-def moderation(input: str, api_key: Optional[str] = None):
+
+
+def moderation(
+    input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
+):
     # only supports open ai for now
     api_key = (
         api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
     )
-    openai.api_key = api_key
-    openai.api_type = "open_ai"  # type: ignore
-    openai.api_version = None
-    openai.base_url = "https://api.openai.com/v1/"
-    response = openai.moderations.create(input=input)
+
+    openai_client = kwargs.get("client", None)
+    if openai_client is None:
+        openai_client = openai.OpenAI(
+            api_key=api_key,
+        )
+
+    response = openai_client.moderations.create(input=input, model=model)
+    return response
+
+
+##### Moderation #######################
+@client
+async def amoderation(input: str, model: str, api_key: Optional[str] = None, **kwargs):
+    # only supports open ai for now
+    api_key = (
+        api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+    )
+    openai_client = kwargs.get("client", None)
+    if openai_client is None:
+        openai_client = openai.AsyncOpenAI(
+            api_key=api_key,
+        )
+    response = await openai_client.moderations.create(input=input, model=model)
     return response
 
 
