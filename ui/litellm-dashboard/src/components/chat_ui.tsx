@@ -51,8 +51,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID })
     const [chatHistory, setChatHistory] = useState<any[]>([]);
     const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
     const [modelInfo, setModelInfo] = useState<any | null>(null); // Declare modelInfo at the component level
-  
+
     useEffect(() => {
+      if (!accessToken || !token || !userRole || !userID) {
+            return;
+      } 
       // Fetch model info and set the default selected model
       const fetchModelInfo = async () => {
         const fetchedModelInfo = await modelInfoCall(accessToken, userID, userRole);
@@ -84,6 +87,10 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID })
   
     const handleSendMessage = async () => {
       if (inputMessage.trim() === "") return;
+  
+      if (!accessToken || !token || !userRole || !userID) {
+        return;
+      }
   
       setChatHistory((prevHistory) => [
         ...prevHistory,
