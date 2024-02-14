@@ -166,9 +166,9 @@ class ProxyException(Exception):
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     return JSONResponse(
-        status_code=int(exc.code)
-        if exc.code
-        else status.HTTP_500_INTERNAL_SERVER_ERROR,
+        status_code=(
+            int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
+        ),
         content={
             "error": {
                 "message": exc.message,
@@ -2428,6 +2428,11 @@ async def chat_completion(
         )
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
+
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            user_api_key_dict=user_api_key_dict, response=response
+        )
         return response
     except Exception as e:
         traceback.print_exc()
@@ -4553,9 +4558,11 @@ async def get_routes():
             "path": getattr(route, "path", None),
             "methods": getattr(route, "methods", None),
             "name": getattr(route, "name", None),
-            "endpoint": getattr(route, "endpoint", None).__name__
-            if getattr(route, "endpoint", None)
-            else None,
+            "endpoint": (
+                getattr(route, "endpoint", None).__name__
+                if getattr(route, "endpoint", None)
+                else None
+            ),
         }
         routes.append(route_info)
 
