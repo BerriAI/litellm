@@ -2,9 +2,11 @@
 #    On success, logs events to Promptlayer
 import dotenv, os
 import requests
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
-from typing import Literal
+
+from typing import Literal, Union
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -54,7 +56,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal["completion", "embeddings"],
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         pass
 
@@ -63,21 +65,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
-    async def async_post_call_streaming_hook(
-        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
-    ):
-        """
-        Returns streaming chunk before their returned to user
-        """
-        pass
-
     async def async_post_call_success_hook(
-        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
     ):
-        """
-        Returns llm response before it's returned to user
-        """
-        pass
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 
