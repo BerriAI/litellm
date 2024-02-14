@@ -70,7 +70,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
-        pass
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 
