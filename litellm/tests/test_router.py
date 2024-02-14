@@ -991,3 +991,23 @@ def test_router_timeout():
         print(e)
         print(vars(e))
         pass
+
+
+@pytest.mark.asyncio
+async def test_router_amoderation():
+    model_list = [
+        {
+            "model_name": "openai-moderations",
+            "litellm_params": {
+                "model": "text-moderation-stable",
+                "api_key": os.getenv("OPENAI_API_KEY", None),
+            },
+        }
+    ]
+
+    router = Router(model_list=model_list)
+    result = await router.amoderation(
+        model="openai-moderations", input="this is valid good text"
+    )
+
+    print("moderation result", result)
