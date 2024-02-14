@@ -19,14 +19,18 @@
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
     "next": "14.1.0",
+    "openai": "^4.28.0",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "react-markdown": "^9.0.1",
+    "react-syntax-highlighter": "^15.5.0"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.7",
     "@types/node": "^20",
     "@types/react": "18.2.48",
     "@types/react-dom": "^18",
+    "@types/react-syntax-highlighter": "^15.5.11",
     "autoprefixer": "^10.4.17",
     "eslint": "^8",
     "eslint-config-next": "14.1.0",
