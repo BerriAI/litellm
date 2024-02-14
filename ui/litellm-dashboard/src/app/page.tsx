@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import Navbar from "../components/navbar";
 import UserDashboard from "../components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
+import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
@@ -83,6 +84,13 @@ const CreateKeyPage = () => {
             />
           ) : page == "models" ? (
             <ModelDashboard
+              userID={userID}
+              userRole={userRole}
+              token={token}
+              accessToken={accessToken}
+            />
+          ) : page == "llm-playground" ? (
+            <ChatUI
               userID={userID}
               userRole={userRole}
               token={token}
