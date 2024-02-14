@@ -738,6 +738,8 @@ class CallTypes(Enum):
     text_completion = "text_completion"
     image_generation = "image_generation"
     aimage_generation = "aimage_generation"
+    moderation = "moderation"
+    amoderation = "amoderation"
 
 
 # Logging function -> log the exact model details + what's being sent | Non-BlockingP
@@ -2100,6 +2102,11 @@ def client(original_function):
                 or call_type == CallTypes.aimage_generation.value
             ):
                 messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            elif (
+                call_type == CallTypes.moderation.value
+                or call_type == CallTypes.amoderation.value
+            ):
+                messages = args[1] if len(args) > 1 else kwargs["input"]
             elif (
                 call_type == CallTypes.atext_completion.value
                 or call_type == CallTypes.text_completion.value
