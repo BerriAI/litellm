@@ -30,7 +30,7 @@ import json
 
 
 class TokenIterator:
-    def __init__(self, stream, acompletion: bool):
+    def __init__(self, stream, acompletion: bool = False):
         if acompletion == False:
             self.byte_iterator = iter(stream)
         elif acompletion == True:
