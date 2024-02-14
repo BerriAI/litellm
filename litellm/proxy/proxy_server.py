@@ -2814,6 +2814,17 @@ async def moderations(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies. 
+
+    Quick Start
+    ```
+    curl --location 'http://0.0.0.0:4000/moderations' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+    ```
+    """
     global proxy_logging_obj
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
