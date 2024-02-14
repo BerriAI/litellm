@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Table, TableHead, TableRow, TableCell, TableBody, Grid } from "@tremor/react";
+import { Card, Title, Table, TableHead, TableRow, TableCell, TableBody, Grid, Tab,
+    TabGroup,
+    TabList,
+    TabPanel,
+    Metric,
+    TabPanels, } from "@tremor/react";
 import { modelInfoCall } from "./networking";
 import openai from "openai";
 
@@ -98,50 +103,66 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID })
       <div style={{ width: "100%", position: "relative" }}>
         <Grid className="gap-2 p-10 h-[75vh] w-full">
           <Card>
-          <div>
-              <label>Select Model:</label>
-              <select
-                value={selectedModel || ""}
-                onChange={(e) => setSelectedModel(e.target.value)}
-              >
-                {/* Populate dropdown options from available models */}
-                {modelInfo?.data.map((element: { model_name: string }) => (
-                  <option key={element.model_name} value={element.model_name}>
-                    {element.model_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <Table className="mt-5" style={{ display: "block", maxHeight: "60vh", overflowY: "auto" }}>
-              <TableHead>
-                <TableRow>
-                  <TableCell>
-                    <Title>Chat</Title>
-                  </TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {chatHistory.map((message, index) => (
-                  <TableRow key={index}>
-                    <TableCell>{`${message.role}: ${message.content}`}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            <div className="mt-3" style={{ position: "absolute", bottom: 5, width: "95%" }}>
-              <div className="flex">
-                <input
-                  type="text"
-                  value={inputMessage}
-                  onChange={(e) => setInputMessage(e.target.value)}
-                  className="flex-1 p-2 border rounded-md mr-2"
-                  placeholder="Type your message..."
-                />
-                <button onClick={handleSendMessage} className="p-2 bg-blue-500 text-white rounded-md">
-                  Send
-                </button>
-              </div>
-            </div>
+          <TabGroup>
+            <TabList className="mt-4">
+                <Tab>Chat</Tab>
+                <Tab>Proxy Usage</Tab>
+            </TabList>
+
+            <TabPanels>
+                <TabPanel>
+                    <div>
+                    <label>Select Model:</label>
+                    <select
+                        value={selectedModel || ""}
+                        onChange={(e) => setSelectedModel(e.target.value)}
+                    >
+                        {/* Populate dropdown options from available models */}
+                        {modelInfo?.data.map((element: { model_name: string }) => (
+                        <option key={element.model_name} value={element.model_name}>
+                            {element.model_name}
+                        </option>
+                        ))}
+                    </select>
+                    </div>
+                    <Table className="mt-5" style={{ display: "block", maxHeight: "60vh", overflowY: "auto" }}>
+                    <TableHead>
+                        <TableRow>
+                        <TableCell>
+                            <Title>Chat</Title>
+                        </TableCell>
+                        </TableRow>
+                    </TableHead>
+                    <TableBody>
+                        {chatHistory.map((message, index) => (
+                        <TableRow key={index}>
+                            <TableCell>{`${message.role}: ${message.content}`}</TableCell>
+                        </TableRow>
+                        ))}
+                    </TableBody>
+                    </Table>
+                    <div className="mt-3" style={{ position: "absolute", bottom: 5, width: "95%" }}>
+                    <div className="flex">
+                        <input
+                        type="text"
+                        value={inputMessage}
+                        onChange={(e) => setInputMessage(e.target.value)}
+                        className="flex-1 p-2 border rounded-md mr-2"
+                        placeholder="Type your message..."
+                        />
+                        <button onClick={handleSendMessage} className="p-2 bg-blue-500 text-white rounded-md">
+                        Send
+                        </button>
+                    </div>
+                    </div>
+                </TabPanel>
+                <TabPanel>
+                    <Metric>
+                        Usage
+                    </Metric>
+                </TabPanel>
+            </TabPanels>
+        </TabGroup>
           </Card>
         </Grid>
       </div>
