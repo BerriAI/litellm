@@ -154,8 +154,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         if litellm.output_parse_pii == False:
             return response
 
-        if isinstance(response, ModelResponse) and isinstance(
-            response.choices, StreamingChoices
+        if isinstance(response, ModelResponse) and not isinstance(
+            response.choices[0], StreamingChoices
         ):  # /chat/completions requests
             if isinstance(response.choices[0].message.content, str):
                 verbose_proxy_logger.debug(
