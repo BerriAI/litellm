@@ -4,7 +4,7 @@ from enum import Enum
 import requests
 import time
 from typing import Callable, Optional, Union
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
 import litellm, uuid
 import httpx
 
@@ -575,9 +575,9 @@ def completion(
         model_response["model"] = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response["choices"][0].finish_reason = response_obj.candidates[
-                0
-            ].finish_reason.name
+            model_response["choices"][0].finish_reason = map_finish_reason(
+                response_obj.candidates[0].finish_reason.name
+            )
             usage = Usage(
                 prompt_tokens=response_obj.usage_metadata.prompt_token_count,
                 completion_tokens=response_obj.usage_metadata.candidates_token_count,
@@ -771,9 +771,9 @@ async def async_completion(
         model_response["model"] = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response["choices"][0].finish_reason = response_obj.candidates[
-                0
-            ].finish_reason.name
+            model_response["choices"][0].finish_reason = map_finish_reason(
+                response_obj.candidates[0].finish_reason.name
+            )
             usage = Usage(
                 prompt_tokens=response_obj.usage_metadata.prompt_token_count,
                 completion_tokens=response_obj.usage_metadata.candidates_token_count,
