@@ -556,7 +556,7 @@ def completion(
                 project=vertex_project, location=vertex_location, endpoint=model
             )
             request_str += (
-                f"llm_model.predict(endpoint={endpoint_path}, instances={instances}, **{optional_params})\n"
+                f"llm_model.predict(endpoint={endpoint_path}, instances={instances})\n"
             )
             response = llm_model.predict(
                 endpoint=endpoint_path,
@@ -588,7 +588,6 @@ def completion(
             request_str += (
                 f"llm_model.predict(instances={instances})\n"
             )
-            print("instances", instances)
             response = llm_model.predict(
                 instances=instances
             ).predictions
@@ -785,7 +784,7 @@ async def async_completion(
                 project=vertex_project, location=vertex_location, endpoint=model
             )
             request_str += (
-                f"llm_model.predict(endpoint={endpoint_path}, instances={instances}, **{optional_params})\n"
+                f"llm_model.predict(endpoint={endpoint_path}, instances={instances})\n"
             )
             response_obj = await llm_model.predict(
                 endpoint=endpoint_path,
@@ -801,7 +800,7 @@ async def async_completion(
  
         elif mode == "private":
             request_str += (
-                f"llm_model.predict(instances={instances}, **{optional_params})\n"
+                f"llm_model.predict_async(instances={instances})\n"
             )
             response_obj = await llm_model.predict_async(
                 instances=instances,
@@ -992,7 +991,7 @@ async def async_streaming(
     elif mode == "private":
         stream = optional_params.pop("stream", None)
         _ = instances[0].pop("stream", None)
-        request_str += f"llm_model.predict_async(instances={instances}, **{optional_params})\n"
+        request_str += f"llm_model.predict_async(instances={instances})\n"
         response_obj = await llm_model.predict_async(
             instances=instances,
         )
