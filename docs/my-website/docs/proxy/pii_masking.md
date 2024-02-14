@@ -4,21 +4,22 @@ import Image from '@theme/IdealImage';
 
 LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) for PII masking. 
 
-## Step 1. Add env
+## Quick Start
+### Step 1. Add env
 
 ```bash
 export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
 export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ```
 
-## Step 2. Set it as a callback in config.yaml
+### Step 2. Set it as a callback in config.yaml
 
 ```yaml
 litellm_settings: 
     callbacks = ["presidio", ...] # e.g. ["presidio", custom_callbacks.proxy_handler_instance]
 ```
 
-## Start proxy 
+### Step 3. Start proxy 
 
 ```
 litellm --config /path/to/config.yaml
@@ -28,3 +29,27 @@ litellm --config /path/to/config.yaml
 This will mask the input going to the llm provider
 
 <Image img={require('../../img/presidio_screenshot.png')} />
+
+## Output parsing 
+
+LLM responses can sometimes contain the masked tokens. 
+
+For presidio 'replace' operations, LiteLLM can check the LLM response and replace the masked token with the user-submitted values. 
+
+Just set `litellm.output_parse_pii = True`, to enable this. 
+
+
+```yaml
+litellm_settings:
+    output_parse_pii: true
+```
+
+**Expected Flow: **
+
+1. User Input: "hello world, my name is Jane Doe. My number is: 034453334"
+
+2. LLM Input: "hello world, my name is [PERSON]. My number is: [PHONE_NUMBER]"
+
+3. LLM Response: "Hey [PERSON], nice to meet you!"
+
+4. User Response: "Hey Jane Doe, nice to meet you!"
