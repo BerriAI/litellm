@@ -32,6 +32,10 @@ model_list:
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
     model_info:
       base_model: azure/gpt-4
+  - model_name: text-moderation-stable
+    litellm_params:
+      model: text-moderation-stable
+      api_key: os.environ/OPENAI_API_KEY
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   success_callback: ['langfuse']
