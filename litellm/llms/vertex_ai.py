@@ -586,8 +586,9 @@ def completion(
                 },
             )
             request_str += (
-                f"llm_model.predict(instances={instances}, **{optional_params})\n"
+                f"llm_model.predict(instances={instances})\n"
             )
+            print("instances", instances)
             response = llm_model.predict(
                 instances=instances
             ).predictions
