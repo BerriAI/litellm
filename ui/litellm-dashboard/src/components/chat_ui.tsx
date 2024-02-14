@@ -5,6 +5,8 @@ import { Card, Title, Table, TableHead, TableRow, TableCell, TableBody, Grid, Ta
     TabList,
     TabPanel,
     Metric,
+    Select,
+    SelectItem,
     TabPanels, } from "@tremor/react";
 import { modelInfoCall } from "./networking";
 import openai from "openai";
