@@ -166,9 +166,9 @@ class ProxyException(Exception):
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     return JSONResponse(
-        status_code=int(exc.code)
-        if exc.code
-        else status.HTTP_500_INTERNAL_SERVER_ERROR,
+        status_code=(
+            int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
+        ),
         content={
             "error": {
                 "message": exc.message,
@@ -682,35 +682,31 @@ async def user_api_key_auth(
         # sso/login, ui/login, /key functions and /user functions
         # this will never be allowed to call /chat/completions
         token_team = getattr(valid_token, "team_id", None)
-        if token_team is not None:
-            if token_team == "litellm-dashboard":
-                # this token is only used for managing the ui
-                allowed_routes = [
-                    "/sso",
-                    "/login",
-                    "/key",
-                    "/spend",
-                    "/user",
-                    "/model/info",
-                ]
-                # check if the current route startswith any of the allowed routes
-                if (
-                    route is not None
-                    and isinstance(route, str)
-                    and any(
-                        route.startswith(allowed_route)
-                        for allowed_route in allowed_routes
-                    )
-                ):
-                    # Do something if the current route starts with any of the allowed routes
-                    pass
-                else:
-                    raise Exception(
-                        f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
-                    )
-            return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
-        else:
-            raise Exception(f"Invalid Key Passed to LiteLLM Proxy")
+        if token_team is not None and token_team == "litellm-dashboard":
+            # this token is only used for managing the ui
+            allowed_routes = [
+                "/sso",
+                "/login",
+                "/key",
+                "/spend",
+                "/user",
+                "/model/info",
+            ]
+            # check if the current route startswith any of the allowed routes
+            if (
+                route is not None
+                and isinstance(route, str)
+                and any(
+                    route.startswith(allowed_route) for allowed_route in allowed_routes
+                )
+            ):
+                # Do something if the current route starts with any of the allowed routes
+                pass
+            else:
+                raise Exception(
+                    f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
+                )
+        return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
     except Exception as e:
         # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
         traceback.print_exc()
@@ -1599,8 +1595,6 @@ async def generate_key_helper_fn(
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
     allowed_cache_controls = allowed_cache_controls
-    if type(team_id) is not str:
-        team_id = str(team_id)
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
@@ -4553,9 +4547,11 @@ async def get_routes():
             "path": getattr(route, "path", None),
             "methods": getattr(route, "methods", None),
             "name": getattr(route, "name", None),
-            "endpoint": getattr(route, "endpoint", None).__name__
-            if getattr(route, "endpoint", None)
-            else None,
+            "endpoint": (
+                getattr(route, "endpoint", None).__name__
+                if getattr(route, "endpoint", None)
+                else None
+            ),
         }
         routes.append(route_info)
 
