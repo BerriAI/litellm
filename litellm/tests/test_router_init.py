@@ -387,3 +387,56 @@ def test_router_init_gpt_4_vision_enhancements():
         print("passed")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_openai_with_organization():
+    try:
+        print("Testing OpenAI with organization")
+        model_list = [
+            {
+                "model_name": "openai-bad-org",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "organization": "org-ikDc4ex8NB",
+                },
+            },
+            {
+                "model_name": "openai-good-org",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+        ]
+
+        router = Router(model_list=model_list)
+
+        print(router.model_list)
+        print(router.model_list[0])
+
+        openai_client = router._get_client(
+            deployment=router.model_list[0],
+            kwargs={"input": ["hello"], "model": "openai-bad-org"},
+        )
+        print(vars(openai_client))
+
+        assert openai_client.organization == "org-ikDc4ex8NB"
+
+        # bad org raises error
+
+        try:
+            response = router.completion(
+                model="openai-bad-org",
+                messages=[{"role": "user", "content": "this is a test"}],
+            )
+            pytest.fail("Request should have failed - This organization does not exist")
+        except Exception as e:
+            print("Got exception: " + str(e))
+            assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+        # good org works
+        response = router.completion(
+            model="openai-good-org",
+            messages=[{"role": "user", "content": "this is a test"}],
+            max_tokens=5,
+        )
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

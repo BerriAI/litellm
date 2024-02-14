@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💰 Budgets, Rate Limits per user 
+# 💰 Budgets, Rate Limits
 
 Requirements: 
 
@@ -10,22 +10,72 @@ Requirements:
 
 ## Set Budgets
 
+You can set budgets at 3 levels: 
+- For the proxy 
+- For a user 
+- For a 'user' passed to `/chat/completions`, `/embeddings` etc
+- For a key
 
-Set `max_budget` in (USD $) param in the `/user/new` or `/key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
 
 <Tabs>
-<TabItem value="per-user" label="Per User">
+<TabItem value="proxy" label="For Proxy">
 
-LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
+Apply a budget across all calls on the proxy
 
+**Step 1. Modify config.yaml**
 
+```yaml
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  # other litellm settings
+  max_budget: 0 # (float) sets max budget as $0 USD
+  budget_duration: 30d # (str) frequency of reset - You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+```
+
+**Step 2. Start proxy**
+
+```bash
+litellm /path/to/config.yaml
+```
+
+**Step 3. Send test call**
+
+```bash
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Autherization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+}'
+```
+</TabItem>
+<TabItem value="per-user" label="For User">
+
+Apply a budget across multiple keys.
+
+LiteLLM exposes a `/user/new` endpoint to create budgets for this.
+
+You can:
+- Add budgets to users [**Jump**](#add-budgets-to-users)
+- Add budget durations, to reset spend [**Jump**](#add-budget-duration-to-users)
+
+By default the `max_budget` is set to `null` and is not checked for keys
+
+### **Add budgets to users**
 ```shell 
 curl --location 'http://localhost:8000/user/new' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
 ```
-The request is a normal `/key/generate` request body + a `max_budget` field. 
 
 [**See Swagger**](https://litellm-api.up.railway.app/#/user%20management/new_user_user_new_post)
 
@@ -40,9 +90,93 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 }
 ```
 
+### **Add budget duration to users**
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+```
+curl 'http://0.0.0.0:8000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_id": "core-infra", # [OPTIONAL]
+  "max_budget": 10,
+  "budget_duration": 10s,
+}'
+```
+
+### Create new keys for existing user
+
+Now you can just call `/key/generate` with that user_id (i.e. krrish3@berri.ai) and:
+- **Budget Check**: krrish3@berri.ai's budget (i.e. $10) will be checked for this key
+- **Spend Tracking**: spend for this key will update krrish3@berri.ai's spend as well
+
+```bash
+curl --location 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
+```
 
 </TabItem>
-<TabItem value="per-key" label="Per Key">
+<TabItem value="per-user-chat" label="For 'user' passed to /chat/completions">
+
+Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
+
+**Step 1. Modify config.yaml**
+Define `litellm.max_user_budget`
+```yaml
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  max_budget: 10      # global budget for proxy 
+  max_user_budget: 0.0001 # budget for 'user' passed to /chat/completions
+```
+
+2. Make a /chat/completions call, pass 'user' - First call Works 
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "user": "ishaan3",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
+```
+
+3. Make a /chat/completions call, pass 'user' - Call Fails, since 'ishaan3' over budget
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "user": "ishaan3",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
+```
+
+Error
+```shell
+{"error":{"message":"Authentication Error, ExceededBudget: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
+```
+
+</TabItem>
+<TabItem value="per-key" label="For Key">
+
+Apply a budget on a key.
 
 You can:
 - Add budgets to keys [**Jump**](#add-budgets-to-keys)
@@ -52,6 +186,8 @@ You can:
 - Costs Per key get auto-populated in `LiteLLM_VerificationToken` Table
 - After the key crosses it's `max_budget`, requests fail
 - If duration set, spend is reset at the end of the duration
+
+By default the `max_budget` is set to `null` and is not checked for keys
 
 ### **Add budgets to keys**
 

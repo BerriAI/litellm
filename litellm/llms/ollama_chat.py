@@ -145,8 +145,16 @@ def get_ollama_response(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    optional_params["stream"] = optional_params.get("stream", False)
-    data = {"model": model, "messages": messages, **optional_params}
+    stream = optional_params.pop("stream", False)
+    format = optional_params.pop("format", None)
+    data = {
+        "model": model,
+        "messages": messages,
+        "options": optional_params,
+        "stream": stream,
+    }
+    if format is not None:
+        data["format"] = format
     ## LOGGING
     logging_obj.pre_call(
         input=None,
@@ -159,7 +167,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if optional_params.get("stream", False) == True:
+        if stream == True:
             response = ollama_async_streaming(
                 url=url,
                 data=data,
@@ -176,7 +184,7 @@ def get_ollama_response(
                 logging_obj=logging_obj,
             )
         return response
-    elif optional_params.get("stream", False) == True:
+    elif stream == True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
     response = requests.post(
@@ -220,8 +228,10 @@ def get_ollama_response(
         model_response["choices"][0]["message"] = response_json["message"]
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
-    prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-    completion_tokens = response_json["eval_count"]
+    prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
+    completion_tokens = response_json.get(
+        "eval_count", litellm.token_counter(text=response_json["message"]["content"])
+    )
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -318,10 +328,16 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 model_response["choices"][0]["message"] = message
             else:
                 model_response["choices"][0]["message"] = response_json["message"]
+
             model_response["created"] = int(time.time())
-            model_response["model"] = "ollama/" + data["model"]
-            prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-            completion_tokens = response_json["eval_count"]
+            model_response["model"] = "ollama_chat/" + data["model"]
+            prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=data["messages"]))  # type: ignore
+            completion_tokens = response_json.get(
+                "eval_count",
+                litellm.token_counter(
+                    text=response_json["message"]["content"], count_response_tokens=True
+                ),
+            )
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

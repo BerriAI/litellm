@@ -10,6 +10,7 @@
 import sys, re, binascii, struct
 import litellm
 import dotenv, json, traceback, threading, base64, ast
+
 import subprocess, os
 import litellm, openai
 import itertools
@@ -54,6 +55,7 @@ from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
+from .caching import S3Cache, RedisSemanticCache
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
@@ -167,6 +169,8 @@ def map_finish_reason(
         return "stop"
     elif finish_reason == "SAFETY":  # vertex ai
         return "content_filter"
+    elif finish_reason == "STOP":  # vertex ai
+        return "stop"
     return finish_reason
 
 
@@ -232,7 +236,8 @@ class Delta(OpenAIObject):
     def __init__(self, content=None, role=None, **params):
         super(Delta, self).__init__(**params)
         self.content = content
-        self.role = role
+        if role is not None:
+            self.role = role
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -713,6 +718,7 @@ class ImageResponse(OpenAIObject):
 ############################################################
 def print_verbose(print_statement):
     try:
+        verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except:
@@ -747,6 +753,10 @@ class Logging:
         start_time,
         litellm_call_id,
         function_id,
+        dynamic_success_callbacks=None,
+        dynamic_async_success_callbacks=None,
+        langfuse_public_key=None,
+        langfuse_secret=None,
     ):
         if call_type not in [item.value for item in CallTypes]:
             allowed_values = ", ".join([item.value for item in CallTypes])
@@ -767,6 +777,17 @@ class Logging:
         self.streaming_chunks = []  # for generating complete stream response
         self.sync_streaming_chunks = []  # for generating complete stream response
         self.model_call_details = {}
+        self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
+        self.dynamic_failure_callbacks = []  # [TODO] callbacks set for just that call
+        self.dynamic_success_callbacks = (
+            dynamic_success_callbacks  # callbacks set for just that call
+        )
+        self.dynamic_async_success_callbacks = (
+            dynamic_async_success_callbacks  # callbacks set for just that call
+        )
+        ## DYNAMIC LANGFUSE KEYS ##
+        self.langfuse_public_key = langfuse_public_key
+        self.langfuse_secret = langfuse_secret
 
     def update_environment_variables(
         self, model, user, optional_params, litellm_params, **additional_params
@@ -786,6 +807,7 @@ class Logging:
             "stream": self.stream,
             "user": user,
             "call_type": str(self.call_type),
+            "litellm_call_id": self.litellm_call_id,
             **self.optional_params,
             **additional_params,
         }
@@ -844,6 +866,11 @@ class Logging:
                 curl_command += additional_args.get("request_str", None)
             elif api_base == "":
                 curl_command = self.model_call_details
+
+            # only print verbose if verbose logger is not set
+            if verbose_logger.level == 0:
+                # this means verbose logger was not switched on - user is in litellm.set_verbose=True
+                print_verbose(f"\033[92m{curl_command}\033[0m\n")
             verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -870,7 +897,8 @@ class Logging:
                 )
 
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
-            for callback in litellm.input_callback:
+            callbacks = litellm.input_callback + self.dynamic_input_callbacks
+            for callback in callbacks:
                 try:
                     if callback == "supabase":
                         print_verbose("reaches supabase for logging!")
@@ -943,43 +971,6 @@ class Logging:
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
 
-    async def async_pre_call(
-        self, result=None, start_time=None, end_time=None, **kwargs
-    ):
-        """
-        Â Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
-        """
-        start_time, end_time, result = self._success_handler_helper_fn(
-            start_time=start_time, end_time=end_time, result=result
-        )
-        print_verbose(f"Async input callbacks: {litellm._async_input_callback}")
-        for callback in litellm._async_input_callback:
-            try:
-                if isinstance(callback, CustomLogger):  # custom logger class
-                    print_verbose(f"Async input callbacks: CustomLogger")
-                    asyncio.create_task(
-                        callback.async_log_input_event(
-                            model=self.model,
-                            messages=self.messages,
-                            kwargs=self.model_call_details,
-                        )
-                    )
-                if callable(callback):  # custom logger functions
-                    print_verbose(f"Async success callbacks: async_log_event")
-                    asyncio.create_task(
-                        customLogger.async_log_input_event(
-                            model=self.model,
-                            messages=self.messages,
-                            kwargs=self.model_call_details,
-                            print_verbose=print_verbose,
-                            callback_func=callback,
-                        )
-                    )
-            except:
-                print_verbose(
-                    f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
-                )
-
     def post_call(
         self, original_response, input=None, api_key=None, additional_args={}
     ):
@@ -995,11 +986,8 @@ class Logging:
             self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
-            verbose_logger.debug(
+            print_verbose(
                 f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n"
-            )
-            verbose_logger.debug(
-                f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}"
             )
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -1012,7 +1000,9 @@ class Logging:
                     )
 
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
-            for callback in litellm.input_callback:
+
+            callbacks = litellm.input_callback + self.dynamic_input_callbacks
+            for callback in callbacks:
                 try:
                     if callback == "lite_debugger":
                         print_verbose("reaches litedebugger for post-call logging!")
@@ -1072,13 +1062,39 @@ class Logging:
                 and (
                     isinstance(result, ModelResponse)
                     or isinstance(result, EmbeddingResponse)
+                    or isinstance(result, ImageResponse)
                 )
                 and self.stream != True
             ):  # handle streaming separately
                 try:
-                    self.model_call_details["response_cost"] = litellm.completion_cost(
-                        completion_response=result,
-                    )
+                    if self.model_call_details.get("cache_hit", False) == True:
+                        self.model_call_details["response_cost"] = 0.0
+                    else:
+                        result._hidden_params["optional_params"] = self.optional_params
+                        if (
+                            self.call_type == CallTypes.aimage_generation.value
+                            or self.call_type == CallTypes.image_generation.value
+                        ):
+                            self.model_call_details[
+                                "response_cost"
+                            ] = litellm.completion_cost(
+                                completion_response=result,
+                                model=self.model,
+                                call_type=self.call_type,
+                            )
+                        else:
+                            # check if base_model set on azure
+                            base_model = _get_base_model_from_metadata(
+                                model_call_details=self.model_call_details
+                            )
+                            # base_model defaults to None if not set on model_info
+                            self.model_call_details[
+                                "response_cost"
+                            ] = litellm.completion_cost(
+                                completion_response=result,
+                                call_type=self.call_type,
+                                model=base_model,
+                            )
                     verbose_logger.debug(
                         f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                     )
@@ -1090,7 +1106,12 @@ class Logging:
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
-            if litellm.max_budget and self.stream:
+            if (
+                litellm.max_budget
+                and self.stream
+                and result is not None
+                and "content" in result
+            ):
                 time_diff = (end_time - start_time).total_seconds()
                 float_diff = float(time_diff)
                 litellm._current_cost += litellm.completion_cost(
@@ -1107,7 +1128,7 @@ class Logging:
     def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        verbose_logger.debug(f"Logging Details LiteLLM-Success Call")
+        verbose_logger.debug(f"Logging Details LiteLLM-Success Call: {cache_hit}")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -1145,9 +1166,20 @@ class Logging:
                     "complete_streaming_response"
                 ] = complete_streaming_response
                 try:
-                    self.model_call_details["response_cost"] = litellm.completion_cost(
-                        completion_response=complete_streaming_response,
-                    )
+                    if self.model_call_details.get("cache_hit", False) == True:
+                        self.model_call_details["response_cost"] = 0.0
+                    else:
+                        # check if base_model set on azure
+                        base_model = _get_base_model_from_metadata(
+                            model_call_details=self.model_call_details
+                        )
+                        # base_model defaults to None if not set on model_info
+                        self.model_call_details[
+                            "response_cost"
+                        ] = litellm.completion_cost(
+                            completion_response=complete_streaming_response,
+                            model=base_model,
+                        )
                     verbose_logger.debug(
                         f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                     )
@@ -1156,8 +1188,21 @@ class Logging:
                         f"Model={self.model} not found in completion cost map."
                     )
                     self.model_call_details["response_cost"] = None
+            if self.dynamic_success_callbacks is not None and isinstance(
+                self.dynamic_success_callbacks, list
+            ):
+                callbacks = self.dynamic_success_callbacks
+                ## keep the internal functions ##
+                for callback in litellm.success_callback:
+                    if (
+                        isinstance(callback, CustomLogger)
+                        and "_PROXY_" in callback.__class__.__name__
+                    ):
+                        callbacks.append(callback)
+            else:
+                callbacks = litellm.success_callback
 
-            for callback in litellm.success_callback:
+            for callback in callbacks:
                 try:
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
@@ -1227,7 +1272,9 @@ class Logging:
                             if "complete_streaming_response" not in kwargs:
                                 break
                             else:
-                                print_verbose("reaches langfuse for streaming logging!")
+                                print_verbose(
+                                    "reaches langsmith for streaming logging!"
+                                )
                                 result = kwargs["complete_streaming_response"]
                         langsmithLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1266,7 +1313,7 @@ class Logging:
                     if callback == "helicone":
                         print_verbose("reaches helicone for logging!")
                         model = self.model
-                        messages = kwargs["messages"]
+                        messages = kwargs["input"]
                         heliconeLogger.log_success(
                             model=model,
                             messages=messages,
@@ -1277,7 +1324,7 @@ class Logging:
                         )
                     if callback == "langfuse":
                         global langFuseLogger
-                        verbose_logger.debug("reaches langfuse for logging!")
+                        verbose_logger.debug("reaches langfuse for success logging!")
                         kwargs = {}
                         for k, v in self.model_call_details.items():
                             if (
@@ -1294,8 +1341,14 @@ class Logging:
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
-                        if langFuseLogger is None:
-                            langFuseLogger = LangFuseLogger()
+                        if langFuseLogger is None or (
+                            self.langfuse_public_key != langFuseLogger.public_key
+                            and self.langfuse_secret != langFuseLogger.secret_key
+                        ):
+                            langFuseLogger = LangFuseLogger(
+                                langfuse_public_key=self.langfuse_public_key,
+                                langfuse_secret=self.langfuse_secret,
+                            )
                         langFuseLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
@@ -1333,7 +1386,37 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-                    elif (
+                    if callback == "s3":
+                        global s3Logger
+                        if s3Logger is None:
+                            s3Logger = S3Logger()
+                        if self.stream:
+                            if "complete_streaming_response" in self.model_call_details:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - Completed Stream Response"
+                                )
+                                s3Logger.log_event(
+                                    kwargs=self.model_call_details,
+                                    response_obj=self.model_call_details[
+                                        "complete_streaming_response"
+                                    ],
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    print_verbose=print_verbose,
+                                )
+                            else:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - No complete stream response as yet"
+                                )
+                        else:
+                            s3Logger.log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                print_verbose=print_verbose,
+                            )
+                    if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
@@ -1344,9 +1427,6 @@ class Logging:
                         )
                         == False
                     ):  # custom logger class
-                        verbose_logger.info(
-                            f"success callbacks: Running SYNC Custom Logger Class"
-                        )
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
                                 kwargs=self.model_call_details,
@@ -1368,7 +1448,7 @@ class Logging:
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-                    elif (
+                    if (
                         callable(callback) == True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
@@ -1412,7 +1492,6 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
-        print_verbose(f"Async success callbacks: {litellm._async_success_callback}")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
@@ -1421,7 +1500,7 @@ class Logging:
         if self.stream:
             if result.choices[0].finish_reason is not None:  # if it's the last chunk
                 self.streaming_chunks.append(result)
-                # print_verbose(f"final set of received chunks: {self.streaming_chunks}")
+                # verbose_logger.debug(f"final set of received chunks: {self.streaming_chunks}")
                 try:
                     complete_streaming_response = litellm.stream_chunk_builder(
                         self.streaming_chunks,
@@ -1430,21 +1509,32 @@ class Logging:
                         end_time=end_time,
                     )
                 except Exception as e:
-                    print_verbose(
+                    verbose_logger.debug(
                         f"Error occurred building stream chunk: {traceback.format_exc()}"
                     )
                     complete_streaming_response = None
             else:
                 self.streaming_chunks.append(result)
         if complete_streaming_response is not None:
-            print_verbose("Async success callbacks: Got a complete streaming response")
+            verbose_logger.debug(
+                "Async success callbacks: Got a complete streaming response"
+            )
             self.model_call_details[
                 "complete_streaming_response"
             ] = complete_streaming_response
             try:
-                self.model_call_details["response_cost"] = litellm.completion_cost(
-                    completion_response=complete_streaming_response,
-                )
+                if self.model_call_details.get("cache_hit", False) == True:
+                    self.model_call_details["response_cost"] = 0.0
+                else:
+                    # check if base_model set on azure
+                    base_model = _get_base_model_from_metadata(
+                        model_call_details=self.model_call_details
+                    )
+                    # base_model defaults to None if not set on model_info
+                    self.model_call_details["response_cost"] = litellm.completion_cost(
+                        completion_response=complete_streaming_response,
+                        model=base_model,
+                    )
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                 )
@@ -1454,7 +1544,23 @@ class Logging:
                 )
                 self.model_call_details["response_cost"] = None
 
-        for callback in litellm._async_success_callback:
+        if self.dynamic_async_success_callbacks is not None and isinstance(
+            self.dynamic_async_success_callbacks, list
+        ):
+            callbacks = self.dynamic_async_success_callbacks
+            ## keep the internal functions ##
+            for callback in litellm._async_success_callback:
+                callback_name = ""
+                if isinstance(callback, CustomLogger):
+                    callback_name = callback.__class__.__name__
+                if callable(callback):
+                    callback_name = callback.__name__
+                if "_PROXY_" in callback_name:
+                    callbacks.append(callback)
+        else:
+            callbacks = litellm._async_success_callback
+        verbose_logger.debug(f"Async success callbacks: {callbacks}")
+        for callback in callbacks:
             try:
                 if callback == "cache" and litellm.cache is not None:
                     # set_cache once complete streaming response is built
@@ -1474,7 +1580,7 @@ class Logging:
                             # only add to cache once we have a complete streaming response
                             litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    print_verbose(f"Async success callbacks: CustomLogger")
+                    print_verbose(f"Async success callbacks: {callback}")
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
                             await callback.async_log_success_event(
@@ -1500,6 +1606,7 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
+                    print_verbose(f"Making async function logging call")
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
                             await customLogger.async_log_event(
@@ -1551,64 +1658,6 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-                if callback == "s3":
-                    global s3Logger
-                    if s3Logger is None:
-                        s3Logger = S3Logger()
-                    if self.stream:
-                        if "complete_streaming_response" in self.model_call_details:
-                            print_verbose(
-                                "S3Logger Logger: Got Stream Event - Completed Stream Response"
-                            )
-                            await s3Logger._async_log_event(
-                                kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "complete_streaming_response"
-                                ],
-                                start_time=start_time,
-                                end_time=end_time,
-                                print_verbose=print_verbose,
-                            )
-                        else:
-                            print_verbose(
-                                "S3Logger Logger: Got Stream Event - No complete stream response as yet"
-                            )
-                    else:
-                        await s3Logger._async_log_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            print_verbose=print_verbose,
-                        )
-                if callback == "langfuse":
-                    global langFuseLogger
-                    print_verbose("reaches Async langfuse for logging!")
-                    kwargs = {}
-                    for k, v in self.model_call_details.items():
-                        if (
-                            k != "original_response"
-                        ):  # copy.deepcopy raises errors as this could be a coroutine
-                            kwargs[k] = v
-                    # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                    if self.stream:
-                        if "complete_streaming_response" not in kwargs:
-                            return
-                        else:
-                            print_verbose(
-                                "reaches Async langfuse for streaming logging!"
-                            )
-                            result = kwargs["complete_streaming_response"]
-                    if langFuseLogger is None:
-                        langFuseLogger = LangFuseLogger()
-                    await langFuseLogger._async_log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        user_id=kwargs.get("user", None),
-                        print_verbose=print_verbose,
-                    )
             except:
                 print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
@@ -1733,9 +1782,37 @@ class Logging:
                             response_obj=result,
                             kwargs=self.model_call_details,
                         )
+                    elif callback == "langfuse":
+                        global langFuseLogger
+                        verbose_logger.debug("reaches langfuse for logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if langFuseLogger is None or (
+                            self.langfuse_public_key != langFuseLogger.public_key
+                            and self.langfuse_secret != langFuseLogger.secret_key
+                        ):
+                            langFuseLogger = LangFuseLogger(
+                                langfuse_public_key=self.langfuse_public_key,
+                                langfuse_secret=self.langfuse_secret,
+                            )
+                        langFuseLogger.log_event(
+                            start_time=start_time,
+                            end_time=end_time,
+                            response_obj=None,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                            status_message=str(exception),
+                            level="ERROR",
+                            kwargs=self.model_call_details,
+                        )
                 except Exception as e:
                     print_verbose(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {traceback.format_exc()}"
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {str(e)}"
                     )
                     print_verbose(
                         f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
@@ -1936,11 +2013,6 @@ def client(original_function):
                         # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                         litellm._async_success_callback.append(callback)
                         removed_async_items.append(index)
-                    elif callback == "s3":
-                        # s3 is an async callback, it's used for the proxy and needs to be async
-                        # we only support async s3 logging for acompletion/aembedding since that's used on proxy
-                        litellm._async_success_callback.append(callback)
-                        removed_async_items.append(index)
 
                 # Pop the async items from success_callback in reverse order to avoid index issues
                 for index in reversed(removed_async_items):
@@ -1956,6 +2028,31 @@ def client(original_function):
                 # Pop the async items from failure_callback in reverse order to avoid index issues
                 for index in reversed(removed_async_items):
                     litellm.failure_callback.pop(index)
+            ### DYNAMIC CALLBACKS ###
+            dynamic_success_callbacks = None
+            dynamic_async_success_callbacks = None
+            if kwargs.get("success_callback", None) is not None and isinstance(
+                kwargs["success_callback"], list
+            ):
+                removed_async_items = []
+                for index, callback in enumerate(kwargs["success_callback"]):
+                    if (
+                        inspect.iscoroutinefunction(callback)
+                        or callback == "dynamodb"
+                        or callback == "s3"
+                    ):
+                        if dynamic_async_success_callbacks is not None and isinstance(
+                            dynamic_async_success_callbacks, list
+                        ):
+                            dynamic_async_success_callbacks.append(callback)
+                        else:
+                            dynamic_async_success_callbacks = [callback]
+                        removed_async_items.append(index)
+                # Pop the async items from success_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    kwargs["success_callback"].pop(index)
+                dynamic_success_callbacks = kwargs.pop("success_callback")
+
             if add_breadcrumb:
                 add_breadcrumb(
                     category="litellm.llm_call",
@@ -2017,17 +2114,22 @@ def client(original_function):
                 function_id=function_id,
                 call_type=call_type,
                 start_time=start_time,
+                dynamic_success_callbacks=dynamic_success_callbacks,
+                dynamic_async_success_callbacks=dynamic_async_success_callbacks,
+                langfuse_public_key=kwargs.pop("langfuse_public_key", None),
+                langfuse_secret=kwargs.pop("langfuse_secret", None),
             )
             ## check if metadata is passed in
+            litellm_params = {}
             if "metadata" in kwargs:
-                litellm_params = {"metadata": kwargs["metadata"]}
-                logging_obj.update_environment_variables(
-                    model=model,
-                    user="",
-                    optional_params={},
-                    litellm_params=litellm_params,
-                )
-            return logging_obj
+                litellm_params["metadata"] = kwargs["metadata"]
+            logging_obj.update_environment_variables(
+                model=model,
+                user="",
+                optional_params={},
+                litellm_params=litellm_params,
+            )
+            return logging_obj, kwargs
         except Exception as e:
             import logging
 
@@ -2082,13 +2184,13 @@ def client(original_function):
         logging_obj = kwargs.get("litellm_logging_obj", None)
 
         # only set litellm_call_id if its not in kwargs
+        call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
         except:
             model = None
-            call_type = original_function.__name__
             if (
                 call_type != CallTypes.image_generation.value
                 and call_type != CallTypes.text_completion.value
@@ -2097,7 +2199,7 @@ def client(original_function):
 
         try:
             if logging_obj is None:
-                logging_obj = function_setup(start_time, *args, **kwargs)
+                logging_obj, kwargs = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
 
             # CHECK FOR 'os.environ/' in kwargs
@@ -2128,12 +2230,21 @@ def client(original_function):
             )
             # if caching is false or cache["no-cache"]==True, don't run this
             if (
-                (kwargs.get("caching", None) is None and litellm.cache is not None)
-                or kwargs.get("caching", False) == True
-                or (
-                    kwargs.get("cache", None) is not None
-                    and kwargs.get("cache", {}).get("no-cache", False) != True
+                (
+                    (
+                        kwargs.get("caching", None) is None
+                        and kwargs.get("cache", None) is None
+                        and litellm.cache is not None
+                    )
+                    or kwargs.get("caching", False) == True
+                    or (
+                        kwargs.get("cache", None) is not None
+                        and kwargs.get("cache", {}).get("no-cache", False) != True
+                    )
                 )
+                and kwargs.get("aembedding", False) != True
+                and kwargs.get("acompletion", False) != True
+                and kwargs.get("aimg_generation", False) != True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
@@ -2160,7 +2271,7 @@ def client(original_function):
                             if call_type == CallTypes.completion.value and isinstance(
                                 cached_result, dict
                             ):
-                                return convert_to_model_response_object(
+                                cached_result = convert_to_model_response_object(
                                     response_object=cached_result,
                                     model_response_object=ModelResponse(),
                                     stream=kwargs.get("stream", False),
@@ -2168,17 +2279,104 @@ def client(original_function):
                             elif call_type == CallTypes.embedding.value and isinstance(
                                 cached_result, dict
                             ):
-                                return convert_to_model_response_object(
+                                cached_result = convert_to_model_response_object(
                                     response_object=cached_result,
                                     response_type="embedding",
                                 )
-                            else:
-                                return cached_result
+
+                            # LOG SUCCESS
+                            cache_hit = True
+                            end_time = datetime.datetime.now()
+                            (
+                                model,
+                                custom_llm_provider,
+                                dynamic_api_key,
+                                api_base,
+                            ) = litellm.get_llm_provider(
+                                model=model,
+                                custom_llm_provider=kwargs.get(
+                                    "custom_llm_provider", None
+                                ),
+                                api_base=kwargs.get("api_base", None),
+                                api_key=kwargs.get("api_key", None),
+                            )
+                            print_verbose(
+                                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+                            )
+                            logging_obj.update_environment_variables(
+                                model=model,
+                                user=kwargs.get("user", None),
+                                optional_params={},
+                                litellm_params={
+                                    "logger_fn": kwargs.get("logger_fn", None),
+                                    "acompletion": False,
+                                    "metadata": kwargs.get("metadata", {}),
+                                    "model_info": kwargs.get("model_info", {}),
+                                    "proxy_server_request": kwargs.get(
+                                        "proxy_server_request", None
+                                    ),
+                                    "preset_cache_key": kwargs.get(
+                                        "preset_cache_key", None
+                                    ),
+                                    "stream_response": kwargs.get(
+                                        "stream_response", {}
+                                    ),
+                                },
+                                input=kwargs.get("messages", ""),
+                                api_key=kwargs.get("api_key", None),
+                                original_response=str(cached_result),
+                                additional_args=None,
+                                stream=kwargs.get("stream", False),
+                            )
+                            threading.Thread(
+                                target=logging_obj.success_handler,
+                                args=(cached_result, start_time, end_time, cache_hit),
+                            ).start()
+                            return cached_result
+
+            # CHECK MAX TOKENS
+            if (
+                kwargs.get("max_tokens", None) is not None
+                and model is not None
+                and litellm.drop_params
+                == True  # user is okay with params being modified
+                and (
+                    call_type == CallTypes.acompletion.value
+                    or call_type == CallTypes.completion.value
+                )
+            ):
+                try:
+                    base_model = model
+                    if kwargs.get("hf_model_name", None) is not None:
+                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
+                    max_output_tokens = (
+                        get_max_tokens(model=base_model) or 4096
+                    )  # assume min context window is 4k tokens
+                    user_max_tokens = kwargs.get("max_tokens")
+                    ## Scenario 1: User limit + prompt > model limit
+                    messages = None
+                    if len(args) > 1:
+                        messages = args[1]
+                    elif kwargs.get("messages", None):
+                        messages = kwargs["messages"]
+                    input_tokens = token_counter(model=base_model, messages=messages)
+                    input_tokens += max(
+                        0.1 * input_tokens, 10
+                    )  # give at least a 10 token buffer. token counting can be imprecise.
+                    if input_tokens > max_output_tokens:
+                        pass  # allow call to fail normally
+                    elif user_max_tokens + input_tokens > max_output_tokens:
+                        user_max_tokens = max_output_tokens - input_tokens
+                    print_verbose(f"user_max_tokens: {user_max_tokens}")
+                    kwargs["max_tokens"] = int(
+                        round(user_max_tokens)
+                    )  # make sure max tokens is always an int
+                except Exception as e:
+                    print_verbose(f"Error while checking max token limit: {str(e)}")
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
             if "stream" in kwargs and kwargs["stream"] == True:
-                # TODO: Add to cache for streaming
                 if (
                     "complete_response" in kwargs
                     and kwargs["complete_response"] == True
@@ -2206,7 +2404,7 @@ def client(original_function):
                 litellm.cache is not None
                 and str(original_function.__name__)
                 in litellm.cache.supported_call_types
-            ):
+            ) and (kwargs.get("cache", {}).get("no-store", False) != True):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
@@ -2237,7 +2435,12 @@ def client(original_function):
                 )
 
                 if num_retries:
-                    if isinstance(e, openai.APIError) or isinstance(e, openai.Timeout):
+                    if (
+                        isinstance(e, openai.APIError)
+                        or isinstance(e, openai.Timeout)
+                        or isinstance(openai.APIConnectionError)
+                    ):
+                        print_verbose(f"RETRY TRIGGERED!")
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
                 elif (
@@ -2277,6 +2480,7 @@ def client(original_function):
         result = None
         logging_obj = kwargs.get("litellm_logging_obj", None)
         # only set litellm_call_id if its not in kwargs
+        call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
         try:
@@ -2290,7 +2494,7 @@ def client(original_function):
 
         try:
             if logging_obj is None:
-                logging_obj = function_setup(start_time, *args, **kwargs)
+                logging_obj, kwargs = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
 
             # [OPTIONAL] CHECK BUDGET
@@ -2307,8 +2511,14 @@ def client(original_function):
                 f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}"
             )
             # if caching is false, don't run this
+            final_embedding_cached_response = None
+
             if (
-                (kwargs.get("caching", None) is None and litellm.cache is not None)
+                (
+                    kwargs.get("caching", None) is None
+                    and kwargs.get("cache", None) is None
+                    and litellm.cache is not None
+                )
                 or kwargs.get("caching", False) == True
                 or (
                     kwargs.get("cache", None) is not None
@@ -2323,8 +2533,44 @@ def client(original_function):
                     in litellm.cache.supported_call_types
                 ):
                     print_verbose(f"Checking Cache")
-                    cached_result = litellm.cache.get_cache(*args, **kwargs)
-                    if cached_result != None:
+                    if call_type == CallTypes.aembedding.value and isinstance(
+                        kwargs["input"], list
+                    ):
+                        tasks = []
+                        for idx, i in enumerate(kwargs["input"]):
+                            preset_cache_key = litellm.cache.get_cache_key(
+                                *args, **{**kwargs, "input": i}
+                            )
+                            tasks.append(
+                                litellm.cache.async_get_cache(
+                                    cache_key=preset_cache_key
+                                )
+                            )
+                        cached_result = await asyncio.gather(*tasks)
+                        ## check if cached result is None ##
+                        if cached_result is not None and isinstance(
+                            cached_result, list
+                        ):
+                            if len(cached_result) == 1 and cached_result[0] is None:
+                                cached_result = None
+                    elif isinstance(litellm.cache.cache, RedisSemanticCache):
+                        preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+                        kwargs[
+                            "preset_cache_key"
+                        ] = preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
+                        cached_result = await litellm.cache.async_get_cache(
+                            *args, **kwargs
+                        )
+                    else:
+                        preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+                        kwargs[
+                            "preset_cache_key"
+                        ] = preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
+                        cached_result = litellm.cache.get_cache(*args, **kwargs)
+
+                    if cached_result is not None and not isinstance(
+                        cached_result, list
+                    ):
                         print_verbose(f"Cache Hit!")
                         call_type = original_function.__name__
                         if call_type == CallTypes.acompletion.value and isinstance(
@@ -2397,6 +2643,103 @@ def client(original_function):
                             args=(cached_result, start_time, end_time, cache_hit),
                         ).start()
                         return cached_result
+                    elif (
+                        call_type == CallTypes.aembedding.value
+                        and cached_result is not None
+                        and isinstance(cached_result, list)
+                        and litellm.cache is not None
+                        and not isinstance(
+                            litellm.cache.cache, S3Cache
+                        )  # s3 doesn't support bulk writing. Exclude.
+                    ):
+                        remaining_list = []
+                        non_null_list = []
+                        for idx, cr in enumerate(cached_result):
+                            if cr is None:
+                                remaining_list.append(kwargs["input"][idx])
+                            else:
+                                non_null_list.append((idx, cr))
+                        original_kwargs_input = kwargs["input"]
+                        kwargs["input"] = remaining_list
+                        if len(non_null_list) > 0:
+                            print_verbose(
+                                f"EMBEDDING CACHE HIT! - {len(non_null_list)}"
+                            )
+                            final_embedding_cached_response = EmbeddingResponse(
+                                model=kwargs.get("model"),
+                                data=[None] * len(original_kwargs_input),
+                            )
+                            final_embedding_cached_response._hidden_params[
+                                "cache_hit"
+                            ] = True
+
+                            for val in non_null_list:
+                                idx, cr = val  # (idx, cr) tuple
+                                if cr is not None:
+                                    final_embedding_cached_response.data[idx] = cr
+                        if len(remaining_list) == 0:
+                            # LOG SUCCESS
+                            cache_hit = True
+                            end_time = datetime.datetime.now()
+                            (
+                                model,
+                                custom_llm_provider,
+                                dynamic_api_key,
+                                api_base,
+                            ) = litellm.get_llm_provider(
+                                model=model,
+                                custom_llm_provider=kwargs.get(
+                                    "custom_llm_provider", None
+                                ),
+                                api_base=kwargs.get("api_base", None),
+                                api_key=kwargs.get("api_key", None),
+                            )
+                            print_verbose(
+                                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+                            )
+                            logging_obj.update_environment_variables(
+                                model=model,
+                                user=kwargs.get("user", None),
+                                optional_params={},
+                                litellm_params={
+                                    "logger_fn": kwargs.get("logger_fn", None),
+                                    "acompletion": True,
+                                    "metadata": kwargs.get("metadata", {}),
+                                    "model_info": kwargs.get("model_info", {}),
+                                    "proxy_server_request": kwargs.get(
+                                        "proxy_server_request", None
+                                    ),
+                                    "preset_cache_key": kwargs.get(
+                                        "preset_cache_key", None
+                                    ),
+                                    "stream_response": kwargs.get(
+                                        "stream_response", {}
+                                    ),
+                                },
+                                input=kwargs.get("messages", ""),
+                                api_key=kwargs.get("api_key", None),
+                                original_response=str(final_embedding_cached_response),
+                                additional_args=None,
+                                stream=kwargs.get("stream", False),
+                            )
+                            asyncio.create_task(
+                                logging_obj.async_success_handler(
+                                    final_embedding_cached_response,
+                                    start_time,
+                                    end_time,
+                                    cache_hit,
+                                )
+                            )
+                            threading.Thread(
+                                target=logging_obj.success_handler,
+                                args=(
+                                    final_embedding_cached_response,
+                                    start_time,
+                                    end_time,
+                                    cache_hit,
+                                ),
+                            ).start()
+                            return final_embedding_cached_response
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -2419,19 +2762,44 @@ def client(original_function):
 
             # [OPTIONAL] ADD TO CACHE
             if (
-                litellm.cache is not None
-                and str(original_function.__name__)
-                in litellm.cache.supported_call_types
+                (litellm.cache is not None)
+                and (
+                    str(original_function.__name__)
+                    in litellm.cache.supported_call_types
+                )
+                and (kwargs.get("cache", {}).get("no-store", False) != True)
             ):
                 if isinstance(result, litellm.ModelResponse) or isinstance(
                     result, litellm.EmbeddingResponse
                 ):
-                    asyncio.create_task(
-                        litellm.cache._async_add_cache(result.json(), *args, **kwargs)
-                    )
+                    if (
+                        isinstance(result, EmbeddingResponse)
+                        and isinstance(kwargs["input"], list)
+                        and litellm.cache is not None
+                        and not isinstance(
+                            litellm.cache.cache, S3Cache
+                        )  # s3 doesn't support bulk writing. Exclude.
+                    ):
+                        asyncio.create_task(
+                            litellm.cache.async_add_cache_pipeline(
+                                result, *args, **kwargs
+                            )
+                        )
+                    elif isinstance(litellm.cache.cache, S3Cache):
+                        threading.Thread(
+                            target=litellm.cache.add_cache,
+                            args=(result,) + args,
+                            kwargs=kwargs,
+                        ).start()
+                    else:
+                        asyncio.create_task(
+                            litellm.cache.async_add_cache(
+                                result.json(), *args, **kwargs
+                            )
+                        )
                 else:
                     asyncio.create_task(
-                        litellm.cache._async_add_cache(result, *args, **kwargs)
+                        litellm.cache.async_add_cache(result, *args, **kwargs)
                     )
             # LOG SUCCESS - handle streaming success logging in the _next_ object
             print_verbose(
@@ -2455,6 +2823,27 @@ def client(original_function):
                 result._response_ms = (
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
+
+            if (
+                isinstance(result, EmbeddingResponse)
+                and final_embedding_cached_response is not None
+            ):
+                idx = 0
+                final_data_list = []
+                for item in final_embedding_cached_response.data:
+                    if item is None:
+                        final_data_list.append(result.data[idx])
+                        idx += 1
+                    else:
+                        final_data_list.append(item)
+
+                final_embedding_cached_response.data = final_data_list
+                final_embedding_cached_response._hidden_params["cache_hit"] = True
+                final_embedding_cached_response._response_ms = (
+                    end_time - start_time
+                ).total_seconds() * 1000
+                return final_embedding_cached_response
+
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
@@ -2686,6 +3075,8 @@ def openai_token_counter(
         # This is the case where we need to count tokens for a streamed response. We should NOT add +3 tokens per message in this branch
         num_tokens = len(encoding.encode(text, disallowed_special=()))
         return num_tokens
+    elif text is not None:
+        num_tokens = len(encoding.encode(text, disallowed_special=()))
     num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
     return num_tokens
 
@@ -2872,8 +3263,13 @@ def token_counter(
                 print_verbose(
                     f"Token Counter - using generic token counter, for model={model}"
                 )
-                enc = tokenizer_json["tokenizer"].encode(text)
-                num_tokens = len(enc)
+                num_tokens = openai_token_counter(
+                    text=text,  # type: ignore
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    is_tool_call=is_tool_call,
+                    count_response_tokens=count_response_tokens,
+                )
     else:
         num_tokens = len(encoding.encode(text))  # type: ignore
     return num_tokens
@@ -2885,6 +3281,7 @@ def cost_per_token(
     completion_tokens=0,
     response_time_ms=None,
     custom_llm_provider=None,
+    region_name=None,
 ):
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -2901,16 +3298,24 @@ def cost_per_token(
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
+    model_with_provider = model
     if custom_llm_provider is not None:
         model_with_provider = custom_llm_provider + "/" + model
-    else:
-        model_with_provider = model
+        if region_name is not None:
+            model_with_provider_and_region = (
+                f"{custom_llm_provider}/{region_name}/{model}"
+            )
+            if (
+                model_with_provider_and_region in model_cost_ref
+            ):  # use region based pricing, if it's available
+                model_with_provider = model_with_provider_and_region
+    if model_with_provider in model_cost_ref:
+        model = model_with_provider
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    verbose_logger.debug(f"Looking up model={model} in model_cost_map")
-
+    print_verbose(f"Looking up model={model} in model_cost_map")
     if model in model_cost_ref:
-        verbose_logger.debug(f"Success: model={model} in model_cost_map")
-        verbose_logger.debug(
+        print_verbose(f"Success: model={model} in model_cost_map")
+        print_verbose(
             f"prompt_tokens={prompt_tokens}; completion_tokens={completion_tokens}"
         )
         if (
@@ -2928,7 +3333,7 @@ def cost_per_token(
             model_cost_ref[model].get("input_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
-            verbose_logger.debug(
+            print_verbose(
                 f"For model={model} - input_cost_per_second: {model_cost_ref[model].get('input_cost_per_second')}; response time: {response_time_ms}"
             )
             ## COST PER SECOND ##
@@ -2936,30 +3341,12 @@ def cost_per_token(
                 model_cost_ref[model]["input_cost_per_second"] * response_time_ms / 1000
             )
             completion_tokens_cost_usd_dollar = 0.0
-        verbose_logger.debug(
+        print_verbose(
             f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
-    elif model_with_provider in model_cost_ref:
-        verbose_logger.debug(
-            f"Looking up model={model_with_provider} in model_cost_map"
-        )
-        verbose_logger.debug(
-            f"applying cost={model_cost_ref[model_with_provider]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
-        )
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model_with_provider]["input_cost_per_token"] * prompt_tokens
-        )
-        verbose_logger.debug(
-            f"applying cost={model_cost_ref[model_with_provider]['output_cost_per_token']} for completion_tokens={completion_tokens}"
-        )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model_with_provider]["output_cost_per_token"]
-            * completion_tokens
-        )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:gpt-3.5-turbo" in model:
-        verbose_logger.debug(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
+        print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
@@ -3016,7 +3403,24 @@ def completion_cost(
     prompt="",
     messages: List = [],
     completion="",
-    total_time=0.0,  # used for replicate
+    total_time=0.0,  # used for replicate, sagemaker
+    call_type: Literal[
+        "completion",
+        "acompletion",
+        "embedding",
+        "aembedding",
+        "atext_completion",
+        "text_completion",
+        "image_generation",
+        "aimage_generation",
+    ] = "completion",
+    ### REGION ###
+    custom_llm_provider=None,
+    region_name=None,  # used for bedrock pricing
+    ### IMAGE GEN ###
+    size=None,
+    quality=None,
+    n=None,  # number of images
 ):
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -3061,12 +3465,26 @@ def completion_cost(
             model = (
                 model or completion_response["model"]
             )  # check if user passed an override for model, if it's none check completion_response['model']
-            if completion_response is not None and hasattr(
-                completion_response, "_hidden_params"
-            ):
+            if hasattr(completion_response, "_hidden_params"):
                 custom_llm_provider = completion_response._hidden_params.get(
                     "custom_llm_provider", ""
                 )
+                region_name = completion_response._hidden_params.get(
+                    "region_name", region_name
+                )
+                size = completion_response._hidden_params.get(
+                    "optional_params", {}
+                ).get(
+                    "size", "1024-x-1024"
+                )  # openai default
+                quality = completion_response._hidden_params.get(
+                    "optional_params", {}
+                ).get(
+                    "quality", "standard"
+                )  # openai default
+                n = completion_response._hidden_params.get("optional_params", {}).get(
+                    "n", 1
+                )  # openai default
         else:
             if len(messages) > 0:
                 prompt_tokens = token_counter(model=model, messages=messages)
@@ -3078,8 +3496,46 @@ def completion_cost(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
+        if (
+            call_type == CallTypes.image_generation.value
+            or call_type == CallTypes.aimage_generation.value
+        ):
+            ### IMAGE GENERATION COST CALCULATION ###
+            image_gen_model_name = f"{size}/{model}"
+            image_gen_model_name_with_quality = image_gen_model_name
+            if quality is not None:
+                image_gen_model_name_with_quality = f"{quality}/{image_gen_model_name}"
+            size = size.split("-x-")
+            height = int(size[0])
+            width = int(size[1])
+            verbose_logger.debug(f"image_gen_model_name: {image_gen_model_name}")
+            verbose_logger.debug(
+                f"image_gen_model_name_with_quality: {image_gen_model_name_with_quality}"
+            )
+            if image_gen_model_name in litellm.model_cost:
+                return (
+                    litellm.model_cost[image_gen_model_name]["input_cost_per_pixel"]
+                    * height
+                    * width
+                    * n
+                )
+            elif image_gen_model_name_with_quality in litellm.model_cost:
+                return (
+                    litellm.model_cost[image_gen_model_name_with_quality][
+                        "input_cost_per_pixel"
+                    ]
+                    * height
+                    * width
+                    * n
+                )
+            else:
+                raise Exception(f"Model={model} not found in completion cost model map")
         # Calculate cost based on prompt_tokens, completion_tokens
-        if "togethercomputer" in model or "together_ai" in model:
+        if (
+            "togethercomputer" in model
+            or "together_ai" in model
+            or custom_llm_provider == "together_ai"
+        ):
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
             model = get_model_params_and_category(model)
@@ -3096,8 +3552,13 @@ def completion_cost(
             completion_tokens=completion_tokens,
             custom_llm_provider=custom_llm_provider,
             response_time_ms=total_time,
+            region_name=region_name,
         )
-        return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+        _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+        print_verbose(
+            f"final cost: {_final_cost}; prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}; completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
+        )
+        return _final_cost
     except Exception as e:
         raise e
 
@@ -3244,27 +3705,50 @@ def get_optional_params_image_gen(
         for k, v in passed_params.items()
         if (k in default_params and v != default_params[k])
     }
-    ## raise exception if non-default value passed for non-openai/azure embedding calls
-    if custom_llm_provider != "openai" and custom_llm_provider != "azure":
-        if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
-                return non_default_params
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-            )
+    optional_params = {}
 
-    final_params = {**non_default_params, **kwargs}
-    return final_params
+    ## raise exception if non-default value passed for non-openai/azure embedding calls
+    def _check_valid_arg(supported_params):
+        if len(non_default_params.keys()) > 0:
+            keys = list(non_default_params.keys())
+            for k in keys:
+                if (
+                    litellm.drop_params is True and k not in supported_params
+                ):  # drop the unsupported non-default values
+                    non_default_params.pop(k, None)
+                elif k not in supported_params:
+                    raise UnsupportedParamsError(
+                        status_code=500,
+                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                    )
+            return non_default_params
+
+    if (
+        custom_llm_provider == "openai"
+        or custom_llm_provider == "azure"
+        or custom_llm_provider in litellm.openai_compatible_providers
+    ):
+        optional_params = non_default_params
+    elif custom_llm_provider == "bedrock":
+        supported_params = ["size"]
+        _check_valid_arg(supported_params=supported_params)
+        if size is not None:
+            width, height = size.split("x")
+            optional_params["width"] = int(width)
+            optional_params["height"] = int(height)
+
+    for k in passed_params.keys():
+        if k not in default_params.keys():
+            optional_params[k] = passed_params[k]
+    return optional_params
 
 
 def get_optional_params_embeddings(
     # 2 optional params
+    model=None,
     user=None,
     encoding_format=None,
+    dimensions=None,
     custom_llm_provider="",
     **kwargs,
 ):
@@ -3275,7 +3759,7 @@ def get_optional_params_embeddings(
     for k, v in special_params.items():
         passed_params[k] = v
 
-    default_params = {"user": None, "encoding_format": None}
+    default_params = {"user": None, "encoding_format": None, "dimensions": None}
 
     non_default_params = {
         k: v
@@ -3283,6 +3767,19 @@ def get_optional_params_embeddings(
         if (k in default_params and v != default_params[k])
     }
     ## raise exception if non-default value passed for non-openai/azure embedding calls
+    if custom_llm_provider == "openai":
+        # 'dimensions` is only supported in `text-embedding-3` and later models
+
+        if (
+            model is not None
+            and "text-embedding-3" not in model
+            and "dimensions" in non_default_params.keys()
+        ):
+            raise UnsupportedParamsError(
+                status_code=500,
+                message=f"Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
+            )
+
     if (
         custom_llm_provider != "openai"
         and custom_llm_provider != "azure"
@@ -3337,6 +3834,10 @@ def get_optional_params(
             custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
         ):  # allow dynamically setting boto3 init logic
             continue
+        elif (
+            k.startswith("vertex_") and custom_llm_provider != "vertex_ai"
+        ):  # allow dynamically setting vertex ai init logic
+            continue
         passed_params[k] = v
     default_params = {
         "functions": None,
@@ -3384,6 +3885,8 @@ def get_optional_params(
             and custom_llm_provider != "text-completion-openai"
             and custom_llm_provider != "azure"
             and custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "anyscale"
+            and custom_llm_provider != "together_ai"
         ):
             if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
                 # ollama actually supports json output
@@ -3402,11 +3905,6 @@ def get_optional_params(
                     optional_params[
                         "functions_unsupported_model"
                     ] = non_default_params.pop("functions")
-            elif (
-                custom_llm_provider == "anyscale"
-                and model == "mistralai/Mistral-7B-Instruct-v0.1"
-            ):  # anyscale just supports function calling with mistral
-                pass
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -3619,11 +4117,13 @@ def get_optional_params(
             "top_p",
             "stop",
             "frequency_penalty",
+            "tools",
+            "tool_choice",
         ]
         _check_valid_arg(supported_params=supported_params)
 
         if stream:
-            optional_params["stream_tokens"] = stream
+            optional_params["stream"] = stream
         if temperature is not None:
             optional_params["temperature"] = temperature
         if top_p is not None:
@@ -3636,6 +4136,10 @@ def get_optional_params(
             ] = frequency_penalty  # https://docs.together.ai/reference/inference
         if stop is not None:
             optional_params["stop"] = stop
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in
         supported_params = [
@@ -3878,7 +4382,7 @@ def get_optional_params(
         if frequency_penalty is not None:
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
-            optional_params["stop_sequences"] = stop
+            optional_params["stop"] = stop
     elif custom_llm_provider == "ollama_chat":
         supported_params = [
             "max_tokens",
@@ -3901,7 +4405,7 @@ def get_optional_params(
         if frequency_penalty is not None:
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
-            optional_params["stop_sequences"] = stop
+            optional_params["stop"] = stop
     elif custom_llm_provider == "nlp_cloud":
         supported_params = [
             "max_tokens",
@@ -4257,6 +4761,14 @@ def get_llm_provider(
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
                 api_base = "https://api.voyageai.com/v1"
                 dynamic_api_key = get_secret("VOYAGE_API_KEY")
+            elif custom_llm_provider == "together_ai":
+                api_base = "https://api.together.xyz/v1"
+                dynamic_api_key = (
+                    get_secret("TOGETHER_API_KEY")
+                    or get_secret("TOGETHER_AI_API_KEY")
+                    or get_secret("TOGETHERAI_API_KEY")
+                    or get_secret("TOGETHER_AI_TOKEN")
+                )
             return model, custom_llm_provider, dynamic_api_key, api_base
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -4318,6 +4830,7 @@ def get_llm_provider(
             or model in litellm.vertex_text_models
             or model in litellm.vertex_code_text_models
             or model in litellm.vertex_language_models
+            or model in litellm.vertex_embedding_models
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21
@@ -4425,7 +4938,7 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
 
 def get_max_tokens(model: str):
     """
-    Get the maximum number of tokens allowed for a given model.
+    Get the maximum number of output tokens allowed for a given model.
 
     Parameters:
     model (str): The name of the model.
@@ -4444,7 +4957,6 @@ def get_max_tokens(model: str):
     def _get_max_position_embeddings(model_name):
         # Construct the URL for the config.json file
         config_url = f"https://huggingface.co/{model_name}/raw/main/config.json"
-
         try:
             # Make the HTTP request to get the raw JSON file
             response = requests.get(config_url)
@@ -4452,10 +4964,8 @@ def get_max_tokens(model: str):
 
             # Parse the JSON response
             config_json = response.json()
-
             # Extract and return the max_position_embeddings
             max_position_embeddings = config_json.get("max_position_embeddings")
-
             if max_position_embeddings is not None:
                 return max_position_embeddings
             else:
@@ -4465,7 +4975,10 @@ def get_max_tokens(model: str):
 
     try:
         if model in litellm.model_cost:
-            return litellm.model_cost[model]["max_tokens"]
+            if "max_output_tokens" in litellm.model_cost[model]:
+                return litellm.model_cost[model]["max_output_tokens"]
+            elif "max_tokens" in litellm.model_cost[model]:
+                return litellm.model_cost[model]["max_tokens"]
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
@@ -5776,14 +6289,29 @@ def exception_type(
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
             ):
+                # custom_llm_provider is openai, make it OpenAI
+                message = original_exception.message
+                if message is not None and isinstance(message, str):
+                    message = message.replace("OPENAI", custom_llm_provider.upper())
+                    message = message.replace("openai", custom_llm_provider)
+                    message = message.replace("OpenAI", custom_llm_provider)
+                if custom_llm_provider == "openai":
+                    exception_provider = "OpenAI" + "Exception"
+                else:
+                    exception_provider = (
+                        custom_llm_provider[0].upper()
+                        + custom_llm_provider[1:]
+                        + "Exception"
+                    )
+
                 if (
                     "This model's maximum context length is" in error_str
                     or "Request too large" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5793,8 +6321,8 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise NotFoundError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5804,8 +6332,8 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5815,8 +6343,19 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"OpenAIException - {original_exception.message}",
-                        llm_provider="openai",
+                        message=f"{exception_provider} - {message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=f"{exception_provider} - {message}",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
                     )
@@ -5825,63 +6364,63 @@ def exception_type(
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"OpenAIException - {original_exception.message}",
-                            llm_provider="openai",
+                            message=f"{exception_provider} - {message}",
+                            llm_provider=custom_llm_provider,
                             model=model,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                         )
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"OpenAIException - {original_exception.message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
-                            llm_provider="openai",
+                            llm_provider=custom_llm_provider,
                         )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"OpenAIException - {original_exception.message}",
-                            llm_provider="openai",
+                            message=f"{exception_provider} - {message}",
+                            llm_provider=custom_llm_provider,
                             model=model,
                             request=original_exception.request,
                         )
@@ -6108,6 +6647,13 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
+                if "Connect timeout on endpoint URL" in error_str:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"BedrockException: Timeout Error - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                    )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
@@ -6115,7 +6661,12 @@ def exception_type(
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
                             model=model,
-                            response=original_exception.response,
+                            response=httpx.Response(
+                                status_code=500,
+                                request=httpx.Request(
+                                    method="POST", url="https://api.openai.com/v1/"
+                                ),
+                            ),
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True
@@ -6198,7 +6749,30 @@ def exception_type(
                         message=f"VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
-                        response=original_exception.response,
+                        response=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
+                    )
+                elif (
+                    "429 Quota exceeded" in error_str
+                    or "IndexError: list index out of range"
+                ):
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"VertexAIException - {error_str}",
+                        model=model,
+                        llm_provider="vertex_ai",
+                        response=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
                     )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
@@ -6813,6 +7387,17 @@ def exception_type(
                         model=model,
                         response=original_exception.response,
                     )
+                elif (
+                    "The api_key client option must be set either by passing api_key to the client or by setting"
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=f"{exception_provider} - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=original_exception.response,
+                    )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
                     if original_exception.status_code == 401:
@@ -6847,6 +7432,21 @@ def exception_type(
                             llm_provider="azure",
                             response=original_exception.response,
                         )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"AzureException - {original_exception.message}",
+                            model=model,
+                            llm_provider="azure",
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"AzureException - {original_exception.message}",
+                            model=model,
+                            llm_provider="azure",
+                        )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
@@ -6870,7 +7470,7 @@ def exception_type(
         ):  # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
-                message=f"OpenAIException: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
+                message=f"{exception_provider}: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=original_exception.response,
@@ -7092,6 +7692,7 @@ class CustomStreamWrapper:
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = ""
         self.complete_response = ""
+        self.response_uptil_now = ""
         _model_info = (
             self.logging_obj.model_call_details.get("litellm_params", {}).get(
                 "model_info", {}
@@ -7102,6 +7703,8 @@ class CustomStreamWrapper:
             "model_id": (_model_info.get("id", None))
         }  # returned as x-litellm-model-id response header in proxy
         self.response_id = None
+        self.logging_loop = None
+        self.rules = Rules()
 
     def __iter__(self):
         return self
@@ -7416,7 +8019,10 @@ class CustomStreamWrapper:
             logprobs = None
             original_chunk = None  # this is used for function/tool calling
             if len(str_line.choices) > 0:
-                if str_line.choices[0].delta.content is not None:
+                if (
+                    str_line.choices[0].delta is not None
+                    and str_line.choices[0].delta.content is not None
+                ):
                     text = str_line.choices[0].delta.content
                 else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
                     original_chunk = str_line
@@ -7672,6 +8278,27 @@ class CustomStreamWrapper:
             }
         return ""
 
+    def handle_sagemaker_stream(self, chunk):
+        if "data: [DONE]" in chunk:
+            text = ""
+            is_finished = True
+            finish_reason = "stop"
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+        elif isinstance(chunk, dict):
+            if chunk["is_finished"] == True:
+                finish_reason = "stop"
+            else:
+                finish_reason = ""
+            return {
+                "text": chunk["text"],
+                "is_finished": chunk["is_finished"],
+                "finish_reason": finish_reason,
+            }
+
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
         if self.response_id is not None:
@@ -7679,6 +8306,7 @@ class CustomStreamWrapper:
         else:
             self.response_id = model_response.id
         model_response._hidden_params["custom_llm_provider"] = self.custom_llm_provider
+        model_response._hidden_params["created_at"] = time.time()
         model_response.choices = [StreamingChoices()]
         model_response.choices[0].finish_reason = None
         response_obj = {}
@@ -7764,13 +8392,20 @@ class CustomStreamWrapper:
                 completion_obj["content"] = chunk.text
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
                 try:
-                    # print(chunk)
-                    if hasattr(chunk, "text"):
-                        # vertexAI chunks return
-                        # MultiCandidateTextGenerationResponse(text=' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', _prediction_response=Prediction(predictions=[{'candidates': [{'content': ' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', 'author': '1'}], 'citationMetadata': [{'citations': None}], 'safetyAttributes': [{'blocked': False, 'scores': None, 'categories': None}]}], deployed_model_id='', model_version_id=None, model_resource_name=None, explanations=None), is_blocked=False, safety_attributes={}, candidates=[ ```python
-                        # This Python code says "Hi" 100 times.
-                        # Create])
-                        completion_obj["content"] = chunk.text
+                    if hasattr(chunk, "candidates") == True:
+                        try:
+                            completion_obj["content"] = chunk.text
+                            if hasattr(chunk.candidates[0], "finish_reason"):
+                                model_response.choices[
+                                    0
+                                ].finish_reason = map_finish_reason(
+                                    chunk.candidates[0].finish_reason.name
+                                )
+                        except:
+                            if chunk.candidates[0].finish_reason.name == "SAFETY":
+                                raise Exception(
+                                    f"The response was blocked by VertexAI. {str(chunk)}"
+                                )
                     else:
                         completion_obj["content"] = str(chunk)
                 except StopIteration as e:
@@ -7797,8 +8432,14 @@ class CustomStreamWrapper:
                     ]
                     self.sent_last_chunk = True
             elif self.custom_llm_provider == "sagemaker":
-                print_verbose(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
-                completion_obj["content"] = chunk
+                verbose_logger.debug(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
+                response_obj = self.handle_sagemaker_stream(chunk)
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    model_response.choices[0].finish_reason = response_obj[
+                        "finish_reason"
+                    ]
+                    self.sent_last_chunk = True
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.sent_last_chunk:
@@ -7899,6 +8540,7 @@ class CustomStreamWrapper:
                         if len(original_chunk.choices) > 0:
                             try:
                                 delta = dict(original_chunk.choices[0].delta)
+                                print_verbose(f"original delta: {delta}")
                                 model_response.choices[0].delta = Delta(**delta)
                             except Exception as e:
                                 model_response.choices[0].delta = Delta()
@@ -7907,9 +8549,21 @@ class CustomStreamWrapper:
                         model_response.system_fingerprint = (
                             original_chunk.system_fingerprint
                         )
+                        print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                         if self.sent_first_chunk == False:
                             model_response.choices[0].delta["role"] = "assistant"
                             self.sent_first_chunk = True
+                        elif self.sent_first_chunk == True and hasattr(
+                            model_response.choices[0].delta, "role"
+                        ):
+                            _initial_delta = model_response.choices[
+                                0
+                            ].delta.model_dump()
+                            _initial_delta.pop("role", None)
+                            model_response.choices[0].delta = Delta(**_initial_delta)
+                        print_verbose(
+                            f"model_response.choices[0].delta: {model_response.choices[0].delta}"
+                        )
                     else:
                         ## else
                         completion_obj["content"] = model_response_str
@@ -7974,6 +8628,27 @@ class CustomStreamWrapper:
                 original_exception=e,
             )
 
+    def set_logging_event_loop(self, loop):
+        self.logging_loop = loop
+
+    async def your_async_function(self):
+        # Your asynchronous code here
+        return "Your asynchronous code is running"
+
+    def run_success_logging_in_thread(self, processed_chunk):
+        # Create an event loop for the new thread
+        ## ASYNC LOGGING
+        if self.logging_loop is not None:
+            future = asyncio.run_coroutine_threadsafe(
+                self.logging_obj.async_success_handler(processed_chunk),
+                loop=self.logging_loop,
+            )
+            result = future.result()
+        else:
+            asyncio.run(self.logging_obj.async_success_handler(processed_chunk))
+        ## SYNC LOGGING
+        self.logging_obj.success_handler(processed_chunk)
+
     ## needs to handle the empty string case (even starting chunk can be an empty string)
     def __next__(self):
         try:
@@ -7986,14 +8661,20 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
                     print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                    response = self.chunk_creator(chunk=chunk)
+                    response: Optional[ModelResponse] = self.chunk_creator(chunk=chunk)
                     print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
                     if response is None:
                         continue
                     ## LOGGING
                     threading.Thread(
-                        target=self.logging_obj.success_handler, args=(response,)
+                        target=self.run_success_logging_in_thread, args=(response,)
                     ).start()  # log response
+                    self.response_uptil_now += (
+                        response.choices[0].delta.get("content", "") or ""
+                    )
+                    self.rules.post_call_rules(
+                        input=self.response_uptil_now, model=self.model
+                    )
                     # RETURN RESULT
                     return response
         except StopIteration:
@@ -8018,7 +8699,6 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "ollama_chat"
                 or self.custom_llm_provider == "vertex_ai"
             ):
-                print_verbose(f"INSIDE ASYNC STREAMING!!!")
                 print_verbose(
                     f"value of async completion stream: {self.completion_stream}"
                 )
@@ -8030,7 +8710,9 @@ class CustomStreamWrapper:
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
                     print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
-                    processed_chunk = self.chunk_creator(chunk=chunk)
+                    processed_chunk: Optional[ModelResponse] = self.chunk_creator(
+                        chunk=chunk
+                    )
                     print_verbose(
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
                     )
@@ -8045,17 +8727,52 @@ class CustomStreamWrapper:
                             processed_chunk,
                         )
                     )
+                    self.response_uptil_now += (
+                        processed_chunk.choices[0].delta.get("content", "") or ""
+                    )
+                    self.rules.post_call_rules(
+                        input=self.response_uptil_now, model=self.model
+                    )
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms
-                processed_chunk = next(self)
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
-                        processed_chunk,
-                    )
-                )
-                return processed_chunk
+                while True:
+                    if isinstance(self.completion_stream, str) or isinstance(
+                        self.completion_stream, bytes
+                    ):
+                        chunk = self.completion_stream
+                    else:
+                        chunk = next(self.completion_stream)
+                    if chunk is not None and chunk != b"":
+                        print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
+                        processed_chunk: Optional[ModelResponse] = self.chunk_creator(
+                            chunk=chunk
+                        )
+                        print_verbose(
+                            f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"
+                        )
+                        if processed_chunk is None:
+                            continue
+                        ## LOGGING
+                        threading.Thread(
+                            target=self.logging_obj.success_handler,
+                            args=(processed_chunk,),
+                        ).start()  # log processed_chunk
+                        asyncio.create_task(
+                            self.logging_obj.async_success_handler(
+                                processed_chunk,
+                            )
+                        )
+
+                        self.response_uptil_now += (
+                            processed_chunk.choices[0].delta.get("content", "") or ""
+                        )
+                        self.rules.post_call_rules(
+                            input=self.response_uptil_now, model=self.model
+                        )
+                        # RETURN RESULT
+                        return processed_chunk
         except StopAsyncIteration:
             raise
         except StopIteration:
@@ -8133,6 +8850,14 @@ def mock_completion_streaming_obj(model_response, mock_response, model):
     for i in range(0, len(mock_response), 3):
         completion_obj = {"role": "assistant", "content": mock_response[i : i + 3]}
         model_response.choices[0].delta = completion_obj
+        yield model_response
+
+
+async def async_mock_completion_streaming_obj(model_response, mock_response, model):
+    for i in range(0, len(mock_response), 3):
+        completion_obj = Delta(role="assistant", content=mock_response)
+        model_response.choices[0].delta = completion_obj
+        model_response.choices[0].finish_reason = "stop"
         yield model_response
 
 
@@ -8558,3 +9283,31 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
     except:
         # This should always be non blocking
         pass
+
+
+def get_logging_id(start_time, response_obj):
+    try:
+        response_id = (
+            "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + response_obj.get("id")
+        )
+        return response_id
+    except:
+        return None
+
+
+def _get_base_model_from_metadata(model_call_details=None):
+    if model_call_details is None:
+        return None
+    litellm_params = model_call_details.get("litellm_params", {})
+
+    if litellm_params is not None:
+        metadata = litellm_params.get("metadata", {})
+
+        if metadata is not None:
+            model_info = metadata.get("model_info", {})
+
+            if model_info is not None:
+                base_model = model_info.get("base_model", None)
+                if base_model is not None:
+                    return base_model
+    return None

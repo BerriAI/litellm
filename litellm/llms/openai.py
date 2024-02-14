@@ -221,6 +221,8 @@ class OpenAIChatCompletion(BaseLLM):
         headers: Optional[dict] = None,
         custom_prompt_dict: dict = {},
         client=None,
+        organization: Optional[str] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
         super().completion()
         exception_mapping_worked = False
@@ -233,6 +235,14 @@ class OpenAIChatCompletion(BaseLLM):
             if not isinstance(timeout, float):
                 raise OpenAIError(
                     status_code=422, message=f"Timeout needs to be a float"
+                )
+
+            if custom_llm_provider == "mistral":
+                # check if message content passed in as list, and not string
+                messages = prompt_factory(
+                    model=model,
+                    messages=messages,
+                    custom_llm_provider=custom_llm_provider,
                 )
 
             for _ in range(
@@ -254,6 +264,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                         else:
                             return self.acompletion(
@@ -266,6 +277,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                     elif optional_params.get("stream", False):
                         return self.streaming(
@@ -278,6 +290,7 @@ class OpenAIChatCompletion(BaseLLM):
                             timeout=timeout,
                             client=client,
                             max_retries=max_retries,
+                            organization=organization,
                         )
                     else:
                         if not isinstance(max_retries, int):
@@ -291,6 +304,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 http_client=litellm.client_session,
                                 timeout=timeout,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                         else:
                             openai_client = client
@@ -320,12 +334,13 @@ class OpenAIChatCompletion(BaseLLM):
                             model_response_object=model_response,
                         )
                 except Exception as e:
-                    if "Conversation roles must alternate user/assistant" in str(
-                        e
-                    ) or "user and assistant roles should be alternating" in str(e):
+                    if (
+                        "Conversation roles must alternate user/assistant" in str(e)
+                        or "user and assistant roles should be alternating" in str(e)
+                    ) and messages is not None:
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
                         new_messages = []
-                        for i in range(len(messages) - 1):
+                        for i in range(len(messages) - 1):  # type: ignore
                             new_messages.append(messages[i])
                             if messages[i]["role"] == messages[i + 1]["role"]:
                                 if messages[i]["role"] == "user":
@@ -336,7 +351,9 @@ class OpenAIChatCompletion(BaseLLM):
                                     new_messages.append({"role": "user", "content": ""})
                         new_messages.append(messages[-1])
                         messages = new_messages
-                    elif "Last message must have role `user`" in str(e):
+                    elif (
+                        "Last message must have role `user`" in str(e)
+                    ) and messages is not None:
                         new_messages = messages
                         new_messages.append({"role": "user", "content": ""})
                         messages = new_messages
@@ -358,6 +375,7 @@ class OpenAIChatCompletion(BaseLLM):
         timeout: float,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         logging_obj=None,
@@ -372,6 +390,7 @@ class OpenAIChatCompletion(BaseLLM):
                     http_client=litellm.aclient_session,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                 )
             else:
                 openai_aclient = client
@@ -412,6 +431,7 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -423,6 +443,7 @@ class OpenAIChatCompletion(BaseLLM):
                 http_client=litellm.client_session,
                 timeout=timeout,
                 max_retries=max_retries,
+                organization=organization,
             )
         else:
             openai_client = client
@@ -431,8 +452,8 @@ class OpenAIChatCompletion(BaseLLM):
             input=data["messages"],
             api_key=api_key,
             additional_args={
-                "headers": headers,
-                "api_base": api_base,
+                "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
+                "api_base": openai_client._base_url._uri_reference,
                 "acompletion": False,
                 "complete_input_dict": data,
             },
@@ -454,6 +475,7 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -467,6 +489,7 @@ class OpenAIChatCompletion(BaseLLM):
                     http_client=litellm.aclient_session,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                 )
             else:
                 openai_aclient = client
@@ -718,8 +741,22 @@ class OpenAIChatCompletion(BaseLLM):
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             raise e
         except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             if hasattr(e, "status_code"):
                 raise OpenAIError(status_code=e.status_code, message=str(e))
             else:
@@ -734,8 +771,11 @@ class OpenAIChatCompletion(BaseLLM):
         messages: Optional[list] = None,
         input: Optional[list] = None,
         prompt: Optional[str] = None,
+        organization: Optional[str] = None,
     ):
-        client = AsyncOpenAI(api_key=api_key, timeout=timeout)
+        client = AsyncOpenAI(
+            api_key=api_key, timeout=timeout, organization=organization
+        )
         if model is None and mode != "image_generation":
             raise Exception("model is not set")
 

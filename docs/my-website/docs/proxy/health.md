@@ -112,7 +112,8 @@ Example Response:
 ```json
 {
     "status": "healthy",
-    "db": "connected"
+    "db": "connected",
+    "litellm_version":"1.19.2",
 }
 ```
 
@@ -121,7 +122,8 @@ Example Response:
 ```json
 {
     "status": "healthy",
-    "db": "Not connected"
+    "db": "Not connected",
+    "litellm_version":"1.19.2",
 }
 ```
 

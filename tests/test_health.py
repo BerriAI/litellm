@@ -70,10 +70,11 @@ async def test_health_readiness():
         url = "http://0.0.0.0:4000/health/readiness"
         async with session.get(url) as response:
             status = response.status
-            response_text = await response.text()
+            response_json = await response.json()
 
-            print(response_text)
-            print()
+            print(response_json)
+            assert "litellm_version" in response_json
+            assert "status" in response_json
 
             if status != 200:
                 raise Exception(f"Request did not return a 200 status code: {status}")

@@ -131,3 +131,23 @@ response = image_generation(
   prompt="cute baby otter"
 )
 ```
+
+## Bedrock - Stable Diffusion
+Use this for stable diffusion on bedrock
+
+
+### Usage
+```python
+import os
+from litellm import image_generation
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = image_generation(
+            prompt="A cute baby sea otter",
+            model="bedrock/stability.stable-diffusion-xl-v0",
+        )
+print(f"response: {response}")
+```
