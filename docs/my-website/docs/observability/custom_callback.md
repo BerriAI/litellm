@@ -1,5 +1,10 @@
 # Custom Callbacks
 
+:::info
+**For PROXY** [Go Here](../proxy/logging.md#custom-callback-class-async)
+::: 
+
+
 ## Callback Class
 You can create a custom callback class to precisely log events as they occur in litellm. 
 
