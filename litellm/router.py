@@ -289,11 +289,7 @@ class Router:
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                # Submit the function to the executor with a timeout
-                future = executor.submit(self.function_with_fallbacks, **kwargs)
-                response = future.result(timeout=timeout)  # type: ignore
-
+            response = self.function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
             raise e
@@ -308,7 +304,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             data = deployment["litellm_params"].copy()
             kwargs["model_info"] = deployment.get("model_info", {})
@@ -380,14 +379,17 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
             for k, v in self.default_litellm_params.items():
                 if (
-                    k not in kwargs
+                    k not in kwargs and v is not None
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
                 elif k == "metadata":
@@ -407,13 +409,24 @@ class Router:
             else:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
+
+            timeout = (
+                data.get(
+                    "timeout", None
+                )  # timeout set on litellm_params for this deployment
+                or self.timeout  # timeout set on router
+                or kwargs.get(
+                    "timeout", None
+                )  # this uses default_litellm_params when nothing is set
+            )
+
             response = await litellm.acompletion(
                 **{
                     **data,
                     "messages": messages,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": self.timeout,
+                    "timeout": timeout,
                     **kwargs,
                 }
             )
@@ -455,7 +468,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -530,7 +546,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -658,7 +677,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -784,7 +806,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
             kwargs.setdefault("metadata", {}).update(
-                {"deployment": deployment["litellm_params"]["model"]}
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
@@ -1411,6 +1436,37 @@ class Router:
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
 
+            # proxy support
+            import os
+            import httpx
+
+            # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
+            http_proxy = os.getenv("HTTP_PROXY", None)
+            https_proxy = os.getenv("HTTPS_PROXY", None)
+
+            # Create the proxies dictionary only if the environment variables are set.
+            sync_proxy_mounts = None
+            async_proxy_mounts = None
+            if http_proxy is not None and https_proxy is not None:
+                sync_proxy_mounts = {
+                    "http://": httpx.HTTPTransport(proxy=httpx.Proxy(url=http_proxy)),
+                    "https://": httpx.HTTPTransport(proxy=httpx.Proxy(url=https_proxy)),
+                }
+                async_proxy_mounts = {
+                    "http://": httpx.AsyncHTTPTransport(
+                        proxy=httpx.Proxy(url=http_proxy)
+                    ),
+                    "https://": httpx.AsyncHTTPTransport(
+                        proxy=httpx.Proxy(url=https_proxy)
+                    ),
+                }
+
+            organization = litellm_params.get("organization", None)
+            if isinstance(organization, str) and organization.startswith("os.environ/"):
+                organization_env_name = organization.replace("os.environ/", "")
+                organization = litellm.get_secret(organization_env_name)
+                litellm_params["organization"] = organization
+
             if "azure" in model_name:
                 if api_base is None:
                     raise ValueError(
@@ -1435,6 +1491,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1456,6 +1513,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1477,6 +1535,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1498,6 +1557,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1533,6 +1593,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1552,6 +1613,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1572,6 +1634,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),
                     )
                     self.cache.set_cache(
@@ -1591,6 +1654,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),
                     )
                     self.cache.set_cache(
@@ -1610,11 +1674,13 @@ class Router:
                     base_url=api_base,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.AsyncClient(
                         transport=AsyncCustomHTTPTransport(),
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1630,11 +1696,13 @@ class Router:
                     base_url=api_base,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.Client(
                         transport=CustomHTTPTransport(),
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=sync_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1651,11 +1719,13 @@ class Router:
                     base_url=api_base,
                     timeout=stream_timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.AsyncClient(
                         transport=AsyncCustomHTTPTransport(),
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1672,11 +1742,13 @@ class Router:
                     base_url=api_base,
                     timeout=stream_timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.Client(
                         transport=CustomHTTPTransport(),
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=sync_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(

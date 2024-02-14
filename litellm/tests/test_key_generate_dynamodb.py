@@ -33,7 +33,7 @@ from litellm.proxy.proxy_server import (
 )
 
 from litellm.proxy._types import NewUserRequest, DynamoDBArgs, GenerateKeyRequest
-from litellm.proxy.utils import DBClient
+from litellm.proxy.utils import DBClient, hash_token
 from starlette.datastructures import URL
 
 
@@ -116,6 +116,10 @@ def test_call_with_invalid_key(custom_db_client):
 
 def test_call_with_invalid_model(custom_db_client):
     # 3. Make a call to a key with an invalid model - expect to fail
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
@@ -209,7 +213,9 @@ def test_call_with_user_over_budget(custom_db_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -232,7 +238,7 @@ def test_call_with_user_over_budget(custom_db_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -240,7 +246,7 @@ def test_call_with_user_over_budget(custom_db_client):
                 },
                 completion_response=resp,
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -281,7 +287,9 @@ def test_call_with_user_over_budget_stream(custom_db_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -305,7 +313,7 @@ def test_call_with_user_over_budget_stream(custom_db_client):
                     "complete_streaming_response": resp,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -313,7 +321,7 @@ def test_call_with_user_over_budget_stream(custom_db_client):
                 },
                 completion_response=ModelResponse(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -353,7 +361,9 @@ def test_call_with_user_key_budget(custom_db_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -376,7 +386,7 @@ def test_call_with_user_key_budget(custom_db_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -384,7 +394,7 @@ def test_call_with_user_key_budget(custom_db_client):
                 },
                 completion_response=resp,
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -425,7 +435,9 @@ def test_call_with_key_over_budget_stream(custom_db_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm.proxy.proxy_server import (
+                _PROXY_track_cost_callback as track_cost_callback,
+            )
             from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
@@ -449,7 +461,7 @@ def test_call_with_key_over_budget_stream(custom_db_client):
                     "complete_streaming_response": resp,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -457,7 +469,7 @@ def test_call_with_key_over_budget_stream(custom_db_client):
                 },
                 completion_response=ModelResponse(),
             )
-
+            await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
@@ -468,3 +480,37 @@ def test_call_with_key_over_budget_stream(custom_db_client):
         error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
+
+
+def test_dynamo_db_migration(custom_db_client):
+    # Tests the temporary patch we have in place
+    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
+    try:
+
+        async def test():
+            request = GenerateKeyRequest(max_budget=1)
+            key = await generate_key_fn(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = (
+                "Bearer " + generated_key
+            )  # this works with ishaan's db, it's a never expiring key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            async def return_body():
+                return b'{"model": "azure-models"}'
+
+            request.body = return_body
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {traceback.format_exc()}")

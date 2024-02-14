@@ -8,16 +8,8 @@ Quick start CLI, Config, Docker
 LiteLLM Server manages:
 
 * **Unified Interface**: Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
+* **Cost tracking**: Authentication, Spend Tracking & Budgets [Virtual Keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
 * **Load Balancing**: between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model) - LiteLLM proxy can handle 1.5k+ requests/second during load tests.
-* **Cost tracking**: Authentication & Spend Tracking [Virtual Keys](#managing-auth---virtual-keys)
-
-[**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
-
-
-#### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
-
-
-View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
 $ pip install 'litellm[proxy]'
@@ -39,115 +31,6 @@ litellm --test
 ```
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
-
-### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
-
-<Tabs>
-<TabItem value="Curl" label="Curl Request">
-
-```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
---header 'Content-Type: application/json' \
---data ' {
-      "model": "gpt-3.5-turbo",
-      "messages": [
-        {
-          "role": "user",
-          "content": "what llm are you"
-        }
-      ]
-    }
-'
-```
-</TabItem>
-<TabItem value="openai" label="OpenAI v1.0.0+">
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:8000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-])
-
-print(response)
-
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo",
-    temperature=0.1
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
-<TabItem value="langchain-embedding" label="Langchain Embeddings">
-
-```python
-from langchain.embeddings import OpenAIEmbeddings
-
-embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
-
-
-text = "This is a test document."
-
-query_result = embeddings.embed_query(text)
-
-print(f"SAGEMAKER EMBEDDINGS")
-print(query_result[:5])
-
-embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
-
-text = "This is a test document."
-
-query_result = embeddings.embed_query(text)
-
-print(f"BEDROCK EMBEDDINGS")
-print(query_result[:5])
-
-embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
-
-text = "This is a test document."
-
-query_result = embeddings.embed_query(text)
-
-print(f"TITAN EMBEDDINGS")
-print(query_result[:5])
-```
-</TabItem>
-</Tabs>
-
 
 ### Supported LLMs
 All LiteLLM supported LLMs are supported on the Proxy. Seel all [supported llms](https://docs.litellm.ai/docs/providers)
@@ -330,9 +213,6 @@ $ litellm --model command-nightly
 
 </Tabs>
 
-
-
-
 ## Quick Start - LiteLLM Proxy + Config.yaml
 The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
 
@@ -362,6 +242,115 @@ model_list:
 ```shell
 litellm --config your_config.yaml
 ```
+
+
+## Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="langchain-embedding" label="Langchain Embeddings">
+
+```python
+from langchain.embeddings import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"SAGEMAKER EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"BEDROCK EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"TITAN EMBEDDINGS")
+print(query_result[:5])
+```
+</TabItem>
+</Tabs>
 
 [**More Info**](./configs.md)
 

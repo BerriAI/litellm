@@ -98,7 +98,7 @@ const sidebars = {
       link: {
         type: 'generated-index',
         title: '💥 OpenAI Proxy Server',
-        description: `Proxy Server to call 100+ LLMs in a unified interface, load balance deployments, track costs per user`,
+        description: `Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: '/simple_proxy',
       },
       items: [
@@ -115,6 +115,8 @@ const sidebars = {
         "proxy/ui",
         "proxy/model_management",
         "proxy/health",
+        "proxy/debugging",
+        "proxy/pii_masking",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
@@ -123,6 +125,7 @@ const sidebars = {
             "proxy/reliability",
           ]
         },
+        "proxy/caching",
         {
           "type": "category",
           "label": "Logging, Alerting, Caching",
@@ -130,7 +133,6 @@ const sidebars = {
             "proxy/logging", 
             "proxy/alerting",
             "proxy/streaming_logging",
-            "proxy/caching",
           ]
         },
         {

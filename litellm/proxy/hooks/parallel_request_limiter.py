@@ -9,7 +9,7 @@ from litellm import ModelResponse
 from datetime import datetime
 
 
-class MaxParallelRequestsHandler(CustomLogger):
+class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     user_api_key_cache = None
 
     # Class variables or attributes
@@ -17,7 +17,12 @@ class MaxParallelRequestsHandler(CustomLogger):
         pass
 
     def print_verbose(self, print_statement):
-        verbose_proxy_logger.debug(print_statement)
+        try:
+            verbose_proxy_logger.debug(print_statement)
+            if litellm.set_verbose:
+                print(print_statement)  # noqa
+        except:
+            pass
 
     async def async_pre_call_hook(
         self,
@@ -120,12 +125,14 @@ class MaxParallelRequestsHandler(CustomLogger):
             # ------------
 
             new_val = {
-                "current_requests": current["current_requests"] - 1,
+                "current_requests": max(current["current_requests"] - 1, 0),
                 "current_tpm": current["current_tpm"] + total_tokens,
                 "current_rpm": current["current_rpm"] + 1,
             }
 
-            self.print_verbose(f"updated_value in success call: {new_val}")
+            self.print_verbose(
+                f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
+            )
             self.user_api_key_cache.set_cache(
                 request_count_api_key, new_val, ttl=60
             )  # store in cache for 1 min.
@@ -176,7 +183,7 @@ class MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val = {
-                    "current_requests": current["current_requests"] - 1,
+                    "current_requests": max(current["current_requests"] - 1, 0),
                     "current_tpm": current["current_tpm"],
                     "current_rpm": current["current_rpm"],
                 }

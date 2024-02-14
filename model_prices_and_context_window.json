@@ -8,6 +8,15 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "gpt-4-turbo-preview": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096, 
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "gpt-4-0314": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -54,6 +63,15 @@
         "mode": "chat"
     },
     "gpt-4-1106-preview": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
+    "gpt-4-0125-preview": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -116,6 +134,15 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "gpt-3.5-turbo-0125": {
+        "max_tokens": 16385,
+        "max_input_tokens": 16385,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "gpt-3.5-turbo-16k": {
         "max_tokens": 16385,
         "max_input_tokens": 16385,
@@ -138,10 +165,24 @@
         "max_tokens": 4097,
         "max_input_tokens": 4097,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000012,
-        "output_cost_per_token": 0.000016,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000006,
         "litellm_provider": "openai",
         "mode": "chat"
+    },
+    "text-embedding-3-large": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "embedding"
+    },
+    "text-embedding-3-small": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.00000002,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "embedding"
     },
     "text-embedding-ada-002": {
         "max_tokens": 8191,
@@ -210,6 +251,15 @@
         "input_cost_per_pixel": 0.0000000381469,
         "output_cost_per_pixel": 0.0,
         "litellm_provider": "openai"
+    },
+    "azure/gpt-4-0125-preview": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "azure",
+        "mode": "chat"
     },
     "azure/gpt-4-1106-preview": {
         "max_tokens": 128000,
@@ -579,6 +629,51 @@
         "output_cost_per_token": 0.0000005,
         "litellm_provider": "vertex_ai-vision-models",
         "mode": "chat"
+    },
+    "textembedding-gecko": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding"
+    },
+    "textembedding-gecko-multilingual": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding"
+    },
+    "textembedding-gecko-multilingual@001": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding"
+    },
+    "textembedding-gecko@001": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding"
+    },
+    "textembedding-gecko@003": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding"
     },
     "palm/chat-bison": {
         "max_tokens": 4096,
@@ -1400,6 +1495,48 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "512-x-512/50-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.018,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "512-x-512/max-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.036,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "max-x-max/50-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.036,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "max-x-max/max-steps/stability.stable-diffusion-xl-v0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.072,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "1024-x-1024/50-steps/stability.stable-diffusion-xl-v1": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "1024-x-1024/max-steps/stability.stable-diffusion-xl-v1": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.08,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
     "sagemaker/meta-textgeneration-llama-2-7b": {
         "max_tokens": 4096, 
         "input_cost_per_token": 0.000,
@@ -1650,62 +1787,71 @@
         "litellm_provider": "deepinfra",
         "mode": "chat"
     },
-      "perplexity/pplx-7b-chat": { 
+    "perplexity/codellama-34b-instruct": { 
+        "max_tokens": 16384, 
+        "input_cost_per_token": 0.00000035, 
+        "output_cost_per_token": 0.00000140,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/codellama-70b-instruct": { 
+        "max_tokens": 16384, 
+        "input_cost_per_token": 0.00000070, 
+        "output_cost_per_token": 0.00000280,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
+        "input_cost_per_token": 0.00000007, 
+        "output_cost_per_token": 0.00000028, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
-      },
-      "perplexity/pplx-70b-chat": { 
+    },
+    "perplexity/pplx-70b-chat": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.00000070, 
+        "output_cost_per_token": 0.00000280, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/pplx-7b-online": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
+        "output_cost_per_token": 0.00000028, 
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
-      },
-      "perplexity/pplx-7b-online": { 
+    },
+    "perplexity/pplx-70b-online": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.0005, 
+        "output_cost_per_token": 0.00000280, 
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
-      },
-      "perplexity/pplx-70b-online": { 
+    },
+    "perplexity/llama-2-70b-chat": { 
         "max_tokens": 4096, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.0005, 
+        "input_cost_per_token": 0.00000070, 
+        "output_cost_per_token": 0.00000280,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
-      },
-      "perplexity/llama-2-13b-chat": { 
+    },
+    "perplexity/mistral-7b-instruct": { 
         "max_tokens": 4096, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
+        "input_cost_per_token": 0.00000007,
+        "output_cost_per_token": 0.00000028,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
-      },
-      "perplexity/llama-2-70b-chat": { 
-        "max_tokens": 4096, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-      },
-      "perplexity/mistral-7b-instruct": { 
-        "max_tokens": 4096, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-      },
-      "perplexity/replit-code-v1.5-3b": { 
-        "max_tokens": 4096, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-      },
+    },
+    "perplexity/mixtral-8x7b-instruct": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000007,
+        "output_cost_per_token": 0.00000028,
+        "litellm_provider": "perplexity",
+        "mode": "chat"
+    },
       "anyscale/mistralai/Mistral-7B-Instruct-v0.1": {
         "max_tokens": 16384, 
         "input_cost_per_token": 0.00000015, 

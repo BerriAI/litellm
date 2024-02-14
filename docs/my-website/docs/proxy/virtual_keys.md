@@ -1,4 +1,4 @@
-# Virtual Keys
+# Virtual Keys, Users
 Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
@@ -6,6 +6,7 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 :::info
 
+- 🔑 [UI to Generate, Edit, Delete Keys (with SSO)](https://docs.litellm.ai/docs/proxy/ui)
 - [Deploy LiteLLM Proxy with Key Management](https://docs.litellm.ai/docs/proxy/deploy#deploy-with-database)
 - Dockerfile.database for LiteLLM Proxy + Key Management [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile.database)
 
@@ -16,8 +17,11 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 Requirements: 
 
-- Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
+- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
 - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
+- Set a `master key`, this is your Proxy Admin key - you can use this to create other keys
+  - ** Set on config.yaml** set your master key under `general_settings:master_key`, example below
+  - ** Set env variable** set `LITELLM_MASTER_KEY` (**Note: either set this on the config.yaml or in your env** whatever is more convenient for you)
 
 (the proxy Dockerfile checks if the `DATABASE_URL` is set and then intializes the DB connection)
 
@@ -81,15 +85,17 @@ curl 'http://0.0.0.0:8000/key/generate' \
 
 Request Params:
 
-- `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
+- `duration`: *Optional[str]* - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+- `key_alias`: *Optional[str]* - User defined key alias
+- `team_id`: *Optional[str]* - The team id of the user
+- `models`: *Optional[list]* - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+- `aliases`: *Optional[dict]* - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
+- `config`: *Optional[dict]* - any key-specific configs, overrides config in config.yaml
+- `spend`: *Optional[int]* - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+- `max_budget`: *Optional[float]* - Specify max budget for a given key.
+- `max_parallel_requests`: *Optional[int]* - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+- `metadata`: *Optional[dict]* - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
 
-- `duration`: *str or null (optional)* Specify the length of time the token is valid for. If null, default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
-
-- `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
-
-- `team_id`: *str or null (optional)* Specify team_id for the associated key
-
-- `max_budget`: *float or null (optional)* Specify max budget (in Dollars $) for a given key. If no value is set, the key has no budget
 
 ### Response
 
@@ -97,18 +103,9 @@ Request Params:
 {
     "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
     "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+    "key_name": "sk-...7sFA" # abbreviated key string, ONLY stored in db if `allow_user_auth: true` set - [see](./ui.md)
+    ...
 }
-```
-
-### Keys that don't expire
-
-Just set duration to None. 
-
-```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
 ```
 
 ### Upgrade/Downgrade Models 
@@ -285,7 +282,152 @@ Request Params:
 }
 ```
 
-## Set Budgets - Per Key
+## /user/new
+
+### Request
+
+All [key/generate params supported](#keygenerate) for creating a user
+```shell
+curl 'http://0.0.0.0:4000/user/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "user_id": "ishaan1",
+  "user_email": "ishaan@litellm.ai",
+  "user_role": "admin",
+  "team_id": "cto-team",
+  "max_budget": 20,
+  "budget_duration": "1h"
+
+}'
+```
+
+Request Params:
+
+- user_id: str (optional - defaults to uuid)  - The unique identifier for the user.
+- user_email: str (optional - defaults to "")  - The email address associated with the user.
+- user_role: str (optional - defaults to "app_user") - The role assigned to the user. Can be "admin", "app_owner", "app_user"
+
+**Possible `user_role` values**
+```
+"admin" - Maintaining the proxy and owning the overall budget
+"app_owner" - employees maintaining the apps, each owner may own more than one app
+"app_user" - users who know nothing about the proxy. These users get created when you pass `user` to /chat/completions
+```
+- team_id: str (optional - defaults to "") - The identifier for the team to which the user belongs.
+- max_budget: float (optional - defaults to `null`) - The maximum budget allocated for the user. No budget checks done if `max_budget==null`
+- budget_duration: str (optional - defaults to `null`) - The duration for which the budget is valid, e.g., "1h", "1d"
+
+### Response
+A key will be generated for the new user created
+
+```shell
+{
+  "models": [],
+  "spend": 0.0,
+  "max_budget": null,
+  "user_id": "ishaan1",
+  "team_id": null,
+  "max_parallel_requests": null,
+  "metadata": {},
+  "tpm_limit": null,
+  "rpm_limit": null,
+  "budget_duration": null,
+  "allowed_cache_controls": [],
+  "key_alias": null,
+  "duration": null,
+  "aliases": {},
+  "config": {},
+  "key": "sk-JflB33ucTqc2NYvNAgiBCA",
+  "key_name": null,
+  "expires": null
+}
+
+```
+
+Request Params:
+- keys: List[str] - List of keys to delete
+
+### Response
+
+```json
+{
+  "deleted_keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}
+```
+
+## Advanced 
+### Upperbound /key/generate params
+Use this, if you need to control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
+
+Set `litellm_settings:upperbound_key_generate_params`:
+```yaml
+litellm_settings:
+  upperbound_key_generate_params:
+    max_budget: 100 # upperbound of $100, for all /key/generate requests
+    duration: "30d" # upperbound of 30 days for all /key/generate requests
+```
+
+** Expected Behavior **
+
+- Send a `/key/generate` request with `max_budget=200`
+- Key will be created with `max_budget=100` since 100 is the upper bound
+
+### Default /key/generate params
+Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
+
+When a `/key/generate` request does not specify `max_budget`, it will use the `max_budget` specified in `default_key_generate_params`
+
+Set `litellm_settings:default_key_generate_params`:
+```yaml
+litellm_settings:
+  default_key_generate_params:
+    max_budget: 1.5000
+    models: ["azure-gpt-3.5"]
+    duration:     # blank means `null`
+    metadata: {"setting":"default"}
+    team_id: "core-infra"
+```
+
+### Restrict models by `team_id`
+`litellm-dev` can only access `azure-gpt-3.5`
+
+```yaml
+litellm_settings:
+  default_team_settings:
+    - team_id: litellm-dev
+      models: ["azure-gpt-3.5"]
+```
+
+#### Create key with team_id="litellm-dev"
+```shell
+curl --location 'http://localhost:4000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data-raw '{"team_id": "litellm-dev"}'
+```
+
+#### Use Key to call invalid model - Fails 
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-qo992IjKOC2CHKZGRoJIGA' \
+    --data '{
+        "model": "BEDROCK_GROUP",
+        "messages": [
+            {
+                "role": "user",
+                "content": "hi"
+            }
+        ]
+    }'
+```
+
+```shell
+{"error":{"message":"Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n\nTraceback (most recent call last):\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/proxy_server.py\", line 2298, in chat_completion\n    _is_valid_team_configs(\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/utils.py\", line 1296, in _is_valid_team_configs\n    raise Exception(\nException: Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n","type":"None","param":"None","code":500}}%            
+```         
+
+### Set Budgets - Per Key
 
 Set `max_budget` in (USD $) param in the `key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
 
@@ -331,7 +473,7 @@ Expected Response from `/chat/completions` when key has crossed budget
 ```
 
 
-## Set Budgets - Per User
+### Set Budgets - Per User
 
 LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
 
@@ -356,7 +498,7 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 }
 ```
 
-## Tracking Spend 
+### Tracking Spend 
 
 You can get spend for a key by using the `/key/info` endpoint. 
 
@@ -391,13 +533,13 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
 ```
 
 
-## Custom Auth 
+### Custom Auth 
 
 You can now override the default api key auth. 
 
 Here's how: 
 
-### 1. Create a custom auth file. 
+#### 1. Create a custom auth file. 
 
 Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
 
@@ -414,7 +556,7 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
         raise Exception
 ```
 
-### 2. Pass the filepath (relative to the config.yaml)
+#### 2. Pass the filepath (relative to the config.yaml)
 
 Pass the filepath to the config.yaml 
 
@@ -435,16 +577,16 @@ general_settings:
 
 [**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
 
-### 3. Start the proxy
+#### 3. Start the proxy
 ```shell
 $ litellm --config /path/to/config.yaml 
 ```
 
-## Custom /key/generate
+### Custom /key/generate
 
 If you need to add custom logic before generating a Proxy API Key (Example Validating `team_id`)
 
-### 1. Write a custom `custom_generate_key_fn`
+#### 1. Write a custom `custom_generate_key_fn`
 
 
 The input to the custom_generate_key_fn function is a single parameter: `data` [(Type: GenerateKeyRequest)](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py#L125)
@@ -510,7 +652,7 @@ async def custom_generate_key_fn(data: GenerateKeyRequest)-> dict:
 ```
 
 
-### 2. Pass the filepath (relative to the config.yaml)
+#### 2. Pass the filepath (relative to the config.yaml)
 
 Pass the filepath to the config.yaml 
 
@@ -532,18 +674,18 @@ general_settings:
 
 
 
-## [BETA] Dynamo DB 
+### [BETA] Dynamo DB 
 
 Only live in `v1.16.21.dev1`. 
 
-### Step 1. Save keys to env
+#### Step 1. Save keys to env
 
 ```shell
 AWS_ACCESS_KEY_ID = "your-aws-access-key-id"
 AWS_SECRET_ACCESS_KEY = "your-aws-secret-access-key"
 ```
 
-### Step 2. Add details to config 
+#### Step 2. Add details to config 
 
 ```yaml
 general_settings: 
@@ -560,7 +702,7 @@ general_settings:
   }
 ```
 
-### Step 3. Generate Key
+#### Step 3. Generate Key
 
 ```bash
 curl --location 'http://0.0.0.0:8000/key/generate' \
