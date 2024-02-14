@@ -432,14 +432,13 @@ def completion(
                 tools=tools,
             )
 
-            if tools is not None and hasattr(
-                response.candidates[0].content.parts[0], "function_call"
+            if tools is not None and bool(
+                getattr(response.candidates[0].content.parts[0], "function_call", None)
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
-                if function_call.args is not None:
-                    for k, v in function_call.args.items():
-                        args_dict[k] = v
+                for k, v in function_call.args.items():
+                    args_dict[k] = v
                 args_str = json.dumps(args_dict)
                 message = litellm.Message(
                     content=None,
