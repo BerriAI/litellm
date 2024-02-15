@@ -2819,7 +2819,8 @@ async def generate_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
-    - team_id: Optional[str] - The team id of the user
+    - team_id: Optional[str] - The team id of the key
+    - user_id: Optional[str] - The user id of the key
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -3048,8 +3049,8 @@ async def info_key_fn_v2(
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:8000/key/info" \
--H "Authorization: Bearer sk-1234" \
--d {"keys": ["sk-1", "sk-2", "sk-3"]}
+    -H "Authorization: Bearer sk-1234" \
+    -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
     global prisma_client
@@ -3755,14 +3756,85 @@ async def delete_team():
     pass
 
 
-@router.post(
+@router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def info_team():
+async def team_info(
+    team_id: str = fastapi.Query(
+        default=None, description="Team ID in the request parameters"
+    )
+):
     """
     get info on team + related keys
+
+    ```
+    curl --location 'http://localhost:4000/team/info' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "teams": ["<team-id>",..]
+    }'
+    ```
     """
-    pass
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                },
+            )
+        if team_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Malformed request. No team id passed in."},
+            )
+
+        team_info = await prisma_client.get_data(
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        ## GET ALL KEYS ##
+        keys = await prisma_client.get_data(
+            team_id=team_id,
+            table_name="key",
+            query_type="find_all",
+            expires=datetime.now(),
+        )
+
+        if team_info is None:
+            ## make sure we still return a total spend ##
+            spend = 0
+            for k in keys:
+                spend += getattr(k, "spend", 0)
+            team_info = {"spend": spend}
+
+        ## REMOVE HASHED TOKEN INFO before returning ##
+        for key in keys:
+            try:
+                key = key.model_dump()  # noqa
+            except:
+                # if using pydantic v1
+                key = key.dict()
+            key.pop("token", None)
+        return {"team_id": team_id, "team_info": team_info, "keys": keys}
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 #### MODEL MANAGEMENT ####
