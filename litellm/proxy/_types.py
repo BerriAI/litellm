@@ -21,10 +21,10 @@ class LiteLLMBase(BaseModel):
 
     def json(self, **kwargs):
         try:
-            return self.model_dump()  # noqa
+            return self.model_dump(**kwargs)  # noqa
         except Exception as e:
             # if using pydantic v1
-            return self.dict()
+            return self.dict(**kwargs)
 
     def fields_set(self):
         try:
@@ -209,6 +209,38 @@ class UpdateUserRequest(GenerateRequestBase):
     metadata: Optional[dict] = None
     user_role: Optional[str] = None
     max_budget: Optional[float] = None
+
+
+class NewTeamRequest(LiteLLMBase):
+    team_alias: Optional[str] = None
+    team_id: Optional[str] = None
+    admins: list = []
+    members: list = []
+    metadata: Optional[dict] = None
+
+
+class LiteLLM_TeamTable(NewTeamRequest):
+    max_budget: Optional[float] = None
+    spend: Optional[float] = None
+    models: list = []
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+
+
+class NewTeamResponse(LiteLLMBase):
+    team_id: str
+    admins: list
+    members: list
+    metadata: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class TeamRequest(LiteLLMBase):
+    teams: List[str]
 
 
 class KeyManagementSystem(enum.Enum):
