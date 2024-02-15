@@ -67,6 +67,7 @@ max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[
     str
 ] = None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+_openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
     "functions",
     "function_call",
@@ -164,6 +165,8 @@ secret_manager_client: Optional[
 ] = None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional[KeyManagementSystem] = None
+#### PII MASKING ####
+output_parse_pii: bool = False
 #############################################
 
 

@@ -198,6 +198,33 @@
         "litellm_provider": "openai",
         "mode": "embedding"
     },
+    "text-moderation-stable": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0,
+        "input_cost_per_token": 0.000000,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "moderations"
+    },
+    "text-moderation-007": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0,
+        "input_cost_per_token": 0.000000,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "moderations"
+    },
+    "text-moderation-latest": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0,
+        "input_cost_per_token": 0.000000,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "moderations"
+    },
     "256-x-256/dall-e-2": {
         "mode": "image_generation",
         "input_cost_per_pixel": 0.00000024414,

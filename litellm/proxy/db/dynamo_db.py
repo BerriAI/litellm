@@ -53,6 +53,41 @@ class DynamoDBWrapper(CustomDB):
         self.database_arguments = database_arguments
         self.region_name = database_arguments.region_name
 
+    def set_env_vars_based_on_arn(self):
+        if self.database_arguments.aws_role_name is None:
+            return
+        verbose_proxy_logger.debug(
+            f"DynamoDB: setting env vars based on arn={self.database_arguments.aws_role_name}"
+        )
+        import boto3, os
+
+        sts_client = boto3.client("sts")
+
+        # call 1
+        non_used_assumed_role = sts_client.assume_role_with_web_identity(
+            RoleArn=self.database_arguments.aws_role_name,
+            RoleSessionName=self.database_arguments.aws_session_name,
+            WebIdentityToken=self.database_arguments.aws_web_identity_token,
+        )
+
+        # call 2
+        assumed_role = sts_client.assume_role(
+            RoleArn=self.database_arguments.assume_role_aws_role_name,
+            RoleSessionName=self.database_arguments.assume_role_aws_session_name,
+        )
+
+        aws_access_key_id = assumed_role["Credentials"]["AccessKeyId"]
+        aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
+        aws_session_token = assumed_role["Credentials"]["SessionToken"]
+
+        verbose_proxy_logger.debug(
+            f"Got STS assumed Role, aws_access_key_id={aws_access_key_id}"
+        )
+        # set these in the env so aiodynamo can use them
+        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+        os.environ["AWS_SESSION_TOKEN"] = aws_session_token
+
     async def connect(self):
         """
         Connect to DB, and creating / updating any tables
@@ -75,6 +110,7 @@ class DynamoDBWrapper(CustomDB):
         import aiohttp
 
         verbose_proxy_logger.debug("DynamoDB Wrapper - Attempting to connect")
+        self.set_env_vars_based_on_arn()
         # before making ClientSession check if ssl_verify=False
         if self.database_arguments.ssl_verify == False:
             client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))
@@ -171,6 +207,8 @@ class DynamoDBWrapper(CustomDB):
         from aiohttp import ClientSession
         import aiohttp
 
+        self.set_env_vars_based_on_arn()
+
         if self.database_arguments.ssl_verify == False:
             client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))
         else:
@@ -213,6 +251,8 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
         import aiohttp
+
+        self.set_env_vars_based_on_arn()
 
         if self.database_arguments.ssl_verify == False:
             client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))
@@ -261,6 +301,7 @@ class DynamoDBWrapper(CustomDB):
     async def update_data(
         self, key: str, value: dict, table_name: Literal["user", "key", "config"]
     ):
+        self.set_env_vars_based_on_arn()
         from aiodynamo.client import Client
         from aiodynamo.credentials import Credentials, StaticCredentials
         from aiodynamo.http.httpx import HTTPX
@@ -334,4 +375,5 @@ class DynamoDBWrapper(CustomDB):
         """
         Not Implemented yet.
         """
+        self.set_env_vars_based_on_arn()
         return super().delete_data(keys, table_name)

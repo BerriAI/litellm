@@ -738,6 +738,8 @@ class CallTypes(Enum):
     text_completion = "text_completion"
     image_generation = "image_generation"
     aimage_generation = "aimage_generation"
+    moderation = "moderation"
+    amoderation = "amoderation"
 
 
 # Logging function -> log the exact model details + what's being sent | Non-BlockingP
@@ -2100,6 +2102,11 @@ def client(original_function):
                 or call_type == CallTypes.aimage_generation.value
             ):
                 messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            elif (
+                call_type == CallTypes.moderation.value
+                or call_type == CallTypes.amoderation.value
+            ):
+                messages = args[1] if len(args) > 1 else kwargs["input"]
             elif (
                 call_type == CallTypes.atext_completion.value
                 or call_type == CallTypes.text_completion.value
@@ -7692,6 +7699,7 @@ class CustomStreamWrapper:
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = ""
         self.complete_response = ""
+        self.response_uptil_now = ""
         _model_info = (
             self.logging_obj.model_call_details.get("litellm_params", {}).get(
                 "model_info", {}
@@ -7703,6 +7711,7 @@ class CustomStreamWrapper:
         }  # returned as x-litellm-model-id response header in proxy
         self.response_id = None
         self.logging_loop = None
+        self.rules = Rules()
 
     def __iter__(self):
         return self
@@ -8659,7 +8668,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
                     print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                    response = self.chunk_creator(chunk=chunk)
+                    response: Optional[ModelResponse] = self.chunk_creator(chunk=chunk)
                     print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
                     if response is None:
                         continue
@@ -8667,7 +8676,12 @@ class CustomStreamWrapper:
                     threading.Thread(
                         target=self.run_success_logging_in_thread, args=(response,)
                     ).start()  # log response
-
+                    self.response_uptil_now += (
+                        response.choices[0].delta.get("content", "") or ""
+                    )
+                    self.rules.post_call_rules(
+                        input=self.response_uptil_now, model=self.model
+                    )
                     # RETURN RESULT
                     return response
         except StopIteration:
@@ -8705,7 +8719,9 @@ class CustomStreamWrapper:
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
                     print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
-                    processed_chunk = self.chunk_creator(chunk=chunk)
+                    processed_chunk: Optional[ModelResponse] = self.chunk_creator(
+                        chunk=chunk
+                    )
                     print_verbose(
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
                     )
@@ -8720,6 +8736,12 @@ class CustomStreamWrapper:
                             processed_chunk,
                         )
                     )
+                    self.response_uptil_now += (
+                        processed_chunk.choices[0].delta.get("content", "") or ""
+                    )
+                    self.rules.post_call_rules(
+                        input=self.response_uptil_now, model=self.model
+                    )
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -8733,7 +8755,9 @@ class CustomStreamWrapper:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
                         print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                        processed_chunk = self.chunk_creator(chunk=chunk)
+                        processed_chunk: Optional[ModelResponse] = self.chunk_creator(
+                            chunk=chunk
+                        )
                         print_verbose(
                             f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"
                         )
@@ -8750,6 +8774,12 @@ class CustomStreamWrapper:
                             )
                         )
 
+                        self.response_uptil_now += (
+                            processed_chunk.choices[0].delta.get("content", "") or ""
+                        )
+                        self.rules.post_call_rules(
+                            input=self.response_uptil_now, model=self.model
+                        )
                         # RETURN RESULT
                         return processed_chunk
         except StopAsyncIteration:
