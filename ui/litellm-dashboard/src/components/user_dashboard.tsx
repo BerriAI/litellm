@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { userInfoCall } from "./networking";
+import { userInfoCall, modelInfoCall } from "./networking";
 import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
@@ -47,6 +47,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [userModels, setUserModels] = useState<string[]>([]);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
@@ -96,22 +97,39 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !data) {
-      const cachedData = localStorage.getItem("userData");
-      const cachedSpendData = localStorage.getItem("userSpendData");
-      if (cachedData && cachedSpendData) {
+      const cachedData = localStorage.getItem("userData" + userID);
+      const cachedSpendData = localStorage.getItem("userSpendData" + userID);
+      const cachedUserModels = localStorage.getItem("userModels" + userID);
+      if (cachedData && cachedSpendData && cachedUserModels) {
         setData(JSON.parse(cachedData));
         setUserSpendData(JSON.parse(cachedSpendData));
+        setUserModels(JSON.parse(cachedUserModels));
+
       } else {
         const fetchData = async () => {
           try {
             const response = await userInfoCall(accessToken, userID, userRole);
             setUserSpendData(response["user_info"]);
             setData(response["keys"]); // Assuming this is the correct path to your data
-            localStorage.setItem("userData", JSON.stringify(response["keys"]));
+            localStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
             localStorage.setItem(
-              "userSpendData",
+              "userSpendData" + userID,
               JSON.stringify(response["user_info"])
             );
+
+            const model_info = await modelInfoCall(accessToken, userID, userRole);
+            console.log("model_info:", model_info);
+            // loop through model_info["data"] and create an array of element.model_name
+            let available_model_names = model_info["data"].map((element: { model_name: string; }) => element.model_name);
+            console.log("available_model_names:", available_model_names);
+            setUserModels(available_model_names);
+
+            console.log("userModels:", userModels);
+
+            localStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
+
+
+            
           } catch (error) {
             console.error("There was an error fetching the data", error);
             // Optionally, update your UI to reflect the error state here as well
@@ -158,6 +176,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           <CreateKey
             userID={userID}
             userRole={userRole}
+            userModels={userModels}
             accessToken={accessToken}
             data={data}
             setData={setData}
