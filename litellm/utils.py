@@ -8705,6 +8705,8 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "ollama"
                 or self.custom_llm_provider == "ollama_chat"
                 or self.custom_llm_provider == "vertex_ai"
+                or self.custom_llm_provider == "sagemaker"
+                or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 print_verbose(
                     f"value of async completion stream: {self.completion_stream}"

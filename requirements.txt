@@ -7,7 +7,7 @@ backoff==2.2.1 # server dep
 pyyaml>=6.0.1 # server dep
 uvicorn==0.22.0 # server dep
 gunicorn==21.2.0 # server dep
-boto3==1.28.58 # aws bedrock/sagemaker calls
+boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
 numpy==1.24.3 # semantic caching
 prisma==0.11.0 # for db
@@ -30,4 +30,5 @@ click==8.1.7 # for proxy cli
 jinja2==3.1.3 # for prompt templates
 certifi>=2023.7.22 # [TODO] clean up 
 aiohttp==3.9.0 # for network calls
+aioboto3==12.3.0 # for async sagemaker calls
 ####
