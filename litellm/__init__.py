@@ -146,6 +146,7 @@ model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/mai
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
 upperbound_key_generate_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
