@@ -29,9 +29,11 @@ from litellm._logging import print_verbose, verbose_logger
 
 class GenericAPILogger:
     # Class variables or attributes
-    def __init__(self, endpoint=None):
+    def __init__(self, endpoint=None, headers=None):
         try:
             verbose_logger.debug(f"in init GenericAPILogger, endpoint {endpoint}")
+            self.endpoint = endpoint
+            self.headers = headers
 
             pass
 
@@ -44,7 +46,7 @@ class GenericAPILogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
             verbose_logger.debug(
-                f"s3 Logging - Enters logging function for model {kwargs}"
+                f"GenericAPILogger Logging - Enters logging function for model {kwargs}"
             )
 
             # construct payload to send custom logger
@@ -54,6 +56,7 @@ class GenericAPILogger:
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
             messages = kwargs.get("messages")
+            cost = kwargs.get("response_cost", 0.0)
             optional_params = kwargs.get("optional_params", {})
             call_type = kwargs.get("call_type", "litellm.completion")
             cache_hit = kwargs.get("cache_hit", False)
@@ -74,6 +77,7 @@ class GenericAPILogger:
                 "response": response_obj,
                 "usage": usage,
                 "metadata": metadata,
+                "cost": cost,
             }
 
             # Ensure everything in the payload is converted to str
@@ -87,11 +91,14 @@ class GenericAPILogger:
             import json
 
             payload = json.dumps(payload)
+            data = {
+                "data": payload,
+            }
 
-            print_verbose(f"\nGeneric Logger - Logging payload = {payload}")
+            print_verbose(f"\nGeneric Logger - Logging payload = {data}")
 
             # make request to endpoint with payload
-            response = requests.post(self.endpoint, data=payload, headers=self.headers)
+            response = requests.post(self.endpoint, data=data, headers=self.headers)
 
             response_status = response.status_code
             response_text = response.text
