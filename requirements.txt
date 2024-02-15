@@ -30,4 +30,5 @@ click==8.1.7 # for proxy cli
 jinja2==3.1.2 # for prompt templates
 certifi>=2023.7.22 # [TODO] clean up 
 aiohttp==3.9.0 # for network calls
+aioboto3==12.3.0 # for async sagemaker calls
 ####
