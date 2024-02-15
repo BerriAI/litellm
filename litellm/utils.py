@@ -29,11 +29,12 @@ from dataclasses import (
     dataclass,
     field,
 )  # for storing API inputs, outputs, and metadata
-#import pkg_resources
+
+# import pkg_resources
 from importlib import resources
 
 # filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
-filename = str(resources.files().joinpath("llms/tokenizers"))
+filename = str(resources.files("llms").joinpath("tokenizers"))
 os.environ[
     "TIKTOKEN_CACHE_DIR"
 ] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
@@ -74,6 +75,10 @@ from .exceptions import (
     BudgetExceededError,
     UnprocessableEntityError,
 )
+
+# import enterprise features
+from ..enterprise.callbacks.api_callback import GenericAPILogger
+
 from typing import cast, List, Dict, Union, Optional, Literal, Any
 from .caching import Cache
 from concurrent.futures import ThreadPoolExecutor
@@ -99,6 +104,7 @@ customLogger = None
 langFuseLogger = None
 dynamoLogger = None
 s3Logger = None
+genericAPILogger = None
 llmonitorLogger = None
 aispendLogger = None
 berrispendLogger = None
@@ -1354,6 +1360,35 @@ class Logging:
                                 langfuse_secret=self.langfuse_secret,
                             )
                         langFuseLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "generic":
+                        global genericAPILogger
+                        verbose_logger.debug("reaches langfuse for success logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            verbose_logger.debug(
+                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
+                            if complete_streaming_response is None:
+                                break
+                            else:
+                                print_verbose("reaches langfuse for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+                        if genericAPILogger is None:
+                            genericAPILogger = GenericAPILogger()
+                        genericAPILogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
