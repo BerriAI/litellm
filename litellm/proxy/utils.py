@@ -677,7 +677,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def insert_data(
-        self, data: dict, table_name: Literal["user", "key", "config", "spend"]
+        self, data: dict, table_name: Literal["user", "key", "config", "spend", "team"]
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -713,6 +713,17 @@ class PrismaClient:
                 )
                 verbose_proxy_logger.info(f"Data Inserted into User Table")
                 return new_user_row
+            elif table_name == "team":
+                db_data = self.jsonify_object(data=data)
+                new_team_row = await self.db.litellm_teamtable.upsert(
+                    where={"team_id": data["team_id"]},
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {},  # don't do anything if it already exists
+                    },
+                )
+                verbose_proxy_logger.info(f"Data Inserted into Team Table")
+                return new_team_row
             elif table_name == "config":
                 """
                 For each param,
