@@ -484,7 +484,7 @@ def embedding(
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
 
-    if aws_access_key_id != None:
+    if aws_access_key_id is not None:
         # uses auth params passed to completion
         # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
         client = boto3.client(

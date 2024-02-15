@@ -88,6 +88,22 @@ async def test_chat_completion():
         await chat_completion(session=session, key=key_2)
 
 
+@pytest.mark.asyncio
+async def test_chat_completion_old_key():
+    """
+    Production test for backwards compatibility. Test db against a pre-generated (old key)
+    - Create key
+    Make chat completion call
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            key = "sk-yNXvlRO4SxIGG0XnRMYxTw"
+            await chat_completion(session=session, key=key)
+        except Exception as e:
+            key = "sk-2KV0sAElLQqMpLZXdNf3yw"  # try diff db key (in case db url is for the other db)
+            await chat_completion(session=session, key=key)
+
+
 async def completion(session, key):
     url = "http://0.0.0.0:4000/completions"
     headers = {

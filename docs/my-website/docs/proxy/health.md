@@ -79,6 +79,23 @@ model_list:
       mode: embedding # 👈 ADD THIS
 ```
 
+### Image Generation Models 
+
+We need some way to know if the model is an image generation model when running checks, if you have this in your config, specifying mode it makes an image generation health check
+
+```yaml
+model_list:
+  - model_name: dall-e-3
+    litellm_params:
+      model: azure/dall-e-3
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      mode: image_generation # 👈 ADD THIS
+```
+
+
 ### Text Completion Models 
 
 We need some way to know if the model is a text completion model when running checks, if you have this in your config, specifying mode it makes an embedding health check

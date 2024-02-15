@@ -675,6 +675,9 @@ class S3Cache(BaseCache):
     def flush_cache(self):
         pass
 
+    async def disconnect(self):
+        pass
+
 
 class DualCache(BaseCache):
     """

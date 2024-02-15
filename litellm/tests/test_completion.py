@@ -71,7 +71,7 @@ def test_completion_claude():
             messages=messages,
             request_timeout=10,
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check response args
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
@@ -1545,9 +1545,9 @@ def test_completion_bedrock_titan_null_response():
             ],
         )
         # Add any assertions here to check the response
-        pytest.fail(f"Expected to fail")
+        print(f"response: {response}")
     except Exception as e:
-        pass
+        pytest.fail(f"An error occurred - {str(e)}")
 
 
 def test_completion_bedrock_titan():
@@ -2093,10 +2093,6 @@ def test_completion_cloudflare():
 
 
 def test_moderation():
-    import openai
-
-    openai.api_type = "azure"
-    openai.api_version = "GM"
     response = litellm.moderation(input="i'm ishaan cto of litellm")
     print(response)
     output = response.results[0]

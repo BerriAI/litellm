@@ -9,73 +9,41 @@ model_list:
       mode: chat
       max_tokens: 4096
       base_model: azure/gpt-4-1106-preview
+      access_groups: ["public"] 
+  - model_name: openai-gpt-3.5
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      access_groups: ["public"]
+  - model_name: anthropic-claude-v2.1
+    litellm_params:
+      model: bedrock/anthropic.claude-v2:1
+      timeout: 300 # sets a 5 minute timeout
+    model_info:
+      access_groups: ["private"]
+  - model_name: anthropic-claude-v2
+    litellm_params:
+      model: bedrock/anthropic.claude-v2
+  - model_name: bedrock-cohere
+    litellm_params:
+      model: bedrock/cohere.command-text-v14
+      timeout: 0.0001
   - model_name: gpt-4
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
-  - model_name: gpt-vision
+    model_info:
+      base_model: azure/gpt-4
+  - model_name: text-moderation-stable
     litellm_params:
-      model: azure/gpt-4-vision
-      base_url: https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions
-      api_key: os.environ/AZURE_VISION_API_KEY
-      api_version: "2023-09-01-preview"
-      dataSources:
-        - type: AzureComputerVision
-          parameters:
-            endpoint: os.environ/AZURE_VISION_ENHANCE_ENDPOINT
-            key: os.environ/AZURE_VISION_ENHANCE_KEY
-  - model_name: BEDROCK_GROUP
-    litellm_params:
-      model: bedrock/cohere.command-text-v14
-      timeout: 0.0001
-  - model_name: tg-ai
-    litellm_params:
-      model: together_ai/mistralai/Mistral-7B-Instruct-v0.1
-  - model_name: sagemaker
-    litellm_params:
-      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
-  - model_name: openai-gpt-3.5
-    litellm_params:
-      model: gpt-3.5-turbo
+      model: text-moderation-stable
       api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      mode: chat
-  - model_name: azure-cloudflare
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-  - model_name: azure-embedding-model
-    litellm_params:
-      model: azure/azure-embedding-model
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-    model_info:
-      mode: embedding
-      base_model: text-embedding-ada-002
-  - model_name: text-embedding-ada-002
-    litellm_params:
-      model: text-embedding-ada-002
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      mode: embedding
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   success_callback: ['langfuse']
-  max_budget: 10      # global budget for proxy 
-  max_user_budget: 0.0001
-  budget_duration: 30d    # global budget duration, will reset after 30d
-  default_key_generate_params:
-    max_budget: 1.5000
-    models: ["azure-gpt-3.5"]
-    duration: None
-  upperbound_key_generate_params:
-    max_budget: 100
-    duration: "30d"   
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
@@ -89,6 +57,7 @@ general_settings:
   #   "region_name": "us-west-2",
   #   "ssl_verify": False
   # }
+
 
 
 
