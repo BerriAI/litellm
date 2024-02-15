@@ -37,12 +37,12 @@ http://0.0.0.0:8000/ui # <proxy_base_url>/ui
 ```
 
 
-## Get Admin UI Link on Swagger 
+### 3. Get Admin UI Link on Swagger 
 Your Proxy Swagger is available on the root of the Proxy: e.g.: `http://localhost:4000/`
 
 <Image img={require('../../img/ui_link.png')} />
 
-## Change default username + password
+### 4. Change default username + password
 
 Set the following in your .env on the Proxy
 
@@ -104,6 +104,29 @@ MICROSOFT_CLIENT_SECRET="nbk8Q~"
 MICROSOFT_TENANT="5a39737
 ```
 - Set Redirect URI on your App Registration on https://portal.azure.com/
+    - Set a redirect url = `<your proxy base url>/sso/callback`
+    ```shell
+    http://localhost:4000/sso/callback
+    ```
+
+</TabItem>
+
+
+<TabItem value="Generic" label="Generic SSO Provider">
+
+A generic OAuth client that can be used to quickly create support for any OAuth provider with close to no code
+
+**Required .env variables on your Proxy**
+```shell
+
+GENERIC_CLIENT_ID = "******"
+GENERIC_CLIENT_SECRET = "G*******"
+GENERIC_AUTHORIZATION_ENDPOINT = "http://localhost:9090/auth"
+GENERIC_TOKEN_ENDPOINT = "http://localhost:9090/token"
+GENERIC_USERINFO_ENDPOINT = "http://localhost:9090/me"
+```
+
+- Set Redirect URI, if your provider requires it
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
     http://localhost:4000/sso/callback

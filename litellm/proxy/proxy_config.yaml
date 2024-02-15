@@ -9,14 +9,19 @@ model_list:
       mode: chat
       max_tokens: 4096
       base_model: azure/gpt-4-1106-preview
+      access_groups: ["public"] 
   - model_name: openai-gpt-3.5
     litellm_params:
       model: gpt-3.5-turbo
       api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      access_groups: ["public"]
   - model_name: anthropic-claude-v2.1
     litellm_params:
       model: bedrock/anthropic.claude-v2:1
       timeout: 300 # sets a 5 minute timeout
+    model_info:
+      access_groups: ["private"]
   - model_name: anthropic-claude-v2
     litellm_params:
       model: bedrock/anthropic.claude-v2
@@ -32,19 +37,13 @@ model_list:
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
     model_info:
       base_model: azure/gpt-4
+  - model_name: text-moderation-stable
+    litellm_params:
+      model: text-moderation-stable
+      api_key: os.environ/OPENAI_API_KEY
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   success_callback: ['langfuse']
-  max_budget: 50      # global budget for proxy 
-  max_user_budget: 0.0001
-  budget_duration: 30d    # global budget duration, will reset after 30d
-  default_key_generate_params:
-    max_budget: 1.5000
-    models: ["azure-gpt-3.5"]
-    duration: None
-  upperbound_key_generate_params:
-    max_budget: 100
-    duration: "30d"   
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
