@@ -4,6 +4,7 @@ import Image from '@theme/IdealImage';
 
 LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) for PII masking. 
 
+
 ## Quick Start
 ### Step 1. Add env
 
@@ -20,6 +21,7 @@ litellm_settings:
 ```
 
 ### Step 3. Start proxy 
+
 
 ```
 litellm --config /path/to/config.yaml
