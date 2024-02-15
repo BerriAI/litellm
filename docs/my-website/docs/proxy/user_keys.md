@@ -197,7 +197,7 @@ from openai import OpenAI
 # set api_key to send to proxy server
 client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:8000")
 
-response = openai.embeddings.create(
+response = client.embeddings.create(
     input=["hello from litellm"],
     model="text-embedding-ada-002"
 )
@@ -279,6 +279,84 @@ print(query_result[:5])
   }
 }
 
+```
+
+## `/moderations`
+
+
+### Request Format
+Input, Output and Exceptions are mapped to the OpenAI format for all supported models
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+from openai import OpenAI
+
+# set base_url to your proxy server
+# set api_key to send to proxy server
+client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:8000")
+
+response = client.moderations.create(
+    input="hello from litellm",
+    model="text-moderation-stable"
+)
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/moderations' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+```
+</TabItem>
+</Tabs>
+
+
+### Response Format
+
+```json
+{
+  "id": "modr-8sFEN22QCziALOfWTa77TodNLgHwA",
+  "model": "text-moderation-007",
+  "results": [
+    {
+      "categories": {
+        "harassment": false,
+        "harassment/threatening": false,
+        "hate": false,
+        "hate/threatening": false,
+        "self-harm": false,
+        "self-harm/instructions": false,
+        "self-harm/intent": false,
+        "sexual": false,
+        "sexual/minors": false,
+        "violence": false,
+        "violence/graphic": false
+      },
+      "category_scores": {
+        "harassment": 0.000019947197870351374,
+        "harassment/threatening": 5.5971017900446896e-6,
+        "hate": 0.000028560316422954202,
+        "hate/threatening": 2.2631787999216613e-8,
+        "self-harm": 2.9121162015144364e-7,
+        "self-harm/instructions": 9.314219084899378e-8,
+        "self-harm/intent": 8.093739012338119e-8,
+        "sexual": 0.00004414955765241757,
+        "sexual/minors": 0.0000156943697220413,
+        "violence": 0.00022354527027346194,
+        "violence/graphic": 8.804164281173144e-6
+      },
+      "flagged": false
+    }
+  ]
+}
 ```
 
 
