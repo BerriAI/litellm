@@ -239,6 +239,10 @@ class NewTeamResponse(LiteLLMBase):
     updated_at: datetime
 
 
+class TeamRequest(LiteLLMBase):
+    teams: List[str]
+
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
