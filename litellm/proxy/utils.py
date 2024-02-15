@@ -511,8 +511,9 @@ class PrismaClient:
         token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
         user_id_list: Optional[list] = None,
+        team_id: Optional[str] = None,
         key_val: Optional[dict] = None,
-        table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
+        table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
         reset_at: Optional[datetime] = None,
@@ -542,6 +543,14 @@ class PrismaClient:
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_verificationtoken.find_many(
                         where={"user_id": user_id}
+                    )
+                    if response is not None and len(response) > 0:
+                        for r in response:
+                            if isinstance(r.expires, datetime):
+                                r.expires = r.expires.isoformat()
+                elif query_type == "find_all" and team_id is not None:
+                    response = await self.db.litellm_verificationtoken.find_many(
+                        where={"team_id": team_id}
                     )
                     if response is not None and len(response) > 0:
                         for r in response:
@@ -659,7 +668,23 @@ class PrismaClient:
                         order={"startTime": "desc"},
                     )
                     return response
+            elif table_name == "team":
+                if query_type == "find_unique":
+                    response = await self.db.litellm_teamtable.find_unique(
+                        where={"team_id": team_id}  # type: ignore
+                    )
+                if query_type == "find_all" and team_id is not None:
+                    user_id_values = str(tuple(team_id))
+                    sql_query = f"""
+                    SELECT *
+                    FROM "LiteLLM_TeamTable"
+                    WHERE "team_id" IN {team_id}
+                    """
 
+                    # Execute the raw query
+                    # The asterisk before `team_id` unpacks the list into separate arguments
+                    response = await self.db.query_raw(sql_query)
+                return response
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             import traceback
@@ -679,7 +704,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def insert_data(
-        self, data: dict, table_name: Literal["user", "key", "config", "spend"]
+        self, data: dict, table_name: Literal["user", "key", "config", "spend", "team"]
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -715,6 +740,17 @@ class PrismaClient:
                 )
                 verbose_proxy_logger.info(f"Data Inserted into User Table")
                 return new_user_row
+            elif table_name == "team":
+                db_data = self.jsonify_object(data=data)
+                new_team_row = await self.db.litellm_teamtable.upsert(
+                    where={"team_id": data["team_id"]},
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {},  # don't do anything if it already exists
+                    },
+                )
+                verbose_proxy_logger.info(f"Data Inserted into Team Table")
+                return new_team_row
             elif table_name == "config":
                 """
                 For each param,
