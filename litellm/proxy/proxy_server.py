@@ -3992,8 +3992,75 @@ async def team_info(
 ):
     """
     get info on team + related keys
+
+    ```
+    curl --location 'http://localhost:4000/team/info' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "teams": ["<team-id>",..]
+    }'
+    ```
     """
-    pass
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                },
+            )
+        if team_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Malformed request. No team id passed in."},
+            )
+
+        team_info = await prisma_client.get_data(
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        ## GET ALL KEYS ##
+        keys = await prisma_client.get_data(
+            team_id=team_id,
+            table_name="key",
+            query_type="find_all",
+            expires=datetime.now(),
+        )
+
+        if team_info is None:
+            ## make sure we still return a total spend ##
+            spend = 0
+            for k in keys:
+                spend += getattr(k, "spend", 0)
+            team_info = {"spend": spend}
+
+        ## REMOVE HASHED TOKEN INFO before returning ##
+        for key in keys:
+            try:
+                key = key.model_dump()  # noqa
+            except:
+                # if using pydantic v1
+                key = key.dict()
+            key.pop("token", None)
+        return {"team_id": team_id, "team_info": team_info, "keys": keys}
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 #### MODEL MANAGEMENT ####
