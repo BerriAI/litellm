@@ -41,24 +41,12 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
-{{- define "litellm.ui.labels" -}}
-helm.sh/chart: {{ include "litellm.chart" . }}
-{{ include "litellm.ui.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- end }}
 
 {{/*
 Selector labels
 */}}
 {{- define "litellm.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "litellm.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
-{{- define "litellm.ui.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "litellm.name" . }}-ui
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
