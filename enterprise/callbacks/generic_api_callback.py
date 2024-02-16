@@ -106,15 +106,14 @@ class GenericAPILogger:
 
             import json
 
-            payload = json.dumps(payload)
             data = {
                 "data": payload,
             }
-
+            data = json.dumps(data)
             print_verbose(f"\nGeneric Logger - Logging payload = {data}")
 
             # make request to endpoint with payload
-            response = requests.post(self.endpoint, data=data, headers=self.headers)
+            response = requests.post(self.endpoint, json=data, headers=self.headers)
 
             response_status = response.status_code
             response_text = response.text
