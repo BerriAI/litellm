@@ -98,6 +98,9 @@ def _get_redis_client_logic(**env_overrides):
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        redis_kwargs.pop(
+            "connection_pool", None
+        )  # redis.from_url doesn't support setting your own connection pool
         return redis.Redis.from_url(**redis_kwargs)
     return redis.Redis(**redis_kwargs)
 
@@ -105,6 +108,9 @@ def get_redis_client(**env_overrides):
 def get_redis_async_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        redis_kwargs.pop(
+            "connection_pool", None
+        )  # redis.from_url doesn't support setting your own connection pool
         return async_redis.Redis.from_url(**redis_kwargs)
     return async_redis.Redis(
         socket_timeout=5,
