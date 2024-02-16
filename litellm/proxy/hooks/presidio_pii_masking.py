@@ -61,7 +61,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         except:
             pass
 
-    async def check_pii(self, text: str) -> str:
+    async def check_pii(self, text: str, output_parse_pii: bool) -> str:
         """
         [TODO] make this more performant for high-throughput scenario
         """
@@ -92,10 +92,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                         start = item["start"]
                         end = item["end"]
                         replacement = item["text"]  # replacement token
-                        if (
-                            item["operator"] == "replace"
-                            and litellm.output_parse_pii == True
-                        ):
+                        if item["operator"] == "replace" and output_parse_pii == True:
                             # check if token in dict
                             # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
                             if replacement in self.pii_tokens:
@@ -125,13 +122,26 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
 
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
+        permissions = user_api_key_dict.permissions
+
+        if permissions.get("pii", True) == False:  # allow key to turn off pii masking
+            return data
+
+        output_parse_pii = permissions.get(
+            "output_parse_pii", litellm.output_parse_pii
+        )  # allow key to turn on/off output parsing for pii
+
         if call_type == "completion":  # /chat/completions requests
             messages = data["messages"]
             tasks = []
 
             for m in messages:
                 if isinstance(m["content"], str):
-                    tasks.append(self.check_pii(text=m["content"]))
+                    tasks.append(
+                        self.check_pii(
+                            text=m["content"], output_parse_pii=output_parse_pii
+                        )
+                    )
             responses = await asyncio.gather(*tasks)
             for index, r in enumerate(responses):
                 if isinstance(messages[index]["content"], str):

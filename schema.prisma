@@ -55,6 +55,7 @@ model LiteLLM_VerificationToken {
     config     Json  @default("{}")
     user_id    String?
     team_id    String?
+    permissions Json @default("{}")
     max_parallel_requests Int?
     metadata   Json  @default("{}")
     tpm_limit     BigInt?
@@ -63,7 +64,6 @@ model LiteLLM_VerificationToken {
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
-    permissions Json?
 }
 
 // store proxy config.yaml
