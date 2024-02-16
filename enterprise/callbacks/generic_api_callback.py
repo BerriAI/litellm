@@ -57,7 +57,9 @@ class GenericAPILogger:
 
     # This is sync, because we run this in a separate thread. Running in a sepearate thread ensures it will never block an LLM API call
     # Experience with s3, Langfuse shows that async logging events are complicated and can block LLM calls
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
+    ):
         try:
             verbose_logger.debug(
                 f"GenericAPILogger Logging - Enters logging function for model {kwargs}"
