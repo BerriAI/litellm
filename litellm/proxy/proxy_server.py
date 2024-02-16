@@ -820,6 +820,7 @@ async def _PROXY_track_cost_callback(
             "user_api_key_user_id", None
         )
         team_id = kwargs["litellm_params"]["metadata"].get("user_api_key_team_id", None)
+        request_tags = kwargs["litellm_params"]["metadata"].get("tags", None)
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
@@ -844,6 +845,7 @@ async def _PROXY_track_cost_callback(
                     response_cost=response_cost,
                     user_id=user_id,
                     team_id=team_id,
+                    request_tags=request_tags,
                     kwargs=kwargs,
                     completion_response=completion_response,
                     start_time=start_time,
@@ -882,6 +884,7 @@ async def update_database(
     response_cost,
     user_id=None,
     team_id=None,
+    request_tags=None,
     kwargs=None,
     completion_response=None,
     start_time=None,
@@ -889,7 +892,7 @@ async def update_database(
 ):
     try:
         verbose_proxy_logger.info(
-            f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
+            f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id} request_tags: {request_tags}"
         )
 
         ### [TODO] STEP 1: GET KEY + USER SPEND ### (key, user)
@@ -903,6 +906,12 @@ async def update_database(
             - Update litellm-proxy-budget row (global proxy spend)
             """
             user_ids = [user_id, litellm_proxy_budget_name]
+            if request_tags is not None:
+                # add prefix: litellm_request_tag_<tag_name> to request_tag
+                new_request_tags = [
+                    f"litellm_request_tag_{tag}" for tag in request_tags
+                ]
+                user_ids += new_request_tags
             data_list = []
             try:
                 for id in user_ids:
@@ -917,7 +926,7 @@ async def update_database(
                             key=id, table_name="user"
                         )
                     verbose_proxy_logger.debug(
-                        f"Updating existing_spend_obj: {existing_spend_obj}"
+                        f"Updating existing_spend_obj: {existing_spend_obj}, user_id: {id}"
                     )
                     if existing_spend_obj is None:
                         # if user does not exist in LiteLLM_UserTable, create a new user
