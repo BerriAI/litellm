@@ -126,6 +126,11 @@ GENERIC_TOKEN_ENDPOINT = "http://localhost:9090/token"
 GENERIC_USERINFO_ENDPOINT = "http://localhost:9090/me"
 ```
 
+**Additional .env variables on your Proxy**
+```shell
+GENERIC_SCOPE = "openid profile email"
+```
+
 - Set Redirect URI, if your provider requires it
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
