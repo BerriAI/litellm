@@ -21,7 +21,8 @@ interface ChatUIProps {
 }
 
 async function generateModelResponse(inputMessage: string, updateUI: (chunk: string) => void, selectedModel: string, accessToken: string) {
-  const client = new openai.OpenAI({
+    // base url should be the current base_url 
+    const client = new openai.OpenAI({
     apiKey: accessToken, // Replace with your OpenAI API key
     baseURL: 'http://0.0.0.0:4000', // Replace with your OpenAI API base URL
     dangerouslyAllowBrowser: true, // using a temporary litellm proxy key
