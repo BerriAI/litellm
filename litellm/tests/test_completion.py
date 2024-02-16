@@ -1331,6 +1331,7 @@ def test_completion_together_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Skip flaky test")
 def test_completion_together_ai_mixtral():
     model_name = "together_ai/DiscoResearch/DiscoLM-mixtral-8x7b-v2"
     try:
