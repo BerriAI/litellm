@@ -1013,7 +1013,10 @@ async def update_database(
                         valid_token.spend = new_spend
                         user_api_key_cache.set_cache(key=token, value=valid_token)
             except Exception as e:
-                verbose_proxy_logger.info(f"Update Key DB Call failed to execute")
+                traceback.print_exc()
+                verbose_proxy_logger.info(
+                    f"Update Key DB Call failed to execute - {str(e)}"
+                )
 
         ### UPDATE SPEND LOGS ###
         async def _insert_spend_log_to_db():
@@ -1656,9 +1659,7 @@ async def generate_key_helper_fn(
             saved_token["config"] = json.loads(saved_token["config"])
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
-        if saved_token["permissions"] is not None and isinstance(
-            saved_token["permissions"], str
-        ):
+        if isinstance(saved_token["permissions"], str):
             saved_token["permissions"] = json.loads(saved_token["permissions"])
         if saved_token.get("expires", None) is not None and isinstance(
             saved_token["expires"], datetime
