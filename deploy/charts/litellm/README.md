@@ -43,20 +43,6 @@ data:
 type: Opaque
 ```
 
-### LiteLLM Admin UI Settings
-
-| Name                                                       | Description                                                                                                                                                                           | Value |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `ui.enabled`                                               | Should the LiteLLM Admin UI be deployed                                                                                                                                               | `true`  |
-| `ui.replicaCount`                                          | The number of LiteLLM Admin UI pods to be deployed                                                                                                                                    | `1`   |
-| `ui.image.repository`                                      | LiteLLM Admin UI image repository                                                                                                                                                     | `ghcr.io/berriai/litellm`  |
-| `ui.image.pullPolicy`                                      | LiteLLM Admin UI image pull policy                                                                                                                                                    | `IfNotPresent`  |
-| `ui.image.tag`                                             | Overrides the image tag whose default the latest version of LiteLLM at the time this chart was published.                                                                             | `""`  |
-| `ui.imagePullSecrets`                                      | Registry credentials for the above images.                                                                                                                                                         | `[]`  |
-| `ui.service.type`                                          | Kubernetes Service type (e.g. `LoadBalancer`, `ClusterIP`, etc.)                                                                                                                      | `ClusterIP`  |
-| `ui.service.port`                                          | TCP port that the Kubernetes Service will listen on.  Also the TCP port within the Pod that the web server will listen on.                                                                 | `8000`  |
-| `ui.ingress.*`                                             | See [values.yaml](./values.yaml) for example settings                                                                                                                                 | N/A |
-
 ### Database Settings
 | Name                                                       | Description                                                                                                                                                                           | Value |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
@@ -86,18 +72,18 @@ type: Opaque
 ```
 
 ## Accessing the Admin UI
-When browsing to the URL published per the settings in `ui.ingress.*`, you will
+When browsing to the URL published per the settings in `ingress.*`, you will
 be prompted for **Admin Configuration**.  The **Proxy Endpoint** is the internal
-(from the `litellm-ui` pod's perspective) URL published by the `litellm-proxy`
+(from the `litellm` pod's perspective) URL published by the `<RELEASE>-litellm`
 Kubernetes Service.  If the deployment uses the default settings for this
-service, the **Proxy Endpoint** should be set to `http://litellm-proxy:8000`.
+service, the **Proxy Endpoint** should be set to `http://<RELEASE>-litellm:8000`.
 
 The **Proxy Key** is the value specified for `masterkey` or, if a `masterkey`
 was not provided to the helm command line, the `masterkey` is a randomly
-generated string stored in the `litellm-masterkey` Kubernetes Secret.
+generated string stored in the `<RELEASE>-litellm-masterkey` Kubernetes Secret.
 
 ```bash
-kubectl -n litellm get secret litellm-masterkey -o jsonpath="{.data.masterkey}"
+kubectl -n litellm get secret <RELEASE>-litellm-masterkey -o jsonpath="{.data.masterkey}"
 ```
 
 ## Admin UI Limitations
