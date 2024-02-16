@@ -34,6 +34,7 @@ from dataclasses import (
 # import pkg_resources
 from importlib import resources
 
+
 try:
     filename = str(
         resources.files().joinpath("llms/tokenizers")  # type: ignore
@@ -42,6 +43,10 @@ except:
     filename = str(
         resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
     )  # for python 3.10+
+os.environ[
+    "TIKTOKEN_CACHE_DIR"
+] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from ._logging import verbose_logger
