@@ -126,6 +126,15 @@ GENERIC_TOKEN_ENDPOINT = "http://localhost:9090/token"
 GENERIC_USERINFO_ENDPOINT = "http://localhost:9090/me"
 ```
 
+**Optional .env variables**
+The following can be used to customize attribute names when interacting with the generic OAuth provider. We will read these attributes from the SSO Provider result
+
+```shell
+GENERIC_USER_ID_ATTRIBUTE = "given_name"
+GENERIC_USER_EMAIL_ATTRIBUTE = "family_name"
+GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
+```
+
 - Set Redirect URI, if your provider requires it
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
