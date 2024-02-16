@@ -85,8 +85,10 @@ enterprise_path = abspath(join(project_path, "enterprise"))
 sys.path.append(enterprise_path)
 
 verbose_logger.debug(f"sys.path: {sys.path}")
-from enterprise.callbacks.generic_api_callback import GenericAPILogger
-
+try:
+    from enterprise.callbacks.generic_api_callback import GenericAPILogger
+except Exception as e:
+    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
 
 from typing import cast, List, Dict, Union, Optional, Literal, Any
 from .caching import Cache
