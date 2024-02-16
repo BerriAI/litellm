@@ -80,8 +80,11 @@ from .exceptions import (
 # Import Enterprise features
 project_path = abspath(join(dirname(__file__), "..", ".."))
 # Add the "enterprise" directory to sys.path
+verbose_logger.debug(f"current project_path: {project_path}")
 enterprise_path = abspath(join(project_path, "enterprise"))
 sys.path.append(enterprise_path)
+
+verbose_logger.debug(f"sys.path: {sys.path}")
 from enterprise.callbacks.generic_api_callback import GenericAPILogger
 
 
