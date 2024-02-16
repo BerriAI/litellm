@@ -8,6 +8,7 @@ import TabItem from '@theme/TabItem';
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
 - [Async Custom Callbacks](#custom-callback-class-async)
+- [Async Custom Callback APIs](#custom-callback-apis-async)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
@@ -296,6 +297,106 @@ ModelResponse(
 }
 ```
 
+
+## Custom Callback APIs [Async]
+
+:::info
+
+This is an Enterprise only feature [Get Started with Enterprise here](https://github.com/BerriAI/litellm/tree/main/enterprise)
+
+:::
+
+Use this if you:
+- Want to use custom callbacks written in a non Python programming language
+- Want your callbacks to run on a different microservice
+
+#### Step 1. Create your generic logging API endpoint
+Set up a generic API endpoint that can receive data in JSON format. The data will be included within a "data" field. 
+
+Your server should support the following Request format:
+
+```shell
+curl --location https://your-domain.com/log-event \
+     --request POST \
+     --header "Content-Type: application/json" \
+     --data '{
+       "data": {
+         "id": "chatcmpl-8sgE89cEQ4q9biRtxMvDfQU1O82PT",
+         "call_type": "acompletion",
+         "cache_hit": "None",
+         "startTime": "2024-02-15 16:18:44.336280",
+         "endTime": "2024-02-15 16:18:45.045539",
+         "model": "gpt-3.5-turbo",
+         "user": "ishaan-2",
+         "modelParameters": "{'temperature': 0.7, 'max_tokens': 10, 'user': 'ishaan-2', 'extra_body': {}}",
+         "messages": "[{'role': 'user', 'content': 'This is a test'}]",
+         "response": "ModelResponse(id='chatcmpl-8sgE89cEQ4q9biRtxMvDfQU1O82PT', choices=[Choices(finish_reason='length', index=0, message=Message(content='Great! How can I assist you with this test', role='assistant'))], created=1708042724, model='gpt-3.5-turbo-0613', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=10, prompt_tokens=11, total_tokens=21))",
+         "usage": "Usage(completion_tokens=10, prompt_tokens=11, total_tokens=21)",
+         "metadata": "{}",
+         "cost": "3.65e-05"
+       }
+     }'
+```
+
+Reference FastAPI Python Server
+
+Here's a reference FastAPI Server that is compatible with LiteLLM Proxy:
+
+```python
+# this is an example endpoint to receive data from litellm
+from fastapi import FastAPI, HTTPException, Request
+
+app = FastAPI()
+
+
+@app.post("/log-event")
+async def log_event(request: Request):
+    try:
+        print("Received /log-event request")
+        # Assuming the incoming request has JSON data
+        data = await request.json()
+        print("Received request data:")
+        print(data)
+
+        # Your additional logic can go here
+        # For now, just printing the received data
+
+        return {"message": "Request received successfully"}
+    except Exception as e:
+        print(f"Error processing request: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
+```
+
+
+#### Step 2. Set your `GENERIC_LOGGER_ENDPOINT` to the endpoint + route we should send callback logs to
+
+```shell
+os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:8000/log-event"
+```
+
+#### Step 3. Create a `config.yaml` file and set `litellm_settings`: `success_callback` = ["generic"]
+
+Example litellm proxy config.yaml
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["generic"]
+```
+
+Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
 ## Logging Proxy Input/Output - Langfuse
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
