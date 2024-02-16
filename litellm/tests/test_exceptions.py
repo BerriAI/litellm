@@ -76,11 +76,14 @@ def test_context_window_with_fallbacks(model):
     sample_text = "how does a court case get to the Supreme Court?" * 1000
     messages = [{"content": sample_text, "role": "user"}]
 
-    completion(
-        model=model,
-        messages=messages,
-        context_window_fallback_dict=ctx_window_fallback_dict,
-    )
+    try:
+        completion(
+            model=model,
+            messages=messages,
+            context_window_fallback_dict=ctx_window_fallback_dict,
+        )
+    except litellm.ServiceUnavailableError as e:
+        pass
 
 
 # for model in litellm.models_by_provider["bedrock"]:
