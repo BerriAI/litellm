@@ -899,7 +899,7 @@ async def test_sagemaker_streaming_async():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-asyncio.run(test_sagemaker_streaming_async())
+# asyncio.run(test_sagemaker_streaming_async())
 
 
 def test_completion_sagemaker_stream():

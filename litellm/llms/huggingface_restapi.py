@@ -631,11 +631,8 @@ class Huggingface(BaseLLM):
                     logging_obj=logging_obj,
                 )
 
-                async def generator():
-                    async for transformed_chunk in streamwrapper:
-                        yield transformed_chunk
-
-                return generator()
+                async for transformed_chunk in streamwrapper:
+                    yield transformed_chunk
 
     def embedding(
         self,
