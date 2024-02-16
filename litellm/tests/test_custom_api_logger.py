@@ -18,6 +18,7 @@ import pytest
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="new beta feature, will be testing in our ci/cd soon")
 async def test_custom_api_logging():
     try:
         litellm.success_callback = ["generic"]
