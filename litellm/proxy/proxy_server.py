@@ -1567,6 +1567,7 @@ async def generate_key_helper_fn(
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
+    permissions: Optional[dict] = None,
 ):
     global prisma_client, custom_db_client, user_api_key_cache
 
@@ -1596,6 +1597,9 @@ async def generate_key_helper_fn(
         duration_s = _duration_in_seconds(duration=budget_duration)
         reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
 
+    if permissions is not None and isinstance(permissions, dict):
+        permissions = json.dumps(permissions)  # type: ignore
+
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
@@ -1604,6 +1608,7 @@ async def generate_key_helper_fn(
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
     allowed_cache_controls = allowed_cache_controls
+
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
@@ -1639,6 +1644,7 @@ async def generate_key_helper_fn(
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
+            "permissions": permissions,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
@@ -1652,6 +1658,10 @@ async def generate_key_helper_fn(
             saved_token["config"] = json.loads(saved_token["config"])
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
+        if saved_token["permissions"] is not None and isinstance(
+            saved_token["permissions"], str
+        ):
+            saved_token["permissions"] = json.loads(saved_token["permissions"])
         if saved_token.get("expires", None) is not None and isinstance(
             saved_token["expires"], datetime
         ):
@@ -2965,6 +2975,7 @@ async def generate_key_fn(
     - max_budget: Optional[float] - Specify max budget for a given key.
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
 
     Returns:
     - key: (str) The generated api key
