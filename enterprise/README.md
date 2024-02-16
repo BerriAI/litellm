@@ -1,6 +1,6 @@
 ## LiteLLM Enterprise
 
-Code in this folder is licensed under a commercial license. Please review the [LICENSE](/LICENSE.md) file within the /enterprise folder
+Code in this folder is licensed under a commercial license. Please review the [LICENSE](./LICENSE.md) file within the /enterprise folder
 
 **These features are covered under the LiteLLM Enterprise contract**
 
