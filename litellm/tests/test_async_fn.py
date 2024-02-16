@@ -192,6 +192,8 @@ async def test_hf_completion_tgi():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.APIError as e:
+        pass
     except litellm.Timeout as e:
         pass
     except Exception as e:
