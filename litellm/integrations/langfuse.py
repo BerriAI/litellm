@@ -259,6 +259,7 @@ class LangFuseLogger:
                     if key in [
                         "user_api_key",
                         "user_api_key_user_id",
+                        "user_api_key_team_id",
                         "semantic-similarity",
                     ]:
                         tags.append(f"{key}:{value}")
