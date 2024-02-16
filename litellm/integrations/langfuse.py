@@ -226,6 +226,7 @@ class LangFuseLogger:
         try:
             tags = []
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
+            supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
             supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
 
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
@@ -293,6 +294,9 @@ class LangFuseLogger:
                 "metadata": metadata,
                 "level": level,
             }
+
+            if supports_prompt:
+                generation_params["prompt"] = metadata.get("prompt", None)
 
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["statusMessage"] = output
