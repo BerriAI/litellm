@@ -126,9 +126,15 @@ GENERIC_TOKEN_ENDPOINT = "http://localhost:9090/token"
 GENERIC_USERINFO_ENDPOINT = "http://localhost:9090/me"
 ```
 
-**Additional .env variables on your Proxy**
+**Optional .env variables**
+The following can be used to customize attribute names when interacting with the generic OAuth provider. We will read these attributes from the SSO Provider result
+
 ```shell
-GENERIC_SCOPE = "openid profile email"
+GENERIC_USER_ID_ATTRIBUTE = "given_name"
+GENERIC_USER_EMAIL_ATTRIBUTE = "family_name"
+GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
+
+GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
 ```
 
 - Set Redirect URI, if your provider requires it
