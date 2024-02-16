@@ -382,7 +382,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
-    permissions: Optional[dict] = None
+    permissions: Dict = {}
 
 
 class UserAPIKeyAuth(
