@@ -808,8 +808,9 @@ class PrismaClient:
         data: dict = {},
         data_list: Optional[List] = None,
         user_id: Optional[str] = None,
+        team_id: Optional[str] = None,
         query_type: Literal["update", "update_many"] = "update",
-        table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
+        table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
         update_key_values: Optional[dict] = None,
     ):
         """
@@ -860,6 +861,35 @@ class PrismaClient:
                     + "\033[0m"
                 )
                 return {"user_id": user_id, "data": db_data}
+            elif (
+                team_id is not None
+                or (table_name is not None and table_name == "team")
+                and query_type == "update"
+            ):
+                """
+                If data['spend'] + data['user'], update the user table with spend info as well
+                """
+                if team_id is None:
+                    team_id = db_data["team_id"]
+                if update_key_values is None:
+                    update_key_values = db_data
+                if "team_id" not in db_data and team_id is not None:
+                    db_data["team_id"] = team_id
+                update_team_row = await self.db.litellm_teamtable.upsert(
+                    where={"team_id": team_id},  # type: ignore
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {
+                            **update_key_values  # type: ignore
+                        },  # just update user-specified values, if it already exists
+                    },
+                )
+                verbose_proxy_logger.info(
+                    "\033[91m"
+                    + f"DB Team Table - update succeeded {update_team_row}"
+                    + "\033[0m"
+                )
+                return {"team_id": team_id, "data": db_data}
             elif (
                 table_name is not None
                 and table_name == "key"
