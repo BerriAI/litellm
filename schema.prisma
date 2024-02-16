@@ -63,6 +63,7 @@ model LiteLLM_VerificationToken {
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
+    permissions Json?
 }
 
 // store proxy config.yaml
