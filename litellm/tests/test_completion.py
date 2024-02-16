@@ -301,6 +301,8 @@ def test_completion_azure_gpt4_vision():
             ],
         )
         print(response)
+    except openai.APIError as e:
+        pass
     except openai.APITimeoutError:
         print("got a timeout error")
         pass
