@@ -1270,6 +1270,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "total_tokens": usage.get("total_tokens", 0),
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
+        "request_tags": metadata.get("tags", []),
     }
 
     verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
