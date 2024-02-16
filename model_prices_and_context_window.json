@@ -964,14 +964,14 @@
         "mode": "completion"
     },
     "dolphin": {
-        "max_tokens": 4096,
+        "max_tokens": 16384,
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000005,
         "litellm_provider": "nlp_cloud",
         "mode": "completion"
     },
     "chatdolphin": {
-        "max_tokens": 4096,
+        "max_tokens": 16384,
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000005,
         "litellm_provider": "nlp_cloud",
