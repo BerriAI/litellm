@@ -437,6 +437,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     metadata: Optional[dict] = {}
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
+    request_tags: Optional[Json] = None
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
