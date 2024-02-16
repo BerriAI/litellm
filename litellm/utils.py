@@ -31,16 +31,17 @@ from dataclasses import (
     field,
 )  # for storing API inputs, outputs, and metadata
 
-# import pkg_resources
-from importlib import resources
-
-# filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
-
 try:
-    filename = str(
-        resources.files().joinpath("llms/tokenizers")  # type: ignore
-    )  # for python 3.8 and 3.12
+    # this works in python 3.8
+    import pkg_resources
+    filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+# try:
+#     filename = str(
+#         resources.files().joinpath("llms/tokenizers")  # type: ignore
+#     )  # for python 3.8 and 3.12
 except:
+    # this works in python 3.9+
+    from importlib import resources
     filename = str(
         resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
     )  # for python 3.10+
