@@ -34,11 +34,14 @@ from dataclasses import (
 # import pkg_resources
 from importlib import resources
 
-# # filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
-# filename = str(resources.files().joinpath("llms/tokenizers"))
-# os.environ[
-#     "TIKTOKEN_CACHE_DIR"
-# ] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+try:
+    filename = str(
+        resources.files().joinpath("llms/tokenizers")  # type: ignore
+    )  # for python 3.8 and 3.12
+except:
+    filename = str(
+        resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
+    )  # for python 3.10+
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from ._logging import verbose_logger
