@@ -965,15 +965,15 @@
     },
     "dolphin": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.00002,
-        "output_cost_per_token": 0.00002,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000005,
         "litellm_provider": "nlp_cloud",
         "mode": "completion"
     },
     "chatdolphin": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.00002,
-        "output_cost_per_token": 0.00002,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000005,
         "litellm_provider": "nlp_cloud",
         "mode": "chat"
     },
