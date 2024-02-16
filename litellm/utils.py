@@ -12,6 +12,7 @@ import litellm
 import dotenv, json, traceback, threading, base64, ast
 
 import subprocess, os
+from os.path import abspath, join, dirname
 import litellm, openai
 import itertools
 import random, uuid, requests
@@ -34,6 +35,7 @@ from dataclasses import (
 from importlib import resources
 
 # filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+
 try:
     filename = str(
         resources.files().joinpath("llms/tokenizers")  # type: ignore
@@ -45,6 +47,7 @@ except:
 os.environ[
     "TIKTOKEN_CACHE_DIR"
 ] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from ._logging import verbose_logger
@@ -82,6 +85,20 @@ from .exceptions import (
     BudgetExceededError,
     UnprocessableEntityError,
 )
+
+# Import Enterprise features
+project_path = abspath(join(dirname(__file__), "..", ".."))
+# Add the "enterprise" directory to sys.path
+verbose_logger.debug(f"current project_path: {project_path}")
+enterprise_path = abspath(join(project_path, "enterprise"))
+sys.path.append(enterprise_path)
+
+verbose_logger.debug(f"sys.path: {sys.path}")
+try:
+    from enterprise.callbacks.generic_api_callback import GenericAPILogger
+except Exception as e:
+    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
+
 from typing import cast, List, Dict, Union, Optional, Literal, Any
 from .caching import Cache
 from concurrent.futures import ThreadPoolExecutor
@@ -107,6 +124,7 @@ customLogger = None
 langFuseLogger = None
 dynamoLogger = None
 s3Logger = None
+genericAPILogger = None
 llmonitorLogger = None
 aispendLogger = None
 berrispendLogger = None
@@ -1362,6 +1380,35 @@ class Logging:
                                 langfuse_secret=self.langfuse_secret,
                             )
                         langFuseLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "generic":
+                        global genericAPILogger
+                        verbose_logger.debug("reaches langfuse for success logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            verbose_logger.debug(
+                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
+                            if complete_streaming_response is None:
+                                break
+                            else:
+                                print_verbose("reaches langfuse for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+                        if genericAPILogger is None:
+                            genericAPILogger = GenericAPILogger()
+                        genericAPILogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
