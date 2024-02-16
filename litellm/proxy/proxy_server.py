@@ -2259,8 +2259,13 @@ async def completion(
             response = await llm_router.atext_completion(
                 **data, specific_deployment=True
             )
-        else:  # router is not set
+        elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.atext_completion(**data)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid model name passed in"},
+            )
 
         if hasattr(response, "_hidden_params"):
             model_id = response._hidden_params.get("model_id", None) or ""
