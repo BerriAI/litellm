@@ -55,3 +55,20 @@ litellm_settings:
 3. LLM Response: "Hey [PERSON], nice to meet you!"
 
 4. User Response: "Hey Jane Doe, nice to meet you!"
+
+## Turn on/off per key 
+
+Turn off PII masking for a given key. 
+
+Do this by setting `permissions: {"pii": false}`, when generating a key. 
+
+```shell 
+curl --location 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+    "permissions": {"pii": false}
+}'
+```
+
+
