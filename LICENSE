@@ -1,6 +1,6 @@
 Portions of this software are licensed as follows:
 
-* All content that resides under the "enterprise/" directory of this repository, if that directory exists, is licensed under the license defined in "enterprise/LICENSE".
+* All content that resides under the "litellm/proxy/enterprise/" directory of this repository, if that directory exists, is licensed under the license defined in "litellm/proxy/enterprise/LICENSE".
 * Content outside of the above mentioned directories or restrictions above is available under the MIT license as defined below.
 ---
 MIT License

@@ -1,9 +1,10 @@
-# +-----------------------------------------------+
+# +--------------------------------------------------------------+
 #
-#            Google Text Moderation
+#                       Google Text Moderation
 #   https://cloud.google.com/natural-language/docs/moderating-text
 #
-# +-----------------------------------------------+
+#                         Enterprise Feature
+# +---------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 
@@ -29,7 +30,10 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
 
     # Class variables or attributes
     def __init__(self, mock_testing: bool = False):
-        pass
+        from google.cloud import language_v1
+
+        self.language = language_v1
+        self.client = language_v1.LanguageServiceClient()
 
     def print_verbose(self, print_statement):
         try:
@@ -50,4 +54,14 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         - Calls Google's Text Moderation API
         - Rejects request if it fails safety check
         """
-        pass
+
+        # Initialize request argument(s)
+        document = self.language.Document()
+        document.content = "content_value"
+
+        request = self.language.ModerateTextRequest(
+            document=document,
+        )
+
+        # Make the request
+        response = await self.client.moderate_text(request=request)

@@ -1311,6 +1311,18 @@ class ProxyConfig:
 
                                 pii_masking_object = _OPTIONAL_PresidioPIIMasking()
                                 imported_list.append(pii_masking_object)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "google_moderations"
+                            ):
+                                from litellm.proxy.enterprise.hooks.google_text_moderation import (
+                                    _ENTERPRISE_GoogleTextModeration,
+                                )
+
+                                google_moderations_object = (
+                                    _ENTERPRISE_GoogleTextModeration()
+                                )
+                                imported_list.append(google_moderations_object)  # type: ignore
                             else:
                                 imported_list.append(
                                     get_instance_fn(
