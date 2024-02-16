@@ -12,6 +12,7 @@ import litellm
 import dotenv, json, traceback, threading, base64, ast
 
 import subprocess, os
+from os.path import abspath, join, dirname
 import litellm, openai
 import itertools
 import random, uuid, requests
@@ -33,11 +34,11 @@ from dataclasses import (
 # import pkg_resources
 from importlib import resources
 
-# filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
-filename = str(resources.files("llms").joinpath("tokenizers"))
-os.environ[
-    "TIKTOKEN_CACHE_DIR"
-] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+# # filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+# filename = str(resources.files().joinpath("llms/tokenizers"))
+# os.environ[
+#     "TIKTOKEN_CACHE_DIR"
+# ] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from ._logging import verbose_logger
@@ -76,8 +77,13 @@ from .exceptions import (
     UnprocessableEntityError,
 )
 
-# import enterprise features
-from ..enterprise.callbacks.api_callback import GenericAPILogger
+# Import Enterprise features
+project_path = abspath(join(dirname(__file__), "..", ".."))
+# Add the "enterprise" directory to sys.path
+enterprise_path = abspath(join(project_path, "enterprise"))
+sys.path.append(enterprise_path)
+from enterprise.callbacks.generic_api_callback import GenericAPILogger
+
 
 from typing import cast, List, Dict, Union, Optional, Literal, Any
 from .caching import Cache
