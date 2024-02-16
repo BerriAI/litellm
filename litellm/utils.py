@@ -34,6 +34,7 @@ from dataclasses import (
 # import pkg_resources
 from importlib import resources
 
+# filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 
 try:
     filename = str(
