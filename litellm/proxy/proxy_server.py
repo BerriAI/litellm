@@ -1016,7 +1016,10 @@ async def update_database(
                         valid_token.spend = new_spend
                         user_api_key_cache.set_cache(key=token, value=valid_token)
             except Exception as e:
-                verbose_proxy_logger.info(f"Update Key DB Call failed to execute")
+                traceback.print_exc()
+                verbose_proxy_logger.info(
+                    f"Update Key DB Call failed to execute - {str(e)}"
+                )
 
         ### UPDATE SPEND LOGS ###
         async def _insert_spend_log_to_db():
@@ -1631,6 +1634,7 @@ async def generate_key_helper_fn(
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
+    permissions: Optional[dict] = {},
 ):
     global prisma_client, custom_db_client, user_api_key_cache
 
@@ -1662,12 +1666,14 @@ async def generate_key_helper_fn(
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
+    permissions_json = json.dumps(permissions)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
     user_role = user_role or "app_user"
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
     allowed_cache_controls = allowed_cache_controls
+
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
@@ -1703,6 +1709,7 @@ async def generate_key_helper_fn(
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
+            "permissions": permissions_json,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
@@ -1716,6 +1723,8 @@ async def generate_key_helper_fn(
             saved_token["config"] = json.loads(saved_token["config"])
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
+        if isinstance(saved_token["permissions"], str):
+            saved_token["permissions"] = json.loads(saved_token["permissions"])
         if saved_token.get("expires", None) is not None and isinstance(
             saved_token["expires"], datetime
         ):
@@ -1878,9 +1887,9 @@ async def initialize(
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         user_max_tokens = max_tokens
         dynamic_config[user_model]["max_tokens"] = max_tokens
@@ -3044,6 +3053,7 @@ async def generate_key_fn(
     - max_budget: Optional[float] - Specify max budget for a given key.
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
 
     Returns:
     - key: (str) The generated api key

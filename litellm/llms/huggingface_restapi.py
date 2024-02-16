@@ -49,9 +49,9 @@ class HuggingfaceConfig:
     details: Optional[bool] = True  # enables returning logprobs + best of
     max_new_tokens: Optional[int] = None
     repetition_penalty: Optional[float] = None
-    return_full_text: Optional[
-        bool
-    ] = False  # by default don't return the input as part of the output
+    return_full_text: Optional[bool] = (
+        False  # by default don't return the input as part of the output
+    )
     seed: Optional[int] = None
     temperature: Optional[float] = None
     top_k: Optional[int] = None
@@ -188,9 +188,9 @@ class Huggingface(BaseLLM):
             "content-type": "application/json",
         }
         if api_key and headers is None:
-            default_headers[
-                "Authorization"
-            ] = f"Bearer {api_key}"  # Huggingface Inference Endpoint default is to accept bearer tokens
+            default_headers["Authorization"] = (
+                f"Bearer {api_key}"  # Huggingface Inference Endpoint default is to accept bearer tokens
+            )
             headers = default_headers
         elif headers:
             headers = headers
