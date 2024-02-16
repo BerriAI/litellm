@@ -6975,6 +6975,14 @@ def exception_type(
                             model=model,
                             response=original_exception.response,
                         )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"HuggingfaceException - {original_exception.message}",
+                            llm_provider="huggingface",
+                            model=model,
+                            response=original_exception.response,
+                        )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
