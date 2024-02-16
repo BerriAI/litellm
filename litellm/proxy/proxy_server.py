@@ -4826,6 +4826,25 @@ async def auth_callback(request: Request):
     # User is Authe'd in - generate key for the UI to access Proxy
     user_email = getattr(result, "email", None)
     user_id = getattr(result, "id", None)
+
+    # generic client id
+    if generic_client_id is not None:
+        generic_user_id_attribute_name = os.getenv("GENERIC_USER_ID_ATTRIBUTE", "email")
+        generic_user_email_attribute_name = os.getenv(
+            "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
+        )
+        generic_user_role_attribute_name = os.getenv(
+            "GENERIC_USER_ROLE_ATTRIBUTE", "role"
+        )
+
+        verbose_proxy_logger.debug(
+            f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
+        )
+
+        user_id = getattr(result, generic_user_id_attribute_name, None)
+        user_email = getattr(result, generic_user_email_attribute_name, None)
+        user_role = getattr(result, generic_user_role_attribute_name, None)
+
     if user_id is None:
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
     response = await generate_key_helper_fn(
