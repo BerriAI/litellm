@@ -124,7 +124,7 @@ class RedisCache(BaseCache):
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+            print_verbose("LiteLLM Caching: set() - Got exception from REDIS : ", e)
 
     async def async_set_cache(self, key, value, **kwargs):
         _redis_client = self.init_async_client()
@@ -134,10 +134,12 @@ class RedisCache(BaseCache):
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
             try:
-                await redis_client.set(name=key, value=json.dumps(value), ex=ttl)
+                await redis_client.set(
+                    name=key, value=json.dumps(value), ex=ttl, get=True
+                )
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
-                logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+                print_verbose("LiteLLM Caching: set() - Got exception from REDIS : ", e)
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         """
