@@ -154,7 +154,7 @@ class GenerateKeyRequest(GenerateRequestBase):
     duration: Optional[str] = None
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
-    permissions: Optional[dict] = None
+    permissions: Optional[dict] = {}
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -167,7 +167,7 @@ class GenerateKeyResponse(GenerateKeyRequest):
     def set_model_info(cls, values):
         if values.get("token") is not None:
             values.update({"key": values.get("token")})
-        dict_fields = ["metadata", "aliases", "config"]
+        dict_fields = ["metadata", "aliases", "config", "permissions"]
         for field in dict_fields:
             value = values.get(field)
             if value is not None and isinstance(value, str):

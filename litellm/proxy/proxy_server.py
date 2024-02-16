@@ -1567,7 +1567,7 @@ async def generate_key_helper_fn(
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
-    permissions: Optional[dict] = None,
+    permissions: Optional[dict] = {},
 ):
     global prisma_client, custom_db_client, user_api_key_cache
 
@@ -1597,11 +1597,9 @@ async def generate_key_helper_fn(
         duration_s = _duration_in_seconds(duration=budget_duration)
         reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
 
-    if permissions is not None and isinstance(permissions, dict):
-        permissions = json.dumps(permissions)  # type: ignore
-
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
+    permissions_json = json.dumps(permissions)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
     user_role = user_role or "app_user"
@@ -1644,7 +1642,7 @@ async def generate_key_helper_fn(
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
-            "permissions": permissions,
+            "permissions": permissions_json,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
@@ -1824,9 +1822,9 @@ async def initialize(
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         user_max_tokens = max_tokens
         dynamic_config[user_model]["max_tokens"] = max_tokens
