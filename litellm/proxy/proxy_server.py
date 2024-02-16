@@ -4565,6 +4565,7 @@ async def google_login(request: Request):
         from fastapi_sso.sso.generic import create_provider, DiscoveryDocument
 
         generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
+        generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
         generic_authorization_endpoint = os.getenv(
             "GENERIC_AUTHORIZATION_ENDPOINT", None
         )
@@ -4615,6 +4616,7 @@ async def google_login(request: Request):
             client_secret=generic_client_secret,
             redirect_uri=redirect_url,
             allow_insecure_http=True,
+            scope=generic_scope,
         )
         with generic_sso:
             return await generic_sso.get_login_redirect()
@@ -4765,6 +4767,7 @@ async def auth_callback(request: Request):
         from fastapi_sso.sso.generic import create_provider, DiscoveryDocument
 
         generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
+        generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
         generic_authorization_endpoint = os.getenv(
             "GENERIC_AUTHORIZATION_ENDPOINT", None
         )
@@ -4815,6 +4818,7 @@ async def auth_callback(request: Request):
             client_secret=generic_client_secret,
             redirect_uri=redirect_url,
             allow_insecure_http=True,
+            scope=generic_scope,
         )
         verbose_proxy_logger.debug(f"calling generic_sso.verify_and_process")
         request_body = await request.body()
