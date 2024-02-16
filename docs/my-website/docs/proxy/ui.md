@@ -124,6 +124,7 @@ GENERIC_CLIENT_SECRET = "G*******"
 GENERIC_AUTHORIZATION_ENDPOINT = "http://localhost:9090/auth"
 GENERIC_TOKEN_ENDPOINT = "http://localhost:9090/token"
 GENERIC_USERINFO_ENDPOINT = "http://localhost:9090/me"
+GENERIC_SCOPE = "openid profile email"
 ```
 
 - Set Redirect URI, if your provider requires it
