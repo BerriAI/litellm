@@ -154,6 +154,7 @@ class GenerateKeyRequest(GenerateRequestBase):
     duration: Optional[str] = None
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
+    permissions: Optional[dict] = None
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -381,6 +382,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
+    permissions: Optional[dict] = None
 
 
 class UserAPIKeyAuth(
