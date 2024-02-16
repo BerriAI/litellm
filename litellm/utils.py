@@ -44,9 +44,9 @@ except:
     filename = str(
         resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
     )  # for python 3.10+
-os.environ["TIKTOKEN_CACHE_DIR"] = (
-    filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
-)
+os.environ[
+    "TIKTOKEN_CACHE_DIR"
+] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
@@ -4256,7 +4256,14 @@ def get_optional_params(
                 optional_params["stop_sequences"] = stop
         if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
-    elif custom_llm_provider == "vertex_ai":
+    elif custom_llm_provider == "vertex_ai" and model in (
+        litellm.vertex_chat_models
+        or model in litellm.vertex_code_chat_models
+        or model in litellm.vertex_text_models
+        or model in litellm.vertex_code_text_models
+        or model in litellm.vertex_language_models
+        or model in litellm.vertex_embedding_models
+    ):
         ## check if unsupported param passed in
         supported_params = [
             "temperature",
