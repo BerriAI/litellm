@@ -383,6 +383,8 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
     permissions: Dict = {}
+    model_spend: Dict = {}
+    model_max_budget: Dict = {}
 
 
 class UserAPIKeyAuth(

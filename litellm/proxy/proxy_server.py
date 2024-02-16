@@ -1635,6 +1635,7 @@ async def generate_key_helper_fn(
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
+    model_max_budget: Optional[dict] = {},
 ):
     global prisma_client, custom_db_client, user_api_key_cache
 
@@ -1668,6 +1669,8 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     permissions_json = json.dumps(permissions)
     metadata_json = json.dumps(metadata)
+    model_max_budget_json = json.dumps(model_max_budget)
+
     user_id = user_id or str(uuid.uuid4())
     user_role = user_role or "app_user"
     tpm_limit = tpm_limit
@@ -1710,6 +1713,7 @@ async def generate_key_helper_fn(
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
+            "model_max_budget": model_max_budget_json,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
@@ -3059,6 +3063,7 @@ async def generate_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
+    - model_max_budget: Optional[dict] - key-specific model budget in USD. Example - {"text-davinci-002": 0.5, "gpt-3.5-turbo": 0.5}. IF null or {} then no model specific budget.
 
     Returns:
     - key: (str) The generated api key

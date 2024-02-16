@@ -64,6 +64,8 @@ model LiteLLM_VerificationToken {
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
+    model_spend      Json @default("{}")
+    model_max_budget Json @default("{}")
 }
 
 // store proxy config.yaml
