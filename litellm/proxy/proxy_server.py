@@ -819,6 +819,7 @@ async def _PROXY_track_cost_callback(
         user_id = user_id or kwargs["litellm_params"]["metadata"].get(
             "user_api_key_user_id", None
         )
+        team_id = kwargs["litellm_params"]["metadata"].get("user_api_key_team_id", None)
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
@@ -2134,6 +2135,9 @@ async def completion(
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
         _headers = dict(request.headers)
         _headers.pop(
             "authorization", None
@@ -2297,6 +2301,9 @@ async def chat_completion(
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -2518,6 +2525,9 @@ async def embeddings(
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
         data["metadata"]["endpoint"] = str(request.url)
 
         ### TEAM-SPECIFIC PARAMS ###
@@ -2689,6 +2699,9 @@ async def image_generation(
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
         data["metadata"]["endpoint"] = str(request.url)
 
         ### TEAM-SPECIFIC PARAMS ###
@@ -2844,6 +2857,9 @@ async def moderations(
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
         data["metadata"]["endpoint"] = str(request.url)
 
         ### TEAM-SPECIFIC PARAMS ###
@@ -4198,6 +4214,9 @@ async def async_queue_request(
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
         data["metadata"]["endpoint"] = str(request.url)
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
