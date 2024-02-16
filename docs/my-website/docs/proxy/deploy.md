@@ -7,6 +7,10 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 
 ## Quick Start
 
+<Tabs>
+
+<TabItem value="basic" label="Basic">
+
 See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
@@ -17,6 +21,12 @@ docker pull ghcr.io/berriai/litellm:main-latest
 ```shell
 docker run ghcr.io/berriai/litellm:main-latest
 ```
+
+</TabItem>
+
+
+
+<TabItem value="cli" label="With CLI Args">
 
 ### Run with LiteLLM CLI args
 
@@ -31,6 +41,34 @@ Here's how you can run the docker image and start litellm on port 8002 with `num
 ```shell
 docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
+
+</TabItem>
+
+<TabItem value="base-image" label="use litellm as a base image">
+
+```shell
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Copy the configuration file into the container at /app
+COPY config.yaml .
+
+# Make sure your entrypoint.sh is executable
+RUN chmod +x entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# Override the CMD instruction with your desired command and arguments
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug", "--run_gunicorn"]
+```
+
+</TabItem>
+
+</Tabs>
 
 ## Deploy with Database
 
