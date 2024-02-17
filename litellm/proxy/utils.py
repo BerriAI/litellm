@@ -128,19 +128,18 @@ class ProxyLogging:
         except Exception as e:
             raise e
 
-    async def success_handler(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        call_type: Literal["completion", "embeddings"],
-        start_time,
-        end_time,
-    ):
+    async def during_call_hook(self, data: dict):
         """
-        Log successful API calls / db read/writes
+        Runs the CustomLogger's async_moderation_hook()
         """
-
-        pass
+        for callback in litellm.callbacks:
+            new_data = copy.deepcopy(data)
+            try:
+                if isinstance(callback, CustomLogger):
+                    await callback.async_moderation_hook(data=new_data)
+            except Exception as e:
+                raise e
+        return data
 
     async def response_taking_too_long(
         self,

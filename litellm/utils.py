@@ -1141,7 +1141,7 @@ class Logging:
 
             if (
                 litellm.max_budget
-                and self.stream
+                and self.stream == False
                 and result is not None
                 and "content" in result
             ):
@@ -1668,7 +1668,9 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    print_verbose(f"Making async function logging call")
+                    print_verbose(
+                        f"Making async function logging call - {self.model_call_details}"
+                    )
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
                             await customLogger.async_log_event(
@@ -3451,7 +3453,7 @@ def cost_per_token(
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     else:
         # if model is not in model_prices_and_context_window.json. Raise an exception-let users know
-        error_str = f"Model not in model_prices_and_context_window.json. You passed model={model}\n"
+        error_str = f"Model not in model_prices_and_context_window.json. You passed model={model}. Register pricing for model - https://docs.litellm.ai/docs/proxy/custom_pricing\n"
         raise litellm.exceptions.NotFoundError(  # type: ignore
             message=error_str,
             model=model,
@@ -3912,6 +3914,8 @@ def get_optional_params(
         if k.startswith("aws_") and (
             custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
         ):  # allow dynamically setting boto3 init logic
+            continue
+        elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
             continue
         elif (
             k.startswith("vertex_") and custom_llm_provider != "vertex_ai"
