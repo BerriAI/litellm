@@ -421,6 +421,8 @@ class LiteLLM_UserTable(LiteLLMBase):
     user_id: str
     max_budget: Optional[float]
     spend: float = 0.0
+    model_max_budget: Optional[Dict] = {}
+    model_spend: Optional[Dict] = {}
     user_email: Optional[str]
     models: list = []
 
