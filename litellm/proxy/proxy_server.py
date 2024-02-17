@@ -1763,6 +1763,11 @@ async def generate_key_helper_fn(
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+        if isinstance(saved_token["model_max_budget"], str):
+            saved_token["model_max_budget"] = json.loads(
+                saved_token["model_max_budget"]
+            )
+
         if saved_token.get("expires", None) is not None and isinstance(
             saved_token["expires"], datetime
         ):
