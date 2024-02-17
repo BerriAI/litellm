@@ -119,6 +119,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         call_type: str,
     ):
         """
+        - Check if request turned off pii
+            - Check if user allowed to turn off pii (key permissions -> 'allow_pii_controls')
+
         - Take the request data
         - Call /analyze -> get the results
         - Call /anonymize w/ the analyze results -> get the redacted text
@@ -126,13 +129,59 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
         permissions = user_api_key_dict.permissions
-
-        if permissions.get("pii", True) == False:  # allow key to turn off pii masking
-            return data
-
         output_parse_pii = permissions.get(
             "output_parse_pii", litellm.output_parse_pii
         )  # allow key to turn on/off output parsing for pii
+        no_pii = permissions.get(
+            "no-pii", None
+        )  # allow key to turn on/off pii masking (if user is allowed to set pii controls, then they can override the key defaults)
+
+        if no_pii is None:
+            # check older way of turning on/off pii
+            no_pii = not permissions.get("pii", True)
+
+        content_safety = data.get("content_safety", None)
+        verbose_proxy_logger.debug(f"content_safety: {content_safety}")
+        ## Request-level turn on/off PII controls ##
+        if content_safety is not None and isinstance(content_safety, dict):
+            # pii masking ##
+            if (
+                content_safety.get("no-pii", None) is not None
+                and content_safety.get("no-pii") == True
+            ):
+                # check if user allowed to turn this off
+                if permissions.get("allow_pii_controls", False) == False:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error": "Not allowed to set PII controls per request"},
+                    )
+                else:  # user allowed to turn off pii masking
+                    no_pii = content_safety.get("no-pii")
+                    if not isinstance(no_pii, bool):
+                        raise HTTPException(
+                            status_code=400,
+                            detail={"error": "no_pii needs to be a boolean value"},
+                        )
+            ## pii output parsing ##
+            if content_safety.get("output_parse_pii", None) is not None:
+                # check if user allowed to turn this off
+                if permissions.get("allow_pii_controls", False) == False:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error": "Not allowed to set PII controls per request"},
+                    )
+                else:  # user allowed to turn on/off pii output parsing
+                    output_parse_pii = content_safety.get("output_parse_pii")
+                    if not isinstance(output_parse_pii, bool):
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "output_parse_pii needs to be a boolean value"
+                            },
+                        )
+
+        if no_pii == False:  # turn off pii masking
+            return data
 
         if call_type == "completion":  # /chat/completions requests
             messages = data["messages"]
