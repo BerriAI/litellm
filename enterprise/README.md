@@ -8,12 +8,7 @@ Code in this folder is licensed under a commercial license. Please review the [L
 
 ## Enterprise Features:
 
-### Spend Tracking, Budgets 
 - Track, View spend per tag https://docs.litellm.ai/docs/proxy/spend
-
-### Logging 
 - Custom API / microservice callbacks
-
-### Content Moderaton, PII Masking 
 - Google Text Moderation API 
 
