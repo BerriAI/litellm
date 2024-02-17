@@ -239,7 +239,7 @@ export const userSpendLogsCall = async (
 
 export const keyInfoCall = async (accessToken: String, keys: String[]) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/key/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/v2/key/info`;
 
     const response = await fetch(url, {
       method: "POST",
