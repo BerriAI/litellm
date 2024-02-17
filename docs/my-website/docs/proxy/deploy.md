@@ -183,7 +183,22 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:8000`.
 </TabItem>
 </Tabs>
 
-## Setting SSL Certification 
+## Advanced Deployment Settings
+
+### Customization of the server root path
+
+:::info
+
+In a Kubernetes deployment, it's possible to utilize a shared DNS to host multiple applications by modifying the virtual service
+
+:::
+
+Customize the root path to eliminate the need for employing multiple DNS configurations during deployment.
+
+👉 Set `SERVER_ROOT_PATH` in your .env and this will be set as your server root path
+
+
+### Setting SSL Certification 
 
 Use this, If you need to set ssl certificates for your on prem litellm proxy
 
