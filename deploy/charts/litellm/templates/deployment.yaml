@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "litellm.fullname" . }}-proxy
+  name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
 spec:
@@ -41,12 +41,12 @@ spec:
             - name: DATABASE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.name" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
                   key: username
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.name" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
                   key: password
             - name: DATABASE_HOST
               value: {{ .Release.Name }}-postgresql
@@ -108,12 +108,12 @@ spec:
             - name: DATABASE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.name" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
                   key: username
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.name" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
                   key: password
             - name: DATABASE_HOST
               value: {{ .Release.Name }}-postgresql
@@ -140,7 +140,7 @@ spec:
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.name" . }}-masterkey
+                  name: {{ include "litellm.fullname" . }}-masterkey
                   key: masterkey
           envFrom:
           {{- range .Values.environmentSecrets }}
@@ -150,16 +150,7 @@ spec:
           args:
             - --config
             - /etc/litellm/config.yaml
-          # command: 
-          #   - bash
-          #   - -c
-          #   - |
-          #     ls -la /etc/litellm/; cat /etc/litellm/config.yaml; export
-          #     find / 2>/dev/null | grep -v -e '^/proc' -e '^/sys' -e '^/dev' >/tmp/before.list
-          #     prisma generate
-          #     find / 2>/dev/null | grep -v -e '^/proc' -e '^/sys' -e '^/dev' >/tmp/after.list
-          #     diff -ruN /tmp/before.list /tmp/after.list
-          #     sleep 3600
+            - --run_gunicorn
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
