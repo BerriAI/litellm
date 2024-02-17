@@ -78,7 +78,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 ```
 
 
-## *NEW* async_moderation_hook 
+## [BETA] *NEW* async_moderation_hook 
 
 Run a moderation check in parallel to the actual LLM API call. 
 
@@ -88,6 +88,12 @@ In your Custom Handler add a new `async_moderation_hook` function
 - This function runs in parallel to the actual LLM API call. 
 - If your `async_moderation_hook` raises an Exception, we will return that to the user. 
 
+
+:::info
+
+We might need to update the function schema in the future, to support multiple endpoints (e.g. accept a call_type). Please keep that in mind, while trying this feature
+
+:::
 
 See a complete example with our [Llama Guard content moderation hook](https://github.com/BerriAI/litellm/blob/main/enterprise/hooks/llama_guard.py)
 
