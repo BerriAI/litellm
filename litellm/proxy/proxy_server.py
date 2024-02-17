@@ -940,13 +940,26 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     existing_spend_obj.spend = existing_spend + response_cost
 
+                    # track cost per model, for the given user
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+                    existing_spend_obj.model_spend = spend_per_model
+
                     valid_token = user_api_key_cache.get_cache(key=id)
                     if valid_token is not None and isinstance(valid_token, dict):
                         user_api_key_cache.set_cache(
                             key=id, value=existing_spend_obj.json()
                         )
 
-                    verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
+                    verbose_proxy_logger.debug(
+                        f"user - new cost: {existing_spend_obj.spend}, user_id: {id}"
+                    )
                     data_list.append(existing_spend_obj)
 
                     # Update the cost column for the given user id
@@ -983,15 +996,28 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
-                    verbose_proxy_logger.debug(f"new cost: {new_spend}")
+                    # track cost per model, for the given key
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+
+                    verbose_proxy_logger.debug(
+                        f"new cost: {new_spend}, new spend per model: {spend_per_model}"
+                    )
                     # Update the cost column for the given token
                     await prisma_client.update_data(
-                        token=token, data={"spend": new_spend}
+                        token=token,
+                        data={"spend": new_spend, "model_spend": spend_per_model},
                     )
 
                     valid_token = user_api_key_cache.get_cache(key=token)
                     if valid_token is not None:
                         valid_token.spend = new_spend
+                        valid_token.model_spend = spend_per_model
                         user_api_key_cache.set_cache(key=token, value=valid_token)
                 elif custom_db_client is not None:
                     # Fetch the existing cost for the given token
@@ -1071,10 +1097,21 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
+                    # track cost per model, for the given team
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+
                     verbose_proxy_logger.debug(f"new cost: {new_spend}")
                     # Update the cost column for the given token
                     await prisma_client.update_data(
-                        team_id=team_id, data={"spend": new_spend}, table_name="team"
+                        team_id=team_id,
+                        data={"spend": new_spend, "model_spend": spend_per_model},
+                        table_name="team",
                     )
 
                 elif custom_db_client is not None:
@@ -1648,6 +1685,7 @@ async def generate_key_helper_fn(
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
+    model_max_budget: Optional[dict] = {},
 ):
     global prisma_client, custom_db_client, user_api_key_cache
 
@@ -1681,6 +1719,8 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     permissions_json = json.dumps(permissions)
     metadata_json = json.dumps(metadata)
+    model_max_budget_json = json.dumps(model_max_budget)
+
     user_id = user_id or str(uuid.uuid4())
     user_role = user_role or "app_user"
     tpm_limit = tpm_limit
@@ -1723,6 +1763,7 @@ async def generate_key_helper_fn(
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
+            "model_max_budget": model_max_budget_json,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
@@ -1738,6 +1779,11 @@ async def generate_key_helper_fn(
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+        if isinstance(saved_token["model_max_budget"], str):
+            saved_token["model_max_budget"] = json.loads(
+                saved_token["model_max_budget"]
+            )
+
         if saved_token.get("expires", None) is not None and isinstance(
             saved_token["expires"], datetime
         ):
@@ -3081,6 +3127,7 @@ async def generate_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
+    - model_max_budget: Optional[dict] - key-specific model budget in USD. Example - {"text-davinci-002": 0.5, "gpt-3.5-turbo": 0.5}. IF null or {} then no model specific budget.
 
     Returns:
     - key: (str) The generated api key
