@@ -143,6 +143,9 @@ app = FastAPI(
     title="LiteLLM API",
     description=f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}",
     version=version,
+    root_path=os.environ.get(
+        "SERVER_ROOT_PATH", ""
+    ),  # check if user passed root path, FastAPI defaults this value to ""
 )
 
 
