@@ -3079,6 +3079,19 @@ async def generate_key_fn(
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
 
+    Examples: 
+
+    1. Allow users to turn on/off pii masking
+
+    ```bash
+    curl --location 'http://0.0.0.0:8000/key/generate' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "permissions": {"allow_pii_controls": true}
+    }'
+    ```
+
     Returns:
     - key: (str) The generated api key
     - expires: (datetime) Datetime object for when key expires.
