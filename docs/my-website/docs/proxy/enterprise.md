@@ -1,20 +1,45 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💸 Spend Tracking
+# ✨ Enterprise Features
+
+Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
 :::info
 
-This is an Enterprise only feature [Get Started with Enterprise here](https://github.com/BerriAI/litellm/tree/main/enterprise)
+[Get Started with Enterprise here](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
 :::
+
+Features: 
+- [ ] Content Moderation with LlamaGuard 
+- [ ] Tracking Spend for Custom Tags
+ 
+## Content Moderation with LlamaGuard 
+
+Currently works with Sagemaker's LlamaGuard endpoint. 
+
+How to enable this in your config.yaml: 
+
+```yaml 
+litellm_settings:
+   callbacks: ["llamaguard_moderations"]
+   llamaguard_model_name: "sagemaker/jumpstart-dft-meta-textgeneration-llama-guard-7b"
+```
+
+Make sure you have the relevant keys in your environment, eg.: 
+
+```
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+```
+
+## Tracking Spend for Custom Tags
 
 Requirements: 
 
 - Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
-
-
-## Tracking Spend per Request Tag
 
 ### Usage - /chat/completions requests with request tags 
 
