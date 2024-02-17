@@ -3197,6 +3197,7 @@ def image_generation(
                 "preset_cache_key": None,
                 "stream_response": {},
             },
+            custom_llm_provider=custom_llm_provider,
         )
 
         if custom_llm_provider == "azure":
