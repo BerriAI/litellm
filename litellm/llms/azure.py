@@ -741,7 +741,7 @@ class AzureChatCompletion(BaseLLM):
             response = azure_client.images.generate(**data, timeout=timeout)  # type: ignore
             ## LOGGING
             logging_obj.post_call(
-                input=input,
+                input=prompt,
                 api_key=api_key,
                 additional_args={"complete_input_dict": data},
                 original_response=response,
