@@ -110,9 +110,16 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj["data"]
-            elif response_obj is not None:
+            elif response_obj is not None and isinstance(
+                response_obj, litellm.ModelResponse
+            ):
                 input = prompt
                 output = response_obj["choices"][0]["message"].json()
+            elif response_obj is not None and isinstance(
+                response_obj, litellm.ImageResponse
+            ):
+                input = prompt
+                output = response_obj["data"]
             print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             if self._is_langfuse_v2():
                 self._log_langfuse_v2(
