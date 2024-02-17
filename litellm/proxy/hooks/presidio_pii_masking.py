@@ -69,6 +69,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             async with aiohttp.ClientSession() as session:
                 # Make the first request to /analyze
                 analyze_url = f"{self.presidio_analyzer_api_base}/analyze"
+                verbose_proxy_logger.debug(f"Making request to: {analyze_url}")
                 analyze_payload = {"text": text, "language": "en"}
                 redacted_text = None
                 async with session.post(analyze_url, json=analyze_payload) as response:
@@ -76,6 +77,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
 
                 # Make the second request to /anonymize
                 anonymize_url = f"{self.presidio_anonymizer_api_base}/anonymize"
+                verbose_proxy_logger.debug(f"Making request to: {anonymize_url}")
                 anonymize_payload = {
                     "text": "hello world, my name is Jane Doe. My number is: 034453334",
                     "analyzer_results": analyze_results,
@@ -88,6 +90,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
 
                 new_text = text
                 if redacted_text is not None:
+                    verbose_proxy_logger.debug(f"redacted_text: {redacted_text}")
                     for item in redacted_text["items"]:
                         start = item["start"]
                         end = item["end"]
