@@ -152,6 +152,35 @@ kubectl port-forward service/litellm-service 4000:4000
 Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
+<TabItem value="helm-deploy" label="Helm">
+
+### Step 1. Clone the repository
+
+```bash
+git clone https://github.com/BerriAI/litellm.git
+```
+
+### Step 2. Deploy with Helm
+
+```bash
+helm install \
+  --set masterkey=SuPeRsEcReT \
+  mydeploy \
+  deploy/charts/litellm
+```
+
+### Step 3. Expose the service to localhost
+
+```bash
+kubectl \
+  port-forward \
+  service/mydeploy-litellm \
+  8000:8000
+```
+
+Your OpenAI proxy server is now running on `http://127.0.0.1:8000`.
+
+</TabItem>
 </Tabs>
 
 ## Setting SSL Certification 
