@@ -937,6 +937,16 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     existing_spend_obj.spend = existing_spend + response_cost
 
+                    # track cost per model, for the given user
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+                    existing_spend_obj.model_spend = spend_per_model
+
                     valid_token = user_api_key_cache.get_cache(key=id)
                     if valid_token is not None and isinstance(valid_token, dict):
                         user_api_key_cache.set_cache(
@@ -1001,6 +1011,7 @@ async def update_database(
                     valid_token = user_api_key_cache.get_cache(key=token)
                     if valid_token is not None:
                         valid_token.spend = new_spend
+                        valid_token.model_spend = spend_per_model
                         user_api_key_cache.set_cache(key=token, value=valid_token)
                 elif custom_db_client is not None:
                     # Fetch the existing cost for the given token
@@ -1080,10 +1091,21 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
+                    # track cost per model, for the given team
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+
                     verbose_proxy_logger.debug(f"new cost: {new_spend}")
                     # Update the cost column for the given token
                     await prisma_client.update_data(
-                        team_id=team_id, data={"spend": new_spend}, table_name="team"
+                        team_id=team_id,
+                        data={"spend": new_spend, "model_spend": spend_per_model},
+                        table_name="team",
                     )
 
                 elif custom_db_client is not None:
