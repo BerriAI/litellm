@@ -155,6 +155,9 @@ class GenerateKeyRequest(GenerateRequestBase):
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
+    model_max_budget: Optional[dict] = (
+        {}
+    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -167,7 +170,13 @@ class GenerateKeyResponse(GenerateKeyRequest):
     def set_model_info(cls, values):
         if values.get("token") is not None:
             values.update({"key": values.get("token")})
-        dict_fields = ["metadata", "aliases", "config", "permissions"]
+        dict_fields = [
+            "metadata",
+            "aliases",
+            "config",
+            "permissions",
+            "model_max_budget",
+        ]
         for field in dict_fields:
             value = values.get(field)
             if value is not None and isinstance(value, str):
