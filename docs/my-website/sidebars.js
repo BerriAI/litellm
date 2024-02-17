@@ -138,7 +138,7 @@ const sidebars = {
         },
         {
           "type": "category",
-          "label": "Admin Controls",
+          "label": "Content Moderation",
           "items": [
             "proxy/call_hooks",
             "proxy/rules",
