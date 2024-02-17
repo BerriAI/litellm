@@ -966,6 +966,7 @@ async def update_database(
                     # track cost per model, for the given user
                     spend_per_model = existing_spend_obj.model_spend or {}
                     current_model = kwargs.get("model")
+
                     if current_model is not None and spend_per_model is not None:
                         if spend_per_model.get(current_model) is None:
                             spend_per_model[current_model] = response_cost
@@ -979,7 +980,9 @@ async def update_database(
                             key=id, value=existing_spend_obj.json()
                         )
 
-                    verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
+                    verbose_proxy_logger.debug(
+                        f"user - new cost: {existing_spend_obj.spend}, user_id: {id}"
+                    )
                     data_list.append(existing_spend_obj)
 
                     # Update the cost column for the given user id
