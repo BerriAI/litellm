@@ -3,6 +3,7 @@
 import sys, os, time, inspect, asyncio, traceback
 from datetime import datetime
 import pytest
+from pydantic import BaseModel
 
 sys.path.insert(0, os.path.abspath("../.."))
 from typing import Optional, Literal, List, Union
@@ -94,7 +95,8 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert (
                 isinstance(
-                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                    kwargs["original_response"],
+                    (str, litellm.CustomStreamWrapper, BaseModel),
                 )
                 or inspect.iscoroutine(kwargs["original_response"])
                 or inspect.isasyncgen(kwargs["original_response"])
@@ -174,7 +176,8 @@ class CompletionCustomHandler(
             ) or isinstance(kwargs["input"], (dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert isinstance(
-                kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                kwargs["original_response"],
+                (str, litellm.CustomStreamWrapper, BaseModel),
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
@@ -471,7 +474,7 @@ async def test_async_chat_azure_stream():
         pytest.fail(f"An exception occurred: {str(e)}")
 
 
-asyncio.run(test_async_chat_azure_stream())
+# asyncio.run(test_async_chat_azure_stream())
 
 
 ## Test Bedrock + sync
@@ -555,6 +558,7 @@ async def test_async_chat_bedrock_stream():
 
 
 # asyncio.run(test_async_chat_bedrock_stream())
+
 
 ## Test Sagemaker + Async
 @pytest.mark.asyncio
@@ -769,14 +773,18 @@ async def test_async_completion_azure_caching():
     unique_time = time.time()
     response1 = await litellm.acompletion(
         model="azure/chatgpt-v-2",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await litellm.acompletion(
         model="azure/chatgpt-v-2",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel
@@ -825,21 +833,25 @@ def test_image_generation_openai():
     try:
         customHandler_success = CompletionCustomHandler()
         customHandler_failure = CompletionCustomHandler()
-        # litellm.callbacks = [customHandler_success]
+        litellm.callbacks = [customHandler_success]
 
-        # litellm.set_verbose = True
+        litellm.set_verbose = True
 
-        # response = litellm.image_generation(
-        #     prompt="A cute baby sea otter", model="dall-e-3"
-        # )
+        response = litellm.image_generation(
+            prompt="A cute baby sea otter",
+            model="azure/",
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
+            api_version="2023-06-01-preview",
+        )
 
-        # print(f"response: {response}")
-        # assert len(response.data) > 0
+        print(f"response: {response}")
+        assert len(response.data) > 0
 
-        # print(f"customHandler_success.errors: {customHandler_success.errors}")
-        # print(f"customHandler_success.states: {customHandler_success.states}")
-        # assert len(customHandler_success.errors) == 0
-        # assert len(customHandler_success.states) == 3  # pre, post, success
+        print(f"customHandler_success.errors: {customHandler_success.errors}")
+        print(f"customHandler_success.states: {customHandler_success.states}")
+        assert len(customHandler_success.errors) == 0
+        assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
         litellm.callbacks = [customHandler_failure]
         try:
@@ -862,7 +874,7 @@ def test_image_generation_openai():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-test_image_generation_openai()
+# test_image_generation_openai()
 ## Test OpenAI + Async
 
 ## Test Azure + Sync
