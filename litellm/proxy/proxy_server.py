@@ -980,10 +980,22 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
-                    verbose_proxy_logger.debug(f"new cost: {new_spend}")
+                    # track cost per model, for the given key
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+
+                    verbose_proxy_logger.debug(
+                        f"new cost: {new_spend}, new spend per model: {spend_per_model}"
+                    )
                     # Update the cost column for the given token
                     await prisma_client.update_data(
-                        token=token, data={"spend": new_spend}
+                        token=token,
+                        data={"spend": new_spend, "model_spend": spend_per_model},
                     )
 
                     valid_token = user_api_key_cache.get_cache(key=token)
