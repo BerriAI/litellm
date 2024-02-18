@@ -48,11 +48,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
-  window.addEventListener('beforeunload', function() {
+
+  // check if window is not undefined
+  if (typeof window !== "undefined") {
+    window.addEventListener('beforeunload', function() {
       // Clear session storage
       sessionStorage.clear();
-  });
-
+    });
+  }
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
