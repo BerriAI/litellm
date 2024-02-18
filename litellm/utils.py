@@ -34,6 +34,7 @@ from dataclasses import (
 try:
     # this works in python 3.8
     import pkg_resources
+
     filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 # try:
 #     filename = str(
@@ -42,6 +43,7 @@ try:
 except:
     # this works in python 3.9+
     from importlib import resources
+
     filename = str(
         resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
     )  # for python 3.10+
@@ -87,16 +89,11 @@ from .exceptions import (
     UnprocessableEntityError,
 )
 
-# Import Enterprise features
-project_path = abspath(join(dirname(__file__), "..", ".."))
-# Add the "enterprise" directory to sys.path
-verbose_logger.debug(f"current project_path: {project_path}")
-enterprise_path = abspath(join(project_path, "enterprise"))
-sys.path.append(enterprise_path)
-
 verbose_logger.debug(f"sys.path: {sys.path}")
 try:
-    from enterprise.callbacks.generic_api_callback import GenericAPILogger
+    from .proxy.enterprise.enterprise_callbacks.generic_api_callback import (
+        GenericAPILogger,
+    )
 except Exception as e:
     verbose_logger.debug(f"Exception import enterprise features {str(e)}")
 
