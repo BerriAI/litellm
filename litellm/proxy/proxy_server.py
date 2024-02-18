@@ -380,6 +380,11 @@ async def user_api_key_auth(
             # 3. If 'user' passed to /chat/completions, /embeddings endpoint is in budget
             # 4. If token is expired
             # 5. If token spend is under Budget for the token
+            # 6. If token spend per model is under budget per model
+
+            request_data = await _read_request_body(
+                request=request
+            )  # request data, used across all checks. Making this easily available
 
             # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
@@ -454,7 +459,6 @@ async def user_api_key_auth(
                 if (
                     litellm.max_user_budget is not None
                 ):  # Check if 'user' passed in /chat/completions is in budget, only checked if litellm.max_user_budget is set
-                    request_data = await _read_request_body(request=request)
                     user_passed_to_chat_completions = request_data.get("user", None)
                     if user_passed_to_chat_completions is not None:
                         user_id_list.append(user_passed_to_chat_completions)
@@ -586,6 +590,25 @@ async def user_api_key_auth(
                     raise Exception(
                         f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
                     )
+
+            # Check 5. Token Model Spend is under Model budget
+            max_budget_per_model = valid_token.model_max_budget
+            spend_per_model = valid_token.model_spend
+
+            if max_budget_per_model is not None and spend_per_model is not None:
+                current_model = request_data.get("model")
+                if current_model is not None:
+                    current_model_spend = spend_per_model.get(current_model, None)
+                    current_model_budget = max_budget_per_model.get(current_model, None)
+
+                    if (
+                        current_model_spend is not None
+                        and current_model_budget is not None
+                    ):
+                        if current_model_spend > current_model_budget:
+                            raise Exception(
+                                f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
+                            )
 
             # Token passed all checks
             api_key = valid_token.token

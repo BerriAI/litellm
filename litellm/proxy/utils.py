@@ -1379,19 +1379,22 @@ async def _read_request_body(request):
     """
     import ast, json
 
-    request_data = {}
-    if request is None:
-        return request_data
-    body = await request.body()
-
-    if body == b"" or body is None:
-        return request_data
-    body_str = body.decode()
     try:
-        request_data = ast.literal_eval(body_str)
+        request_data = {}
+        if request is None:
+            return request_data
+        body = await request.body()
+
+        if body == b"" or body is None:
+            return request_data
+        body_str = body.decode()
+        try:
+            request_data = ast.literal_eval(body_str)
+        except:
+            request_data = json.loads(body_str)
+        return request_data
     except:
-        request_data = json.loads(body_str)
-    return request_data
+        return {}
 
 
 def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
