@@ -1454,6 +1454,18 @@ class ProxyConfig:
 
                                 llama_guard_object = _ENTERPRISE_LlamaGuard()
                                 imported_list.append(llama_guard_object)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "google_text_moderation"
+                            ):
+                                from litellm.proxy.enterprise.enterprise_hooks.google_text_moderation import (
+                                    _ENTERPRISE_GoogleTextModeration,
+                                )
+
+                                google_text_moderation_obj = (
+                                    _ENTERPRISE_GoogleTextModeration()
+                                )
+                                imported_list.append(google_text_moderation_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
