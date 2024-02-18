@@ -538,17 +538,13 @@ model_list: # will route requests to the least busy ollama model
       api_base: "http://127.0.0.1:8003"
 ```
 
-## Max Parallel Requests
 
-To rate limit a user based on the number of parallel requests, e.g.: 
-if user's parallel requests > x, send a 429 error
-if user's parallel requests <= x, let them use the API freely.
-
-set the max parallel request limit on the config.yaml (note: this expects the user to be passing in an api key).
+## Configure DB Pool Limits + Connection Timeouts 
 
 ```yaml
-general_settings:
-  max_parallel_requests: 100 # max parallel requests for a user = 100
+general_settings: 
+  database_connection_pool_limit: 100 # sets connection pool for prisma client to postgres db at 100
+  database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
 ```
 
 ## All settings 
@@ -577,6 +573,8 @@ general_settings:
     "key_management_system": "google_kms", # either google_kms or azure_kms
     "master_key": "string",
     "database_url": "string",
+    "database_connection_pool_limit": 0, # default 100
+    "database_connection_timeout": 0, # default 60s
     "database_type": "dynamo_db",
     "database_args": {
       "billing_mode": "PROVISIONED_THROUGHPUT",
