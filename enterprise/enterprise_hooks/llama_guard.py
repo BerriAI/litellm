@@ -35,6 +35,23 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
     # Class variables or attributes
     def __init__(self, model_name: Optional[str] = None):
         self.model = model_name or litellm.llamaguard_model_name
+        file_path = litellm.llamaguard_unsafe_content_categories
+        data = None
+
+        if file_path is not None:
+            try:
+                with open(file_path, "r") as file:
+                    data = file.read()
+            except FileNotFoundError:
+                raise Exception(f"File not found. file_path={file_path}")
+            except Exception as e:
+                raise Exception(f"An error occurred: {str(e)}, file_path={file_path}")
+
+        self.unsafe_content_categories = data
+
+        verbose_proxy_logger.debug(
+            f"self.unsafe_content_categories: {self.unsafe_content_categories}"
+        )
 
     def print_verbose(self, print_statement):
         try:
@@ -43,6 +60,41 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
                 print(print_statement)  # noqa
         except:
             pass
+
+    def set_custom_prompt_template(self, messages: list):
+        if self.unsafe_content_categories is not None and self.model is not None:
+            role = "Agent" if len(messages) % 2 == 0 else "User"
+            litellm.register_prompt_template(
+                model=self.model,
+                initial_prompt_value=f"""[INST] Task: Check if there is unsafe content in '{role}' messages in conversations according our safety policy with the below categories.
+
+                <BEGIN UNSAFE CONTENT CATEGORIES>
+                {self.unsafe_content_categories}
+                <END UNSAFE CONTENT CATEGORIES>
+
+                <BEGIN CONVERSATION>
+
+                """,
+                roles={
+                    "system": {
+                        "pre_message": "User: ",  # [OPTIONAL]
+                        "post_message": "\n\n",  # [OPTIONAL]
+                    },
+                    "user": {
+                        "pre_message": "User: ",  # [OPTIONAL]
+                        "post_message": "\n\n",  # [OPTIONAL]
+                    },
+                    "assistant": {
+                        "pre_message": "Agent: ",  # [OPTIONAL]
+                        "post_message": "\n\n",  # [OPTIONAL]
+                    },
+                },
+                final_prompt_value="""<END CONVERSATION>
+
+        Provide your safety assessment for {role} in the above conversation:
+        - First line must read 'safe' or 'unsafe'.
+        - If unsafe, a second line must include a comma-separated list of violated categories. [/INST]""",
+            )
 
     async def async_moderation_hook(
         self,
@@ -62,7 +114,6 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
                 model=self.model,
                 messages=[safety_check_messages],
                 hf_model_name="meta-llama/LlamaGuard-7b",
-            )
 
             if "unsafe" in response.choices[0].message.content:
                 raise HTTPException(
