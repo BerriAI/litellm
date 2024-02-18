@@ -602,7 +602,7 @@ class PrismaClient:
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Authentication Error: invalid user key - token does not exist",
                     )
-            elif user_id is not None or (
+            elif (user_id is not None and table_name is None) or (
                 table_name is not None and table_name == "user"
             ):
                 if query_type == "find_unique":
@@ -672,17 +672,10 @@ class PrismaClient:
                     response = await self.db.litellm_teamtable.find_unique(
                         where={"team_id": team_id}  # type: ignore
                     )
-                if query_type == "find_all" and team_id is not None:
-                    user_id_values = str(tuple(team_id))
-                    sql_query = f"""
-                    SELECT *
-                    FROM "LiteLLM_TeamTable"
-                    WHERE "team_id" IN {team_id}
-                    """
-
-                    # Execute the raw query
-                    # The asterisk before `team_id` unpacks the list into separate arguments
-                    response = await self.db.query_raw(sql_query)
+                elif query_type == "find_all" and user_id is not None:
+                    response = await self.db.litellm_teamtable.find_many(
+                        where={"members": {"has": user_id}}
+                    )
                 return response
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
