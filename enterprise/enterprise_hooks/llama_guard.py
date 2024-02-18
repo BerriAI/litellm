@@ -114,6 +114,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
                 model=self.model,
                 messages=[safety_check_messages],
                 hf_model_name="meta-llama/LlamaGuard-7b",
+            )
 
             if "unsafe" in response.choices[0].message.content:
                 raise HTTPException(
