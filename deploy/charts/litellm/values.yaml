@@ -5,7 +5,9 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/berriai/litellm
+  # Use "ghcr.io/berriai/litellm-database" for optimized image with database
+  # Alternatively, use "ghcr.io/berriai/litellm" for the default image
+  repository: ghcr.io/berriai/litellm-database
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   # tag: "main-latest"
@@ -56,7 +58,7 @@ service:
   port: 8000
 
 ingress:
-  enabled: true
+  enabled: false
   className: "nginx"
   annotations: {}
     # kubernetes.io/ingress.class: nginx
@@ -70,6 +72,8 @@ ingress:
   #  - secretName: chart-example-tls
   #    hosts:
   #      - chart-example.local
+
+# masterkey: changeit
 
 # The elements within proxy_config are rendered as config.yaml for the proxy
 #  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
@@ -159,61 +163,6 @@ postgresql:
 
     # A secret is created by this chart (litellm-helm) with the credentials that
     #  the new Postgres instance should use.
-    existingSecret: litellm-dbcredentials
-    secretKeys:
-      userPasswordKey: password
-
-ui:
-  enabled: true
-  replicaCount: 1
-  autoscaling:
-    enabled: false
-  image:
-    repository: ghcr.io/berriai/litellm-ui
-    pullPolicy: IfNotPresent
-    # Overrides the image tag whose default is the chart appVersion.
-    # tag: "main-latest"
-    # TODO: Switch to BerryAI repo and tags if/when they provide a ui image
-    # https://github.com/BerriAI/litellm/pull/1505
-    tag: ""
-  
-  service:
-    type: ClusterIP
-    port: 8501
-
-  ingress:
-    enabled: true
-    className: "nginx"
-    annotations: {}
-    hosts:
-      - host: ui.example.local
-        paths:
-          - path: /
-            pathType: ImplementationSpecific
-    tls: []
-
-  podAnnotations: {}
-  podLabels: {}
-
-  podSecurityContext:
-    fsGroup: 1000
-
-  securityContext:
-    capabilities:
-      drop:
-        - ALL
-    readOnlyRootFilesystem: true
-    runAsNonRoot: true
-    runAsUser: 1000
-
-  resources: {}
-
-  volumes: []
-
-  volumeMounts: []
-
-  nodeSelector: {}
-
-  tolerations: []
-
-  affinity: {}
+    # existingSecret: ""
+    # secretKeys:
+    #   userPasswordKey: password

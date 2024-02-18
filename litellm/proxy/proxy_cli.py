@@ -409,6 +409,8 @@ def run_server(
                 "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
             )
 
+        db_connection_pool_limit = 100
+        db_connection_timeout = 60
         if config is not None:
             """
             Allow user to pass in db url via config
@@ -427,6 +429,12 @@ def run_server(
                 proxy_config.load_config(router=None, config_file_path=config)
             )
             database_url = general_settings.get("database_url", None)
+            db_connection_pool_limit = general_settings.get(
+                "database_connection_pool_limit", 100
+            )
+            db_connection_timeout = general_settings.get(
+                "database_connection_timeout", 60
+            )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
@@ -447,14 +455,19 @@ def run_server(
             try:
                 if os.getenv("DATABASE_URL", None) is not None:
                     ### add connection pool + pool timeout args
-                    params = {"connection_limit": 100, "pool_timeout": 60}
+                    params = {
+                        "connection_limit": db_connection_pool_limit,
+                        "pool_timeout": db_connection_timeout,
+                    }
                     database_url = os.getenv("DATABASE_URL")
                     modified_url = append_query_params(database_url, params)
                     os.environ["DATABASE_URL"] = modified_url
-                    ###
                 if os.getenv("DIRECT_URL", None) is not None:
                     ### add connection pool + pool timeout args
-                    params = {"connection_limit": 100, "pool_timeout": 60}
+                    params = {
+                        "connection_limit": db_connection_pool_limit,
+                        "pool_timeout": db_connection_timeout,
+                    }
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, params)
                     os.environ["DIRECT_URL"] = modified_url

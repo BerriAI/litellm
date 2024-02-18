@@ -49,6 +49,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
 
+  // check if window is not undefined
+  if (typeof window !== "undefined") {
+    window.addEventListener('beforeunload', function() {
+      // Clear session storage
+      sessionStorage.clear();
+    });
+  }
+
   function formatUserRole(userRole: string) {
     if (!userRole) {
       return "Undefined Role";
@@ -70,6 +78,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
+
     if (token) {
       const decoded = jwtDecode(token) as { [key: string]: any };
       if (decoded) {
@@ -97,22 +106,22 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !data) {
-      const cachedData = localStorage.getItem("userData" + userID);
-      const cachedSpendData = localStorage.getItem("userSpendData" + userID);
-      const cachedUserModels = localStorage.getItem("userModels" + userID);
+      const cachedData = sessionStorage.getItem("userData" + userID);
+      const cachedSpendData = sessionStorage.getItem("userSpendData" + userID);
+      const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedData && cachedSpendData && cachedUserModels) {
         setData(JSON.parse(cachedData));
         setUserSpendData(JSON.parse(cachedSpendData));
         setUserModels(JSON.parse(cachedUserModels));
-
+  
       } else {
         const fetchData = async () => {
           try {
             const response = await userInfoCall(accessToken, userID, userRole);
             setUserSpendData(response["user_info"]);
             setData(response["keys"]); // Assuming this is the correct path to your data
-            localStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
-            localStorage.setItem(
+            sessionStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
+            sessionStorage.setItem(
               "userSpendData" + userID,
               JSON.stringify(response["user_info"])
             );
@@ -126,7 +135,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             console.log("userModels:", userModels);
 
-            localStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
+            sessionStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
 
 
             

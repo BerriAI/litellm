@@ -110,7 +110,6 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             -1
         ]  # get the last response - llama guard has a 4k token limit
         self.set_custom_prompt_template(messages=[safety_check_messages])
-        # print(f"self.model: {self.model}")
         response = await litellm.acompletion(
             model=self.model,
             messages=[safety_check_messages],
