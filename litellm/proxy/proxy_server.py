@@ -93,6 +93,7 @@ from litellm.proxy.utils import (
     html_form,
     _read_request_body,
     _is_valid_team_configs,
+    _is_user_proxy_admin,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -143,6 +144,9 @@ app = FastAPI(
     title="LiteLLM API",
     description=f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}",
     version=version,
+    root_path=os.environ.get(
+        "SERVER_ROOT_PATH", ""
+    ),  # check if user passed root path, FastAPI defaults this value to ""
 )
 
 
@@ -376,6 +380,11 @@ async def user_api_key_auth(
             # 3. If 'user' passed to /chat/completions, /embeddings endpoint is in budget
             # 4. If token is expired
             # 5. If token spend is under Budget for the token
+            # 6. If token spend per model is under budget per model
+
+            request_data = await _read_request_body(
+                request=request
+            )  # request data, used across all checks. Making this easily available
 
             # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
@@ -450,7 +459,6 @@ async def user_api_key_auth(
                 if (
                     litellm.max_user_budget is not None
                 ):  # Check if 'user' passed in /chat/completions is in budget, only checked if litellm.max_user_budget is set
-                    request_data = await _read_request_body(request=request)
                     user_passed_to_chat_completions = request_data.get("user", None)
                     if user_passed_to_chat_completions is not None:
                         user_id_list.append(user_passed_to_chat_completions)
@@ -496,11 +504,7 @@ async def user_api_key_auth(
                                 continue
                             assert isinstance(_user, dict)
                             # check if user is admin #
-                            if (
-                                _user.get("user_role", None) is not None
-                                and _user.get("user_role") == "proxy_admin"
-                            ):
-                                return UserAPIKeyAuth(api_key=master_key)
+
                             # Token exists, not expired now check if its in budget for the user
                             user_max_budget = _user.get("max_budget", None)
                             user_current_spend = _user.get("spend", None)
@@ -587,6 +591,25 @@ async def user_api_key_auth(
                         f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
                     )
 
+            # Check 5. Token Model Spend is under Model budget
+            max_budget_per_model = valid_token.model_max_budget
+            spend_per_model = valid_token.model_spend
+
+            if max_budget_per_model is not None and spend_per_model is not None:
+                current_model = request_data.get("model")
+                if current_model is not None:
+                    current_model_spend = spend_per_model.get(current_model, None)
+                    current_model_budget = max_budget_per_model.get(current_model, None)
+
+                    if (
+                        current_model_spend is not None
+                        and current_model_budget is not None
+                    ):
+                        if current_model_spend > current_model_budget:
+                            raise Exception(
+                                f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
+                            )
+
             # Token passed all checks
             api_key = valid_token.token
 
@@ -616,11 +639,15 @@ async def user_api_key_auth(
                     )
                 )
             if (
-                route.startswith("/key/")
-                or route.startswith("/user/")
-                or route.startswith("/model/")
-                or route.startswith("/spend/")
-            ) and (not is_master_key_valid):
+                (
+                    route.startswith("/key/")
+                    or route.startswith("/user/")
+                    or route.startswith("/model/")
+                    or route.startswith("/spend/")
+                )
+                and (not is_master_key_valid)
+                and (not _is_user_proxy_admin(user_id_information))
+            ):
                 allow_user_auth = False
                 if (
                     general_settings.get("allow_user_auth", False) == True
@@ -712,9 +739,12 @@ async def user_api_key_auth(
                 # Do something if the current route starts with any of the allowed routes
                 pass
             else:
-                raise Exception(
-                    f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
-                )
+                if _is_user_proxy_admin(user_id_information):
+                    pass
+                else:
+                    raise Exception(
+                        f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
+                    )
         return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
     except Exception as e:
         # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
@@ -937,13 +967,26 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     existing_spend_obj.spend = existing_spend + response_cost
 
+                    # track cost per model, for the given user
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+                    existing_spend_obj.model_spend = spend_per_model
+
                     valid_token = user_api_key_cache.get_cache(key=id)
                     if valid_token is not None and isinstance(valid_token, dict):
                         user_api_key_cache.set_cache(
                             key=id, value=existing_spend_obj.json()
                         )
 
-                    verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
+                    verbose_proxy_logger.debug(
+                        f"user - new cost: {existing_spend_obj.spend}, user_id: {id}"
+                    )
                     data_list.append(existing_spend_obj)
 
                     # Update the cost column for the given user id
@@ -980,15 +1023,28 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
-                    verbose_proxy_logger.debug(f"new cost: {new_spend}")
+                    # track cost per model, for the given key
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+
+                    verbose_proxy_logger.debug(
+                        f"new cost: {new_spend}, new spend per model: {spend_per_model}"
+                    )
                     # Update the cost column for the given token
                     await prisma_client.update_data(
-                        token=token, data={"spend": new_spend}
+                        token=token,
+                        data={"spend": new_spend, "model_spend": spend_per_model},
                     )
 
                     valid_token = user_api_key_cache.get_cache(key=token)
                     if valid_token is not None:
                         valid_token.spend = new_spend
+                        valid_token.model_spend = spend_per_model
                         user_api_key_cache.set_cache(key=token, value=valid_token)
                 elif custom_db_client is not None:
                     # Fetch the existing cost for the given token
@@ -1068,10 +1124,21 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
+                    # track cost per model, for the given team
+                    spend_per_model = existing_spend_obj.model_spend or {}
+                    current_model = kwargs.get("model")
+                    if current_model is not None and spend_per_model is not None:
+                        if spend_per_model.get(current_model) is None:
+                            spend_per_model[current_model] = response_cost
+                        else:
+                            spend_per_model[current_model] += response_cost
+
                     verbose_proxy_logger.debug(f"new cost: {new_spend}")
                     # Update the cost column for the given token
                     await prisma_client.update_data(
-                        team_id=team_id, data={"spend": new_spend}, table_name="team"
+                        team_id=team_id,
+                        data={"spend": new_spend, "model_spend": spend_per_model},
+                        table_name="team",
                     )
 
                 elif custom_db_client is not None:
@@ -1645,6 +1712,7 @@ async def generate_key_helper_fn(
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
+    model_max_budget: Optional[dict] = {},
 ):
     global prisma_client, custom_db_client, user_api_key_cache
 
@@ -1678,6 +1746,8 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     permissions_json = json.dumps(permissions)
     metadata_json = json.dumps(metadata)
+    model_max_budget_json = json.dumps(model_max_budget)
+
     user_id = user_id or str(uuid.uuid4())
     user_role = user_role or "app_user"
     tpm_limit = tpm_limit
@@ -1720,6 +1790,7 @@ async def generate_key_helper_fn(
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
+            "model_max_budget": model_max_budget_json,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
@@ -1735,6 +1806,11 @@ async def generate_key_helper_fn(
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+        if isinstance(saved_token["model_max_budget"], str):
+            saved_token["model_max_budget"] = json.loads(
+                saved_token["model_max_budget"]
+            )
+
         if saved_token.get("expires", None) is not None and isinstance(
             saved_token["expires"], datetime
         ):
@@ -3078,6 +3154,20 @@ async def generate_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
+    - model_max_budget: Optional[dict] - key-specific model budget in USD. Example - {"text-davinci-002": 0.5, "gpt-3.5-turbo": 0.5}. IF null or {} then no model specific budget.
+
+    Examples: 
+
+    1. Allow users to turn on/off pii masking
+
+    ```bash
+    curl --location 'http://0.0.0.0:8000/key/generate' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "permissions": {"allow_pii_controls": true}
+    }'
+    ```
 
     Returns:
     - key: (str) The generated api key
@@ -4871,7 +4961,7 @@ async def auth_callback(request: Request):
     if user_id is None:
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
     response = await generate_key_helper_fn(
-        **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard", "user_email": user_email}  # type: ignore
+        **{"duration": "1hr", "key_max_budget": 0.01, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard", "user_email": user_email}  # type: ignore
     )
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore

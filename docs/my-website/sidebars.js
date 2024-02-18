@@ -129,7 +129,7 @@ const sidebars = {
         "proxy/caching",
         {
           "type": "category",
-          "label": "Logging, Alerting, Caching",
+          "label": "Logging, Alerting",
           "items": [
             "proxy/logging", 
             "proxy/alerting",

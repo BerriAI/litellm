@@ -24,6 +24,8 @@ model LiteLLM_TeamTable {
     budget_reset_at DateTime?
     created_at    DateTime               @default(now()) @map("created_at")
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+    model_spend      Json @default("{}")
+    model_max_budget Json @default("{}")
 }
 
 // Track spend, rate limit, budget Users
@@ -41,6 +43,8 @@ model LiteLLM_UserTable {
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
+    model_spend      Json @default("{}")
+    model_max_budget Json @default("{}")
 }
 
 // Generate Tokens for Proxy
@@ -64,6 +68,8 @@ model LiteLLM_VerificationToken {
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
+    model_spend      Json @default("{}")
+    model_max_budget Json @default("{}")
 }
 
 // store proxy config.yaml

@@ -1379,19 +1379,22 @@ async def _read_request_body(request):
     """
     import ast, json
 
-    request_data = {}
-    if request is None:
-        return request_data
-    body = await request.body()
-
-    if body == b"" or body is None:
-        return request_data
-    body_str = body.decode()
     try:
-        request_data = ast.literal_eval(body_str)
+        request_data = {}
+        if request is None:
+            return request_data
+        body = await request.body()
+
+        if body == b"" or body is None:
+            return request_data
+        body_str = body.decode()
+        try:
+            request_data = ast.literal_eval(body_str)
+        except:
+            request_data = json.loads(body_str)
+        return request_data
     except:
-        request_data = json.loads(body_str)
-    return request_data
+        return {}
 
 
 def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
@@ -1406,6 +1409,22 @@ def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
                 f"Invalid model for team {team_id}: {model_in_request}.  Valid models for team are: {valid_models}\n"
             )
     return
+
+
+def _is_user_proxy_admin(user_id_information=None):
+    if (
+        user_id_information == None
+        or len(user_id_information) == 0
+        or user_id_information[0] == None
+    ):
+        return False
+    _user = user_id_information[0]
+    if (
+        _user.get("user_role", None) is not None
+        and _user.get("user_role") == "proxy_admin"
+    ):
+        return True
+    return False
 
 
 # LiteLLM Admin UI - Non SSO Login
