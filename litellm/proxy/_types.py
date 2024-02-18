@@ -311,6 +311,13 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="connect to a postgres db - needed for generating temporary keys + tracking spend / key",
     )
+    database_connection_pool_limit: Optional[int] = Field(
+        100,
+        description="default connection pool for prisma client connecting to postgres db",
+    )
+    database_connection_timeout: Optional[float] = Field(
+        60, description="default timeout for a connection to the database"
+    )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )
