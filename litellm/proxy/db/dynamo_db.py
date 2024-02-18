@@ -287,6 +287,8 @@ class DynamoDBWrapper(CustomDB):
                             or k == "config"
                             or k == "metadata"
                             or k == "permissions"
+                            or k == "model_spend"
+                            or k == "model_max_budget"
                         )
                         and v is not None
                         and isinstance(v, str)
