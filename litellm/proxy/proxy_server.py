@@ -4029,6 +4029,10 @@ async def user_info(
             user_info = await prisma_client.get_data(user_id=user_id)
         else:
             user_info = None
+        ## GET ALL TEAMS ##
+        teams = await prisma_client.get_data(
+            user_id=user_id, table_name="team", query_type="find_all"
+        )
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
             user_id=user_id,
@@ -4052,7 +4056,12 @@ async def user_info(
                 # if using pydantic v1
                 key = key.dict()
             key.pop("token", None)
-        return {"user_id": user_id, "user_info": user_info, "keys": keys}
+        return {
+            "user_id": user_id,
+            "user_info": user_info,
+            "keys": keys,
+            "teams": teams,
+        }
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
