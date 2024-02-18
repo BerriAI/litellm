@@ -89,7 +89,6 @@ from .exceptions import (
     UnprocessableEntityError,
 )
 
-verbose_logger.debug(f"sys.path: {sys.path}")
 try:
     from .proxy.enterprise.enterprise_callbacks.generic_api_callback import (
         GenericAPILogger,

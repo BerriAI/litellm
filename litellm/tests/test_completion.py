@@ -1912,7 +1912,7 @@ def test_mistral_anyscale_stream():
 # test_baseten_wizardLMcompletion_withbase()
 
 # def test_baseten_mosaic_ML_completion_withbase():
-#     model_name = "31dxrj3"
+#     model_name = "31dxrj3",
 #     litellm.api_base = "https://app.baseten.co"
 #     try:
 #         response = completion(model=model_name, messages=messages)
