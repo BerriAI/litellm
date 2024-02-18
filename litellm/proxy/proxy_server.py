@@ -93,6 +93,7 @@ from litellm.proxy.utils import (
     html_form,
     _read_request_body,
     _is_valid_team_configs,
+    _is_user_proxy_admin,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -503,11 +504,7 @@ async def user_api_key_auth(
                                 continue
                             assert isinstance(_user, dict)
                             # check if user is admin #
-                            if (
-                                _user.get("user_role", None) is not None
-                                and _user.get("user_role") == "proxy_admin"
-                            ):
-                                return UserAPIKeyAuth(api_key=master_key)
+
                             # Token exists, not expired now check if its in budget for the user
                             user_max_budget = _user.get("max_budget", None)
                             user_current_spend = _user.get("spend", None)
@@ -642,11 +639,15 @@ async def user_api_key_auth(
                     )
                 )
             if (
-                route.startswith("/key/")
-                or route.startswith("/user/")
-                or route.startswith("/model/")
-                or route.startswith("/spend/")
-            ) and (not is_master_key_valid):
+                (
+                    route.startswith("/key/")
+                    or route.startswith("/user/")
+                    or route.startswith("/model/")
+                    or route.startswith("/spend/")
+                )
+                and (not is_master_key_valid)
+                and (not _is_user_proxy_admin(user_id_information))
+            ):
                 allow_user_auth = False
                 if (
                     general_settings.get("allow_user_auth", False) == True
@@ -738,9 +739,12 @@ async def user_api_key_auth(
                 # Do something if the current route starts with any of the allowed routes
                 pass
             else:
-                raise Exception(
-                    f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
-                )
+                if _is_user_proxy_admin(user_id_information):
+                    pass
+                else:
+                    raise Exception(
+                        f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
+                    )
         return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
     except Exception as e:
         # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
@@ -4944,7 +4948,7 @@ async def auth_callback(request: Request):
     if user_id is None:
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
     response = await generate_key_helper_fn(
-        **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard", "user_email": user_email}  # type: ignore
+        **{"duration": "1hr", "key_max_budget": 0.01, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard", "user_email": user_email}  # type: ignore
     )
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
