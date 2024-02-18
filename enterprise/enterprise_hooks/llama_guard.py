@@ -54,18 +54,19 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
 
         The llama guard prompt template is applied automatically in factory.py
         """
-        safety_check_messages = data["messages"][
-            -1
-        ]  # get the last response - llama guard has a 4k token limit
-        response = await litellm.acompletion(
-            model=self.model,
-            messages=[safety_check_messages],
-            hf_model_name="meta-llama/LlamaGuard-7b",
-        )
-
-        if "unsafe" in response.choices[0].message.content:
-            raise HTTPException(
-                status_code=400, detail={"error": "Violated content safety policy"}
+        if "messages" in data:
+            safety_check_messages = data["messages"][
+                -1
+            ]  # get the last response - llama guard has a 4k token limit
+            response = await litellm.acompletion(
+                model=self.model,
+                messages=[safety_check_messages],
+                hf_model_name="meta-llama/LlamaGuard-7b",
             )
+
+            if "unsafe" in response.choices[0].message.content:
+                raise HTTPException(
+                    status_code=400, detail={"error": "Violated content safety policy"}
+                )
 
         return data
