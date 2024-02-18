@@ -1421,7 +1421,7 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "llamaguard_moderations"
                             ):
-                                from litellm.proxy.enterprise.hooks.llama_guard import (
+                                from litellm.proxy.enterprise.enterprise_hooks.llama_guard import (
                                     _ENTERPRISE_LlamaGuard,
                                 )
 
