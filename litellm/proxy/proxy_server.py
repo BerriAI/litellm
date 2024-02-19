@@ -4335,8 +4335,7 @@ async def model_info_v1(
     # check all models user has access to in user_api_key_dict
     user_models = []
     if len(user_api_key_dict.models) > 0:
-        model_names = user_api_key_dict.models
-        user_models = [m for m in config["model_list"] if m in model_names]
+        user_models = user_api_key_dict.models
 
     # for all models check if the user has access, and mark it as "user_access": `True` or `False`
     for model in all_models:
@@ -4978,8 +4977,25 @@ async def auth_callback(request: Request):
 
     if user_id is None:
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
+    # get user_info from litellm DB
+    user_info = None
+    if prisma_client is not None:
+        user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
+    if user_info is not None:
+        user_id_models = getattr(user_info, "models", [])
+
     response = await generate_key_helper_fn(
-        **{"duration": "1hr", "key_max_budget": 0.01, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard", "user_email": user_email}  # type: ignore
+        **{
+            "duration": "1hr",
+            "key_max_budget": 0.01,
+            "models": user_id_models,
+            "aliases": {},
+            "config": {},
+            "spend": 0,
+            "user_id": user_id,
+            "team_id": "litellm-dashboard",
+            "user_email": user_email,
+        }  # type: ignore
     )
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
