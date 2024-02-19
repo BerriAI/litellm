@@ -13,6 +13,7 @@ Features here are behind a commercial license in our `/enterprise` folder. [**Se
 
 Features: 
 - [ ] Content Moderation with LlamaGuard 
+- [ ] Content Moderation with Google Text Moderations 
 - [ ] Tracking Spend for Custom Tags
  
 ## Content Moderation with LlamaGuard 
@@ -34,6 +35,60 @@ os.environ["AWS_ACCESS_KEY_ID"] = ""
 os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 ```
+
+## Content Moderation with Google Text Moderation 
+
+Requires your GOOGLE_APPLICATION_CREDENTIALS to be set in your .env (same as VertexAI).
+
+How to enable this in your config.yaml: 
+
+```yaml 
+litellm_settings:
+   callbacks: ["google_text_moderation"]
+```
+
+### Set custom confidence thresholds
+
+Google Moderations checks the test against several categories. [Source](https://cloud.google.com/natural-language/docs/moderating-text#safety_attribute_confidence_scores)
+
+#### Set global default confidence threshold
+
+By default this is set to 0.8. But you can override this in your config.yaml.
+
+```yaml
+litellm_settings: 
+    google_moderation_confidence_threshold: 0.4 
+```
+
+#### Set category-specific confidence threshold
+
+Set a category specific confidence threshold in your config.yaml. If none set, the global default will be used. 
+
+```yaml
+litellm_settings: 
+    toxic_confidence_threshold: 0.1
+```
+
+Here are the category specific values: 
+
+| Category | Setting |
+| -------- | -------- |
+| "toxic" | toxic_confidence_threshold: 0.1 | 
+| "insult" | insult_confidence_threshold: 0.1 | 
+| "profanity" | profanity_confidence_threshold: 0.1 | 
+| "derogatory" | derogatory_confidence_threshold: 0.1 | 
+| "sexual" | sexual_confidence_threshold: 0.1 | 
+| "death_harm_and_tragedy" | death_harm_and_tragedy_threshold: 0.1 | 
+| "violent" | violent_threshold: 0.1 | 
+| "firearms_and_weapons" | firearms_and_weapons_threshold: 0.1 | 
+| "public_safety" | public_safety_threshold: 0.1 | 
+| "health" | health_threshold: 0.1 | 
+| "religion_and_belief" | religion_and_belief_threshold: 0.1 | 
+| "illicit_drugs" | illicit_drugs_threshold: 0.1 | 
+| "war_and_conflict" | war_and_conflict_threshold: 0.1 | 
+| "politics" | politics_threshold: 0.1 | 
+| "finance" | finance_threshold: 0.1 | 
+| "legal" | legal_threshold: 0.1 |
 
 ## Tracking Spend for Custom Tags
 
