@@ -75,7 +75,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: local, linux/amd64,linux/arm64,linux/arm64/v8
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
           
   build-and-push-image-database:
     runs-on: ubuntu-latest
