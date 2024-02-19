@@ -4327,11 +4327,29 @@ async def model_info_v1(
     # Load existing config
     config = await proxy_config.get_config()
 
+    all_models = config.get("model_list", [])
+    if user_model is not None:
+        # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
+        all_models += [user_model]
+
+    # check all models user has access to in user_api_key_dict
+    user_models = []
     if len(user_api_key_dict.models) > 0:
         model_names = user_api_key_dict.models
-        all_models = [m for m in config["model_list"] if m in model_names]
-    else:
-        all_models = config["model_list"]
+        user_models = [m for m in config["model_list"] if m in model_names]
+
+    # for all models check if the user has access, and mark it as "user_access": `True` or `False`
+    for model in all_models:
+        model_name = model.get("model_name", None)
+        if model_name is not None:
+            user_has_access = model_name in user_models
+            if (
+                user_models == []
+            ):  # if user_api_key_dict.models == [], user has access to all models
+                user_has_access = True
+            model["user_access"] = user_has_access
+
+    # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for model in all_models:
         # provided model_info in config.yaml
         model_info = model.get("model_info", {})
