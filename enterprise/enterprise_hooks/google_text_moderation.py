@@ -60,14 +60,9 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         self.language_document = language_v1.types.Document
         self.document_type = language_v1.types.Document.Type.PLAIN_TEXT
 
-        if hasattr(litellm, "google_moderation_confidence_threshold"):
-            default_confidence_threshold = (
-                litellm.google_moderation_confidence_threshold
-            )
-        else:
-            default_confidence_threshold = (
-                0.8  # by default require a high confidence (80%) to fail
-            )
+        default_confidence_threshold = (
+            litellm.google_moderation_confidence_threshold or 0.8
+        )  # by default require a high confidence (80%) to fail
 
         for category in self.confidence_categories:
             if hasattr(litellm, f"{category}_confidence_threshold"):
@@ -82,6 +77,13 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
                     f"{category}_confidence_threshold",
                     default_confidence_threshold,
                 )
+            set_confidence_value = getattr(
+                self,
+                f"{category}_confidence_threshold",
+            )
+            verbose_proxy_logger.info(
+                f"Google Text Moderation: {category}_confidence_threshold: {set_confidence_value}"
+            )
 
     def print_verbose(self, print_statement):
         try:
@@ -112,7 +114,6 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
 
             # Make the request
             response = self.client.moderate_text(request=request)
-            print(response)
             for category in response.moderation_categories:
                 category_name = category.name
                 category_name = category_name.lower()
