@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Subtitle, Table, TableHead, TableRow, TableCell, TableBody, Metric, Grid } from "@tremor/react";
 import { modelInfoCall } from "./networking";
-import { Badge, BadgeDelta } from '@tremor/react';
+import { Badge, BadgeDelta, Button } from '@tremor/react';
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -85,6 +85,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     console.log(modelData.data[i]);
 
   }
+  // when users click request access show pop up to allow them to request access
 
   return (
     <div style={{ width: "100%" }}>
@@ -109,7 +110,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <TableCell>{model.provider}</TableCell>
 
                 <TableCell>
-                  {model.user_access ? <Badge color={"green"}>Yes</Badge> : <Badge color={"red"}>Request Access</Badge>}
+                  {model.user_access ? <Badge color={"green"}>Yes</Badge> : <Button color={"red"} size="xs">Request Access</Button>}
                 </TableCell>
 
                 <TableCell>{model.input_cost}</TableCell>
