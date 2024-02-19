@@ -36,6 +36,18 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 ```
 
+### Customize LlamaGuard prompt 
+
+To modify the unsafe categories llama guard evaluates against, just create your own version of [this category list](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/llamaguard_prompt.txt)
+
+Point your proxy to it
+
+```yaml
+callbacks: ["llamaguard_moderations"]
+  llamaguard_model_name: "sagemaker/jumpstart-dft-meta-textgeneration-llama-guard-7b"
+  llamaguard_unsafe_content_categories: /path/to/llamaguard_prompt.txt
+```
+
 ## Content Moderation with Google Text Moderation 
 
 Requires your GOOGLE_APPLICATION_CREDENTIALS to be set in your .env (same as VertexAI).
