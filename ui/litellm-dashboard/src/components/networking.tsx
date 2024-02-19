@@ -145,7 +145,7 @@ export const modelInfoCall = async (
   userRole: String
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/info` : `/model/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
 
     message.info("Requesting model data");
     const response = await fetch(url, {
