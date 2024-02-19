@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Subtitle, Table, TableHead, TableRow, TableCell, TableBody, Metric, Grid } from "@tremor/react";
 import { modelInfoCall } from "./networking";
+import { Badge, BadgeDelta } from '@tremor/react';
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -65,11 +66,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         // If there is only one element, default provider to openai
         provider = splitModel.length === 1 ? defaultProvider : firstElement;
         
-        console.log("Provider:", provider);
     } else {
         // litellm_model_name is null or undefined, default provider to openai
         provider = defaultProvider;
-        console.log("Provider:", provider);
     }
 
     if (model_info) {
@@ -83,8 +82,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].output_cost = output_cost
     modelData.data[i].max_tokens = max_tokens
 
-  }
+    console.log(modelData.data[i]);
 
+  }
 
   return (
     <div style={{ width: "100%" }}>
@@ -95,6 +95,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             <TableRow>
               <TableCell><Title>Model Name </Title></TableCell>
               <TableCell><Title>Provider</Title></TableCell>
+              <TableCell><Title>Access</Title></TableCell>
               <TableCell><Title>Input Price per token ($)</Title></TableCell>
               <TableCell><Title>Output Price per token ($)</Title></TableCell>
               <TableCell><Title>Max Tokens</Title></TableCell>
@@ -106,6 +107,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
                 <TableCell><Title>{model.model_name}</Title></TableCell>
                 <TableCell>{model.provider}</TableCell>
+
+                <TableCell>
+                  {model.user_access ? <Badge color={"green"}>Yes</Badge> : <Badge color={"red"}>Request Access</Badge>}
+                </TableCell>
+
                 <TableCell>{model.input_cost}</TableCell>
                 <TableCell>{model.output_cost}</TableCell>
                 <TableCell>{model.max_tokens}</TableCell>
