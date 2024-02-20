@@ -512,7 +512,9 @@ class PrismaClient:
         user_id_list: Optional[list] = None,
         team_id: Optional[str] = None,
         key_val: Optional[dict] = None,
-        table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
+        table_name: Optional[
+            Literal["user", "key", "config", "spend", "team", "user_notification"]
+        ] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
         reset_at: Optional[datetime] = None,
@@ -677,6 +679,14 @@ class PrismaClient:
                         where={"members": {"has": user_id}}
                     )
                 return response
+            elif table_name == "user_notification":
+                if query_type == "find_unique":
+                    response = await self.db.litellm_usernotifications.find_unique(
+                        where={"user_id": user_id}  # type: ignore
+                    )
+                elif query_type == "find_all":
+                    response = await self.db.litellm_usernotifications.find_many()
+                return response
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             import traceback
@@ -696,7 +706,11 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def insert_data(
-        self, data: dict, table_name: Literal["user", "key", "config", "spend", "team"]
+        self,
+        data: dict,
+        table_name: Literal[
+            "user", "key", "config", "spend", "team", "user_notification"
+        ],
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -778,6 +792,19 @@ class PrismaClient:
                 )
                 verbose_proxy_logger.info(f"Data Inserted into Spend Table")
                 return new_spend_row
+            elif table_name == "user_notification":
+                db_data = self.jsonify_object(data=data)
+                new_user_notification_row = (
+                    await self.db.litellm_usernotifications.upsert(
+                        where={"request_id": data["request_id"]},
+                        data={
+                            "create": {**db_data},  # type: ignore
+                            "update": {},  # don't do anything if it already exists
+                        },
+                    )
+                )
+                verbose_proxy_logger.info(f"Data Inserted into Model Request Table")
+                return new_user_notification_row
 
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
