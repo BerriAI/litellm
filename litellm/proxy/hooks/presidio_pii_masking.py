@@ -29,10 +29,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
     user_api_key_cache = None
 
     # Class variables or attributes
-    def __init__(self, mock_testing: bool = False):
+    def __init__(
+        self, mock_testing: bool = False, mock_redacted_text: Optional[dict] = None
+    ):
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
+
+        self.mock_redacted_text = mock_redacted_text
         if mock_testing == True:  # for testing purposes only
             return
 
@@ -67,26 +71,31 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         """
         try:
             async with aiohttp.ClientSession() as session:
-                # Make the first request to /analyze
-                analyze_url = f"{self.presidio_analyzer_api_base}/analyze"
-                verbose_proxy_logger.debug(f"Making request to: {analyze_url}")
-                analyze_payload = {"text": text, "language": "en"}
-                redacted_text = None
-                async with session.post(analyze_url, json=analyze_payload) as response:
-                    analyze_results = await response.json()
+                if self.mock_redacted_text is not None:
+                    redacted_text = self.mock_redacted_text
+                else:
+                    # Make the first request to /analyze
+                    analyze_url = f"{self.presidio_analyzer_api_base}analyze"
+                    verbose_proxy_logger.debug(f"Making request to: {analyze_url}")
+                    analyze_payload = {"text": text, "language": "en"}
+                    redacted_text = None
+                    async with session.post(
+                        analyze_url, json=analyze_payload
+                    ) as response:
+                        analyze_results = await response.json()
 
-                # Make the second request to /anonymize
-                anonymize_url = f"{self.presidio_anonymizer_api_base}/anonymize"
-                verbose_proxy_logger.debug(f"Making request to: {anonymize_url}")
-                anonymize_payload = {
-                    "text": "hello world, my name is Jane Doe. My number is: 034453334",
-                    "analyzer_results": analyze_results,
-                }
+                    # Make the second request to /anonymize
+                    anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+                    verbose_proxy_logger.debug(f"Making request to: {anonymize_url}")
+                    anonymize_payload = {
+                        "text": text,
+                        "analyzer_results": analyze_results,
+                    }
 
-                async with session.post(
-                    anonymize_url, json=anonymize_payload
-                ) as response:
-                    redacted_text = await response.json()
+                    async with session.post(
+                        anonymize_url, json=anonymize_payload
+                    ) as response:
+                        redacted_text = await response.json()
 
                 new_text = text
                 if redacted_text is not None:
@@ -99,14 +108,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                             # check if token in dict
                             # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
                             if replacement in self.pii_tokens:
-                                replacement = replacement + uuid.uuid4()
+                                replacement = replacement + str(uuid.uuid4())
 
                             self.pii_tokens[replacement] = new_text[
                                 start:end
                             ]  # get text it'll replace
 
                         new_text = new_text[:start] + replacement + new_text[end:]
-                return redacted_text["text"]
+                    return redacted_text["text"]
+                else:
+                    raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
             traceback.print_exc()
             raise e
@@ -128,79 +139,88 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
 
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
-        permissions = user_api_key_dict.permissions
-        output_parse_pii = permissions.get(
-            "output_parse_pii", litellm.output_parse_pii
-        )  # allow key to turn on/off output parsing for pii
-        no_pii = permissions.get(
-            "no-pii", None
-        )  # allow key to turn on/off pii masking (if user is allowed to set pii controls, then they can override the key defaults)
+        try:
+            permissions = user_api_key_dict.permissions
+            output_parse_pii = permissions.get(
+                "output_parse_pii", litellm.output_parse_pii
+            )  # allow key to turn on/off output parsing for pii
+            no_pii = permissions.get(
+                "no-pii", None
+            )  # allow key to turn on/off pii masking (if user is allowed to set pii controls, then they can override the key defaults)
 
-        if no_pii is None:
-            # check older way of turning on/off pii
-            no_pii = not permissions.get("pii", True)
+            if no_pii is None:
+                # check older way of turning on/off pii
+                no_pii = not permissions.get("pii", True)
 
-        content_safety = data.get("content_safety", None)
-        verbose_proxy_logger.debug(f"content_safety: {content_safety}")
-        ## Request-level turn on/off PII controls ##
-        if content_safety is not None and isinstance(content_safety, dict):
-            # pii masking ##
-            if (
-                content_safety.get("no-pii", None) is not None
-                and content_safety.get("no-pii") == True
-            ):
-                # check if user allowed to turn this off
-                if permissions.get("allow_pii_controls", False) == False:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": "Not allowed to set PII controls per request"},
-                    )
-                else:  # user allowed to turn off pii masking
-                    no_pii = content_safety.get("no-pii")
-                    if not isinstance(no_pii, bool):
-                        raise HTTPException(
-                            status_code=400,
-                            detail={"error": "no_pii needs to be a boolean value"},
-                        )
-            ## pii output parsing ##
-            if content_safety.get("output_parse_pii", None) is not None:
-                # check if user allowed to turn this off
-                if permissions.get("allow_pii_controls", False) == False:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": "Not allowed to set PII controls per request"},
-                    )
-                else:  # user allowed to turn on/off pii output parsing
-                    output_parse_pii = content_safety.get("output_parse_pii")
-                    if not isinstance(output_parse_pii, bool):
+            content_safety = data.get("content_safety", None)
+            verbose_proxy_logger.debug(f"content_safety: {content_safety}")
+            ## Request-level turn on/off PII controls ##
+            if content_safety is not None and isinstance(content_safety, dict):
+                # pii masking ##
+                if (
+                    content_safety.get("no-pii", None) is not None
+                    and content_safety.get("no-pii") == True
+                ):
+                    # check if user allowed to turn this off
+                    if permissions.get("allow_pii_controls", False) == False:
                         raise HTTPException(
                             status_code=400,
                             detail={
-                                "error": "output_parse_pii needs to be a boolean value"
+                                "error": "Not allowed to set PII controls per request"
                             },
                         )
-
-        if no_pii == False:  # turn off pii masking
-            return data
-
-        if call_type == "completion":  # /chat/completions requests
-            messages = data["messages"]
-            tasks = []
-
-            for m in messages:
-                if isinstance(m["content"], str):
-                    tasks.append(
-                        self.check_pii(
-                            text=m["content"], output_parse_pii=output_parse_pii
+                    else:  # user allowed to turn off pii masking
+                        no_pii = content_safety.get("no-pii")
+                        if not isinstance(no_pii, bool):
+                            raise HTTPException(
+                                status_code=400,
+                                detail={"error": "no_pii needs to be a boolean value"},
+                            )
+                ## pii output parsing ##
+                if content_safety.get("output_parse_pii", None) is not None:
+                    # check if user allowed to turn this off
+                    if permissions.get("allow_pii_controls", False) == False:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "Not allowed to set PII controls per request"
+                            },
                         )
-                    )
-            responses = await asyncio.gather(*tasks)
-            for index, r in enumerate(responses):
-                if isinstance(messages[index]["content"], str):
-                    messages[index][
-                        "content"
-                    ] = r  # replace content with redacted string
-        return data
+                    else:  # user allowed to turn on/off pii output parsing
+                        output_parse_pii = content_safety.get("output_parse_pii")
+                        if not isinstance(output_parse_pii, bool):
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "error": "output_parse_pii needs to be a boolean value"
+                                },
+                            )
+
+            if no_pii == True:  # turn off pii masking
+                return data
+
+            if call_type == "completion":  # /chat/completions requests
+                messages = data["messages"]
+                tasks = []
+
+                for m in messages:
+                    if isinstance(m["content"], str):
+                        tasks.append(
+                            self.check_pii(
+                                text=m["content"], output_parse_pii=output_parse_pii
+                            )
+                        )
+                responses = await asyncio.gather(*tasks)
+                for index, r in enumerate(responses):
+                    if isinstance(messages[index]["content"], str):
+                        messages[index][
+                            "content"
+                        ] = r  # replace content with redacted string
+                verbose_proxy_logger.debug(f"Redacted pii message: {data['messages']}")
+            return data
+        except Exception as e:
+            verbose_proxy_logger.info(f"An error occurred - {str(e)}")
+            raise e
 
     async def async_post_call_success_hook(
         self,
