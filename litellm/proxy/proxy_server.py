@@ -1469,6 +1469,16 @@ class ProxyConfig:
                                     _ENTERPRISE_GoogleTextModeration()
                                 )
                                 imported_list.append(google_text_moderation_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "llmguard_moderations"
+                            ):
+                                from litellm.proxy.enterprise.enterprise_hooks.llm_guard import (
+                                    _ENTERPRISE_LLMGuard,
+                                )
+
+                                llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
+                                imported_list.append(llm_guard_moderation_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
