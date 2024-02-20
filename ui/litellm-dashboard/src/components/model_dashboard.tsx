@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Card, Title, Subtitle, Table, TableHead, TableRow, TableCell, TableBody, Metric, Grid } from "@tremor/react";
 import { modelInfoCall } from "./networking";
 import { Badge, BadgeDelta, Button } from '@tremor/react';
+import RequestAccess from "./request_model_access";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -41,6 +42,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   if (!modelData) {
     return <div>Loading...</div>;
   }
+  let all_models_on_proxy: any[] = [];
 
   // loop through model data and edit each row 
   for (let i = 0; i < modelData.data.length; i++) {
@@ -82,6 +84,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].output_cost = output_cost
     modelData.data[i].max_tokens = max_tokens
 
+    all_models_on_proxy.push(curr_model.model_name);
+
     console.log(modelData.data[i]);
 
   }
@@ -110,7 +114,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <TableCell>{model.provider}</TableCell>
 
                 <TableCell>
-                  {model.user_access ? <Badge color={"green"}>Yes</Badge> : <Button color={"red"} size="xs">Request Access</Button>}
+                  {model.user_access ? <Badge color={"green"}>Yes</Badge> : <RequestAccess userModels={all_models_on_proxy}></RequestAccess>}
                 </TableCell>
 
                 <TableCell>{model.input_cost}</TableCell>
