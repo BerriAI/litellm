@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Subtitle, Table, TableHead, TableRow, TableCell, TableBody, Metric, Grid } from "@tremor/react";
-import { modelInfoCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall } from "./networking";
 import { Badge, BadgeDelta, Button } from '@tremor/react';
 import RequestAccess from "./request_model_access";
 
@@ -18,6 +18,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   userID,
 }) => {
   const [modelData, setModelData] = useState<any>({ data: [] });
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
@@ -29,6 +31,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         const modelDataResponse = await modelInfoCall(accessToken, userID,  userRole);
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
+
+        // if userRole is Admin, show the pending requests 
+        if (userRole === "Admin" && accessToken) {
+          const user_requests = await userGetRequesedtModelsCall(accessToken);
+          console.log("Pending Requests:", pendingRequests);
+          setPendingRequests(user_requests.requests || []);
+        }
+
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -91,6 +101,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
   // when users click request access show pop up to allow them to request access
 
+
   return (
     <div style={{ width: "100%" }}>
     <Grid className="gap-2 p-10 h-[75vh] w-full">
@@ -127,6 +138,35 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TableBody>
         </Table>
       </Card>
+      {
+        userRole === "Admin" && pendingRequests ? (
+          <Card>
+            <Table>
+              <TableHead>
+                <Title>Pending Requests</Title>
+                <TableRow>
+                  <TableCell><Title>User ID</Title></TableCell>
+                  <TableCell><Title>Requested Models</Title></TableCell>
+                  <TableCell><Title>Justification</Title></TableCell>
+                  <TableCell><Title>Justification</Title></TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {pendingRequests.map((request: any) => (
+                  <TableRow key={request.request_id}>
+                    <TableCell><p>{request.user_id}</p></TableCell>
+                    <TableCell><p>{request.models[0]}</p></TableCell>
+                    <TableCell><p>{request.justification}</p></TableCell>
+                    <TableCell><p>{request.user_id}</p></TableCell>
+                    <Button>Approve</Button>
+                    <Button variant="secondary" className="ml-2">Deny</Button>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+        </Card>
+        ) : null
+      }
       </Grid>
     </div>
   );
