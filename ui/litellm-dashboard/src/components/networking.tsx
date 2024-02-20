@@ -327,3 +327,32 @@ export const userRequestModelCall = async (accessToken: String, model: String, U
     throw error;
   }
 };
+
+
+export const userGetRequesedtModelsCall = async (accessToken: String) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_requests` : `user/get_requests`;
+    console.log("in userGetRequesedtModelsCall:", url);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to delete key: " + errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    message.success("");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get requested models:", error);
+    throw error;
+  }
+};
