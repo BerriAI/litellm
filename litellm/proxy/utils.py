@@ -512,7 +512,9 @@ class PrismaClient:
         user_id_list: Optional[list] = None,
         team_id: Optional[str] = None,
         key_val: Optional[dict] = None,
-        table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
+        table_name: Optional[
+            Literal["user", "key", "config", "spend", "team", "user_notification"]
+        ] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
         reset_at: Optional[datetime] = None,
@@ -676,6 +678,14 @@ class PrismaClient:
                     response = await self.db.litellm_teamtable.find_many(
                         where={"members": {"has": user_id}}
                     )
+                return response
+            elif table_name == "user_notification":
+                if query_type == "find_unique":
+                    response = await self.db.litellm_usernotifications.find_unique(
+                        where={"user_id": user_id}  # type: ignore
+                    )
+                elif query_type == "find_all":
+                    response = await self.db.litellm_usernotifications.find_many()
                 return response
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
