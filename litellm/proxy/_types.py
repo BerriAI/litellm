@@ -159,6 +159,9 @@ class GenerateKeyRequest(GenerateRequestBase):
         {}
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
+    class Config:
+        protected_namespaces = ()
+
 
 class GenerateKeyResponse(GenerateKeyRequest):
     key: str
@@ -402,6 +405,9 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_spend: Dict = {}
     model_max_budget: Dict = {}
 
+    class Config:
+        protected_namespaces = ()
+
 
 class UserAPIKeyAuth(
     LiteLLM_VerificationToken
@@ -440,6 +446,9 @@ class LiteLLM_UserTable(LiteLLMBase):
         if values.get("models") is None:
             values.update({"models": []})
         return values
+
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLM_SpendLogs(LiteLLMBase):
