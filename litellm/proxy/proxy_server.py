@@ -687,6 +687,8 @@ async def user_api_key_auth(
                 elif route == "/model/info":
                     # /model/info just shows models user has access to
                     pass
+                elif route == "/user/request_model":
+                    pass  # this allows any user to request a model through the UI
                 elif allow_user_auth == True and route == "/key/generate":
                     pass
                 elif allow_user_auth == True and route == "/key/delete":
