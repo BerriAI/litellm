@@ -139,7 +139,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         </Table>
       </Card>
       {
-        userRole === "Admin" && pendingRequests ? (
+        userRole === "Admin" && pendingRequests && pendingRequests.length > 0 ? (
           <Card>
             <Table>
               <TableHead>
