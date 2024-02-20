@@ -4020,7 +4020,11 @@ async def user_auth(request: Request):
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
-    )
+    ),
+    view_all: bool = fastapi.Query(
+        default=False,
+        description="set to true to View all users. When using view_all, don't pass user_id",
+    ),
 ):
     """
     Use this to get user information. (user row + all user key info)
@@ -4040,6 +4044,11 @@ async def user_info(
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
+        elif view_all == True:
+            user_info = await prisma_client.get_data(
+                table_name="user", query_type="find_all"
+            )
+            return user_info
         else:
             user_info = None
         ## GET ALL TEAMS ##
