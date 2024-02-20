@@ -3,19 +3,21 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Modal, Form, Input, Select, InputNumber, message } from "antd";
 import { Button } from "@tremor/react";
-import { keyCreateCall } from "./networking";
+import { userRequestModelCall } from "./networking";
 
 const { Option } = Select;
 
 interface RequestAccessProps {
   userModels: string[];
+  accessToken: string;
+  userID: string;
 }
 
 function onRequestAccess(formData: Record<string, any>): void {
     // This function does nothing for now
   }
 
-const RequestAccess: React.FC<RequestAccessProps> = ({ userModels }) => {
+const RequestAccess: React.FC<RequestAccessProps> = ({ userModels, accessToken, userID }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
 
@@ -32,6 +34,17 @@ const RequestAccess: React.FC<RequestAccessProps> = ({ userModels }) => {
   const handleRequestAccess = async (formValues: Record<string, any>) => {
     try {
       message.info("Requesting access");
+      // Extract form values
+        const { selectedModel, accessReason } = formValues;
+
+        // Call userRequestModelCall
+        const response = await userRequestModelCall(
+        accessToken,  // You need to have accessToken available
+        selectedModel,
+        userID,  // You need to have UserID available
+        accessReason
+        );
+    
       onRequestAccess(formValues);
       setIsModalVisible(true);
     } catch (error) {
@@ -41,7 +54,7 @@ const RequestAccess: React.FC<RequestAccessProps> = ({ userModels }) => {
 
   return (
     <div>
-      <Button color={"red"} size="xs" onClick={() => setIsModalVisible(true)}>
+      <Button size="xs" onClick={() => setIsModalVisible(true)}>
         Request Access
       </Button>
       <Modal
