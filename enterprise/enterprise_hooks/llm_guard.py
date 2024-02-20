@@ -66,7 +66,9 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                         analyze_url, json=analyze_payload
                     ) as response:
                         redacted_text = await response.json()
-
+                verbose_proxy_logger.info(
+                    f"LLM Guard: Received response - {redacted_text}"
+                )
                 if redacted_text is not None:
                     if (
                         redacted_text.get("is_valid", None) is not None
