@@ -63,3 +63,103 @@ async def test_output_parsing():
 
 
 # asyncio.run(test_output_parsing())
+
+
+### UNIT TESTS FOR PRESIDIO PII MASKING ###
+
+input_a_anonymizer_results = {
+    "text": "hello world, my name is <PERSON>. My number is: <PHONE_NUMBER>",
+    "items": [
+        {
+            "start": 48,
+            "end": 62,
+            "entity_type": "PHONE_NUMBER",
+            "text": "<PHONE_NUMBER>",
+            "operator": "replace",
+        },
+        {
+            "start": 24,
+            "end": 32,
+            "entity_type": "PERSON",
+            "text": "<PERSON>",
+            "operator": "replace",
+        },
+    ],
+}
+
+input_b_anonymizer_results = {
+    "text": "My name is <PERSON>, who are you? Say my name in your response",
+    "items": [
+        {
+            "start": 11,
+            "end": 19,
+            "entity_type": "PERSON",
+            "text": "<PERSON>",
+            "operator": "replace",
+        }
+    ],
+}
+
+
+#   Test if PII masking works with input A
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_input_a():
+    """
+    Tests to see if correct parts of sentence anonymized
+    """
+    pii_masking = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
+    )
+
+    _api_key = "sk-12345"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    new_data = await pii_masking.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello world, my name is Jane Doe. My number is: 23r323r23r2wwkl",
+                }
+            ]
+        },
+        call_type="completion",
+    )
+
+    assert "<PERSON>" in new_data["messages"][0]["content"]
+    assert "<PHONE_NUMBER>" in new_data["messages"][0]["content"]
+
+
+#   Test if PII masking works with input B (also test if the response != A's response)
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_input_b():
+    """
+    Tests to see if correct parts of sentence anonymized
+    """
+    pii_masking = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
+    )
+
+    _api_key = "sk-12345"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    new_data = await pii_masking.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "My name is Jane Doe, who are you? Say my name in your response",
+                }
+            ]
+        },
+        call_type="completion",
+    )
+
+    assert "<PERSON>" in new_data["messages"][0]["content"]
+    assert "<PHONE_NUMBER>" not in new_data["messages"][0]["content"]
