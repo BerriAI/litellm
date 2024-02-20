@@ -104,13 +104,18 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
 
 export const userInfoCall = async (
   accessToken: String,
-  userID: String,
-  userRole: String
+  userID: String | null,
+  userRole: String,
+  viewAll: Boolean = false
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-    if (userRole == "App Owner") {
+    if (userRole == "App Owner" && userID) {
       url = `${url}/?user_id=${userID}`;
+    }
+    console.log("in userInfoCall viewAll=", viewAll);
+    if (viewAll) {
+      url = `${url}/?view_all=true`;
     }
     message.info("Requesting user data");
     const response = await fetch(url, {
