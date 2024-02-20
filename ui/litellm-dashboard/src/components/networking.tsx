@@ -298,7 +298,7 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
 
 export const userRequestModelCall = async (accessToken: String, model: String, UserID: String, justification: String) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/request_model` : `user/request_model`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/request_model` : `/user/request_model`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -331,7 +331,7 @@ export const userRequestModelCall = async (accessToken: String, model: String, U
 
 export const userGetRequesedtModelsCall = async (accessToken: String) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_requests` : `user/get_requests`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_requests` : `/user/get_requests`;
     console.log("in userGetRequesedtModelsCall:", url);
     const response = await fetch(url, {
       method: "GET",
