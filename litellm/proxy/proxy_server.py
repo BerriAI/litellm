@@ -4122,6 +4122,58 @@ async def user_update(data: UpdateUserRequest):
         )
 
 
+@router.post(
+    "/user/request_model",
+    tags=["user management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def user_request_model(request: Request):
+    """
+    Allow a user to create a request to access a model
+    """
+    global prisma_client
+    try:
+        data_json = await request.json()
+
+        # get the row from db
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        non_default_values = {k: v for k, v in data_json.items() if v is not None}
+        new_models = non_default_values.get("models", None)
+        user_id = non_default_values.get("user_id", None)
+        justification = non_default_values.get("justification", None)
+
+        response = await prisma_client.insert_data(
+            data={
+                "models": new_models,
+                "justification": justification,
+                "user_id": user_id,
+                "request_id": str(uuid.uuid4()),
+            },
+            table_name="model_request",
+        )
+        return {"status": "success"}
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
 #### TEAM MANAGEMENT ####
 
 
