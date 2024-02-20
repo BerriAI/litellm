@@ -96,3 +96,11 @@ model LiteLLM_SpendLogs {
   cache_key           String   @default("")
   request_tags        Json     @default("[]")
 }
+
+// Beta - allow team members to request access to a model
+model LiteLLM_ModelRequests {
+  request_id          String @unique
+  user_id             String 
+  models              String[]
+  justification       String
+}
