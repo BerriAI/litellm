@@ -4175,6 +4175,48 @@ async def user_request_model(request: Request):
         )
 
 
+@router.get(
+    "/user/get_requests",
+    tags=["user management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def user_get_requests():
+    """
+    Get all "Access" requests made by proxy users, access requests are requests for accessing models
+    """
+    global prisma_client
+    try:
+
+        # get the row from db
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        # TODO: Optimize this so we don't read all the data here, eventually move to pagination
+        response = await prisma_client.get_data(
+            query_type="find_all",
+            table_name="user_notification",
+        )
+        return {"requests": response}
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
 #### TEAM MANAGEMENT ####
 
 
