@@ -681,11 +681,11 @@ class PrismaClient:
                 return response
             elif table_name == "user_notification":
                 if query_type == "find_unique":
-                    response = await self.db.litellm_usernotifications.find_unique(
+                    response = await self.db.litellm_usernotifications.find_unique(  # type: ignore
                         where={"user_id": user_id}  # type: ignore
                     )
                 elif query_type == "find_all":
-                    response = await self.db.litellm_usernotifications.find_many()
+                    response = await self.db.litellm_usernotifications.find_many()  # type: ignore
                 return response
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
@@ -795,7 +795,7 @@ class PrismaClient:
             elif table_name == "user_notification":
                 db_data = self.jsonify_object(data=data)
                 new_user_notification_row = (
-                    await self.db.litellm_usernotifications.upsert(
+                    await self.db.litellm_usernotifications.upsert(  # type: ignore
                         where={"request_id": data["request_id"]},
                         data={
                             "create": {**db_data},  # type: ignore
