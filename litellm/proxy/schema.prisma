@@ -98,9 +98,10 @@ model LiteLLM_SpendLogs {
 }
 
 // Beta - allow team members to request access to a model
-model LiteLLM_ModelRequests {
+model LiteLLM_UserNotifications {
   request_id          String @unique
   user_id             String 
   models              String[]
   justification       String
+    status              String // approved, disapproved, pending
 }
