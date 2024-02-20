@@ -4149,9 +4149,10 @@ async def user_request_model(request: Request):
                 "models": new_models,
                 "justification": justification,
                 "user_id": user_id,
+                "status": "pending",
                 "request_id": str(uuid.uuid4()),
             },
-            table_name="model_request",
+            table_name="user_notification",
         )
         return {"status": "success"}
         # update based on remaining passed in values

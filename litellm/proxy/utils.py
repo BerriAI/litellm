@@ -698,7 +698,9 @@ class PrismaClient:
     async def insert_data(
         self,
         data: dict,
-        table_name: Literal["user", "key", "config", "spend", "team", "model_request"],
+        table_name: Literal[
+            "user", "key", "config", "spend", "team", "user_notification"
+        ],
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -780,17 +782,19 @@ class PrismaClient:
                 )
                 verbose_proxy_logger.info(f"Data Inserted into Spend Table")
                 return new_spend_row
-            elif table_name == "model_request":
+            elif table_name == "user_notification":
                 db_data = self.jsonify_object(data=data)
-                new_model_request_row = await self.db.litellm_modelrequests.upsert(
-                    where={"request_id": data["request_id"]},
-                    data={
-                        "create": {**db_data},  # type: ignore
-                        "update": {},  # don't do anything if it already exists
-                    },
+                new_user_notification_row = (
+                    await self.db.litellm_usernotifications.upsert(
+                        where={"request_id": data["request_id"]},
+                        data={
+                            "create": {**db_data},  # type: ignore
+                            "update": {},  # don't do anything if it already exists
+                        },
+                    )
                 )
                 verbose_proxy_logger.info(f"Data Inserted into Model Request Table")
-                return new_model_request_row
+                return new_user_notification_row
 
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
