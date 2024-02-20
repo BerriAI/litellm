@@ -8752,9 +8752,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:
-                    print_verbose(
-                        f"value of async chunk: {chunk.parts}; len(chunk.parts): {len(chunk.parts)}"
-                    )
+                    print_verbose(f"value of async chunk: {chunk}")
                     if chunk == "None" or chunk is None:
                         raise Exception
                     elif self.custom_llm_provider == "gemini" and len(chunk.parts) == 0:
