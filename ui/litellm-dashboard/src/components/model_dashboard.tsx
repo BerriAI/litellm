@@ -52,6 +52,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   if (!modelData) {
     return <div>Loading...</div>;
   }
+
+  if (!accessToken || !token || !userRole || !userID) {
+    return <div>Loading...</div>;
+  }
   let all_models_on_proxy: any[] = [];
 
   // loop through model data and edit each row 
