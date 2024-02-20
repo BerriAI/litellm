@@ -292,3 +292,38 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
     throw error;
   }
 };
+
+
+
+
+export const userRequestModelCall = async (accessToken: String, model: String, UserID: String, justification: String) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/request_model` : `user/request_model`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        models: [model],
+        user_id: UserID,
+        justification: justification,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to delete key: " + errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    message.success("");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
