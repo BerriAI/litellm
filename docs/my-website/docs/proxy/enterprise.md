@@ -14,6 +14,7 @@ Features here are behind a commercial license in our `/enterprise` folder. [**Se
 Features: 
 - [ ] Content Moderation with LlamaGuard 
 - [ ] Content Moderation with Google Text Moderations 
+- [ ] Content Moderation with LLM Guard
 - [ ] Tracking Spend for Custom Tags
  
 ## Content Moderation with LlamaGuard 
@@ -46,6 +47,33 @@ Point your proxy to it
 callbacks: ["llamaguard_moderations"]
   llamaguard_model_name: "sagemaker/jumpstart-dft-meta-textgeneration-llama-guard-7b"
   llamaguard_unsafe_content_categories: /path/to/llamaguard_prompt.txt
+```
+
+## Content Moderation with LLM Guard
+
+Set the LLM Guard API Base in your environment 
+
+```env
+LLM_GUARD_API_BASE = "http://0.0.0.0:8000"
+```
+
+Add `llmguard_moderations` as a callback 
+
+```yaml
+litellm_settings:
+    callbacks: ["llmguard_moderations"]
+```
+
+Now you can easily test it
+
+- Make a regular /chat/completion call 
+
+- Check your proxy logs for any statement with `LLM Guard:`
+
+Expected results: 
+
+```
+LLM Guard: Received response - {"sanitized_prompt": "hello world", "is_valid": true, "scanners": { "Regex": 0.0 }}
 ```
 
 ## Content Moderation with Google Text Moderation 
@@ -101,6 +129,8 @@ Here are the category specific values:
 | "politics" | politics_threshold: 0.1 | 
 | "finance" | finance_threshold: 0.1 | 
 | "legal" | legal_threshold: 0.1 |
+
+
 
 ## Tracking Spend for Custom Tags
 
