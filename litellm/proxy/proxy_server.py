@@ -5157,6 +5157,7 @@ async def auth_callback(request: Request):
     user_info = None
     if prisma_client is not None:
         user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
+    user_id_models: List = []
     if user_info is not None:
         user_id_models = getattr(user_info, "models", [])
 
