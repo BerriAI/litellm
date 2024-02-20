@@ -114,7 +114,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <TableCell>{model.provider}</TableCell>
 
                 <TableCell>
-                  {model.user_access ? <Badge color={"green"}>Yes</Badge> : <RequestAccess userModels={all_models_on_proxy}></RequestAccess>}
+                  {model.user_access ? <Badge color={"green"}>Yes</Badge> : <RequestAccess userModels={all_models_on_proxy} accessToken={accessToken} userID={userID}></RequestAccess>}
                 </TableCell>
 
                 <TableCell>{model.input_cost}</TableCell>
