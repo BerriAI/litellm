@@ -5028,7 +5028,7 @@ async def login(request: Request):
                 "user_id": "litellm-dashboard",
             }
         key = response["token"]  # type: ignore
-        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "/") + "ui/"
+        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "") + "/ui/"
         import jwt
 
         jwt_token = jwt.encode(
