@@ -238,6 +238,15 @@ class NewTeamRequest(LiteLLMBase):
     metadata: Optional[dict] = None
 
 
+class UpdateTeamRequest(LiteLLMBase):
+    team_id: str  # required
+    team_alias: Optional[str] = None
+    admins: Optional[list] = None
+    members: Optional[list] = None
+    members_with_roles: Optional[List[Member]] = None
+    metadata: Optional[dict] = None
+
+
 class LiteLLM_TeamTable(NewTeamRequest):
     max_budget: Optional[float] = None
     spend: Optional[float] = None
