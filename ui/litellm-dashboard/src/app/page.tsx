@@ -11,7 +11,7 @@ import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
 
 const CreateKeyPage = () => {
-  const [userRole, setUserRole] = useState<null | string>(null);
+  const [userRole, setUserRole] = useState('');
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const searchParams = useSearchParams();
 
@@ -67,10 +67,6 @@ const CreateKeyPage = () => {
       default:
         return "Unknown Role";
     }
-  }
-
-  if (!userRole) {
-    return <div>Loading...</div>;
   }
 
   return (
