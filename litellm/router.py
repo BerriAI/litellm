@@ -816,7 +816,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.atext_completion(model={model_name})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.atext_completion(model={model})\033[31m Exception {str(e)}\033[0m"
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
