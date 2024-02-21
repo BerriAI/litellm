@@ -3,6 +3,7 @@ import { Card, Title, Subtitle, Table, TableHead, TableRow, TableCell, TableBody
 import { userInfoCall } from "./networking";
 import { Badge, BadgeDelta, Button } from '@tremor/react';
 import RequestAccess from "./request_model_access";
+import CreateUser from "./create_user_button";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -55,6 +56,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   return (
     <div style={{ width: "100%" }}>
     <Grid className="gap-2 p-10 h-[75vh] w-full">
+        <CreateUser
+            userID={userID}
+            userModels={["litellm-proxy-budget", "model2"]}
+            accessToken={accessToken}
+          />
       <Card>
         <Table className="mt-5">
           <TableHead>

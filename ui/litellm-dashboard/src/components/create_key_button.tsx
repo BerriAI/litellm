@@ -78,15 +78,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             label="Key Name"
             name="key_alias"          
           >
-            <Input />
-            <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional</p>
+            <Input />         
             </Form.Item>
             <Form.Item
               label="Team ID"
               name="team_id"
             >
               <Input placeholder="ai_team" />
-              <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional</p>
             </Form.Item>
             <Form.Item
             label="Models"
@@ -103,44 +101,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Option>
               ))}
             </Select>
-            <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional, defaults to all models</p>
           </Form.Item>
-            
-
             <Form.Item
               label="Max Budget (USD)"
               name="max_budget"
             >
               <InputNumber step={0.01} precision={2} width={200}/>
-              <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional, defaults Unlimited Budget </p>
             </Form.Item>
             <Form.Item
               label="Tokens per minute Limit (TPM)"
               name="tpm_limit"
             >
               <InputNumber step={1} width={400}/>
-              <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional, defaults to Unlimited TPM</p>
             </Form.Item>
             <Form.Item
               label="Requests per minute Limit (RPM)"
               name="rpm_limit"
             >
               <InputNumber step={1} width={400}/>
-              <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional, defaults to Unlimited RPM</p>
             </Form.Item>
             <Form.Item
               label="Duration (eg: 30s, 30h, 30d)"
               name="duration"
             >
               <Input />
-              <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional, defaults to never expiring key</p>
             </Form.Item>
             <Form.Item
               label="Metadata"
               name="metadata"
             >
               <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-              <p style={{ fontStyle: 'italic', color: 'gray' }}>Optional, defaults to null</p>
             </Form.Item>
             </>
             ) : (
