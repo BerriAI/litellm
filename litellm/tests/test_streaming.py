@@ -438,7 +438,7 @@ async def test_acompletion_gemini_stream():
             {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
+                "content": "What do you know?",
             },
         ]
         print("testing gemini streaming")
@@ -453,8 +453,6 @@ async def test_acompletion_gemini_stream():
             print(f"chunk in acompletion gemini: {chunk}")
             print(chunk.choices[0].delta)
             chunk, finished = streaming_format_tests(idx, chunk)
-            if idx > 5:
-                break
             if finished:
                 break
             print(f"chunk: {chunk}")
