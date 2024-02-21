@@ -909,20 +909,6 @@ class Logging:
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
 
-            if litellm.max_budget and self.stream:
-                start_time = self.start_time
-                end_time = (
-                    self.start_time
-                )  # no time has passed as the call hasn't been made yet
-                time_diff = (end_time - start_time).total_seconds()
-                float_diff = float(time_diff)
-                litellm._current_cost += litellm.completion_cost(
-                    model=self.model,
-                    prompt="".join(message["content"] for message in self.messages),
-                    completion="",
-                    total_time=float_diff,
-                )
-
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
             for callback in callbacks:

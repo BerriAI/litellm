@@ -101,18 +101,15 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         - Use the sanitized prompt returned
             - LLM Guard can handle things like PII Masking, etc.
         """
-        if "messages" in data:
-            safety_check_messages = data["messages"][
-                -1
-            ]  # get the last response - llama guard has a 4k token limit
-            if (
-                isinstance(safety_check_messages, dict)
-                and "content" in safety_check_messages
-                and isinstance(safety_check_messages["content"], str)
-            ):
-                await self.moderation_check(safety_check_messages["content"])
-
         return data
+
+    async def async_post_call_streaming_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, response: str
+    ):
+        if response is not None:
+            await self.moderation_check(text=response)
+
+        return response
 
 
 # llm_guard = _ENTERPRISE_LLMGuard()
