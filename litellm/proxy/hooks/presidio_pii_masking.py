@@ -235,7 +235,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                         messages[index][
                             "content"
                         ] = r  # replace content with redacted string
-                verbose_proxy_logger.debug(f"Redacted pii message: {data['messages']}")
+                verbose_proxy_logger.info(
+                    f"Presidio PII Masking: Redacted pii message: {data['messages']}"
+                )
             return data
         except Exception as e:
             verbose_proxy_logger.info(f"An error occurred - {str(e)}")
