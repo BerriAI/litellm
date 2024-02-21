@@ -642,13 +642,12 @@ class PrismaClient:
                         }
                     )
                 elif query_type == "find_all" and user_id_list is not None:
-                    user_id_values = str(tuple(user_id_list))
+                    user_id_values = ", ".join(f"'{item}'" for item in user_id_list)
                     sql_query = f"""
                     SELECT *
                     FROM "LiteLLM_UserTable"
-                    WHERE "user_id" IN {user_id_values}
+                    WHERE "user_id" IN ({user_id_values})
                     """
-
                     # Execute the raw query
                     # The asterisk before `user_id_list` unpacks the list into separate arguments
                     response = await self.db.query_raw(sql_query)
@@ -928,6 +927,19 @@ class PrismaClient:
                     update_key_values = db_data
                 if "team_id" not in db_data and team_id is not None:
                     db_data["team_id"] = team_id
+                if "members_with_roles" in db_data and isinstance(
+                    db_data["members_with_roles"], list
+                ):
+                    db_data["members_with_roles"] = json.dumps(
+                        db_data["members_with_roles"]
+                    )
+                if "members_with_roles" in update_key_values and isinstance(
+                    update_key_values["members_with_roles"], list
+                ):
+                    update_key_values["members_with_roles"] = json.dumps(
+                        update_key_values["members_with_roles"]
+                    )
+
                 update_team_row = await self.db.litellm_teamtable.upsert(
                     where={"team_id": team_id},  # type: ignore
                     data={
@@ -942,7 +954,7 @@ class PrismaClient:
                     + f"DB Team Table - update succeeded {update_team_row}"
                     + "\033[0m"
                 )
-                return {"team_id": team_id, "data": db_data}
+                return {"team_id": team_id, "data": update_team_row}
             elif (
                 table_name is not None
                 and table_name == "key"
