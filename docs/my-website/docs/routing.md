@@ -584,6 +584,71 @@ async def test_acompletion_caching_on_router_caching_groups():
 asyncio.run(test_acompletion_caching_on_router_caching_groups())
 ```
 
+## Track cost for Azure Deployments
+
+**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
+
+**Solution** ✅ :  Set `model_info["base_model"]` on your router init so litellm uses the correct model for calculating azure cost
+
+Step 1. Router Setup
+
+```python
+from litellm import Router
+
+model_list = [
+	{ # list of model deployments 
+		"model_name": "gpt-4-preview", # model alias 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-v-2", # actual model name
+			"api_key": os.getenv("AZURE_API_KEY"),
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"model_info": {
+			"base_model": "azure/gpt-4-1106-preview" # azure/gpt-4-1106-preview will be used for cost tracking, ensure this exists in litellm model_prices_and_context_window.json
+		}
+	}, 
+	{
+		"model_name": "gpt-4-32k", 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-functioncalling", 
+			"api_key": os.getenv("AZURE_API_KEY"),
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"model_info": {
+			"base_model": "azure/gpt-4-32k" # azure/gpt-4-32k will be used for cost tracking, ensure this exists in litellm model_prices_and_context_window.json
+		}
+	}
+]
+
+router = Router(model_list=model_list)
+
+```
+
+Step 2. Access `response_cost` in the custom callback, **litellm calculates the response cost for you**
+
+```python
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+
+class MyCustomHandler(CustomLogger):        
+	def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+		print(f"On Success")
+		response_cost = kwargs.get("response_cost")
+		print("response_cost=", response_cost)
+
+customHandler = MyCustomHandler()
+litellm.callbacks = [customHandler]
+
+# router completion call
+response = router.completion(
+	model="gpt-4-32k", 
+	messages=[{ "role": "user", "content": "Hi who are you"}]
+)
+```
+
+
 #### Default litellm.completion/embedding params
 
 You can also set default params for litellm completion/embedding calls. Here's how to do that: 
