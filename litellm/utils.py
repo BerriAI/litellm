@@ -4288,18 +4288,15 @@ def get_optional_params(
         if tools is not None and isinstance(tools, list):
             from vertexai.preview import generative_models
 
-            gtools = []
+            gtool_func_declarations = []
             for tool in tools:
-                gtool = generative_models.FunctionDeclaration(
+                gtool_func_declaration = generative_models.FunctionDeclaration(
                     name=tool["function"]["name"],
                     description=tool["function"].get("description", ""),
                     parameters=tool["function"].get("parameters", {}),
                 )
-                gtool_func_declaration = generative_models.Tool(
-                    function_declarations=[gtool]
-                )
-                gtools.append(gtool_func_declaration)
-            optional_params["tools"] = gtools
+                gtool_func_declarations.append(gtool_func_declaration)
+            optional_params["tools"] = [generative_models.Tool(function_declarations=gtool_func_declarations)]
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
