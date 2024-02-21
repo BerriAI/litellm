@@ -1465,6 +1465,20 @@ def _is_user_proxy_admin(user_id_information=None):
         and _user.get("user_role") == "proxy_admin"
     ):
         return True
+
+    # if user_id_information contains litellm-proxy-budget
+    # get first user_id that is not litellm-proxy-budget
+    for user in user_id_information:
+        if user.get("user_id") != "litellm-proxy-budget":
+            _user = user
+            break
+
+    if (
+        _user.get("user_role", None) is not None
+        and _user.get("user_role") == "proxy_admin"
+    ):
+        return True
+
     return False
 
 
