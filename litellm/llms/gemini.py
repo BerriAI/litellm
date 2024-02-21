@@ -1,4 +1,4 @@
-import os, types, traceback, copy
+import os, types, traceback, copy, asyncio
 import json
 from enum import Enum
 import time
@@ -82,6 +82,27 @@ class GeminiConfig:
         }
 
 
+class TextStreamer:
+    """
+    A class designed to return an async stream from AsyncGenerateContentResponse object.
+    """
+
+    def __init__(self, response):
+        self.response = response
+        self._aiter = self.response.__aiter__()
+
+    async def __aiter__(self):
+        while True:
+            try:
+                # This will manually advance the async iterator.
+                # In the case the next object doesn't exists, __anext__() will simply raise a StopAsyncIteration exception
+                next_object = await self._aiter.__anext__()
+                yield next_object
+            except StopAsyncIteration:
+                # After getting all items from the async iterator, stop iterating
+                break
+
+
 def completion(
     model: str,
     messages: list,
@@ -160,12 +181,11 @@ def completion(
                     )
 
                     response = litellm.CustomStreamWrapper(
-                        aiter(response),
+                        TextStreamer(response),
                         model,
                         custom_llm_provider="gemini",
                         logging_obj=logging_obj,
                     )
-
                     return response
 
                 return async_streaming()
