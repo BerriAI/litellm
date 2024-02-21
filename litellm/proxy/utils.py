@@ -401,6 +401,27 @@ class ProxyLogging:
                 raise e
         return new_response
 
+    async def post_call_streaming_hook(
+        self,
+        response: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """
+        - Check outgoing streaming response uptil that point
+        - Run through moderation check
+        - Reject request if it fails moderation check
+        """
+        new_response = copy.deepcopy(response)
+        for callback in litellm.callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    await callback.async_post_call_streaming_hook(
+                        user_api_key_dict=user_api_key_dict, response=new_response
+                    )
+            except Exception as e:
+                raise e
+        return new_response
+
 
 ### DB CONNECTOR ###
 # Define the retry decorator with backoff strategy
