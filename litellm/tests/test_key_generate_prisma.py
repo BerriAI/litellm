@@ -887,13 +887,22 @@ def test_generate_and_update_key(prisma_client):
             request._url = URL(url="/update/key")
 
             # update the key
-            await update_key_fn(
+            response1 = await update_key_fn(
                 request=Request,
                 data=UpdateKeyRequest(
                     key=generated_key,
                     models=["ada", "babbage", "curie", "davinci"],
                 ),
             )
+
+            print("response1=", response1)
+
+            # update the team id
+            response2 = await update_key_fn(
+                request=Request,
+                data=UpdateKeyRequest(key=generated_key, team_id="ishaan"),
+            )
+            print("response2=", response2)
 
             # get info on key after update
             result = await info_key_fn(key=generated_key)
@@ -906,6 +915,7 @@ def test_generate_and_update_key(prisma_client):
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
+            assert result["info"]["team_id"] == "ishaan"
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
