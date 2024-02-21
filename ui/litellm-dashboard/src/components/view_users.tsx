@@ -58,8 +58,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <Grid className="gap-2 p-10 h-[75vh] w-full">
         <CreateUser
             userID={userID}
-            userRole={userRole}
-            userModels={["litellm-proxy-budget"]}
+            userModels={["litellm-proxy-budget", "model2"]}
             accessToken={accessToken}
           />
       <Card>

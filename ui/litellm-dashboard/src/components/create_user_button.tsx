@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button, Modal, Form, Input, message, Select, InputNumber } from "antd";
 import { Button as Button2 } from "@tremor/react";
-import { userCreateCall } from "./networking";
+import { userCreateCall, modelInfoCall } from "./networking";
+const { Option } = Select;
 
 interface CreateuserProps {
   userID: string;
@@ -12,7 +13,32 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<string | null>(null);
+  const [userModels, setUserModels] = useState<string[]>([]);
+  
+  // get all models
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const userRole = "any"; // You may need to get the user role dynamically
+        const modelDataResponse = await modelInfoCall(accessToken, userID, userRole);
+        // Assuming modelDataResponse.data contains an array of model objects with a 'model_name' property
+        const availableModels = [];
+        for (let i = 0; i < modelDataResponse.data.length; i++) {
+            const model = modelDataResponse.data[i];
+            availableModels.push(model.model_name);
+        }
+        console.log("Model data response:", modelDataResponse.data);
+        console.log("Available models:", availableModels);
 
+        // Assuming modelDataResponse.data contains an array of model names
+        setUserModels(availableModels);
+      } catch (error) {
+        console.error("Error fetching model data:", error);
+      }
+    };
+
+    fetchData(); // Call the function to fetch model data when the component mounts
+  }, []); // Empty dependency array to run only once
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -70,7 +96,7 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
             label="Models"
             name="models"
             >
-            {/* <Select
+            <Select
                 mode="multiple"
                 placeholder="Select models"
                 style={{ width: '100%' }}
@@ -80,7 +106,7 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
                     {model}
                 </Option>
                 ))}
-            </Select> */}
+            </Select>
             </Form.Item>
             
 
@@ -119,9 +145,11 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
                 <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
                 
             </Form.Item>
-          <Button htmlType="submit">
-            Create User
-          </Button>
+            <div style={{ textAlign: 'right', marginTop: '10px' }}>
+              <Button htmlType="submit">
+                Create User
+              </Button>
+              </div>
         </Form>
       </Modal>
       {apiuser && (
