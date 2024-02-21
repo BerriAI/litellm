@@ -5008,10 +5008,19 @@ async def login(request: Request):
             # checks if user is admin
             user_role = "app_admin"
             key_user_id = os.getenv("PROXY_ADMIN_ID", "default_user_id")
+
         # Admin is Authe'd in - generate key for the UI to access Proxy
+
+        # ensure this user is set as the proxy admin, in this route there is no sso, we can assume this user is only the admin
+        await user_update(
+            data=UpdateUserRequest(
+                user_id=key_user_id,
+                user_role="proxy_admin",
+            )
+        )
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
-                **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
+                **{"user_role": "proxy_admin", "duration": "1hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
             )
         else:
             response = {
@@ -5027,7 +5036,7 @@ async def login(request: Request):
                 "user_id": user_id,
                 "key": key,
                 "user_email": user_id,
-                "user_role": user_role,
+                "user_role": "app_admin",  # this is the path without sso - we can assume only admins will use this
             },
             "secret",
             algorithm="HS256",
