@@ -69,6 +69,9 @@ const CreateKeyPage = () => {
     }
   }
 
+  if (!userRole) {
+    return <div>Loading...</div>;
+  }
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
