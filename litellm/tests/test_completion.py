@@ -1993,6 +1993,19 @@ def test_completion_gemini():
 # test_completion_gemini()
 
 
+@pytest.mark.asyncio
+async def test_acompletion_gemini():
+    litellm.set_verbose = True
+    model_name = "gemini/gemini-pro"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response = await litellm.acompletion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # Palm tests
 def test_completion_palm():
     litellm.set_verbose = True
