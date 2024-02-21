@@ -56,6 +56,39 @@ litellm_settings:
 
 4. User Response: "Hey Jane Doe, nice to meet you!"
 
+## Ad-hoc recognizers 
+
+Send ad-hoc recognizers to presidio `/analyze` by passing a json file to the proxy 
+
+[**Example** ad-hoc recognizer](../../../../litellm/proxy/hooks/example_presidio_ad_hoc_recognizer.json)
+
+```yaml
+litellm_settings: 
+  callbacks: ["presidio"]
+  presidio_ad_hoc_recognizers: "./hooks/example_presidio_ad_hoc_recognizer.json"
+```
+
+You can see this working, when you run the proxy: 
+
+```bash
+litellm --config /path/to/config.yaml --debug
+```
+
+Make a chat completions request, example:
+
+```
+{
+  "model": "azure-gpt-3.5",
+  "messages": [{"role": "user", "content": "John Smith AHV number is 756.3026.0705.92. Zip code: 1334023"}]
+}
+```
+
+And search for any log starting with `Presidio PII Masking`, example:
+```
+Presidio PII Masking: Redacted pii message: <PERSON> AHV number is <AHV_NUMBER>. Zip code: <US_DRIVER_LICENSE>
+```
+
+
 ## Turn on/off per key 
 
 Turn off PII masking for a given key. 

@@ -9,7 +9,7 @@
 
 
 from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid
+import litellm, traceback, sys, uuid, json
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
@@ -27,6 +27,7 @@ import aiohttp, asyncio
 
 class _OPTIONAL_PresidioPIIMasking(CustomLogger):
     user_api_key_cache = None
+    ad_hoc_recognizers = None
 
     # Class variables or attributes
     def __init__(
@@ -39,6 +40,22 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         self.mock_redacted_text = mock_redacted_text
         if mock_testing == True:  # for testing purposes only
             return
+
+        ad_hoc_recognizers = litellm.presidio_ad_hoc_recognizers
+        if ad_hoc_recognizers is not None:
+            try:
+                with open(ad_hoc_recognizers, "r") as file:
+                    self.ad_hoc_recognizers = json.load(file)
+            except FileNotFoundError:
+                raise Exception(f"File not found. file_path={ad_hoc_recognizers}")
+            except json.JSONDecodeError as e:
+                raise Exception(
+                    f"Error decoding JSON file: {str(e)}, file_path={ad_hoc_recognizers}"
+                )
+            except Exception as e:
+                raise Exception(
+                    f"An error occurred: {str(e)}, file_path={ad_hoc_recognizers}"
+                )
 
         self.presidio_analyzer_api_base = litellm.get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
@@ -78,6 +95,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                     analyze_url = f"{self.presidio_analyzer_api_base}analyze"
                     verbose_proxy_logger.debug(f"Making request to: {analyze_url}")
                     analyze_payload = {"text": text, "language": "en"}
+                    if self.ad_hoc_recognizers is not None:
+                        analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
                     redacted_text = None
                     async with session.post(
                         analyze_url, json=analyze_payload
@@ -216,7 +235,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                         messages[index][
                             "content"
                         ] = r  # replace content with redacted string
-                verbose_proxy_logger.debug(f"Redacted pii message: {data['messages']}")
+                verbose_proxy_logger.info(
+                    f"Presidio PII Masking: Redacted pii message: {data['messages']}"
+                )
             return data
         except Exception as e:
             verbose_proxy_logger.info(f"An error occurred - {str(e)}")
