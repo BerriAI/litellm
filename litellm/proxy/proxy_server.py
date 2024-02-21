@@ -4060,9 +4060,30 @@ async def user_info(
         else:
             user_info = None
         ## GET ALL TEAMS ##
-        teams = await prisma_client.get_data(
+        team_list = []
+        team_id_list = []
+        # _DEPRECATED_ check if user in 'member' field
+        teams_1 = await prisma_client.get_data(
             user_id=user_id, table_name="team", query_type="find_all"
         )
+
+        if teams_1 is not None and isinstance(teams_1, list):
+            team_list = teams_1
+            for team in teams_1:
+                team_id_list.append(team.team_id)
+
+        if user_info is not None:
+            # *NEW* get all teams in user 'teams' field
+            teams_2 = await prisma_client.get_data(
+                team_id_list=user_info.teams, table_name="team", query_type="find_all"
+            )
+
+            if teams_2 is not None and isinstance(teams_2, list):
+                for team in teams_2:
+                    if team.team_id not in team_id_list:
+                        team_list.append(team)
+                        team_id_list.append(team.team_id)
+
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
             user_id=user_id,
@@ -4090,9 +4111,10 @@ async def user_info(
             "user_id": user_id,
             "user_info": user_info,
             "keys": keys,
-            "teams": teams,
+            "teams": team_list,
         }
     except Exception as e:
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -4274,12 +4296,31 @@ async def new_team(
     Parameters:
     - team_alias: Optional[str] - User defined team alias
     - team_id: Optional[str] - The team id of the user. If none passed, we'll generate it.
-    - admins: list - A list of user IDs that will be owning the team
-    - members: list - A list of user IDs that will be members of the team
+    - members_with_roles: list - A list of dictionaries, mapping user_id to role in team (either 'admin' or 'user')
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
+
+    _deprecated_params: 
+    - admins: list - A list of user_id's for the admin role 
+    - users: list - A list of user_id's for the user role 
+
+    Example Request:
+    ```
+    curl --location 'http://0.0.0.0:8000/team/new' \
+    
+    --header 'Authorization: Bearer sk-1234' \
+    
+    --header 'Content-Type: application/json' \
+    
+    --data '{
+      "team_alias": "my-new-team_2",
+      "members_with_roles": [{"role": "admin", "user_id": "user-1234"}, 
+        {"role": "user", "user_id": "user-2434"}]
+    }'
+
+    ```
     """
     global prisma_client
 
@@ -4303,6 +4344,19 @@ async def new_team(
     team_row = await prisma_client.insert_data(
         data=complete_team_data.json(exclude_none=True), table_name="team"
     )
+
+    ## ADD TEAM ID TO USER TABLE ##
+    for user in complete_team_data.members_with_roles:
+        ## add team id to user row ##
+        await prisma_client.update_data(
+            user_id=user.user_id,
+            data={"user_id": user.user_id, "teams": [team_row.team_id]},
+            update_key_values={
+                "teams": {
+                    "push ": [team_row.team_id],
+                }
+            },
+        )
     return team_row
 
 

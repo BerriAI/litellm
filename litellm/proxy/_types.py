@@ -224,11 +224,17 @@ class UpdateUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
 
 
+class Member(LiteLLMBase):
+    role: Literal["admin", "user"]
+    user_id: str
+
+
 class NewTeamRequest(LiteLLMBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
     admins: list = []
     members: list = []
+    members_with_roles: List[Member] = []
     metadata: Optional[dict] = None
 
 
