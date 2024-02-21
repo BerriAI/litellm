@@ -24,7 +24,7 @@ interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
   userEmail: string | null;
-  setUserRole: React.Dispatch<React.SetStateAction<string | null>>;
+  setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
@@ -106,12 +106,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !data) {
-      const cachedData = sessionStorage.getItem("userData" + userID);
-      const cachedSpendData = sessionStorage.getItem("userSpendData" + userID);
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
-      if (cachedData && cachedSpendData && cachedUserModels) {
-        setData(JSON.parse(cachedData));
-        setUserSpendData(JSON.parse(cachedSpendData));
+      if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
   
       } else {
