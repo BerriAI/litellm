@@ -15,6 +15,7 @@ You can set budgets at 3 levels:
 - For a user 
 - For a 'user' passed to `/chat/completions`, `/embeddings` etc
 - For a key
+- For a key (model specific budgets)
 
 
 <Tabs>
@@ -69,7 +70,7 @@ You can:
 
 By default the `max_budget` is set to `null` and is not checked for keys
 
-### **Add budgets to users**
+#### **Add budgets to users**
 ```shell 
 curl --location 'http://localhost:8000/user/new' \
 --header 'Authorization: Bearer <your-master-key>' \
@@ -90,7 +91,7 @@ curl --location 'http://localhost:8000/user/new' \
 }
 ```
 
-### **Add budget duration to users**
+#### **Add budget duration to users**
 
 `budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 
@@ -105,7 +106,7 @@ curl 'http://0.0.0.0:8000/user/new' \
 }'
 ```
 
-### Create new keys for existing user
+#### Create new keys for existing user
 
 Now you can just call `/key/generate` with that user_id (i.e. krrish3@berri.ai) and:
 - **Budget Check**: krrish3@berri.ai's budget (i.e. $10) will be checked for this key
@@ -189,7 +190,7 @@ You can:
 
 By default the `max_budget` is set to `null` and is not checked for keys
 
-### **Add budgets to keys**
+#### **Add budgets to keys**
 
 ```bash
 curl 'http://0.0.0.0:8000/key/generate' \
@@ -227,7 +228,7 @@ Expected Response from `/chat/completions` when key has crossed budget
 }   
 ```
 
-### **Add budget duration to keys**
+#### **Add budget duration to keys**
 
 `budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 
@@ -239,6 +240,36 @@ curl 'http://0.0.0.0:8000/key/generate' \
   "team_id": "core-infra", # [OPTIONAL]
   "max_budget": 10,
   "budget_duration": 10s,
+}'
+```
+
+</TabItem>
+
+<TabItem value="per-model-key" label="For Key (model specific)">
+
+Apply model specific budgets on a key.
+
+**Expected Behaviour**
+- `model_spend` gets auto-populated in `LiteLLM_VerificationToken` Table
+- After the key crosses the budget set for the `model` in `model_max_budget`, calls fail
+
+By default the `model_max_budget` is set to `{}` and is not checked for keys
+
+:::info
+
+- LiteLLM will track the cost/budgets for the `model` passed to LLM endpoints (`/chat/completions`, `/embeddings`)
+
+
+:::
+
+#### **Add model specific budgets to keys**
+
+```bash
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  model_max_budget={"gpt4": 0.5, "gpt-5": 0.01}
 }'
 ```
 
