@@ -532,6 +532,7 @@ class PrismaClient:
         user_id: Optional[str] = None,
         user_id_list: Optional[list] = None,
         team_id: Optional[str] = None,
+        team_id_list: Optional[list] = None,
         key_val: Optional[dict] = None,
         table_name: Optional[
             Literal["user", "key", "config", "spend", "team", "user_notification"]
@@ -697,7 +698,13 @@ class PrismaClient:
                     )
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_teamtable.find_many(
-                        where={"members": {"has": user_id}}
+                        where={
+                            "members": {"has": user_id},
+                        },
+                    )
+                elif query_type == "find_all" and team_id_list is not None:
+                    response = await self.db.litellm_teamtable.find_many(
+                        where={"team_id": {"in": team_id_list}}
                     )
                 return response
             elif table_name == "user_notification":
@@ -769,6 +776,12 @@ class PrismaClient:
                 return new_user_row
             elif table_name == "team":
                 db_data = self.jsonify_object(data=data)
+                if db_data.get("members_with_roles", None) is not None and isinstance(
+                    db_data["members_with_roles"], list
+                ):
+                    db_data["members_with_roles"] = json.dumps(
+                        db_data["members_with_roles"]
+                    )
                 new_team_row = await self.db.litellm_teamtable.upsert(
                     where={"team_id": data["team_id"]},
                     data={
