@@ -19,6 +19,10 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+# print contents of ui_colors.json
+echo "Contents of ui_colors.json:"
+cat ui_colors.json
+
 # Run npm build
 npm run build
 
@@ -26,8 +30,12 @@ npm run build
 if [ $? -eq 0 ]; then
   echo "Build successful. Copying files..."
 
+  # echo current dir
+  echo
+  pwd
+
   # Specify the destination directory
-  destination_dir="../../litellm/proxy/experimental"
+  destination_dir="../../litellm/proxy/_experimental/out"
 
   # Remove existing files in the destination directory
   rm -rf "$destination_dir"/*
