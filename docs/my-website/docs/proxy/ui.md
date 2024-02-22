@@ -133,7 +133,8 @@ The following can be used to customize attribute names when interacting with the
 GENERIC_USER_ID_ATTRIBUTE = "given_name"
 GENERIC_USER_EMAIL_ATTRIBUTE = "family_name"
 GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
-
+GENERIC_CLIENT_STATE = "some-state" # if the provider needs a state parameter
+GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id is not in the body
 GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
 ```
 
