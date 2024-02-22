@@ -171,22 +171,25 @@ def completion(
             if acompletion == True:
 
                 async def async_streaming():
-                    response = await _model.generate_content_async(
-                        contents=prompt,
-                        generation_config=genai.types.GenerationConfig(
-                            **inference_params
-                        ),
-                        safety_settings=safety_settings,
-                        stream=True,
-                    )
+                    try:
+                        response = await _model.generate_content_async(
+                            contents=prompt,
+                            generation_config=genai.types.GenerationConfig(
+                                **inference_params
+                            ),
+                            safety_settings=safety_settings,
+                            stream=True,
+                        )
 
-                    response = litellm.CustomStreamWrapper(
-                        TextStreamer(response),
-                        model,
-                        custom_llm_provider="gemini",
-                        logging_obj=logging_obj,
-                    )
-                    return response
+                        response = litellm.CustomStreamWrapper(
+                            TextStreamer(response),
+                            model,
+                            custom_llm_provider="gemini",
+                            logging_obj=logging_obj,
+                        )
+                        return response
+                    except Exception as e:
+                        raise GeminiError(status_code=500, message=str(e))
 
                 return async_streaming()
             response = _model.generate_content(
