@@ -2330,13 +2330,13 @@ def client(original_function):
                                     model_response_object=ModelResponse(),
                                     stream=kwargs.get("stream", False),
                                 )
-
-                                cached_result = CustomStreamWrapper(
-                                    completion_stream=cached_result,
-                                    model=model,
-                                    custom_llm_provider="cached_response",
-                                    logging_obj=logging_obj,
-                                )
+                                if kwargs.get("stream", False) == True:
+                                    cached_result = CustomStreamWrapper(
+                                        completion_stream=cached_result,
+                                        model=model,
+                                        custom_llm_provider="cached_response",
+                                        logging_obj=logging_obj,
+                                    )
                             elif call_type == CallTypes.embedding.value and isinstance(
                                 cached_result, dict
                             ):
