@@ -36,8 +36,7 @@ const Navbar: React.FC<NavbarProps> = ({ userID, userRole, userEmail }) => {
         <div className="flex flex-col items-center">
           <Link href="/">
             <button className="text-gray-800 text-2xl px-4 py-1 rounded text-center">
-              <img src={imageUrl} width={50} height={50} alt="LiteLLM Brand" className="mr-2" />
-              LiteLLM
+              <img src={imageUrl} width={200} height={200} alt="LiteLLM Brand" className="mr-2" />
             </button>
           </Link>
         </div>

@@ -5050,7 +5050,7 @@ def get_image():
     """Get logo to show on admin UI"""
     from fastapi.responses import FileResponse
 
-    logo_path = os.getenv("UI_LOGO_PATH", "./logo.png")
+    logo_path = os.getenv("UI_LOGO_PATH", "./logo.jpg")
     verbose_proxy_logger.debug(f"Reading logo from {logo_path}")
     return FileResponse(path=logo_path)
 
