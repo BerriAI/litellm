@@ -20,6 +20,9 @@ RUN pip install --upgrade pip && \
 # Copy the current directory contents into the container at /app
 COPY . .
 
+# Build Admin UI
+RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+
 # Build the package
 RUN rm -rf dist/* && python -m build
 
