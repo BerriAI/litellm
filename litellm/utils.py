@@ -6832,6 +6832,15 @@ def exception_type(
                         llm_provider="palm",
                         response=original_exception.response,
                     )
+                if "500 An internal error has occurred." in error_str:
+                    exception_mapping_worked = True
+                    raise APIError(
+                        status_code=original_exception.status_code,
+                        message=f"PalmException - {original_exception.message}",
+                        llm_provider="palm",
+                        model=model,
+                        request=original_exception.request,
+                    )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
