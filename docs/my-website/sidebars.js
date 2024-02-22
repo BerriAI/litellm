@@ -20,6 +20,62 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
+      label: "💥 OpenAI Proxy Server",
+      link: {
+        type: 'generated-index',
+        title: '💥 OpenAI Proxy Server',
+        description: `Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
+        slug: '/simple_proxy',
+      },
+      items: [
+        "proxy/quick_start", 
+        "proxy/configs",
+        {
+          type: 'link',
+          label: '📖 All Endpoints',
+          href: 'https://litellm-api.up.railway.app/',
+        },
+        "proxy/enterprise",
+        "proxy/user_keys",
+        "proxy/virtual_keys",
+        "proxy/users",
+        "proxy/ui",
+        "proxy/model_management",
+        "proxy/health",
+        "proxy/debugging",
+        "proxy/pii_masking",
+        {
+          "type": "category",
+          "label": "🔥 Load Balancing",
+          "items": [
+            "proxy/load_balancing", 
+            "proxy/reliability",
+          ]
+        },
+        "proxy/caching",
+        {
+          "type": "category",
+          "label": "Logging, Alerting",
+          "items": [
+            "proxy/logging", 
+            "proxy/alerting",
+            "proxy/streaming_logging",
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Content Moderation",
+          "items": [
+            "proxy/call_hooks",
+            "proxy/rules",
+          ]
+        },
+        "proxy/deploy", 
+        "proxy/cli", 
+      ]
+    },
+    {
+      type: "category",
       label: "Completion()",
       link: {
         type: 'generated-index',
@@ -90,62 +146,6 @@ const sidebars = {
         "providers/openrouter", 
         "providers/custom_openai_proxy",
         "providers/petals",
-      ]
-    },
-    {
-      type: "category",
-      label: "💥 OpenAI Proxy Server",
-      link: {
-        type: 'generated-index',
-        title: '💥 OpenAI Proxy Server',
-        description: `Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
-        slug: '/simple_proxy',
-      },
-      items: [
-        "proxy/quick_start", 
-        "proxy/configs",
-        {
-          type: 'link',
-          label: '📖 All Endpoints',
-          href: 'https://litellm-api.up.railway.app/',
-        },
-        "proxy/enterprise",
-        "proxy/user_keys",
-        "proxy/virtual_keys",
-        "proxy/users",
-        "proxy/ui",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
-        "proxy/pii_masking",
-        {
-          "type": "category",
-          "label": "🔥 Load Balancing",
-          "items": [
-            "proxy/load_balancing", 
-            "proxy/reliability",
-          ]
-        },
-        "proxy/caching",
-        {
-          "type": "category",
-          "label": "Logging, Alerting",
-          "items": [
-            "proxy/logging", 
-            "proxy/alerting",
-            "proxy/streaming_logging",
-          ]
-        },
-        {
-          "type": "category",
-          "label": "Content Moderation",
-          "items": [
-            "proxy/call_hooks",
-            "proxy/rules",
-          ]
-        },
-        "proxy/deploy", 
-        "proxy/cli", 
       ]
     },
     "proxy/custom_pricing",
