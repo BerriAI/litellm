@@ -2,7 +2,7 @@
 ## This test asserts the type of data passed into each method of the custom callback handler
 import sys, os, time, inspect, asyncio, traceback
 from datetime import datetime
-import pytest
+import pytest, uuid
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -793,6 +793,53 @@ async def test_async_completion_azure_caching():
     )
     assert len(customHandler_caching.errors) == 0
     assert len(customHandler_caching.states) == 4  # pre, post, success, success
+
+
+@pytest.mark.asyncio
+async def test_async_completion_azure_caching_streaming():
+    import copy
+
+    litellm.set_verbose = True
+    customHandler_caching = CompletionCustomHandler()
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    litellm.callbacks = [customHandler_caching]
+    unique_time = uuid.uuid4()
+    response1 = await litellm.acompletion(
+        model="azure/chatgpt-v-2",
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
+        caching=True,
+        stream=True,
+    )
+    async for chunk in response1:
+        print(f"chunk in response1: {chunk}")
+    await asyncio.sleep(1)
+    initial_customhandler_caching_states = len(customHandler_caching.states)
+    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
+    response2 = await litellm.acompletion(
+        model="azure/chatgpt-v-2",
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
+        caching=True,
+        stream=True,
+    )
+    async for chunk in response2:
+        print(f"chunk in response2: {chunk}")
+    await asyncio.sleep(1)  # success callbacks are done in parallel
+    print(
+        f"customHandler_caching.states post-cache hit: {customHandler_caching.states}"
+    )
+    assert len(customHandler_caching.errors) == 0
+    assert (
+        len(customHandler_caching.states) > initial_customhandler_caching_states
+    )  # pre, post, streaming .., success, success
 
 
 @pytest.mark.asyncio

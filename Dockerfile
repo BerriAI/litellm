@@ -20,6 +20,9 @@ RUN pip install --upgrade pip && \
 # Copy the current directory contents into the container at /app
 COPY . .
 
+# Build Admin UI
+RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+
 # Build the package
 RUN rm -rf dist/* && python -m build
 
@@ -34,6 +37,9 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
 RUN pip install redisvl==0.0.7 --no-deps
+
+# Build Admin UI
+RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE as runtime

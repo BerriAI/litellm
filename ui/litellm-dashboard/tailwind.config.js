@@ -1,6 +1,7 @@
 /** @type {import('tailwindcss').Config} */ 
 
 const colors = require("tailwindcss/colors");
+const userColors = require('./ui_colors.json') || {};
 module.exports = {
   content: [
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -15,10 +16,10 @@ module.exports = {
         // light mode
         tremor: {
           brand: {
-            faint: colors.indigo[50],
-            muted: colors.indigo[200],
-            subtle: colors.indigo[400],
-            DEFAULT: colors.indigo[500],
+            faint: userColors.brand.faint,
+            muted: userColors.brand.muted,
+            subtle: userColors.brand.subtle,
+            DEFAULT: userColors.brand.DEFAULT,
             emphasis: colors.indigo[700],
             inverted: colors.white,
           },
