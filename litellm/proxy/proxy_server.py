@@ -5320,9 +5320,11 @@ async def auth_callback(request: Request):
             f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
         )
 
-        generic_user_id_attribute_name = os.getenv("GENERIC_USER_ID_ATTRIBUTE", "email")
+        generic_user_id_attribute_name = os.getenv(
+            "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
+        )
         generic_user_display_name_attribute_name = os.getenv(
-            "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "email"
+            "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
         )
         generic_user_email_attribute_name = os.getenv(
             "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
