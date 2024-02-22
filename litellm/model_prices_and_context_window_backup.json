@@ -936,7 +936,14 @@
         "mode": "chat"
     },
     "openrouter/mistralai/mistral-7b-instruct": {
-        "max_tokens": 4096,
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000013,
+        "litellm_provider": "openrouter",
+        "mode": "chat"
+    },
+    "openrouter/mistralai/mistral-7b-instruct:free": {
+        "max_tokens": 8192,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
