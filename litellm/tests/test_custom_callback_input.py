@@ -835,7 +835,7 @@ async def test_async_completion_azure_caching_streaming():
     )
     assert len(customHandler_caching.errors) == 0
     assert (
-        len(customHandler_caching.states) > 4
+        len(customHandler_caching.states) == 4
     )  # pre, post, streaming .., success, success
 
 
