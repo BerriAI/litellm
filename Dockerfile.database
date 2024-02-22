@@ -50,6 +50,9 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 # install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
 RUN pip install redisvl==0.0.7 --no-deps
 
+# Build Admin UI
+RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+
 # Generate prisma client
 RUN prisma generate
 RUN chmod +x entrypoint.sh
