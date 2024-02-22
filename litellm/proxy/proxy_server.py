@@ -5104,8 +5104,8 @@ async def google_login(request: Request):
             redirect_params = {}
             state = os.getenv("GENERIC_CLIENT_STATE", None)
             if state:
-                redirect_params['state'] = state
-            return await generic_sso.get_login_redirect(**redirect_params)
+                redirect_params["state"] = state
+            return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
     elif ui_username is not None:
         # No Google, Microsoft SSO
         # Use UI Credentials set in .env
@@ -5368,15 +5368,15 @@ async def auth_callback(request: Request):
 
     # generic client id
     if generic_client_id is not None:
-        user_id = result.id
-        user_email = result.email
+        user_id = getattr(result, "id", None)
+        user_email = getattr(result, "email", None)
         user_role = getattr(result, generic_user_role_attribute_name, None)
 
     if user_id is None:
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
 
     user_info = None
-    user_id_models = []
+    user_id_models: List = []
 
     # User might not be already created on first generation of key
     # But if it is, we want its models preferences

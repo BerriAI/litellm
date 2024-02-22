@@ -9,8 +9,6 @@ import litellm
 
 import pytest
 
-litellm.success_callback = ["promptlayer"]
-litellm.set_verbose = True
 import time
 
 # def test_promptlayer_logging():
@@ -45,6 +43,8 @@ def test_promptlayer_logging_with_metadata():
         # Redirect stdout
         old_stdout = sys.stdout
         sys.stdout = new_stdout = io.StringIO()
+        litellm.set_verbose = True
+        litellm.success_callback = ["promptlayer"]
 
         response = completion(
             model="gpt-3.5-turbo",
@@ -69,6 +69,9 @@ def test_promptlayer_logging_with_metadata():
 def test_promptlayer_logging_with_metadata_tags():
     try:
         # Redirect stdout
+        litellm.set_verbose = True
+
+        litellm.success_callback = ["promptlayer"]
         old_stdout = sys.stdout
         sys.stdout = new_stdout = io.StringIO()
 
@@ -78,7 +81,7 @@ def test_promptlayer_logging_with_metadata_tags():
             temperature=0.2,
             max_tokens=20,
             metadata={"model": "ai21", "pl_tags": ["env:dev"]},
-            mock_response="this is a mock response"
+            mock_response="this is a mock response",
         )
 
         # Restore stdout
@@ -92,8 +95,6 @@ def test_promptlayer_logging_with_metadata_tags():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_promptlayer_logging_with_metadata()
-test_promptlayer_logging_with_metadata_tags()
 
 # def test_chat_openai():
 #     try:
