@@ -1411,7 +1411,7 @@ class Logging:
                                 print_verbose(
                                     f"success_callback: reaches cache for logging, there is no complete_streaming_response. Kwargs={kwargs}\n\n"
                                 )
-                                return
+                                pass
                             else:
                                 print_verbose(
                                     "success_callback: reaches cache for logging, there is a complete_streaming_response. Adding to cache"
@@ -1616,7 +1616,7 @@ class Logging:
                             print_verbose(
                                 f"async success_callback: reaches cache for logging, there is no complete_streaming_response. Kwargs={kwargs}\n\n"
                             )
-                            return
+                            pass
                         else:
                             print_verbose(
                                 "async success_callback: reaches cache for logging, there is a complete_streaming_response. Adding to cache"
@@ -1625,8 +1625,10 @@ class Logging:
                             # only add to cache once we have a complete streaming response
                             litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    print_verbose(f"Async success callbacks: {callback}")
-                    if self.stream:
+                    print_verbose(
+                        f"Async success callbacks: {callback}; self.stream: {self.stream}; complete_streaming_response: {self.model_call_details.get('complete_streaming_response', None)}"
+                    )
+                    if self.stream == True:
                         if "complete_streaming_response" in self.model_call_details:
                             await callback.async_log_success_event(
                                 kwargs=self.model_call_details,
