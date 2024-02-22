@@ -5192,6 +5192,16 @@ async def login(request: Request):
         )
 
 
+@app.get("/get_image", include_in_schema=False)
+def get_image():
+    """Get logo to show on admin UI"""
+    from fastapi.responses import FileResponse
+
+    logo_path = os.getenv("UI_LOGO_PATH", "./logo.jpg")
+    verbose_proxy_logger.debug(f"Reading logo from {logo_path}")
+    return FileResponse(path=logo_path)
+
+
 @app.get("/sso/callback", tags=["experimental"])
 async def auth_callback(request: Request):
     """Verify login"""
