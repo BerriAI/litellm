@@ -13,6 +13,7 @@ model LiteLLM_TeamTable {
     team_alias  String? 
     admins String[]
     members String[]
+    members_with_roles Json @default("{}")
     metadata  Json  @default("{}")
     max_budget Float?
     spend      Float    @default(0.0)
@@ -32,6 +33,7 @@ model LiteLLM_TeamTable {
 model LiteLLM_UserTable {
 		user_id    String @unique
     team_id    String?
+    teams    String[] @default([])
     user_role  String?
 		max_budget Float?
     spend      Float    @default(0.0)
@@ -103,5 +105,5 @@ model LiteLLM_UserNotifications {
   user_id             String 
   models              String[]
   justification       String
-    status              String // approved, disapproved, pending
+  status              String // approved, disapproved, pending
 }

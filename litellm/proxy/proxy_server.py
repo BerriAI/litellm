@@ -4060,9 +4060,30 @@ async def user_info(
         else:
             user_info = None
         ## GET ALL TEAMS ##
-        teams = await prisma_client.get_data(
+        team_list = []
+        team_id_list = []
+        # _DEPRECATED_ check if user in 'member' field
+        teams_1 = await prisma_client.get_data(
             user_id=user_id, table_name="team", query_type="find_all"
         )
+
+        if teams_1 is not None and isinstance(teams_1, list):
+            team_list = teams_1
+            for team in teams_1:
+                team_id_list.append(team.team_id)
+
+        if user_info is not None:
+            # *NEW* get all teams in user 'teams' field
+            teams_2 = await prisma_client.get_data(
+                team_id_list=user_info.teams, table_name="team", query_type="find_all"
+            )
+
+            if teams_2 is not None and isinstance(teams_2, list):
+                for team in teams_2:
+                    if team.team_id not in team_id_list:
+                        team_list.append(team)
+                        team_id_list.append(team.team_id)
+
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
             user_id=user_id,
@@ -4090,9 +4111,10 @@ async def user_info(
             "user_id": user_id,
             "user_info": user_info,
             "keys": keys,
-            "teams": teams,
+            "teams": team_list,
         }
     except Exception as e:
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -4274,12 +4296,31 @@ async def new_team(
     Parameters:
     - team_alias: Optional[str] - User defined team alias
     - team_id: Optional[str] - The team id of the user. If none passed, we'll generate it.
-    - admins: list - A list of user IDs that will be owning the team
-    - members: list - A list of user IDs that will be members of the team
+    - members_with_roles: list - A list of dictionaries, mapping user_id to role in team (either 'admin' or 'user')
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
+
+    _deprecated_params: 
+    - admins: list - A list of user_id's for the admin role 
+    - users: list - A list of user_id's for the user role 
+
+    Example Request:
+    ```
+    curl --location 'http://0.0.0.0:8000/team/new' \
+    
+    --header 'Authorization: Bearer sk-1234' \
+    
+    --header 'Content-Type: application/json' \
+    
+    --data '{
+      "team_alias": "my-new-team_2",
+      "members_with_roles": [{"role": "admin", "user_id": "user-1234"}, 
+        {"role": "user", "user_id": "user-2434"}]
+    }'
+
+    ```
     """
     global prisma_client
 
@@ -4303,27 +4344,124 @@ async def new_team(
     team_row = await prisma_client.insert_data(
         data=complete_team_data.json(exclude_none=True), table_name="team"
     )
+
+    ## ADD TEAM ID TO USER TABLE ##
+    for user in complete_team_data.members_with_roles:
+        ## add team id to user row ##
+        await prisma_client.update_data(
+            user_id=user.user_id,
+            data={"user_id": user.user_id, "teams": [team_row.team_id]},
+            update_key_values={
+                "teams": {
+                    "push ": [team_row.team_id],
+                }
+            },
+        )
     return team_row
 
 
 @router.post(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def update_team():
+async def update_team(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    update team and members
+    add new members to the team
     """
-    pass
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.team_id is None:
+        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    existing_team_row = await prisma_client.get_data(
+        team_id=data.team_id, table_name="team", query_type="find_unique"
+    )
+
+    updated_kv = data.json(exclude_none=True)
+    team_row = await prisma_client.update_data(
+        update_key_values=updated_kv,
+        data=updated_kv,
+        table_name="team",
+        team_id=data.team_id,
+    )
+
+    ## ADD NEW USERS ##
+    existing_user_id_list = []
+    ## Get new users
+    for user in existing_team_row.members_with_roles:
+        existing_user_id_list.append(user["user_id"])
+
+    ## Update new user rows with team id (info used by /user/info to show all teams, user is a part of)
+    if data.members_with_roles is not None:
+        for user in data.members_with_roles:
+            if user.user_id not in existing_user_id_list:
+                await prisma_client.update_data(
+                    user_id=user.user_id,
+                    data={"user_id": user.user_id, "teams": [team_row["team_id"]]},
+                    update_key_values={
+                        "teams": {
+                            "push": [team_row["team_id"]],
+                        }
+                    },
+                )
+
+    ## REMOVE DELETED USERS ##
+    ### Get list of deleted users (old list - new list)
+    deleted_user_id_list = []
+    existing_user_id_list = []
+    ## Get old user list
+    for user in existing_team_row.members_with_roles:
+        existing_user_id_list.append(user["user_id"])
+    ## Get diff
+    if data.members_with_roles is not None:
+        for user in data.members_with_roles:
+            if user.user_id not in existing_user_id_list:
+                deleted_user_id_list.append(user.user_id)
+
+    ## SET UPDATED LIST
+    if len(deleted_user_id_list) > 0:
+        # get the deleted users
+        existing_user_rows = await prisma_client.get_data(
+            user_id_list=deleted_user_id_list, table_name="user", query_type="find_all"
+        )
+        for user in existing_user_rows:
+            if data.team_id in user["teams"]:
+                user["teams"].remove(data.team_id)
+            await prisma_client.update_data(
+                user_id=user["user_id"],
+                data=user,
+                update_key_values={"user_id": user["user_id"], "teams": user["teams"]},
+            )
+    return team_row
 
 
 @router.post(
     "/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def delete_team():
+async def delete_team(
+    data: DeleteTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    delete team and team keys
+    delete team and associated team keys
     """
-    pass
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.team_ids is None:
+        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    ## DELETE ASSOCIATED KEYS
+    await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
+    ## DELETE TEAMS
+    await prisma_client.delete_data(team_id_list=data.team_ids, table_name="team")
 
 
 @router.get(
