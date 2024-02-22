@@ -6797,7 +6797,7 @@ def exception_type(
                             llm_provider="vertex_ai",
                             request=original_exception.request,
                         )
-            elif custom_llm_provider == "palm":
+            elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
                 if "503 Getting metadata" in error_str:
                     # auth errors look like this
                     # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
