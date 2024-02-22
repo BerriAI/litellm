@@ -27,7 +27,7 @@ if [ $? -eq 0 ]; then
   echo "Build successful. Copying files..."
 
   # Specify the destination directory
-  destination_dir="/path/to/your/destination/dir"
+  destination_dir="../../litellm/proxy/experimental"
 
   # Remove existing files in the destination directory
   rm -rf "$destination_dir"/*
