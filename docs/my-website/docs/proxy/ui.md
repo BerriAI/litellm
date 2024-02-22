@@ -133,6 +133,9 @@ The following can be used to customize attribute names when interacting with the
 ```shell
 GENERIC_USER_ID_ATTRIBUTE = "given_name"
 GENERIC_USER_EMAIL_ATTRIBUTE = "family_name"
+GENERIC_USER_DISPLAY_NAME_ATTRIBUTE = "display_name"
+GENERIC_USER_FIRST_NAME_ATTRIBUTE = "first_name"
+GENERIC_USER_LAST_NAME_ATTRIBUTE = "last_name"
 GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
 GENERIC_CLIENT_STATE = "some-state" # if the provider needs a state parameter
 GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id is not in the body
