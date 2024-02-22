@@ -15,6 +15,7 @@ env:
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
   docker-hub-deploy:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       -
@@ -137,7 +138,7 @@ jobs:
       - name: Get last published chart version
         id: current_version
         shell: bash
-        run: helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
+        run: helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} || true | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
         env:
           HELM_EXPERIMENTAL_OCI: '1'
 
