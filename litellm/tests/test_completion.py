@@ -1883,7 +1883,6 @@ def test_mistral_anyscale_stream():
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
-# test_baseten_falcon_7bcompletion()
 
 # def test_baseten_falcon_7bcompletion_withbase():
 #     model_name = "qvv0xeq"
