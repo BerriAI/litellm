@@ -4296,7 +4296,9 @@ def get_optional_params(
                     parameters=tool["function"].get("parameters", {}),
                 )
                 gtool_func_declarations.append(gtool_func_declaration)
-            optional_params["tools"] = [generative_models.Tool(function_declarations=gtool_func_declarations)]
+            optional_params["tools"] = [
+                generative_models.Tool(function_declarations=gtool_func_declarations)
+            ]
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
@@ -6813,6 +6815,15 @@ def exception_type(
                         model=model,
                         llm_provider="palm",
                         response=original_exception.response,
+                    )
+                if "500 An internal error has occurred." in error_str:
+                    exception_mapping_worked = True
+                    raise APIError(
+                        status_code=original_exception.status_code,
+                        message=f"PalmException - {original_exception.message}",
+                        llm_provider="palm",
+                        model=model,
+                        request=original_exception.request,
                     )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
