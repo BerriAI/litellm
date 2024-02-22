@@ -187,7 +187,21 @@ We allow you to
 - Customize the UI color scheme
 <Image img={require('../../img/litellm_custom_ai.png')} />
 
-#### Usage
+#### Set Custom Logo
+We allow you to pass a local image or a an http/https url of your image
+
+Set `UI_LOGO_PATH` on your env. We recommend using a hosted image, it's a lot easier to set up and configure / debug
+
+Exaple setting Hosted image
+```shell
+UI_LOGO_PATH="https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png"
+```
+
+Exaple setting a local image (on your container)
+```shell
+UI_LOGO_PATH="ui_images/logo.jpg"
+```
+#### Set Custom Color Theme
 - Navigate to [/enterprise/enterprise_ui](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_ui/_enterprise_colors.json)
 - Inside the `enterprise_ui` directory, rename `_enterprise_colors.json` to `enterprise_colors.json`
 - Set your companies custom color scheme in `enterprise_colors.json`
@@ -206,8 +220,6 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 }
 
 ```
-
-- Set the path to your custom png/jpg logo as `UI_LOGO_PATH` in your .env
 - Deploy LiteLLM Proxy Server
 
 
