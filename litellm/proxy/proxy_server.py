@@ -5321,12 +5321,22 @@ async def auth_callback(request: Request):
         )
 
         generic_user_id_attribute_name = os.getenv("GENERIC_USER_ID_ATTRIBUTE", "email")
+        generic_user_display_name_attribute_name = os.getenv(
+            "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "email"
+        )
         generic_user_email_attribute_name = os.getenv(
             "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
         )
         generic_user_role_attribute_name = os.getenv(
             "GENERIC_USER_ROLE_ATTRIBUTE", "role"
         )
+        generic_user_first_name_attribute_name = os.getenv(
+            "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
+        )
+        generic_user_last_name_attribute_name = os.getenv(
+            "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
+        )
+
         verbose_proxy_logger.debug(
             f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
         )
@@ -5339,9 +5349,11 @@ async def auth_callback(request: Request):
 
         def response_convertor(response, client):
             return OpenID(
-                id=response.get(generic_user_email_attribute_name),
-                display_name=response.get(generic_user_email_attribute_name),
+                id=response.get(generic_user_id_attribute_name),
+                display_name=response.get(generic_user_display_name_attribute_name),
                 email=response.get(generic_user_email_attribute_name),
+                first_name=response.get(generic_user_first_name_attribute_name),
+                last_name=response.get(generic_user_last_name_attribute_name),
             )
 
         SSOProvider = create_provider(
