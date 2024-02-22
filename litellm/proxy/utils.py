@@ -1026,22 +1026,45 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def delete_data(self, tokens: List):
+    async def delete_data(
+        self,
+        tokens: Optional[List] = None,
+        team_id_list: Optional[List] = None,
+        table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
+    ):
         """
         Allow user to delete a key(s)
         """
         try:
-            hashed_tokens = []
-            for token in tokens:
-                if isinstance(token, str) and token.startswith("sk-"):
-                    hashed_token = self.hash_token(token=token)
-                else:
-                    hashed_token = token
-                hashed_tokens.append(hashed_token)
-            await self.db.litellm_verificationtoken.delete_many(
-                where={"token": {"in": hashed_tokens}}
-            )
-            return {"deleted_keys": tokens}
+            if tokens is not None and isinstance(tokens, List):
+                hashed_tokens = []
+                for token in tokens:
+                    if isinstance(token, str) and token.startswith("sk-"):
+                        hashed_token = self.hash_token(token=token)
+                    else:
+                        hashed_token = token
+                    hashed_tokens.append(hashed_token)
+                await self.db.litellm_verificationtoken.delete_many(
+                    where={"token": {"in": hashed_tokens}}
+                )
+                return {"deleted_keys": tokens}
+            elif (
+                table_name == "team"
+                and team_id_list is not None
+                and isinstance(team_id_list, List)
+            ):
+                await self.db.litellm_teamtable.delete_many(
+                    where={"team_id": {"in": team_id_list}}
+                )
+                return {"deleted_teams": team_id_list}
+            elif (
+                table_name == "key"
+                and team_id_list is not None
+                and isinstance(team_id_list, List)
+            ):
+                await self.db.litellm_verificationtoken.delete_many(
+                    where={"team_id": {"in": team_id_list}}
+                )
         except Exception as e:
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)

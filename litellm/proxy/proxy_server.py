@@ -4443,11 +4443,25 @@ async def update_team(
 @router.post(
     "/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def delete_team():
+async def delete_team(
+    data: DeleteTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    delete team and team keys
+    delete team and associated team keys
     """
-    pass
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.team_ids is None:
+        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    ## DELETE ASSOCIATED KEYS
+    await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
+    ## DELETE TEAMS
+    await prisma_client.delete_data(team_id_list=data.team_ids, table_name="team")
 
 
 @router.get(
