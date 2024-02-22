@@ -5045,6 +5045,11 @@ async def login(request: Request):
         )
 
 
+@app.get("/get_image", include_in_schema=False)
+def get_image():
+    return FileResponse(path="./logo.png")
+
+
 @app.get("/sso/callback", tags=["experimental"])
 async def auth_callback(request: Request):
     """Verify login"""
