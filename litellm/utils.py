@@ -258,11 +258,14 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
-    def __init__(self, content=None, role=None, **params):
+    def __init__(
+        self, content=None, role=None, function_call=None, tool_calls=None, **params
+    ):
         super(Delta, self).__init__(**params)
         self.content = content
-        if role is not None:
-            self.role = role
+        self.role = role
+        self.function_call = function_call
+        self.tool_calls = tool_calls
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -8675,8 +8678,37 @@ class CustomStreamWrapper:
                     ):
                         try:
                             delta = dict(original_chunk.choices[0].delta)
+                            ## AZURE - check if arguments is not None
+                            if (
+                                original_chunk.choices[0].delta.function_call
+                                is not None
+                            ):
+                                if (
+                                    getattr(
+                                        original_chunk.choices[0].delta.function_call,
+                                        "arguments",
+                                    )
+                                    is None
+                                ):
+                                    original_chunk.choices[
+                                        0
+                                    ].delta.function_call.arguments = ""
+                            elif original_chunk.choices[0].delta.tool_calls is not None:
+                                if isinstance(
+                                    original_chunk.choices[0].delta.tool_calls, list
+                                ):
+                                    for t in original_chunk.choices[0].delta.tool_calls:
+                                        if (
+                                            getattr(
+                                                t.function,
+                                                "arguments",
+                                            )
+                                            is None
+                                        ):
+                                            t.function.arguments = ""
                             model_response.choices[0].delta = Delta(**delta)
                         except Exception as e:
+                            traceback.print_exc()
                             model_response.choices[0].delta = Delta()
                     else:
                         return
