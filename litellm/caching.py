@@ -124,7 +124,9 @@ class RedisCache(BaseCache):
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            print_verbose("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+            print_verbose(
+                f"LiteLLM Caching: set() - Got exception from REDIS : {str(e)}"
+            )
 
     async def async_set_cache(self, key, value, **kwargs):
         _redis_client = self.init_async_client()
