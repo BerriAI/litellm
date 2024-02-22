@@ -15,18 +15,6 @@ model_list:
     litellm_params:
       model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
       input_cost_per_second: 0.000420  
-  - model_name: gpt-4
-    litellm_params:
-      model: azure/gpt-turbo
-      api_key: os.environ/AZURE_FRANCE_API_KEY
-      api_base: https://openai-france-1234.openai.azure.com/
-      rpm: 100
-  - model_name: gpt-4
-    litellm_params:
-      model: azure/gpt-35-turbo
-      api_key: os.environ/AZURE_EUROPE_API_KEY
-      api_base: https://my-endpoint-europe-berri-992.openai.azure.com
-      rpm: 10
   - model_name: text-embedding-ada-002
     litellm_params: 
       model: azure/azure-embedding-model

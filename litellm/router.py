@@ -142,11 +142,13 @@ class Router:
             Router: An instance of the litellm.Router class.
         """
         self.set_verbose = set_verbose
-        if self.set_verbose:
+        self.debug_level = debug_level
+        if self.set_verbose == True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
             elif debug_level == "DEBUG":
                 verbose_router_logger.setLevel(logging.DEBUG)
+
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -272,6 +274,16 @@ class Router:
         verbose_router_logger.debug(
             f"Intialized router with Routing strategy: {self.routing_strategy}\n"
         )
+
+    def print_deployment(self, deployment: dict):
+        """
+        returns a copy of the deployment with the api key masked
+        """
+        _deployment_copy = copy.deepcopy(deployment)
+        litellm_params: dict = _deployment_copy["litellm_params"]
+        if "api_key" in litellm_params:
+            litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
+        return _deployment_copy
 
     ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
 
@@ -2060,7 +2072,7 @@ class Router:
                 verbose_router_logger.debug(f"\n selected index, {selected_index}")
                 deployment = healthy_deployments[selected_index]
                 verbose_router_logger.info(
-                    f"get_available_deployment for model: {model}, Selected deployment: {deployment or deployment[0]} for model: {model}"
+                    f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
                 )
                 return deployment or deployment[0]
             ############## Check if we can do a RPM/TPM based weighted pick #################
@@ -2077,7 +2089,7 @@ class Router:
                 verbose_router_logger.debug(f"\n selected index, {selected_index}")
                 deployment = healthy_deployments[selected_index]
                 verbose_router_logger.info(
-                    f"get_available_deployment for model: {model}, Selected deployment: {deployment or deployment[0]} for model: {model}"
+                    f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
                 )
                 return deployment or deployment[0]
 
@@ -2108,7 +2120,7 @@ class Router:
             )
             raise ValueError("No models available.")
         verbose_router_logger.info(
-            f"get_available_deployment for model: {model}, Selected deployment: {deployment} for model: {model}"
+            f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
         )
         return deployment
 
