@@ -5211,7 +5211,25 @@ def get_image():
 
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug(f"Reading logo from {logo_path}")
-    return FileResponse(path=logo_path)
+
+    # Check if the logo path is an HTTP/HTTPS URL
+    if logo_path.startswith(("http://", "https://")):
+        # Download the image and cache it
+        response = requests.get(logo_path)
+        if response.status_code == 200:
+            # Save the image to a local file
+            cache_path = os.path.join(current_dir, "cached_logo.jpg")
+            with open(cache_path, "wb") as f:
+                f.write(response.content)
+
+            # Return the cached image as a FileResponse
+            return FileResponse(cache_path, media_type="image/jpeg")
+        else:
+            # Handle the case when the image cannot be downloaded
+            return FileResponse(default_logo, media_type="image/jpeg")
+    else:
+        # Return the local image file if the logo path is not an HTTP/HTTPS URL
+        return FileResponse(logo_path, media_type="image/jpeg")
 
 
 @app.get("/sso/callback", tags=["experimental"])
