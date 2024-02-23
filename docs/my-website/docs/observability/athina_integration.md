@@ -4,7 +4,7 @@ import Image from '@theme/IdealImage';
 
 [Athina](https://athina.ai/) is an evaluation framework and production monitoring platform for your LLM-powered app. Athina is designed to enhance the performance and reliability of AI applications through real-time monitoring, granular analytics, and plug-and-play evaluations.
 
-<Image img={require('../../athina_dashboard.png')} />
+<Image img={require('../../img/athina_dashboard.png')} />
 
 ## Getting Started
 
@@ -41,7 +41,7 @@ response = completion(
 ) 
 ```
 
-## Support & Talk with us
+## Support & Talk with Athina Team
 
 - [Schedule Demo 👋](https://cal.com/shiv-athina/30min)
 - [Website 💻](https://athina.ai/?utm_source=litellm&utm_medium=website)
