@@ -131,6 +131,7 @@ const sidebars = {
         "providers/bedrock", 
         "providers/anyscale",
         "providers/perplexity", 
+        "providers/groq", 
         "providers/vllm", 
         "providers/xinference", 
         "providers/cloudflare_workers", 
