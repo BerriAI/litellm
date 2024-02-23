@@ -1613,18 +1613,21 @@ def streaming_and_function_calling_format_tests(idx, chunk):
 def test_openai_streaming_and_function_calling():
     tools = [
         {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
                     },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    "required": ["location"],
                 },
-                "required": ["location"],
             },
         }
     ]
@@ -1638,7 +1641,13 @@ def test_openai_streaming_and_function_calling():
         )
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
-            streaming_and_function_calling_format_tests(idx=idx, chunk=chunk)
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
