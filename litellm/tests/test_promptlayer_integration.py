@@ -38,7 +38,9 @@ import time
 # test_promptlayer_logging()
 
 
-@pytest.mark.skip(reason="ci/cd issues. works locally")
+@pytest.mark.skip(
+    reason="this works locally but fails on ci/cd since ci/cd is not reading the stdout correctly"
+)
 def test_promptlayer_logging_with_metadata():
     try:
         # Redirect stdout
@@ -67,7 +69,9 @@ def test_promptlayer_logging_with_metadata():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="ci/cd issues. works locally")
+@pytest.mark.skip(
+    reason="this works locally but fails on ci/cd since ci/cd is not reading the stdout correctly"
+)
 def test_promptlayer_logging_with_metadata_tags():
     try:
         # Redirect stdout
