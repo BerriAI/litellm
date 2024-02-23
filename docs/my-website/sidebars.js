@@ -154,6 +154,7 @@ const sidebars = {
     "rules",
     "set_keys",
     "budget_manager",
+    "contributing",
     "secret",
     "completion/token_usage",
     "load_test",
