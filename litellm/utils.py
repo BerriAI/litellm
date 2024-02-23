@@ -4300,6 +4300,7 @@ def get_optional_params(
         or model in litellm.vertex_language_models
         or model in litellm.vertex_embedding_models
     ):
+        print_verbose(f"(start) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK")
         ## check if unsupported param passed in
         supported_params = [
             "temperature",
@@ -4333,6 +4334,9 @@ def get_optional_params(
             optional_params["tools"] = [
                 generative_models.Tool(function_declarations=gtool_func_declarations)
             ]
+        print_verbose(
+            f"(end) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK - optional_params: {optional_params}"
+        )
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
@@ -4748,6 +4752,7 @@ def get_optional_params(
             extra_body  # openai client supports `extra_body` param
         )
     else:  # assume passing in params for openai/azure openai
+        print_verbose(f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZUREs")
         supported_params = [
             "functions",
             "function_call",
@@ -4823,6 +4828,7 @@ def get_optional_params(
         for k in passed_params.keys():
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
+    print_verbose(f"Final returned optional params: {optional_params}")
     return optional_params
 
 
