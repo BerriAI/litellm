@@ -238,9 +238,11 @@ chat_completion = client.chat.completions.create(
         }
     ],
     model="gpt-3.5-turbo",
-    cache={
-			"no-cache": True # will not return a cached response 
-		}
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        cache: {
+          "no-cache": True # will not return a cached response 
+      }
+    }
 )
 ```
 
@@ -264,9 +266,11 @@ chat_completion = client.chat.completions.create(
         }
     ],
     model="gpt-3.5-turbo",
-    cache={
-			"ttl": 600 # caches response for 10 minutes 
-		}
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        cache: {
+          "ttl": 600 # caches response for 10 minutes 
+      }
+    }
 )
 ```
 
@@ -288,13 +292,15 @@ chat_completion = client.chat.completions.create(
         }
     ],
     model="gpt-3.5-turbo",
-    cache={
-			"s-maxage": 600 # only get responses cached within last 10 minutes 
-		}
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        cache: {
+          "s-maxage": 600 # only get responses cached within last 10 minutes 
+      }
+    }
 )
 ```
 
-## Supported `cache_params`
+## Supported `cache_params` on proxy config.yaml
 
 ```yaml
 cache_params:

@@ -1479,6 +1479,26 @@ class ProxyConfig:
 
                                 llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
                                 imported_list.append(llm_guard_moderation_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "blocked_user_check"
+                            ):
+                                from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+                                    _ENTERPRISE_BlockedUserList,
+                                )
+
+                                blocked_user_list = _ENTERPRISE_BlockedUserList()
+                                imported_list.append(blocked_user_list)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "banned_keywords"
+                            ):
+                                from litellm.proxy.enterprise.enterprise_hooks.banned_keywords import (
+                                    _ENTERPRISE_BannedKeywords,
+                                )
+
+                                banned_keywords_obj = _ENTERPRISE_BannedKeywords()
+                                imported_list.append(banned_keywords_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
@@ -4368,7 +4388,20 @@ async def update_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    add new members to the team
+    You can now add / delete users from a team via /team/update
+
+    ```
+    curl --location 'http://0.0.0.0:8000/team/update' \
+    
+    --header 'Authorization: Bearer sk-1234' \
+        
+    --header 'Content-Type: application/json' \
+    
+    --data-raw '{
+        "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
+        "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}, {"role": "user", "user_id": "krrish247652@berri.ai"}]
+    }'
+    ```
     """
     global prisma_client
 
@@ -4449,6 +4482,18 @@ async def delete_team(
 ):
     """
     delete team and associated team keys
+
+    ```
+    curl --location 'http://0.0.0.0:8000/team/delete' \
+        
+    --header 'Authorization: Bearer sk-1234' \
+        
+    --header 'Content-Type: application/json' \
+    
+    --data-raw '{
+        "team_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
+    }'
+    ```
     """
     global prisma_client
 
@@ -5097,7 +5142,15 @@ async def google_login(request: Request):
             scope=generic_scope,
         )
         with generic_sso:
-            return await generic_sso.get_login_redirect()
+            # TODO: state should be a random string and added to the user session with cookie
+            # or a cryptographicly signed state that we can verify stateless
+            # For simplification we are using a static state, this is not perfect but some
+            # SSO providers do not allow stateless verification
+            redirect_params = {}
+            state = os.getenv("GENERIC_CLIENT_STATE", None)
+            if state:
+                redirect_params["state"] = state
+            return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
     elif ui_username is not None:
         # No Google, Microsoft SSO
         # Use UI Credentials set in .env
@@ -5203,7 +5256,25 @@ def get_image():
 
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug(f"Reading logo from {logo_path}")
-    return FileResponse(path=logo_path)
+
+    # Check if the logo path is an HTTP/HTTPS URL
+    if logo_path.startswith(("http://", "https://")):
+        # Download the image and cache it
+        response = requests.get(logo_path)
+        if response.status_code == 200:
+            # Save the image to a local file
+            cache_path = os.path.join(current_dir, "cached_logo.jpg")
+            with open(cache_path, "wb") as f:
+                f.write(response.content)
+
+            # Return the cached image as a FileResponse
+            return FileResponse(cache_path, media_type="image/jpeg")
+        else:
+            # Handle the case when the image cannot be downloaded
+            return FileResponse(default_logo, media_type="image/jpeg")
+    else:
+        # Return the local image file if the logo path is not an HTTP/HTTPS URL
+        return FileResponse(logo_path, media_type="image/jpeg")
 
 
 @app.get("/sso/callback", tags=["experimental"])
@@ -5265,7 +5336,7 @@ async def auth_callback(request: Request):
         result = await microsoft_sso.verify_and_process(request)
     elif generic_client_id is not None:
         # make generic sso provider
-        from fastapi_sso.sso.generic import create_provider, DiscoveryDocument
+        from fastapi_sso.sso.generic import create_provider, DiscoveryDocument, OpenID
 
         generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
         generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
@@ -5274,6 +5345,9 @@ async def auth_callback(request: Request):
         )
         generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
         generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
+        generic_include_client_id = (
+            os.getenv("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
+        )
         if generic_client_secret is None:
             raise ProxyException(
                 message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
@@ -5308,12 +5382,50 @@ async def auth_callback(request: Request):
         verbose_proxy_logger.debug(
             f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
         )
+
+        generic_user_id_attribute_name = os.getenv(
+            "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
+        )
+        generic_user_display_name_attribute_name = os.getenv(
+            "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
+        )
+        generic_user_email_attribute_name = os.getenv(
+            "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
+        )
+        generic_user_role_attribute_name = os.getenv(
+            "GENERIC_USER_ROLE_ATTRIBUTE", "role"
+        )
+        generic_user_first_name_attribute_name = os.getenv(
+            "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
+        )
+        generic_user_last_name_attribute_name = os.getenv(
+            "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
+        )
+
+        verbose_proxy_logger.debug(
+            f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
+        )
+
         discovery = DiscoveryDocument(
             authorization_endpoint=generic_authorization_endpoint,
             token_endpoint=generic_token_endpoint,
             userinfo_endpoint=generic_userinfo_endpoint,
         )
-        SSOProvider = create_provider(name="oidc", discovery_document=discovery)
+
+        def response_convertor(response, client):
+            return OpenID(
+                id=response.get(generic_user_id_attribute_name),
+                display_name=response.get(generic_user_display_name_attribute_name),
+                email=response.get(generic_user_email_attribute_name),
+                first_name=response.get(generic_user_first_name_attribute_name),
+                last_name=response.get(generic_user_last_name_attribute_name),
+            )
+
+        SSOProvider = create_provider(
+            name="oidc",
+            discovery_document=discovery,
+            response_convertor=response_convertor,
+        )
         generic_sso = SSOProvider(
             client_id=generic_client_id,
             client_secret=generic_client_secret,
@@ -5322,43 +5434,36 @@ async def auth_callback(request: Request):
             scope=generic_scope,
         )
         verbose_proxy_logger.debug(f"calling generic_sso.verify_and_process")
-        request_body = await request.body()
-        request_query_params = request.query_params
-        # get "code" from query params
-        code = request_query_params.get("code")
-        result = await generic_sso.verify_and_process(request)
+        result = await generic_sso.verify_and_process(
+            request, params={"include_client_id": generic_include_client_id}
+        )
         verbose_proxy_logger.debug(f"generic result: {result}")
+
     # User is Authe'd in - generate key for the UI to access Proxy
     user_email = getattr(result, "email", None)
     user_id = getattr(result, "id", None)
 
     # generic client id
     if generic_client_id is not None:
-        generic_user_id_attribute_name = os.getenv("GENERIC_USER_ID_ATTRIBUTE", "email")
-        generic_user_email_attribute_name = os.getenv(
-            "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
-        )
-        generic_user_role_attribute_name = os.getenv(
-            "GENERIC_USER_ROLE_ATTRIBUTE", "role"
-        )
-
-        verbose_proxy_logger.debug(
-            f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
-        )
-
-        user_id = getattr(result, generic_user_id_attribute_name, None)
-        user_email = getattr(result, generic_user_email_attribute_name, None)
+        user_id = getattr(result, "id", None)
+        user_email = getattr(result, "email", None)
         user_role = getattr(result, generic_user_role_attribute_name, None)
 
     if user_id is None:
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
-    # get user_info from litellm DB
+
     user_info = None
-    if prisma_client is not None:
-        user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
     user_id_models: List = []
-    if user_info is not None:
-        user_id_models = getattr(user_info, "models", [])
+
+    # User might not be already created on first generation of key
+    # But if it is, we want its models preferences
+    try:
+        if prisma_client is not None:
+            user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
+            if user_info is not None:
+                user_id_models = getattr(user_info, "models", [])
+    except Exception as e:
+        pass
 
     response = await generate_key_helper_fn(
         **{

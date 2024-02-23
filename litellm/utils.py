@@ -4277,8 +4277,8 @@ def get_optional_params(
                 optional_params["stop_sequences"] = stop
         if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
-    elif custom_llm_provider == "vertex_ai" and model in (
-        litellm.vertex_chat_models
+    elif custom_llm_provider == "vertex_ai" and (
+        model in litellm.vertex_chat_models
         or model in litellm.vertex_code_chat_models
         or model in litellm.vertex_text_models
         or model in litellm.vertex_code_text_models
@@ -6826,6 +6826,14 @@ def exception_type(
                         model=model,
                         llm_provider="palm",
                         response=original_exception.response,
+                    )
+                if "504 Deadline expired before operation could complete." in error_str:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"PalmException - {original_exception.message}",
+                        model=model,
+                        llm_provider="palm",
+                        request=original_exception.request,
                     )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True

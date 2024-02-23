@@ -133,8 +133,12 @@ The following can be used to customize attribute names when interacting with the
 ```shell
 GENERIC_USER_ID_ATTRIBUTE = "given_name"
 GENERIC_USER_EMAIL_ATTRIBUTE = "family_name"
+GENERIC_USER_DISPLAY_NAME_ATTRIBUTE = "display_name"
+GENERIC_USER_FIRST_NAME_ATTRIBUTE = "first_name"
+GENERIC_USER_LAST_NAME_ATTRIBUTE = "last_name"
 GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
-
+GENERIC_CLIENT_STATE = "some-state" # if the provider needs a state parameter
+GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id is not in the body
 GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
 ```
 
@@ -148,7 +152,14 @@ GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not e
 
 </Tabs>
 
-#### Step 3. Test flow
+#### Step 3. Set `PROXY_BASE_URL` in your .env
+
+Set this in your .env (so the proxy can set the correct redirect url)
+```shell
+PROXY_BASE_URL=https://litellm-api.up.railway.app/
+```
+
+#### Step 4. Test flow
 <Image img={require('../../img/litellm_ui_3.gif')} />
 
 ### Set Admin view w/ SSO 
@@ -183,7 +194,21 @@ We allow you to
 - Customize the UI color scheme
 <Image img={require('../../img/litellm_custom_ai.png')} />
 
-#### Usage
+#### Set Custom Logo
+We allow you to pass a local image or a an http/https url of your image
+
+Set `UI_LOGO_PATH` on your env. We recommend using a hosted image, it's a lot easier to set up and configure / debug
+
+Exaple setting Hosted image
+```shell
+UI_LOGO_PATH="https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png"
+```
+
+Exaple setting a local image (on your container)
+```shell
+UI_LOGO_PATH="ui_images/logo.jpg"
+```
+#### Set Custom Color Theme
 - Navigate to [/enterprise/enterprise_ui](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_ui/_enterprise_colors.json)
 - Inside the `enterprise_ui` directory, rename `_enterprise_colors.json` to `enterprise_colors.json`
 - Set your companies custom color scheme in `enterprise_colors.json`
@@ -202,8 +227,6 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 }
 
 ```
-
-- Set the path to your custom png/jpg logo as `UI_LOGO_PATH` in your .env
 - Deploy LiteLLM Proxy Server
 
 
