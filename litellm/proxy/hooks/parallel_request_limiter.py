@@ -147,11 +147,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             user_rpm_limit = sys.maxsize
 
         # now do the same tpm/rpm checks
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        current_hour = datetime.now().strftime("%H")
-        current_minute = datetime.now().strftime("%M")
-        precise_minute = f"{current_date}-{current_hour}-{current_minute}"
-
         request_count_api_key = f"{user_id}::{precise_minute}::request_count"
 
         # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
