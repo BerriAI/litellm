@@ -65,7 +65,7 @@ def test_promptlayer_logging_with_metadata():
         print(e)
 
 
-test_promptlayer_logging_with_metadata()
+# test_promptlayer_logging_with_metadata()
 
 
 # def test_chat_openai():
