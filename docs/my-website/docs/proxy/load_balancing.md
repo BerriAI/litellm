@@ -2,6 +2,14 @@
 Load balance multiple instances of the same model
 
 The proxy will handle routing requests (using LiteLLM's Router). **Set `rpm` in the config if you want maximize throughput**
+
+
+:::info
+
+For more details on routing strategies / params, see [Routing](../routing.md)
+
+:::
+
 ## Quick Start - Load Balancing
 ### Step 1 - Set deployments on config
 
