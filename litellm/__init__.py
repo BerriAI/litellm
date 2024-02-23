@@ -60,6 +60,8 @@ llamaguard_model_name: Optional[str] = None
 presidio_ad_hoc_recognizers: Optional[str] = None
 google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
+blocked_user_list: Optional[Union[str, List]] = None
+banned_keywords_list: Optional[Union[str, List]] = None
 ##################
 logging: bool = True
 caching: bool = (
