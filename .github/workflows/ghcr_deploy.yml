@@ -140,7 +140,9 @@ jobs:
         shell: bash
         run: |
           CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} 2>/dev/null || true)
-          if [ ! -z "${CHART_LIST}" ]; then
+          if [ -z "${CHART_LIST}" ]; then
+            echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
+          else
             printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
           fi
         env:
@@ -158,7 +160,7 @@ jobs:
         with:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
-          tag: helm-${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
+          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
           app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}
