@@ -398,6 +398,7 @@ def completion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
+    extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
@@ -514,6 +515,7 @@ def completion(
         "max_retries",
         "logprobs",
         "top_logprobs",
+        "extra_headers",
     ]
     litellm_params = [
         "metadata",
@@ -691,6 +693,7 @@ def completion(
             max_retries=max_retries,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
+            extra_headers=extra_headers,
             **non_default_params,
         )
 
