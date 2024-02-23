@@ -424,6 +424,10 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_spend: Dict = {}
     model_max_budget: Dict = {}
 
+    # hidden params used for parallel request limiting, not required to create a token
+    user_id_rate_limits: Optional[dict] = None
+    team_id_rate_limits: Optional[dict] = None
+
     class Config:
         protected_namespaces = ()
 

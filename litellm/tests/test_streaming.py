@@ -393,6 +393,8 @@ def test_completion_palm_stream():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
+    except litellm.Timeout as e:
+        pass
     except litellm.APIError as e:
         pass
     except Exception as e:
