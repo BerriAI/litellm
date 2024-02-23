@@ -227,6 +227,7 @@ model_list:
   - model_name: openai-gpt-3.5
     litellm_params:
       model: openai/gpt-3.5-turbo
+      extra_headers: {"AI-Resource Group": "ishaan-resource"}
       api_key: sk-123
       organization: org-ikDc4ex8NB
       temperature: 0.2
@@ -234,10 +235,6 @@ model_list:
     litellm_params:
       model: ollama/mistral
       api_base: your_ollama_api_base
-      headers: {
-        "HTTP-Referer": "litellm.ai",  
-        "X-Title": "LiteLLM Server"
-      }
 ```
 
 **Step 2**: Start server with config
