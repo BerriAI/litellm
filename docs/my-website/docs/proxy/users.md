@@ -279,9 +279,9 @@ curl 'http://0.0.0.0:8000/key/generate' \
 ## Set Rate Limits 
 
 You can set: 
+- tpm limits (tokens per minute)
+- rpm limits (requests per minute)
 - max parallel requests
-- tpm limits 
-- rpm limits 
 
 <Tabs>
 <TabItem value="per-user" label="Per User">
