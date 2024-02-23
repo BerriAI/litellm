@@ -4862,6 +4862,10 @@ def get_llm_provider(
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
                 dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
+            elif custom_llm_provider == "groq":
+                # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
+                api_base = "https://api.groq.com/openai/v1"
+                dynamic_api_key = get_secret("GROQ_API_KEY")
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
                 api_base = "https://api.mistral.ai/v1"
@@ -4899,6 +4903,9 @@ def get_llm_provider(
                     elif endpoint == "api.mistral.ai/v1":
                         custom_llm_provider = "mistral"
                         dynamic_api_key = get_secret("MISTRAL_API_KEY")
+                    elif endpoint == "api.groq.com/openai/v1":
+                        custom_llm_provider = "groq"
+                        dynamic_api_key = get_secret("GROQ_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
