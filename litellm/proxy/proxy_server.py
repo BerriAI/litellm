@@ -4378,7 +4378,20 @@ async def update_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    add new members to the team
+    You can now add / delete users from a team via /team/update
+
+    ```
+    curl --location 'http://0.0.0.0:8000/team/update' \
+    
+    --header 'Authorization: Bearer sk-1234' \
+        
+    --header 'Content-Type: application/json' \
+    
+    --data-raw '{
+        "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
+        "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}, {"role": "user", "user_id": "krrish247652@berri.ai"}]
+    }'
+    ```
     """
     global prisma_client
 
@@ -4459,6 +4472,18 @@ async def delete_team(
 ):
     """
     delete team and associated team keys
+
+    ```
+    curl --location 'http://0.0.0.0:8000/team/delete' \
+        
+    --header 'Authorization: Bearer sk-1234' \
+        
+    --header 'Content-Type: application/json' \
+    
+    --data-raw '{
+        "team_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
+    }'
+    ```
     """
     global prisma_client
 
