@@ -97,10 +97,8 @@ def test_promptlayer_logging_with_metadata_tags():
         print(output)
 
         assert "Prompt Layer Logging: success" in output
-
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 # def test_chat_openai():
 #     try:
