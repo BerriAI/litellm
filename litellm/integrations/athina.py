@@ -1,3 +1,6 @@
+import datetime
+
+
 class AthinaLogger:
     def __init__(self):
         import os
@@ -13,20 +16,24 @@ class AthinaLogger:
         import requests
         import json
         import traceback
-        raise Exception("This method is not implemented yet")
         try:
             response_json = response_obj.model_dump() if response_obj else {}
             data = {
                 "language_model_id": kwargs.get("model"),
-                "response_time": int((end_time - start_time).total_seconds() * 1000),
                 "request": kwargs,
                 "response": response_json,
-                "prompt": kwargs.get("messages"),
-                "user_query": kwargs.get("messages")[0].get("content"),
                 "prompt_tokens": response_json.get("usage", {}).get("prompt_tokens"),
                 "completion_tokens": response_json.get("usage", {}).get("completion_tokens"),
                 "total_tokens": response_json.get("usage", {}).get("total_tokens"),
             }
+            
+            if type(end_time) == datetime.datetime and type(start_time) == datetime.datetime:
+                data["response_time"] = int((end_time - start_time).total_seconds() * 1000)
+
+            if "messages" in kwargs:
+                data["prompt"] = kwargs.get("messages", None)
+                if kwargs.get("messages") and len(kwargs.get("messages")) > 0:
+                    data["user_query"] = kwargs.get("messages")[0].get("content", None)
 
             # Directly add tools or functions if present
             optional_params = kwargs.get("optional_params", {})
