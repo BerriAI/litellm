@@ -1489,6 +1489,16 @@ class ProxyConfig:
 
                                 blocked_user_list = _ENTERPRISE_BlockedUserList()
                                 imported_list.append(blocked_user_list)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "banned_keywords"
+                            ):
+                                from litellm.proxy.enterprise.enterprise_hooks.banned_keywords import (
+                                    _ENTERPRISE_BannedKeywords,
+                                )
+
+                                banned_keywords_obj = _ENTERPRISE_BannedKeywords()
+                                imported_list.append(banned_keywords_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
