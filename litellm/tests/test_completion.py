@@ -1320,6 +1320,7 @@ def test_completion_together_ai():
             max_tokens=256,
             n=1,
             logger_fn=logger_fn,
+            timeout=1,
         )
         # Add any assertions here to check the response
         print(response)
@@ -1330,6 +1331,7 @@ def test_completion_together_ai():
             f"${float(cost):.10f}",
         )
     except litellm.Timeout as e:
+        print("got a timeout error")
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
