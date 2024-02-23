@@ -99,6 +99,16 @@ model LiteLLM_SpendLogs {
   request_tags        Json     @default("[]")
 }
 
+// used for /spend/logs - view Aggregate Spend per Day
+model LiteLLM_AdminDailySpendReport {
+  id                Int      @id @default(autoincrement())
+  date              DateTime
+  total_spend       Float
+  spend_per_api_key Json @default("{}")
+  spend_per_model   Json @default("{}")
+  spend_per_user   Json @default("{}")
+}
+
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
   request_id          String @unique
@@ -107,3 +117,4 @@ model LiteLLM_UserNotifications {
   justification       String
   status              String // approved, disapproved, pending
 }
+
