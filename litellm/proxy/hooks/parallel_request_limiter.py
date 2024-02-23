@@ -126,18 +126,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 status_code=429, detail="Max parallel request limit reached."
             )
 
-        # print("checking if user is in rate limits for user_id")
-
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         _user_id_rate_limits = user_api_key_dict.user_id_rate_limits
 
-        # print(
-        #     f"USER ID RATE LIMITS: {_user_id_rate_limits}"
-        # )
         # get user tpm/rpm limits
-
-        if _user_id_rate_limits is None:
+        if _user_id_rate_limits is None or _user_id_rate_limits == {}:
             return
         user_tpm_limit = _user_id_rate_limits.get("tpm_limit")
         user_rpm_limit = _user_id_rate_limits.get("rpm_limit")
@@ -155,7 +149,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             cache=cache,
             data=data,
             call_type=call_type,
-            max_parallel_requests=max_parallel_requests,
+            max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
             request_count_api_key=request_count_api_key,
             tpm_limit=user_tpm_limit,
             rpm_limit=user_rpm_limit,
@@ -166,9 +160,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             self.print_verbose(f"INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
             user_api_key = kwargs["litellm_params"]["metadata"]["user_api_key"]
-            user_api_key_user_id = kwargs["litellm_params"]["metadata"][
-                "user_api_key_user_id"
-            ]
+            user_api_key_user_id = kwargs["litellm_params"]["metadata"].get(
+                "user_api_key_user_id", None
+            )
+
             if user_api_key is None:
                 return
 
