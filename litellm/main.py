@@ -398,6 +398,7 @@ def completion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
+    extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
@@ -435,6 +436,7 @@ def completion(
         api_version (str, optional): API version (default is None).
         api_key (str, optional): API key (default is None).
         model_list (list, optional): List of api base, version, keys
+        extra_headers (dict, optional): Additional headers to include in the request.
 
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
@@ -514,6 +516,7 @@ def completion(
         "max_retries",
         "logprobs",
         "top_logprobs",
+        "extra_headers",
     ]
     litellm_params = [
         "metadata",
@@ -691,6 +694,7 @@ def completion(
             max_retries=max_retries,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
+            extra_headers=extra_headers,
             **non_default_params,
         )
 
