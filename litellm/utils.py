@@ -6824,6 +6824,14 @@ def exception_type(
                         llm_provider="palm",
                         response=original_exception.response,
                     )
+                if "504 Deadline expired before operation could complete." in error_str:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"PalmException - {original_exception.message}",
+                        model=model,
+                        llm_provider="palm",
+                        request=original_exception.request,
+                    )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
