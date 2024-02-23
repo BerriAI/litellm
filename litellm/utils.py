@@ -55,6 +55,7 @@ encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from ._logging import verbose_logger
 from .integrations.traceloop import TraceloopLogger
+from .integrations.athina import AthinaLogger
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
@@ -114,6 +115,7 @@ posthog = None
 slack_app = None
 alerts_channel = None
 heliconeLogger = None
+athinaLogger = None
 promptLayerLogger = None
 langsmithLogger = None
 weightsBiasesLogger = None
@@ -1419,6 +1421,17 @@ class Logging:
                                 result = kwargs["complete_streaming_response"]
                                 # only add to cache once we have a complete streaming response
                                 litellm.cache.add_cache(result, **kwargs)
+                    if callback == "athina":
+                        deep_copy = {}
+                        for k, v in self.model_call_details.items():
+                            deep_copy[k] = v
+                        athinaLogger.log_event(
+                            kwargs=deep_copy,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
                     if callback == "traceloop":
                         deep_copy = {}
                         for k, v in self.model_call_details.items():
@@ -5506,7 +5519,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 
 def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -5561,6 +5574,9 @@ def set_callbacks(callback_list, function_id=None):
                 print_verbose(f"Initialized Slack App: {slack_app}")
             elif callback == "traceloop":
                 traceloopLogger = TraceloopLogger()
+            elif callback == "athina":
+                athinaLogger = AthinaLogger()
+                print_verbose("Initialized Athina Logger")
             elif callback == "helicone":
                 heliconeLogger = HeliconeLogger()
             elif callback == "llmonitor":
