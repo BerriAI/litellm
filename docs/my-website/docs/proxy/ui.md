@@ -152,7 +152,14 @@ GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not e
 
 </Tabs>
 
-#### Step 3. Test flow
+#### Step 3. Set `PROXY_BASE_URL` in your .env
+
+Set this in your .env (so the proxy can set the correct redirect url)
+```shell
+PROXY_BASE_URL=https://litellm-api.up.railway.app/
+```
+
+#### Step 4. Test flow
 <Image img={require('../../img/litellm_ui_3.gif')} />
 
 ### Set Admin view w/ SSO 

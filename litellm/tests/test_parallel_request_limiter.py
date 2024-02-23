@@ -140,6 +140,56 @@ async def test_pre_call_hook_tpm_limits():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_user_tpm_limits():
+    """
+    Test if error raised on hitting tpm limits
+    """
+    # create user with tpm/rpm limits
+
+    _api_key = "sk-12345"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        user_id="ishaan",
+        user_id_rate_limits={"tpm_limit": 9, "rpm_limit": 10},
+    )
+    res = dict(user_api_key_dict)
+    print("dict user", res)
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler()
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"user_api_key_user_id": "ishaan", "user_api_key": "gm"}
+        }
+    }
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(total_tokens=10)),
+        start_time="",
+        end_time="",
+    )
+
+    ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
+
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+
+        pytest.fail(f"Expected call to fail")
+    except Exception as e:
+        assert e.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_success_call_hook():
     """
     Test if on success, cache correctly decremented

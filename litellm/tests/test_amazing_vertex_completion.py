@@ -318,7 +318,7 @@ def test_gemini_pro_vision():
 # test_gemini_pro_vision()
 
 
-def gemini_pro_function_calling():
+def test_gemini_pro_function_calling():
     load_vertex_ai_credentials()
     tools = [
         {
@@ -345,12 +345,15 @@ def gemini_pro_function_calling():
         model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
     )
     print(f"completion: {completion}")
+    assert completion.choices[0].message.content is None
+    assert len(completion.choices[0].message.tool_calls) == 1
 
 
 # gemini_pro_function_calling()
 
 
-async def gemini_pro_async_function_calling():
+@pytest.mark.asyncio
+async def test_gemini_pro_async_function_calling():
     load_vertex_ai_credentials()
     tools = [
         {
@@ -377,6 +380,9 @@ async def gemini_pro_async_function_calling():
         model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
     )
     print(f"completion: {completion}")
+    assert completion.choices[0].message.content is None
+    assert len(completion.choices[0].message.tool_calls) == 1
+    # raise Exception("it worked!")
 
 
 # asyncio.run(gemini_pro_async_function_calling())
