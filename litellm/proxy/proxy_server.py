@@ -1864,6 +1864,11 @@ async def generate_key_helper_fn(
                     table_name="user",
                     update_key_values=update_key_values,
                 )
+            if user_id == litellm_proxy_budget_name:
+                # do not create a key for litellm_proxy_budget_name
+                # we only need to ensure this exists in the user table
+                # the LiteLLM_VerificationToken table will increase in size if we don't do this check
+                return key_data
 
             ## CREATE KEY
             verbose_proxy_logger.debug(f"prisma_client: Creating Key={key_data}")
