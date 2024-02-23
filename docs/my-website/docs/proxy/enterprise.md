@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ✨ Enterprise Features - Content Moderation, Blocked Users
+# ✨ Enterprise Features - Content Moderation, Blocked Users/Keywords
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
@@ -16,6 +16,7 @@ Features:
 - [ ] Content Moderation with Google Text Moderations 
 - [ ] Content Moderation with LLM Guard
 - [ ] Reject calls from Blocked User list 
+- [ ] Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 - [ ] Tracking Spend for Custom Tags
  
 ## Content Moderation with LlamaGuard 
@@ -166,6 +167,30 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 
 :::
 
+## Enable Banned Keywords List
+
+```yaml 
+litellm_settings: 
+     callbacks: ["banned_keywords"]
+     banned_keywords_list: ["hello"] # can also be a .txt file - e.g.: `/relative/path/keywords.txt`
+```
+
+### Test this 
+
+```bash
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello world!"
+        }
+      ]
+    }
+'
+```
 ## Tracking Spend for Custom Tags
 
 Requirements: 
