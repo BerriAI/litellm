@@ -258,6 +258,7 @@ async def acompletion(
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "groq"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
@@ -810,6 +811,7 @@ def completion(
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "groq"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
@@ -819,7 +821,7 @@ def completion(
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
-                api_base  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api base from there
+                api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
@@ -2241,6 +2243,7 @@ async def aembedding(*args, **kwargs):
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "groq"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
@@ -2735,6 +2738,7 @@ async def atext_completion(*args, **kwargs):
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "groq"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
