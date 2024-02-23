@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, Langfuse, s3 Bucket, Sentry, OpenTelemetry
+# 🔎 Logging - Custom Callbacks, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
@@ -13,7 +13,8 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
-- [Logging to Traceloop (OpenTelemetry)](#opentelemetry---traceloop)
+- [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
+- [Logging to Athina](#logging-proxy-inputoutput-athina)
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -830,4 +831,46 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }'
 ```
 
+## Logging Proxy Input/Output Athina
 
+[Athina](https://athina.ai/) allows you to log LLM Input/Output for monitoring, analytics, and observability.
+
+We will use the `--config` to set `litellm.success_callback = ["athina"]` this will log all successfull LLM calls to athina
+
+**Step 1** Set Athina API key
+
+```shell
+ATHINA_API_KEY = "your-athina-api-key"
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["athina"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "which llm are you"
+        }
+    ]
+    }'
+```
