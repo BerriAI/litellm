@@ -1479,6 +1479,16 @@ class ProxyConfig:
 
                                 llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
                                 imported_list.append(llm_guard_moderation_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "blocked_user_check"
+                            ):
+                                from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+                                    _ENTERPRISE_BlockedUserList,
+                                )
+
+                                blocked_user_list = _ENTERPRISE_BlockedUserList()
+                                imported_list.append(blocked_user_list)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
