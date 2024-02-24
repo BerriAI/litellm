@@ -69,7 +69,6 @@ export const keyCreateCall = async (
   }
 };
 
-
 export const userCreateCall = async (
   accessToken: string,
   userID: string,
@@ -132,7 +131,6 @@ export const userCreateCall = async (
     throw error;
   }
 };
-
 
 export const keyDeleteCall = async (accessToken: String, user_key: String) => {
   try {
@@ -207,15 +205,52 @@ export const userInfoCall = async (
   }
 };
 
-
-
 export const modelInfoCall = async (
   accessToken: String,
   userID: String,
   userRole: String
 ) => {
+  /**
+   * Get all models on proxy
+   */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
+
+    message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const modelAvailableCall = async (
+  accessToken: String,
+  userID: String,
+  userRole: String
+) => {
+  /**
+   * Get all the models user has access to
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
 
     message.info("Requesting model data");
     const response = await fetch(url, {
@@ -363,12 +398,16 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
   }
 };
 
-
-
-
-export const userRequestModelCall = async (accessToken: String, model: String, UserID: String, justification: String) => {
+export const userRequestModelCall = async (
+  accessToken: String,
+  model: String,
+  UserID: String,
+  justification: String
+) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/request_model` : `/user/request_model`;
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/request_model`
+      : `/user/request_model`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -398,10 +437,11 @@ export const userRequestModelCall = async (accessToken: String, model: String, U
   }
 };
 
-
 export const userGetRequesedtModelsCall = async (accessToken: String) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_requests` : `/user/get_requests`;
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/get_requests`
+      : `/user/get_requests`;
     console.log("in userGetRequesedtModelsCall:", url);
     const response = await fetch(url, {
       method: "GET",

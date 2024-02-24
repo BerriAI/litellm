@@ -1,17 +1,26 @@
 import React, { useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { Card, Title, Table, TableHead, TableRow, TableCell, TableBody, Grid, Tab,
-    TabGroup,
-    TabList,
-    TabPanel,
-    Metric,
-    Select,
-    SelectItem,
-    TabPanels, } from "@tremor/react";
-import { modelInfoCall } from "./networking";
+import {
+  Card,
+  Title,
+  Table,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableBody,
+  Grid,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  Metric,
+  Select,
+  SelectItem,
+  TabPanels,
+} from "@tremor/react";
+import { modelAvailableCall } from "./networking";
 import openai from "openai";
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -20,12 +29,19 @@ interface ChatUIProps {
   userID: string | null;
 }
 
-async function generateModelResponse(inputMessage: string, updateUI: (chunk: string) => void, selectedModel: string, accessToken: string) {
-    // base url should be the current base_url 
-    const isLocal = process.env.NODE_ENV === "development";
-    console.log("isLocal:", isLocal);
-    const proxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
-    const client = new openai.OpenAI({
+async function generateModelResponse(
+  inputMessage: string,
+  updateUI: (chunk: string) => void,
+  selectedModel: string,
+  accessToken: string
+) {
+  // base url should be the current base_url
+  const isLocal = process.env.NODE_ENV === "development";
+  console.log("isLocal:", isLocal);
+  const proxyBaseUrl = isLocal
+    ? "http://localhost:4000"
+    : window.location.origin;
+  const client = new openai.OpenAI({
     apiKey: accessToken, // Replace with your OpenAI API key
     baseURL: proxyBaseUrl, // Replace with your OpenAI API base URL
     dangerouslyAllowBrowser: true, // using a temporary litellm proxy key
@@ -36,7 +52,7 @@ async function generateModelResponse(inputMessage: string, updateUI: (chunk: str
     stream: true,
     messages: [
       {
-        role: 'user',
+        role: "user",
         content: inputMessage,
       },
     ],
@@ -50,138 +66,166 @@ async function generateModelResponse(inputMessage: string, updateUI: (chunk: str
   }
 }
 
-const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID }) => {
-    const [inputMessage, setInputMessage] = useState("");
-    const [chatHistory, setChatHistory] = useState<any[]>([]);
-    const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
-    const [modelInfo, setModelInfo] = useState<any | null>(null); // Declare modelInfo at the component level
+const ChatUI: React.FC<ChatUIProps> = ({
+  accessToken,
+  token,
+  userRole,
+  userID,
+}) => {
+  const [inputMessage, setInputMessage] = useState("");
+  const [chatHistory, setChatHistory] = useState<any[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(
+    undefined
+  );
+  const [modelInfo, setModelInfo] = useState<any | null>(null); // Declare modelInfo at the component level
 
-    useEffect(() => {
-      if (!accessToken || !token || !userRole || !userID) {
-            return;
-      } 
-      // Fetch model info and set the default selected model
-      const fetchModelInfo = async () => {
-        const fetchedModelInfo = await modelInfoCall(accessToken, userID, userRole);
-        console.log("model_info:", fetchedModelInfo);
-  
-        if (fetchedModelInfo?.data.length > 0) {
-          setModelInfo(fetchedModelInfo);
-          setSelectedModel(fetchedModelInfo.data[0].model_name);
-        }
-      };
-  
-      fetchModelInfo();
-    }, [accessToken, userID, userRole]);
-  
-    const updateUI = (role: string, chunk: string) => {
-      setChatHistory((prevHistory) => {
-        const lastMessage = prevHistory[prevHistory.length - 1];
-  
-        if (lastMessage && lastMessage.role === role) {
-          return [
-            ...prevHistory.slice(0, prevHistory.length - 1),
-            { role, content: lastMessage.content + chunk },
-          ];
-        } else {
-          return [...prevHistory, { role, content: chunk }];
-        }
-      });
-    };
-  
-    const handleSendMessage = async () => {
-      if (inputMessage.trim() === "") return;
-  
-      if (!accessToken || !token || !userRole || !userID) {
-        return;
+  useEffect(() => {
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+    // Fetch model info and set the default selected model
+    const fetchModelInfo = async () => {
+      const fetchedAvailableModels = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole
+      );
+      console.log("model_info:", fetchedAvailableModels);
+
+      if (fetchedAvailableModels?.data.length > 0) {
+        setModelInfo(fetchedAvailableModels.data);
+        setSelectedModel(fetchedAvailableModels.data[0].id);
       }
-  
-      setChatHistory((prevHistory) => [
-        ...prevHistory,
-        { role: "user", content: inputMessage },
-      ]);
-  
-      try {
-        if (selectedModel) {
-          await generateModelResponse(inputMessage, (chunk) => updateUI("assistant", chunk), selectedModel, accessToken);
-        }
-      } catch (error) {
-        console.error("Error fetching model response", error);
-        updateUI("assistant", "Error fetching model response");
-      }
-  
-      setInputMessage("");
     };
-  
-    return (
-      <div style={{ width: "100%", position: "relative" }}>
-        <Grid className="gap-2 p-10 h-[75vh] w-full">
-          <Card>
+
+    fetchModelInfo();
+  }, [accessToken, userID, userRole]);
+
+  const updateUI = (role: string, chunk: string) => {
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+
+      if (lastMessage && lastMessage.role === role) {
+        return [
+          ...prevHistory.slice(0, prevHistory.length - 1),
+          { role, content: lastMessage.content + chunk },
+        ];
+      } else {
+        return [...prevHistory, { role, content: chunk }];
+      }
+    });
+  };
+
+  const handleSendMessage = async () => {
+    if (inputMessage.trim() === "") return;
+
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+
+    setChatHistory((prevHistory) => [
+      ...prevHistory,
+      { role: "user", content: inputMessage },
+    ]);
+
+    try {
+      if (selectedModel) {
+        await generateModelResponse(
+          inputMessage,
+          (chunk) => updateUI("assistant", chunk),
+          selectedModel,
+          accessToken
+        );
+      }
+    } catch (error) {
+      console.error("Error fetching model response", error);
+      updateUI("assistant", "Error fetching model response");
+    }
+
+    setInputMessage("");
+  };
+
+  return (
+    <div style={{ width: "100%", position: "relative" }}>
+      <Grid className="gap-2 p-10 h-[75vh] w-full">
+        <Card>
           <TabGroup>
             <TabList className="mt-4">
-                <Tab>Chat</Tab>
-                <Tab>API Reference</Tab>
+              <Tab>Chat</Tab>
+              <Tab>API Reference</Tab>
             </TabList>
 
             <TabPanels>
-                <TabPanel>
-                    <div>
-                    <label>Select Model:</label>
-                    <select
-                        value={selectedModel || ""}
-                        onChange={(e) => setSelectedModel(e.target.value)}
+              <TabPanel>
+                <div>
+                  <label>Select Model:</label>
+                  <select
+                    value={selectedModel || ""}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                  >
+                    {/* Populate dropdown options from available models */}
+                    {modelInfo?.map((element: { id: string }) => (
+                      <option key={element.id} value={element.id}>
+                        {element.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Table
+                  className="mt-5"
+                  style={{
+                    display: "block",
+                    maxHeight: "60vh",
+                    overflowY: "auto",
+                  }}
+                >
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>
+                        <Title>Chat</Title>
+                      </TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {chatHistory.map((message, index) => (
+                      <TableRow key={index}>
+                        <TableCell>{`${message.role}: ${message.content}`}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div
+                  className="mt-3"
+                  style={{ position: "absolute", bottom: 5, width: "95%" }}
+                >
+                  <div className="flex">
+                    <input
+                      type="text"
+                      value={inputMessage}
+                      onChange={(e) => setInputMessage(e.target.value)}
+                      className="flex-1 p-2 border rounded-md mr-2"
+                      placeholder="Type your message..."
+                    />
+                    <button
+                      onClick={handleSendMessage}
+                      className="p-2 bg-blue-500 text-white rounded-md"
                     >
-                        {/* Populate dropdown options from available models */}
-                        {modelInfo?.data.map((element: { model_name: string }) => (
-                        <option key={element.model_name} value={element.model_name}>
-                            {element.model_name}
-                        </option>
-                        ))}
-                    </select>
-                    </div>
-                    <Table className="mt-5" style={{ display: "block", maxHeight: "60vh", overflowY: "auto" }}>
-                    <TableHead>
-                        <TableRow>
-                        <TableCell>
-                            <Title>Chat</Title>
-                        </TableCell>
-                        </TableRow>
-                    </TableHead>
-                    <TableBody>
-                        {chatHistory.map((message, index) => (
-                        <TableRow key={index}>
-                            <TableCell>{`${message.role}: ${message.content}`}</TableCell>
-                        </TableRow>
-                        ))}
-                    </TableBody>
-                    </Table>
-                    <div className="mt-3" style={{ position: "absolute", bottom: 5, width: "95%" }}>
-                    <div className="flex">
-                        <input
-                        type="text"
-                        value={inputMessage}
-                        onChange={(e) => setInputMessage(e.target.value)}
-                        className="flex-1 p-2 border rounded-md mr-2"
-                        placeholder="Type your message..."
-                        />
-                        <button onClick={handleSendMessage} className="p-2 bg-blue-500 text-white rounded-md">
-                        Send
-                        </button>
-                    </div>
-                    </div>
-                </TabPanel>
-                <TabPanel>
-                    <TabGroup>
-                        <TabList>
-                            <Tab>OpenAI Python SDK</Tab>
-                            <Tab>LlamaIndex</Tab>
-                            <Tab>Langchain Py</Tab>
-                        </TabList>
-                        <TabPanels>
-                        <TabPanel>
-                    
-                    <SyntaxHighlighter language="python">
-            {`
+                      Send
+                    </button>
+                  </div>
+                </div>
+              </TabPanel>
+              <TabPanel>
+                <TabGroup>
+                  <TabList>
+                    <Tab>OpenAI Python SDK</Tab>
+                    <Tab>LlamaIndex</Tab>
+                    <Tab>Langchain Py</Tab>
+                  </TabList>
+                  <TabPanels>
+                    <TabPanel>
+                      <SyntaxHighlighter language="python">
+                        {`
 import openai
 client = openai.OpenAI(
     api_key="your_api_key",
@@ -208,12 +252,11 @@ response = client.chat.completions.create(
 
 print(response)
             `}
-        </SyntaxHighlighter>
-     </TabPanel>
-     <TabPanel>
-                    
-                    <SyntaxHighlighter language="python">
-            {`
+                      </SyntaxHighlighter>
+                    </TabPanel>
+                    <TabPanel>
+                      <SyntaxHighlighter language="python">
+                        {`
 import os, dotenv
 
 from llama_index.llms import AzureOpenAI
@@ -245,12 +288,11 @@ response = query_engine.query("What did the author do growing up?")
 print(response)
 
             `}
-        </SyntaxHighlighter>
-     </TabPanel>
-     <TabPanel>
-                    
-                    <SyntaxHighlighter language="python">
-            {`
+                      </SyntaxHighlighter>
+                    </TabPanel>
+                    <TabPanel>
+                      <SyntaxHighlighter language="python">
+                        {`
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
@@ -286,20 +328,17 @@ response = chat(messages)
 print(response)
 
             `}
-        </SyntaxHighlighter>
-     </TabPanel>
-        </TabPanels>
-        </TabGroup>
-                    
-                </TabPanel>
+                      </SyntaxHighlighter>
+                    </TabPanel>
+                  </TabPanels>
+                </TabGroup>
+              </TabPanel>
             </TabPanels>
-        </TabGroup>
-          </Card>
-        </Grid>
-      </div>
-    );
-  };
+          </TabGroup>
+        </Card>
+      </Grid>
+    </div>
+  );
+};
 
-
-
-  export default ChatUI;
+export default ChatUI;
