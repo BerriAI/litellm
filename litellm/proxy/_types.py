@@ -116,6 +116,10 @@ class ModelInfo(LiteLLMBase):
         return values
 
 
+class BlockUsers(LiteLLMBase):
+    user_ids: List[str]  # required
+
+
 class ModelParams(LiteLLMBase):
     model_name: str
     litellm_params: dict
