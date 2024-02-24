@@ -321,7 +321,7 @@ export const dailySpendCall = async (
     if ( metric ) {
       url = `${url}&metric_type=${metric}`;
     }
-    message.info("Making spend logs request");
+    //message.info("Making spend logs request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -336,10 +336,10 @@ export const dailySpendCall = async (
     }
     const data = await response.json();
     console.log(data);
-    message.success("Spend Logs received");
+    //message.success("Spend Logs received");
     return data;
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to get usage:", error);
     throw error;
   }
 };
