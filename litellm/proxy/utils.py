@@ -1537,56 +1537,33 @@ async def _create_db_triggers(
         return
     resp = await prisma_client.db.execute_raw(
         """
-        CREATE OR REPLACE FUNCTION update_daily_spend_report_function()
-        RETURNS TRIGGER AS $$
-        BEGIN
-        -- Update existing row for the given date
-        UPDATE "LiteLLM_AdminDailySpendReport"
-        SET
-            total_spend = total_spend + NEW.spend,
-            spend_per_api_key = COALESCE(spend_per_api_key, '{}'::jsonb) || jsonb_build_object(NEW.api_key, COALESCE(spend_per_api_key->>NEW.api_key, '0')::numeric + NEW.spend),
-            spend_per_model = COALESCE(spend_per_model, '{}'::jsonb) || jsonb_build_object(COALESCE(NEW.model, 'Unknown'), COALESCE(spend_per_model->>COALESCE(NEW.model, 'Unknown'), '0')::numeric + NEW.spend),
-            spend_per_user = COALESCE(spend_per_user, '{}'::jsonb) || jsonb_build_object(COALESCE(NEW."user", 'Unknown'), COALESCE(spend_per_user->>COALESCE(NEW."user", 'Unknown'), '0')::numeric + NEW.spend)
-        WHERE
-            date = DATE_TRUNC('day', NEW."startTime");
-
-        -- If no row was updated, insert a new row
-        IF NOT FOUND THEN
-            INSERT INTO "LiteLLM_AdminDailySpendReport" (date, total_spend, spend_per_api_key, spend_per_model, spend_per_user)
-            VALUES (
-            DATE_TRUNC('day', NEW."startTime"),
-            NEW.spend,
-            jsonb_build_object(NEW.api_key, NEW.spend::text),
-            jsonb_build_object(COALESCE(NEW.model, 'Unknown'), NEW.spend::text),
-            jsonb_build_object(COALESCE(NEW."user", 'Unknown'), NEW.spend::text)
-            );
-        END IF;
-
-        RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
+        CREATE VIEW daily_spend_view_model_34 AS
+        SELECT
+        date,
+        json_object_agg(model, total_spend) AS model_spend,
+        json_object_agg(api_key, total_spend) AS api_key_spend,
+        json_object_agg("user", total_spend) AS user_spend
+        FROM (
+        SELECT
+            DATE_TRUNC('day', "startTime") AS date,
+            model,
+            api_key,
+            "user",
+            SUM(spend) AS total_spend
+        FROM
+            "LiteLLM_SpendLogs"
+        GROUP BY
+            DATE_TRUNC('day', "startTime"),
+            model, 
+            api_key,
+            "user"
+        ) sub
+        GROUP BY
+        date;
         """
     )
 
     # print("response 1", resp)
-
-    resp2 = await prisma_client.db.execute_raw(
-        """
-        DO $$ 
-        BEGIN
-            IF NOT EXISTS (
-            SELECT 1 
-            FROM pg_trigger 
-            WHERE tgname = 'litellm_update_daily_spend_report_trigger'
-            ) THEN
-            CREATE TRIGGER litellm_update_daily_spend_report_trigger
-            AFTER INSERT ON "LiteLLM_SpendLogs"
-            FOR EACH ROW
-            EXECUTE FUNCTION update_daily_spend_report_function();
-            END IF;
-        END $$;
-        """
-    )
 
 
 # LiteLLM Admin UI - Non SSO Login
