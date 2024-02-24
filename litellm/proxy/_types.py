@@ -236,6 +236,10 @@ class NewTeamRequest(LiteLLMBase):
     members: list = []
     members_with_roles: List[Member] = []
     metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: list = []
 
 
 class UpdateTeamRequest(LiteLLMBase):
@@ -252,23 +256,10 @@ class DeleteTeamRequest(LiteLLMBase):
 
 
 class LiteLLM_TeamTable(NewTeamRequest):
-    max_budget: Optional[float] = None
     spend: Optional[float] = None
-    models: list = []
     max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
-
-
-class NewTeamResponse(LiteLLMBase):
-    team_id: str
-    admins: list
-    members: list
-    metadata: dict
-    created_at: datetime
-    updated_at: datetime
 
 
 class TeamRequest(LiteLLMBase):
