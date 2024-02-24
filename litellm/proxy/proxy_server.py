@@ -4314,7 +4314,7 @@ async def user_get_requests():
     "/team/new",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=NewTeamResponse,
+    response_model=LiteLLM_TeamTable,
 )
 async def new_team(
     data: NewTeamRequest,
@@ -4360,13 +4360,55 @@ async def new_team(
     if data.team_id is None:
         data.team_id = str(uuid.uuid4())
 
+    if (
+        data.tpm_limit is not None
+        and user_api_key_dict.tpm_limit is not None
+        and data.tpm_limit > user_api_key_dict.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}"
+            },
+        )
+
+    if (
+        data.rpm_limit is not None
+        and user_api_key_dict.rpm_limit is not None
+        and data.rpm_limit > user_api_key_dict.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}"
+            },
+        )
+
+    if (
+        data.max_budget is not None
+        and user_api_key_dict.max_budget is not None
+        and data.max_budget > user_api_key_dict.max_budget
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}"
+            },
+        )
+
+    if data.models is not None:
+        for m in data.models:
+            if m not in user_api_key_dict.models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}"
+                    },
+                )
+
     complete_team_data = LiteLLM_TeamTable(
         **data.json(),
-        max_budget=user_api_key_dict.max_budget,
-        models=user_api_key_dict.models,
         max_parallel_requests=user_api_key_dict.max_parallel_requests,
-        tpm_limit=user_api_key_dict.tpm_limit,
-        rpm_limit=user_api_key_dict.rpm_limit,
         budget_duration=user_api_key_dict.budget_duration,
         budget_reset_at=user_api_key_dict.budget_reset_at,
     )
