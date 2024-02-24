@@ -376,11 +376,9 @@ class StreamingChoices(OpenAIObject):
             self.delta = delta
         else:
             self.delta = Delta()
-
-        if logprobs is not None:
-            self.logprobs = logprobs
         if enhancements is not None:
             self.enhancements = enhancements
+        self.logprobs = logprobs
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -8631,6 +8629,10 @@ class CustomStreamWrapper:
                     model_response.choices[0].finish_reason = response_obj[
                         "finish_reason"
                     ]
+                if response_obj.get("original_chunk", None) is not None:
+                    model_response.system_fingerprint = getattr(
+                        response_obj["original_chunk"], "system_fingerprint", None
+                    )
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
