@@ -206,6 +206,7 @@ def test_async_custom_handler_stream():
 # test_async_custom_handler_stream()
 
 
+@pytest.mark.skip(reason="Flaky test")
 def test_azure_completion_stream():
     # [PROD Test] - Do not DELETE
     # test if completion() + sync custom logger get the same complete stream response

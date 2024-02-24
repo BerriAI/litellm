@@ -575,12 +575,20 @@ class Huggingface(BaseLLM):
                 response = await client.post(url=api_base, json=data, headers=headers)
                 response_json = response.json()
                 if response.status_code != 200:
-                    raise HuggingfaceError(
-                        status_code=response.status_code,
-                        message=response.text,
-                        request=response.request,
-                        response=response,
-                    )
+                    if "error" in response_json:
+                        raise HuggingfaceError(
+                            status_code=response.status_code,
+                            message=response_json["error"],
+                            request=response.request,
+                            response=response,
+                        )
+                    else:
+                        raise HuggingfaceError(
+                            status_code=response.status_code,
+                            message=response.text,
+                            request=response.request,
+                            response=response,
+                        )
 
                 ## RESPONSE OBJECT
                 return self.convert_to_model_response_object(
@@ -595,6 +603,8 @@ class Huggingface(BaseLLM):
         except Exception as e:
             if isinstance(e, httpx.TimeoutException):
                 raise HuggingfaceError(status_code=500, message="Request Timeout Error")
+            elif isinstance(e, HuggingfaceError):
+                raise e
             elif response is not None and hasattr(response, "text"):
                 raise HuggingfaceError(
                     status_code=500,

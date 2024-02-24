@@ -554,6 +554,11 @@ class PrismaClient:
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
                 if query_type == "find_unique":
+                    if token is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={"error": f"No token passed in. Token={token}"},
+                        )
                     response = await self.db.litellm_verificationtoken.find_unique(
                         where={"token": hashed_token}
                     )
