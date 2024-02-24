@@ -121,7 +121,7 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 
 # OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 
-Track spend across multiple projects/people 
+Set Budgets & Rate limits across multiple projects
 
 The proxy provides: 
 1. [Hooks for auth](https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth)
