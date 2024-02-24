@@ -4302,6 +4302,93 @@ async def user_get_requests():
         )
 
 
+@router.post(
+    "/user/block",
+    tags=["user management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def block_user(data: BlockUsers):
+    """
+    [BETA] Reject calls with this user id
+
+    ```
+    curl -X POST "http://0.0.0.0:8000/user/block"
+    -H "Authorization: Bearer sk-1234"
+    -D '{
+    "user_ids": [<user_id>, ...]
+    }'
+    ```
+    """
+    from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+        _ENTERPRISE_BlockedUserList,
+    )
+
+    if not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks):
+        blocked_user_list = _ENTERPRISE_BlockedUserList()
+        litellm.callbacks.append(blocked_user_list)  # type: ignore
+
+    if litellm.blocked_user_list is None:
+        litellm.blocked_user_list = data.user_ids
+    elif isinstance(litellm.blocked_user_list, list):
+        litellm.blocked_user_list = litellm.blocked_user_list + data.user_ids
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "`blocked_user_list` must be a list or not set. Filepaths can't be updated."
+            },
+        )
+
+    return {"blocked_users": litellm.blocked_user_list}
+
+
+@router.post(
+    "/user/unblock",
+    tags=["user management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def unblock_user(data: BlockUsers):
+    """
+    [BETA] Unblock calls with this user id
+
+    Example
+    ```
+    curl -X POST "http://0.0.0.0:8000/user/unblock"
+    -H "Authorization: Bearer sk-1234"
+    -D '{
+    "user_ids": [<user_id>, ...]
+    }'
+    ```
+    """
+    from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+        _ENTERPRISE_BlockedUserList,
+    )
+
+    if (
+        not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
+        or litellm.blocked_user_list is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Blocked user check was never set. This call has no effect."
+            },
+        )
+
+    if isinstance(litellm.blocked_user_list, list):
+        for id in data.user_ids:
+            litellm.blocked_user_list.remove(id)
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "`blocked_user_list` must be set as a list. Filepaths can't be updated."
+            },
+        )
+
+    return {"blocked_users": litellm.blocked_user_list}
+
+
 #### TEAM MANAGEMENT ####
 
 
