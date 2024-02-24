@@ -5,6 +5,7 @@ import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import ViewUserSpend from "./view_user_spend";
+import DashboardTeam from "./dashboard_default_team";
 import EnterProxyUrl from "./enter_proxy_url";
 import { message } from "antd";
 import Navbar from "./navbar";
@@ -36,6 +37,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
 }) => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
+  const [teams, setTeams] = useState<null | string[]>(null); // Keep the initialization of state here
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
     null
   );
@@ -111,8 +113,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         const fetchData = async () => {
           try {
             const response = await userInfoCall(accessToken, userID, userRole);
+            console.log(
+              `received teams in user dashboard: ${Object.keys(
+                response
+              )}; team type: ${Array.isArray(response.teams)}`
+            );
             setUserSpendData(response["user_info"]);
             setData(response["keys"]); // Assuming this is the correct path to your data
+            setTeams(response["teams"]);
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -191,6 +199,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             data={data}
             setData={setData}
           />
+          <DashboardTeam teams={teams} />
         </Col>
       </Grid>
     </div>
