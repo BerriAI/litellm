@@ -3865,6 +3865,16 @@ async def view_spend_daily_metrics(
                     LIMIT 5;
                 """
             )
+            returned_data = []
+            for row in response:
+                returned_data.append(
+                    {
+                        "model": row.get("model", None),
+                        "spend": row.get("total_spend_for_time", None),
+                    }
+                )
+
+            return returned_data
         return response
     except Exception as e:
         if isinstance(e, HTTPException):
