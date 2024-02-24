@@ -25,6 +25,13 @@ model_list:
   - model_name: anthropic-claude-v2
     litellm_params:
       model: bedrock/anthropic.claude-v2
+      aws_arn_arguments: {
+        "aws_role_name": "arn:aws:iam::123456789012:role/example-role",
+        "aws_session_name": "example-session",
+        "aws_web_identity_token": "os.environ/AWS_WEB_IDENTITY_TOKEN",
+        "assume_role_aws_role_name": "arn:aws:iam::123456789012:role/assume-role",
+        "assume_role_aws_session_name": "assume-role-session",
+      }
   - model_name: bedrock-cohere
     litellm_params:
       model: bedrock/cohere.command-text-v14
