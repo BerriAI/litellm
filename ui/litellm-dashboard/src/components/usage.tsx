@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { Grid, Col, Text, LineChart } from "@tremor/react";
 import { userSpendLogsCall, keyInfoCall, dailySpendCall } from "./networking";
 import { start } from "repl";
+import { message } from "antd";
 
 interface UsagePageProps {
   accessToken: string | null;
@@ -127,6 +128,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
   const [topKeys, setTopKeys] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
+  const [topModels, setTopModels] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -162,42 +164,37 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   useEffect(() => {
     if (accessToken && token && userRole && userID) {
+      const getAndSetData = async (
+        callType: string | String | null, 
+        setStateFunction: { (value: React.SetStateAction<any[]>): void; (value: React.SetStateAction<any[]>): void; (value: React.SetStateAction<any[]>): void; (value: React.SetStateAction<any[]>): void; (arg0: any): void; }) => {
+        try {
+          console.log(`making a call to ${callType}`);
+          const response = await dailySpendCall(accessToken, startTime, endTime, callType);
+          console.log(`daily ${callType} response`, response);
+          setStateFunction(response);
+        } catch (error) {
+          console.error(`Error fetching ${callType} data`, error);
+          // Optionally, update your UI to reflect the error state here as well
+        }
+      };
+  
       const fetchData = async () => {
         try {
-          console.log("making a call to daily spend");
-          await dailySpendCall(accessToken, startTime, endTime, null).then((response) => {
-            console.log("daily spend call response", response)
-            setKeySpendData(response);
-          });
-        } catch (error) {
-          console.error("There was an error fetching the data", error);
-          // Optionally, update your UI to reflect the error state here as well
-        }
-
-        // getting top api keys
-        try {
-          console.log("making a call to daily spend");
-          await dailySpendCall(accessToken, startTime, endTime, "top_api_keys").then((response) => {
-            console.log("daily setTopKeys response", response)
-            setTopKeys(response);
-          });
-        } catch (error) {
-          console.error("There was an error fetching the data", error);
-          // Optionally, update your UI to reflect the error state here as well
-        }
-
-        // getting top user
-        try {
-          console.log("making a call to daily spend");
-          await dailySpendCall(accessToken, startTime, endTime, "top_users").then((response) => {
-            console.log("daily topusers response", response)
-            setTopUsers(response);
-          });
+          console.log("making parallel calls");
+          message.info("Fetching Usage data")
+  
+          await Promise.all([
+            getAndSetData(null, setKeySpendData),
+            getAndSetData("top_api_keys", setTopKeys),
+            getAndSetData("top_users", setTopUsers),
+            getAndSetData("top_models", setTopModels)
+          ]);
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
         }
       };
+  
       fetchData();
     }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
@@ -242,6 +239,22 @@ const UsagePage: React.FC<UsagePageProps> = ({
               className="mt-4 h-40"
               data={topUsers}
               index="user_id"
+              categories={["spend"]}
+              colors={["blue"]}
+              yAxisWidth={200}
+              layout="vertical"
+              showXAxis={false}
+              showLegend={false}
+            />
+          </Card>
+        </Col>
+        <Col numColSpan={2}>
+          <Card className="mb-4">
+            <Title>Top models</Title>
+            <BarChart
+              className="mt-4 h-40"
+              data={topModels}
+              index="model"
               categories={["spend"]}
               colors={["blue"]}
               yAxisWidth={200}
