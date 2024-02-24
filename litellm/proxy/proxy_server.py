@@ -94,6 +94,7 @@ from litellm.proxy.utils import (
     _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
+    _create_db_triggers,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -2243,60 +2244,7 @@ async def startup_event():
         )
 
     # print("prisma client creating trigger func")
-    # resp = await prisma_client.db.execute_raw(
-    #     """
-    #     CREATE OR REPLACE FUNCTION update_daily_spend_report_function()
-    #     RETURNS TRIGGER AS $$
-    #     BEGIN
-    #     INSERT INTO "LiteLLM_AdminDailySpendReport" (date, total_spend, spend_per_api_key, spend_per_model, spend_per_user)
-    #     SELECT
-    #         DATE_TRUNC('day', NEW."startTime") AS date,
-    #         SUM(NEW.spend) AS total_spend,
-    #         JSONB_OBJECT_AGG(NEW.api_key, NEW.spend::text) AS spend_per_api_key,
-    #         JSONB_OBJECT_AGG(COALESCE(NEW.model, 'Unknown'), NEW.spend::text) AS spend_per_model,
-    #         JSONB_OBJECT_AGG(COALESCE(NEW."user", 'Unknown'), NEW.spend::text) AS spend_per_user
-    #     WHERE
-    #         DATE_TRUNC('day', NEW."startTime") IS NOT NULL
-    #     GROUP BY
-    #         DATE_TRUNC('day', NEW."startTime");
-
-    #     RETURN NEW;
-    #     END;
-    #     $$ LANGUAGE plpgsql;
-    # """
-    # )
-
-    # print("response 1", resp)
-
-    # resp2 = await prisma_client.db.execute_raw(
-    #     """
-    #     CREATE TRIGGER update_daily_spend_report_trigger
-    #     AFTER INSERT ON "LiteLLM_SpendLogs"
-    #     FOR EACH ROW
-    #     EXECUTE FUNCTION update_daily_spend_report_function();
-    #     """
-    # )
-
-    # print("response 2", resp2)
-
-    # view all triggers
-    resp3 = await prisma_client.db.query_raw(
-        """
-SELECT
-    trigger_name,
-    event_object_table,
-    action_timing,
-    event_manipulation,
-    action_statement
-FROM
-    information_schema.triggers
-WHERE
-    trigger_schema = 'public'; -- Replace 'public' with your schema name if different
-    """
-    )
-    # print(resp3)
-
-    # print("all triggers=", resp3)
+    await _create_db_triggers(prisma_client=prisma_client)
 
     verbose_proxy_logger.debug(
         f"custom_db_client client {custom_db_client}. Master_key: {master_key}"
