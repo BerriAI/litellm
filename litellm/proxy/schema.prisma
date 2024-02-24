@@ -99,6 +99,16 @@ model LiteLLM_SpendLogs {
   request_tags        Json     @default("[]")
 }
 
+// used for /spend/logs - view Aggregate Spend per Day
+model LiteLLM_AdminDailySpendReport {   
+  date              DateTime  @id @default(now())
+  total_spend       Float
+  spend_per_api_key Json @default("{}")
+  spend_per_model   Json @default("{}")
+  spend_per_user   Json @default("{}")
+  migration_completed Boolean @default(false) // variable to indicate if we migrated user SpendLogs data to LiteLLM_AdminDailySpendReport
+}
+
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
   request_id          String @unique

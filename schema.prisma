@@ -106,6 +106,7 @@ model LiteLLM_AdminDailySpendReport {
   spend_per_api_key Json @default("{}")
   spend_per_model   Json @default("{}")
   spend_per_user   Json @default("{}")
+  migration_completed Boolean @default(false) // variable to indicate if we migrated user SpendLogs data to LiteLLM_AdminDailySpendReport
 }
 
 // Beta - allow team members to request access to a model
