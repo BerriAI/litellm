@@ -30,13 +30,14 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, userRole }) => {
           <Menu.Item key="4" onClick={() => setPage("usage")}>
             Usage
           </Menu.Item>
-          {
-            userRole == "Admin" ? 
-              <Menu.Item key="5" onClick={() => setPage("users")}>
-                Users
-              </Menu.Item>
-            : null
-          }
+          {userRole == "Admin" ? (
+            <Menu.Item key="5" onClick={() => setPage("users")}>
+              Users
+            </Menu.Item>
+          ) : null}
+          <Menu.Item key="6" onClick={() => setPage("teams")}>
+            Teams
+          </Menu.Item>
         </Menu>
       </Sider>
     </Layout>
