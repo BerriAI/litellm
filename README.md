@@ -163,7 +163,7 @@ print(response)
 UI on `/ui` on your proxy server 
 ![ui_3](https://github.com/BerriAI/litellm/assets/29436595/47c97d5e-b9be-4839-b28c-43d7f4f10033)
 
-Track Spend, Set budgets and create virtual keys for the proxy
+Set budgets and rate limits across multiple projects
 `POST /key/generate`
 
 ### Request
