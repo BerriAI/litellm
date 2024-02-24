@@ -100,9 +100,8 @@ model LiteLLM_SpendLogs {
 }
 
 // used for /spend/logs - view Aggregate Spend per Day
-model LiteLLM_AdminDailySpendReport {
-  id                Int      @id @default(autoincrement())
-  date              DateTime
+model LiteLLM_AdminDailySpendReport {   
+  date              DateTime  @id @default(now())
   total_spend       Float
   spend_per_api_key Json @default("{}")
   spend_per_model   Json @default("{}")
