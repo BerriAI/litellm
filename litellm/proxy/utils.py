@@ -1530,7 +1530,7 @@ def _is_user_proxy_admin(user_id_information=None):
     return False
 
 
-async def _create_db_triggers(
+async def _create_db_views(
     prisma_client=None,
 ):
     if prisma_client is None:

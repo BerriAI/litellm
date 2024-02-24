@@ -94,7 +94,7 @@ from litellm.proxy.utils import (
     _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
-    _create_db_triggers,
+    _create_db_views,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -2244,7 +2244,7 @@ async def startup_event():
         )
 
     # print("prisma client creating trigger func")
-    await _create_db_triggers(prisma_client=prisma_client)
+    await _create_db_views(prisma_client=prisma_client)
 
     verbose_proxy_logger.debug(
         f"custom_db_client client {custom_db_client}. Master_key: {master_key}"
