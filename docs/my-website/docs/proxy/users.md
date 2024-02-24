@@ -120,6 +120,51 @@ curl --location 'http://0.0.0.0:8000/key/generate' \
 ```
 
 </TabItem>
+<TabItem value="per-team" label="For Team">
+You can:
+- Add budgets to Teams
+
+
+#### **Add budgets to users**
+```shell 
+curl --location 'http://localhost:8000/team/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_alias": "my-new-team_4",
+  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
+  "rpm_limit": 99
+}' 
+```
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
+
+**Sample Response**
+
+```shell
+{
+    "team_alias": "my-new-team_4",
+    "team_id": "13e83b19-f851-43fe-8e93-f96e21033100",
+    "admins": [],
+    "members": [],
+    "members_with_roles": [
+        {
+            "role": "admin",
+            "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"
+        }
+    ],
+    "metadata": {},
+    "tpm_limit": null,
+    "rpm_limit": 99,
+    "max_budget": null,
+    "models": [],
+    "spend": 0.0,
+    "max_parallel_requests": null,
+    "budget_duration": null,
+    "budget_reset_at": null
+}
+```
+</TabItem>
 <TabItem value="per-user-chat" label="For 'user' passed to /chat/completions">
 
 Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
