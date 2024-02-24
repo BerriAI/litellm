@@ -3778,16 +3778,27 @@ async def view_spend_daily_metrics(
         if metric_type is None:
             response = await prisma_client.db.query_raw(
                 f"""
-                SELECT * FROM daily_spend_view_final
+                SELECT * FROM daily_spend_view
                 WHERE date BETWEEN '{start_date_obj}' AND '{end_date_obj}'
                 """
             )
+
+            returned_data = []
+            # return [{"day": date, "total_spend": total_spend} for date, total_spend in response]
+            for row in response:
+                returned_data.append(
+                    {
+                        "date": row.get("date", None),
+                        "total_spend": row.get("total_spend", None),
+                    }
+                )
+            return returned_data
         elif metric_type == "top_api_keys":
             response = await prisma_client.db.query_raw(
                 f"""
                     SELECT
                     api_key,
-                    SUM(total_spend) AS total_spend_for_month
+                    SUM(total_spend) AS total_spend_for_time
                     FROM
                     daily_spend_view_per_api_key
                     WHERE
@@ -3795,17 +3806,27 @@ async def view_spend_daily_metrics(
                     GROUP BY
                     api_key
                     ORDER BY
-                    total_spend_for_month DESC
+                    total_spend_for_time DESC
                     LIMIT 5;
                 """
             )
-            pass
+
+            returned_data = []
+            for row in response:
+                returned_data.append(
+                    {
+                        "key": row.get("api_key", None),
+                        "spend": row.get("total_spend_for_time", None),
+                    }
+                )
+
+            return returned_data
         elif metric_type == "top_users":
             response = await prisma_client.db.query_raw(
                 f"""
                     SELECT
                     "user",
-                    SUM(total_spend) AS total_spend_for_month
+                    SUM(total_spend) AS total_spend_for_time
                     FROM
                     daily_spend_view_per_user
                     WHERE
@@ -3813,16 +3834,26 @@ async def view_spend_daily_metrics(
                     GROUP BY
                     "user"
                     ORDER BY
-                    total_spend_for_month DESC
+                    total_spend_for_time DESC
                     LIMIT 5;
                 """
             )
+            returned_data = []
+            for row in response:
+                returned_data.append(
+                    {
+                        "user_id": row.get("user", None),
+                        "spend": row.get("total_spend_for_time", None),
+                    }
+                )
+
+            return returned_data
         elif metric_type == "top_models":
             response = await prisma_client.db.query_raw(
                 f"""
                    SELECT
                     model,
-                    SUM(total_spend) AS total_spend_for_month
+                    SUM(total_spend) AS total_spend_for_time
                     FROM
                     daily_spend_view_per_model
                     WHERE
@@ -3830,7 +3861,7 @@ async def view_spend_daily_metrics(
                     GROUP BY
                     model
                     ORDER BY
-                    total_spend_for_month DESC
+                    total_spend_for_time DESC
                     LIMIT 5;
                 """
             )

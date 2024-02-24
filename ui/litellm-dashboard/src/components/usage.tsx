@@ -2,7 +2,7 @@ import { BarChart, Card, Title } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 import { Grid, Col, Text, LineChart } from "@tremor/react";
-import { userSpendLogsCall, keyInfoCall } from "./networking";
+import { userSpendLogsCall, keyInfoCall, dailySpendCall } from "./networking";
 import { start } from "repl";
 
 interface UsagePageProps {
@@ -164,28 +164,34 @@ const UsagePage: React.FC<UsagePageProps> = ({
     if (accessToken && token && userRole && userID) {
       const fetchData = async () => {
         try {
-          await userSpendLogsCall(
-            accessToken,
-            token,
-            userRole,
-            userID,
-            startTime,
-            endTime
-          ).then(async (response) => {
-            const topKeysResponse = await keyInfoCall(
-              accessToken,
-              getTopKeys(response)
-            );
-            const filtered_keys = topKeysResponse["info"].map((k: any) => ({
-              key: (k["key_name"] || k["key_alias"] || k["token"]).substring(
-                0,
-                7
-              ),
-              spend: k["spend"],
-            }));
-            setTopKeys(filtered_keys);
-            setTopUsers(getTopUsers(response));
+          console.log("making a call to daily spend");
+          await dailySpendCall(accessToken, startTime, endTime, null).then((response) => {
+            console.log("daily spend call response", response)
             setKeySpendData(response);
+          });
+        } catch (error) {
+          console.error("There was an error fetching the data", error);
+          // Optionally, update your UI to reflect the error state here as well
+        }
+
+        // getting top api keys
+        try {
+          console.log("making a call to daily spend");
+          await dailySpendCall(accessToken, startTime, endTime, "top_api_keys").then((response) => {
+            console.log("daily setTopKeys response", response)
+            setTopKeys(response);
+          });
+        } catch (error) {
+          console.error("There was an error fetching the data", error);
+          // Optionally, update your UI to reflect the error state here as well
+        }
+
+        // getting top user
+        try {
+          console.log("making a call to daily spend");
+          await dailySpendCall(accessToken, startTime, endTime, "top_users").then((response) => {
+            console.log("daily topusers response", response)
+            setTopUsers(response);
           });
         } catch (error) {
           console.error("There was an error fetching the data", error);
@@ -204,13 +210,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
             <Title>Monthly Spend</Title>
             <BarChart
               data={keySpendData}
-              index="startTime"
-              categories={["spend"]}
+              index="date"
+              categories={["total_spend"]}
               colors={["blue"]}
-              valueFormatter={valueFormatter}
               yAxisWidth={100}
               tickGap={5}
-              customTooltip={customTooltip}
             />
           </Card>
         </Col>

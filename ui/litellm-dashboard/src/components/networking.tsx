@@ -307,6 +307,43 @@ export const userSpendLogsCall = async (
   }
 };
 
+
+
+export const dailySpendCall = async (
+  accessToken: String,
+  startTime: String,
+  endTime: String,
+  metric: String | null
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/daily_metrics` : `/spend/daily_metrics`;
+    url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
+    if ( metric ) {
+      url = `${url}&metric_type=${metric}`;
+    }
+    message.info("Making spend logs request");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    message.success("Spend Logs received");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const keyInfoCall = async (accessToken: String, keys: String[]) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/v2/key/info`;
