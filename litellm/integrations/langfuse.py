@@ -235,6 +235,9 @@ class LangFuseLogger:
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
             supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
             supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
+            supports_completion_start_time = Version(
+                langfuse.version.__version__
+            ) >= Version("2.7.3")
 
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
@@ -307,6 +310,11 @@ class LangFuseLogger:
 
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["statusMessage"] = output
+
+            if supports_completion_start_time:
+                generation_params["completion_start_time"] = kwargs.get(
+                    "completion_start_time", None
+                )
 
             trace.generation(**generation_params)
         except Exception as e:
