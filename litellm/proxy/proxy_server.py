@@ -3725,6 +3725,135 @@ async def view_spend_tags(
 
 
 @router.get(
+    "/spend/daily_metrics",
+    tags=["budget & spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def view_spend_daily_metrics(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+    metric_type: Optional[
+        Literal["top_models", "top_api_keys", "top_users"]
+    ] = fastapi.Query(default=None),
+):
+    """
+    LiteLLM Enterprise - View Admin Aggregate Spend Metrics
+
+    Example Request:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/daily_metrics" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Spend with Start Date and End Date
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/daily_metrics?start_date=2022-01-01&end_date=2022-02-01" \
+    """
+    global prisma_client
+    try:
+        verbose_proxy_logger.debug("inside view_spend_logs")
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+        if (
+            start_date is not None
+            and isinstance(start_date, str)
+            and end_date is not None
+            and isinstance(end_date, str)
+        ):
+            # Convert the date strings to datetime objects
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+        if metric_type is None:
+            response = await prisma_client.db.query_raw(
+                f"""
+                SELECT * FROM daily_spend_view_final
+                WHERE date BETWEEN '{start_date_obj}' AND '{end_date_obj}'
+                """
+            )
+        elif metric_type == "top_api_keys":
+            response = await prisma_client.db.query_raw(
+                f"""
+                    SELECT
+                    api_key,
+                    SUM(total_spend) AS total_spend_for_month
+                    FROM
+                    daily_spend_view_per_api_key
+                    WHERE
+                    date >= '{start_date_obj}' AND date <= '{end_date_obj}'
+                    GROUP BY
+                    api_key
+                    ORDER BY
+                    total_spend_for_month DESC
+                    LIMIT 5;
+                """
+            )
+            pass
+        elif metric_type == "top_users":
+            response = await prisma_client.db.query_raw(
+                f"""
+                    SELECT
+                    "user",
+                    SUM(total_spend) AS total_spend_for_month
+                    FROM
+                    daily_spend_view_per_user
+                    WHERE
+                    date >= '{start_date_obj}' AND date <= '{end_date_obj}'
+                    GROUP BY
+                    "user"
+                    ORDER BY
+                    total_spend_for_month DESC
+                    LIMIT 5;
+                """
+            )
+        elif metric_type == "top_models":
+            response = await prisma_client.db.query_raw(
+                f"""
+                   SELECT
+                    model,
+                    SUM(total_spend) AS total_spend_for_month
+                    FROM
+                    daily_spend_view_per_model
+                    WHERE
+                    date >= '{start_date_obj}' AND date <= '{end_date_obj}'
+                    GROUP BY
+                    model
+                    ORDER BY
+                    total_spend_for_month DESC
+                    LIMIT 5;
+                """
+            )
+        return response
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/spend/logs Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/spend/logs Error" + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
     "/spend/logs",
     tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -3800,11 +3929,17 @@ async def view_spend_logs(
             end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
             filter_query = {
-                "startTime": {
+                "date": {
                     "gte": start_date_obj,  # Greater than or equal to Start Date
                     "lte": end_date_obj,  # Less than or equal to End Date
                 }
             }
+            response = await prisma_client.db.execute_raw(
+                f"""
+                SELECT * FROM litellm_daily_spend_view_model_v0
+                WHERE date BETWEEN '{start_date_obj}' AND '{end_date_obj}'
+                """
+            )
 
             if api_key is not None and isinstance(api_key, str):
                 filter_query["api_key"] = api_key  # type: ignore
