@@ -730,6 +730,8 @@ async def user_api_key_auth(
                 "/user",
                 "/model/info",
                 "/v2/model/info",
+                "/models",
+                "/v1/models",
             ]
             # check if the current route startswith any of the allowed routes
             if (
@@ -1758,6 +1760,7 @@ async def generate_key_helper_fn(
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
+    table_name: Optional[Literal["key", "user"]] = None,
 ):
     global prisma_client, custom_db_client, user_api_key_cache
 
@@ -1884,8 +1887,10 @@ async def generate_key_helper_fn(
                     table_name="user",
                     update_key_values=update_key_values,
                 )
-            if user_id == litellm_proxy_budget_name:
-                # do not create a key for litellm_proxy_budget_name
+            if user_id == litellm_proxy_budget_name or (
+                table_name is not None and table_name == "user"
+            ):
+                # do not create a key for litellm_proxy_budget_name or if table name is set to just 'user'
                 # we only need to ensure this exists in the user table
                 # the LiteLLM_VerificationToken table will increase in size if we don't do this check
                 return key_data
@@ -2440,7 +2445,7 @@ async def completion(
         )
         traceback.print_exc()
         error_traceback = traceback.format_exc()
-        error_msg = f"{str(e)}\n\n{error_traceback}"
+        error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
@@ -5548,27 +5553,50 @@ async def auth_callback(request: Request):
     user_id_models: List = []
 
     # User might not be already created on first generation of key
-    # But if it is, we want its models preferences
+    # But if it is, we want their models preferences
+    default_ui_key_values = {
+        "duration": "1hr",
+        "key_max_budget": 0.01,
+        "aliases": {},
+        "config": {},
+        "spend": 0,
+        "team_id": "litellm-dashboard",
+    }
+    user_defined_values = {
+        "models": user_id_models,
+        "user_id": user_id,
+        "user_email": user_email,
+    }
     try:
         if prisma_client is not None:
             user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
+            verbose_proxy_logger.debug(
+                f"user_info: {user_info}; litellm.default_user_params: {litellm.default_user_params}"
+            )
             if user_info is not None:
-                user_id_models = getattr(user_info, "models", [])
+                user_defined_values = {
+                    "models": getattr(user_info, "models", []),
+                    "user_id": getattr(user_info, "user_id", user_id),
+                    "user_email": getattr(user_info, "user_id", user_email),
+                }
+            elif litellm.default_user_params is not None and isinstance(
+                litellm.default_user_params, dict
+            ):
+                user_defined_values = {
+                    "models": litellm.default_user_params.get("models", user_id_models),
+                    "user_id": litellm.default_user_params.get("user_id", user_id),
+                    "user_email": litellm.default_user_params.get(
+                        "user_email", user_email
+                    ),
+                }
     except Exception as e:
         pass
 
+    verbose_proxy_logger.info(
+        f"user_defined_values for creating ui key: {user_defined_values}"
+    )
     response = await generate_key_helper_fn(
-        **{
-            "duration": "1hr",
-            "key_max_budget": 0.01,
-            "models": user_id_models,
-            "aliases": {},
-            "config": {},
-            "spend": 0,
-            "user_id": user_id,
-            "team_id": "litellm-dashboard",
-            "user_email": user_email,
-        }  # type: ignore
+        **default_ui_key_values, **user_defined_values  # type: ignore
     )
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
