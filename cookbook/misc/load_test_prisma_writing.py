@@ -103,12 +103,12 @@ async def test_call_with_key_never_over_budget():
             "optional_params": {"extra_body": {}},
             "litellm_params": {
                 "acompletion": True,
-                "api_key": "d6f82361954b450188295b448e2091ca",
+                "api_key": "d6f****",
                 "force_timeout": 600,
                 "logger_fn": None,
                 "verbose": False,
                 "custom_llm_provider": "azure",
-                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+                "api_base": "any_api_base",
                 "litellm_call_id": "17ca368a-fb0d-4d02-87f5-be66327b59b3",
                 "model_alias_map": {},
                 "completion_call_id": None,
@@ -175,9 +175,9 @@ async def test_call_with_key_never_over_budget():
             "max_retries": 0,
             "extra_body": {},
             "input": [{"role": "user", "content": "write a para about yc and litellm"}],
-            "api_key": "d6f82361954b450188295b448e2091ca",
+            "api_key": "d6f****",
             "additional_args": {
-                "headers": {"Authorization": "Bearer d6f82361954b450188295b448e2091ca"},
+                "headers": {"Authorization": "Bearer d6f****"},
                 "api_base": True,
                 "complete_input_dict": {
                     "model": "chatgpt-v-2",
