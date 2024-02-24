@@ -2445,7 +2445,7 @@ async def completion(
         )
         traceback.print_exc()
         error_traceback = traceback.format_exc()
-        error_msg = f"{str(e)}\n\n{error_traceback}"
+        error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
