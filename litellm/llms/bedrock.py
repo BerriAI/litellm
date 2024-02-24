@@ -6,6 +6,7 @@ from typing import Callable, Optional, Any, Union, List
 import litellm
 from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse
 from .prompt_templates.factory import prompt_factory, custom_prompt
+from litellm._logging import verbose_logger
 import httpx
 
 
@@ -476,6 +477,55 @@ def init_bedrock_client(
     return client
 
 
+def _set_env_vars_based_on_arn(aws_arn_arguments):
+    import boto3, os, litellm
+
+    verbose_logger.debug(f"Bedrock: setting aws_arn_arguments {aws_arn_arguments}")
+    for k, v in aws_arn_arguments.items():
+        if isinstance(v, str) and v.startswith("os.environ/"):
+            aws_arn_arguments[k] = litellm.get_secret(v)
+        if isinstance(k, str) and k == "aws_web_identity_token":
+            value = aws_arn_arguments[k]
+            verbose_logger.debug(f"Loading AWS Web Identity Token from file: {value}")
+            if os.path.exists(value):
+                with open(value, "r") as file:
+                    token_content = file.read()
+                    aws_arn_arguments[k] = token_content
+            else:
+                verbose_logger.debug(
+                    f"DynamoDB Loading - {value} is not a valid file path"
+                )
+
+    if aws_arn_arguments["aws_role_name"] is None:
+        return
+    verbose_logger.debug(f"Bedrock: setting env vars based on arn={aws_arn_arguments}")
+
+    sts_client = boto3.client("sts")
+
+    # call 1
+    non_used_assumed_role = sts_client.assume_role_with_web_identity(
+        RoleArn=aws_arn_arguments["aws_role_name"],
+        RoleSessionName=aws_arn_arguments["aws_session_name"],
+        WebIdentityToken=aws_arn_arguments["aws_web_identity_token"],
+    )
+
+    # call 2
+    assumed_role = sts_client.assume_role(
+        RoleArn=aws_arn_arguments["assume_role_aws_role_name"],
+        RoleSessionName=aws_arn_arguments["assume_role_aws_session_name"],
+    )
+
+    aws_access_key_id = assumed_role["Credentials"]["AccessKeyId"]
+    aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
+    aws_session_token = assumed_role["Credentials"]["SessionToken"]
+
+    verbose_logger.debug(f"Got STS assumed Role, aws_access_key_id={aws_access_key_id}")
+    # set these in the env so aiodynamo can use them
+    os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+    os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+    os.environ["AWS_SESSION_TOKEN"] = aws_session_token
+
+
 def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
     # handle anthropic prompts and amazon titan prompts
     if provider == "anthropic" or provider == "amazon":
@@ -540,9 +590,14 @@ def completion(
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )
+        aws_arn_arguments = optional_params.pop("aws_arn_arguments", None)
 
         # use passed in BedrockRuntime.Client if provided, otherwise create a new one
         client = optional_params.pop("aws_bedrock_client", None)
+
+        # aws_arn_arguments
+        if aws_arn_arguments is not None:
+            _set_env_vars_based_on_arn(aws_arn_arguments=aws_arn_arguments)
 
         # only init client, if user did not pass one
         if client is None:
@@ -595,9 +650,9 @@ def completion(
                 ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                     inference_params[k] = v
             if optional_params.get("stream", False) == True:
-                inference_params[
-                    "stream"
-                ] = True  # cohere requires stream = True in inference params
+                inference_params["stream"] = (
+                    True  # cohere requires stream = True in inference params
+                )
             data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "meta":
             ## LOAD CONFIG
