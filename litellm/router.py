@@ -830,8 +830,8 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.atext_completion(model={model})\033[31m Exception {str(e)}\033[0m"
             )
-            if model_name is not None:
-                self.fail_calls[model_name] += 1
+            if model is not None:
+                self.fail_calls[model] += 1
             raise e
 
     def embedding(
