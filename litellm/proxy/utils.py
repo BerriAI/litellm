@@ -1537,32 +1537,78 @@ async def _create_db_triggers(
         return
     resp = await prisma_client.db.execute_raw(
         """
-        CREATE VIEW daily_spend_view_model_34 AS
-        SELECT
-        date,
-        json_object_agg(model, total_spend) AS model_spend,
-        json_object_agg(api_key, total_spend) AS api_key_spend,
-        json_object_agg("user", total_spend) AS user_spend
-        FROM (
-        SELECT
-            DATE_TRUNC('day', "startTime") AS date,
-            model,
-            api_key,
-            "user",
-            SUM(spend) AS total_spend
-        FROM
-            "LiteLLM_SpendLogs"
-        GROUP BY
-            DATE_TRUNC('day', "startTime"),
-            model, 
-            api_key,
-            "user"
-        ) sub
-        GROUP BY
-        date;
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = 'daily_spend_view') THEN
+                    CREATE VIEW daily_spend_view AS
+                    SELECT
+                        DATE_TRUNC('day', "startTime") AS date,
+                        SUM(spend) AS total_spend
+                    FROM
+                        "LiteLLM_SpendLogs"
+                    GROUP BY
+                        date;
+                END IF;
+            END $$;
         """
     )
 
+    resp = await prisma_client.db.execute_raw(
+        """ 
+        DO $$ 
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = 'daily_spend_view_per_api_key') THEN
+                CREATE VIEW daily_spend_view_per_api_key AS
+                SELECT
+                    DATE_TRUNC('day', "startTime") AS date,
+                    api_key,
+                    SUM(spend) AS total_spend
+                FROM
+                    "LiteLLM_SpendLogs"
+                GROUP BY
+                    date, api_key;  -- Use the column alias in GROUP BY
+            END IF;
+        END $$;
+        """
+    )
+
+    resp = await prisma_client.db.execute_raw(
+        """ 
+        DO $$ 
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = 'daily_spend_view_per_model') THEN
+                CREATE VIEW daily_spend_view_per_model AS
+                SELECT
+                    DATE_TRUNC('day', "startTime") AS date,
+                    model,
+                    SUM(spend) AS total_spend
+                FROM
+                    "LiteLLM_SpendLogs"
+                GROUP BY
+                    date, model;  -- Include api_key in the GROUP BY clause if it exists
+            END IF;
+        END $$;
+        """
+    )
+
+    resp = await prisma_client.db.execute_raw(
+        """ 
+        DO $$ 
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = 'daily_spend_view_per_user') THEN
+                CREATE VIEW daily_spend_view_per_user AS
+                SELECT
+                    DATE_TRUNC('day', "startTime") AS date,
+                    "user",
+                    SUM(spend) AS total_spend
+                FROM
+                    "LiteLLM_SpendLogs"
+                GROUP BY
+                    date, "user";  -- Include api_key in the GROUP BY clause if it exists
+            END IF;
+        END $$;
+        """
+    )
     # print("response 1", resp)
 
 
