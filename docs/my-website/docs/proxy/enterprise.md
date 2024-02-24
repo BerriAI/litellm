@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ✨ Enterprise Features - Content Moderation, Blocked Users/Keywords
+# ✨ Enterprise Features - End-user Opt-out, Content Mod
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
@@ -166,6 +166,29 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 [Suggest a way to improve this](https://github.com/BerriAI/litellm/issues/new/choose)
 
 :::
+
+### Using via API
+
+
+**Block all calls for a user id**
+
+```
+curl -X POST "http://0.0.0.0:8000/user/block" \
+-H "Authorization: Bearer sk-1234" \ 
+-D '{
+"user_ids": [<user_id>, ...] 
+}'
+```
+
+**Unblock calls for a user id**
+
+```
+curl -X POST "http://0.0.0.0:8000/user/unblock" \
+-H "Authorization: Bearer sk-1234" \ 
+-D '{
+"user_ids": [<user_id>, ...] 
+}'
+```
 
 ## Enable Banned Keywords List
 
