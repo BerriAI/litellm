@@ -4453,13 +4453,13 @@ async def new_team(
         await prisma_client.update_data(
             user_id=user.user_id,
             data={"user_id": user.user_id, "teams": [team_row.team_id]},
-            update_key_values={
+            update_key_values_custom_query={
                 "teams": {
                     "push ": [team_row.team_id],
                 }
             },
         )
-    return team_row
+    return team_row.model_dump()
 
 
 @router.post(
