@@ -772,9 +772,13 @@ class OpenAIChatCompletion(BaseLLM):
         input: Optional[list] = None,
         prompt: Optional[str] = None,
         organization: Optional[str] = None,
+        api_base: Optional[str] = None,
     ):
         client = AsyncOpenAI(
-            api_key=api_key, timeout=timeout, organization=organization
+            api_key=api_key,
+            timeout=timeout,
+            organization=organization,
+            base_url=api_base,
         )
         if model is None and mode != "image_generation":
             raise Exception("model is not set")
@@ -870,9 +874,9 @@ class OpenAITextCompletion(BaseLLM):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            model_response_object._hidden_params[
-                "original_response"
-            ] = response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            model_response_object._hidden_params["original_response"] = (
+                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            )
             return model_response_object
         except Exception as e:
             raise e
