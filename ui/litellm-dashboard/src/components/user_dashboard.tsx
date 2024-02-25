@@ -25,19 +25,22 @@ interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
   userEmail: string | null;
+  teams: string[] | null;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<string[] | null>>;
 }
 
 const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
+  teams,
   setUserRole,
   userEmail,
   setUserEmail,
+  setTeams,
 }) => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
-  const [teams, setTeams] = useState<null | string[]>(null); // Keep the initialization of state here
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
     null
   );
