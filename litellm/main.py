@@ -3358,12 +3358,15 @@ async def ahealth_check(
                 or default_timeout
             )
 
+            api_base = model_params.get("api_base") or get_secret("OPENAI_API_BASE")
+
             response = await openai_chat_completions.ahealth_check(
                 model=model,
                 messages=model_params.get(
                     "messages", None
                 ),  # Replace with your actual messages list
                 api_key=api_key,
+                api_base=api_base,
                 timeout=timeout,
                 mode=mode,
                 prompt=prompt,
