@@ -12,7 +12,7 @@ The proxy exposes:
 #### Request
 Make a GET Request to `/health` on the proxy
 ```shell
-curl --location 'http://0.0.0.0:8000/health'
+curl --location 'http://0.0.0.0:8000/health' -H "Authorization: Bearer sk-1234"
 ```
 
 You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
