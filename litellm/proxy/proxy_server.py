@@ -4526,7 +4526,7 @@ async def update_team(
                         "teams": [team_row["team_id"]],
                         "models": team_row["data"].models,
                     },
-                    update_key_values={
+                    update_key_values_custom_query={
                         "teams": {
                             "push": [team_row["team_id"]],
                         }
@@ -4632,7 +4632,7 @@ async def team_member_add(
         await prisma_client.update_data(
             user_id=new_member.user_id,
             data=user_data,
-            update_key_values={
+            update_key_values_custom_query={
                 "teams": {
                     "push": [team_row["team_id"]],
                 }
