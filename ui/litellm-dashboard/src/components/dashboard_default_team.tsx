@@ -3,29 +3,33 @@ import { Typography } from "antd";
 import { Select, SelectItem } from "@tremor/react";
 
 interface DashboardTeamProps {
-  teams: string[] | null;
+  teams: Object[] | null;
+  setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
 }
 
-const DashboardTeam: React.FC<DashboardTeamProps> = ({ teams }) => {
+const DashboardTeam: React.FC<DashboardTeamProps> = ({
+  teams,
+  setSelectedTeam,
+}) => {
   const { Title, Paragraph } = Typography;
   const [value, setValue] = useState("");
-  console.log(`received teams ${teams}`);
+
   return (
     <div className="mt-10">
       <Title level={4}>Default Team</Title>
       <Paragraph>
-        If you belong to multiple teams, this setting controls which
-        organization is used by default when creating new API Keys.
+        If you belong to multiple teams, this setting controls which team is
+        used by default when creating new API Keys.
       </Paragraph>
       {teams && teams.length > 0 ? (
-        <Select
-          id="distance"
-          value={value}
-          onValueChange={setValue}
-          className="mt-2"
-        >
-          {teams.map((model) => (
-            <SelectItem value="model">{model}</SelectItem>
+        <Select defaultValue="0">
+          {teams.map((team: any, index) => (
+            <SelectItem
+              value={String(index)}
+              onClick={() => setSelectedTeam(team)}
+            >
+              {team["team_alias"]}
+            </SelectItem>
           ))}
         </Select>
       ) : (

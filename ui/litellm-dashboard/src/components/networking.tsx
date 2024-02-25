@@ -196,6 +196,7 @@ export const userInfoCall = async (
     }
 
     const data = await response.json();
+    console.log("API Response:", data);
     message.info("Received user data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -503,14 +504,23 @@ export const teamCreateCall = async (
   }
 };
 
-export const teamUpdateCall = async (
+export interface Member {
+  role: string;
+  user_id: string | null;
+  user_email: string | null;
+}
+
+export const teamMemberAddCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  teamId: string,
+  formValues: Member // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamCreateCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/update` : `/team/update`;
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/member_add`
+      : `/team/member_add`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -518,7 +528,8 @@ export const teamUpdateCall = async (
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        ...formValues, // Include formValues in the request body
+        team_id: teamId,
+        member: formValues, // Include formValues in the request body
       }),
     });
 
