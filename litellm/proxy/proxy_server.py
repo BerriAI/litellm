@@ -4063,6 +4063,7 @@ async def user_info(
         default=False,
         description="set to true to View all users. When using view_all, don't pass user_id",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Use this to get user information. (user row + all user key info)
@@ -4113,6 +4114,22 @@ async def user_info(
                     if team.team_id not in team_id_list:
                         team_list.append(team)
                         team_id_list.append(team.team_id)
+        elif user_api_key_dict.user_id is not None:
+            caller_user_info = await prisma_client.get_data(
+                user_id=user_api_key_dict.user_id
+            )
+            # *NEW* get all teams in user 'teams' field
+            teams_2 = await prisma_client.get_data(
+                team_id_list=caller_user_info.teams,
+                table_name="team",
+                query_type="find_all",
+            )
+
+            if teams_2 is not None and isinstance(teams_2, list):
+                for team in teams_2:
+                    if team.team_id not in team_id_list:
+                        team_list.append(team)
+                        team_id_list.append(team.team_id)
 
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
@@ -4137,12 +4154,14 @@ async def user_info(
                 # if using pydantic v1
                 key = key.dict()
             key.pop("token", None)
-        return {
+
+        response_data = {
             "user_id": user_id,
             "user_info": user_info,
             "keys": keys,
             "teams": team_list,
         }
+        return response_data
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):
@@ -4401,7 +4420,7 @@ async def unblock_user(data: BlockUsers):
     "/team/new",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=NewTeamResponse,
+    response_model=LiteLLM_TeamTable,
 )
 async def new_team(
     data: NewTeamRequest,
@@ -4447,13 +4466,66 @@ async def new_team(
     if data.team_id is None:
         data.team_id = str(uuid.uuid4())
 
+    if (
+        data.tpm_limit is not None
+        and user_api_key_dict.tpm_limit is not None
+        and data.tpm_limit > user_api_key_dict.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}"
+            },
+        )
+
+    if (
+        data.rpm_limit is not None
+        and user_api_key_dict.rpm_limit is not None
+        and data.rpm_limit > user_api_key_dict.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}"
+            },
+        )
+
+    if (
+        data.max_budget is not None
+        and user_api_key_dict.max_budget is not None
+        and data.max_budget > user_api_key_dict.max_budget
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}"
+            },
+        )
+
+    if data.models is not None:
+        for m in data.models:
+            if m not in user_api_key_dict.models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}"
+                    },
+                )
+
+    if user_api_key_dict.user_id is not None:
+        creating_user_in_list = False
+        for member in data.members_with_roles:
+            if member.user_id == user_api_key_dict.user_id:
+                creating_user_in_list = True
+
+        if creating_user_in_list == False:
+            data.members_with_roles.append(
+                Member(role="admin", user_id=user_api_key_dict.user_id)
+            )
+
     complete_team_data = LiteLLM_TeamTable(
         **data.json(),
-        max_budget=user_api_key_dict.max_budget,
-        models=user_api_key_dict.models,
         max_parallel_requests=user_api_key_dict.max_parallel_requests,
-        tpm_limit=user_api_key_dict.tpm_limit,
-        rpm_limit=user_api_key_dict.rpm_limit,
         budget_duration=user_api_key_dict.budget_duration,
         budget_reset_at=user_api_key_dict.budget_reset_at,
     )
@@ -4468,13 +4540,13 @@ async def new_team(
         await prisma_client.update_data(
             user_id=user.user_id,
             data={"user_id": user.user_id, "teams": [team_row.team_id]},
-            update_key_values={
+            update_key_values_custom_query={
                 "teams": {
                     "push ": [team_row.team_id],
                 }
             },
         )
-    return team_row
+    return team_row.model_dump()
 
 
 @router.post(
@@ -4485,6 +4557,9 @@ async def update_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    [BETA]
+    [DEPRECATED] - use the `/team/member_add` and `/team/member_remove` endpoints instead 
+
     You can now add / delete users from a team via /team/update
 
     ```
@@ -4524,7 +4599,8 @@ async def update_team(
     existing_user_id_list = []
     ## Get new users
     for user in existing_team_row.members_with_roles:
-        existing_user_id_list.append(user["user_id"])
+        if user["user_id"] is not None:
+            existing_user_id_list.append(user["user_id"])
 
     ## Update new user rows with team id (info used by /user/info to show all teams, user is a part of)
     if data.members_with_roles is not None:
@@ -4532,26 +4608,32 @@ async def update_team(
             if user.user_id not in existing_user_id_list:
                 await prisma_client.update_data(
                     user_id=user.user_id,
-                    data={"user_id": user.user_id, "teams": [team_row["team_id"]]},
-                    update_key_values={
+                    data={
+                        "user_id": user.user_id,
+                        "teams": [team_row["team_id"]],
+                        "models": team_row["data"].models,
+                    },
+                    update_key_values_custom_query={
                         "teams": {
                             "push": [team_row["team_id"]],
                         }
                     },
+                    table_name="user",
                 )
 
     ## REMOVE DELETED USERS ##
     ### Get list of deleted users (old list - new list)
     deleted_user_id_list = []
-    existing_user_id_list = []
+    new_user_id_list = []
     ## Get old user list
-    for user in existing_team_row.members_with_roles:
-        existing_user_id_list.append(user["user_id"])
-    ## Get diff
     if data.members_with_roles is not None:
         for user in data.members_with_roles:
-            if user.user_id not in existing_user_id_list:
-                deleted_user_id_list.append(user.user_id)
+            new_user_id_list.append(user.user_id)
+    ## Get diff
+    if existing_team_row.members_with_roles is not None:
+        for user in existing_team_row.members_with_roles:
+            if user["user_id"] not in new_user_id_list:
+                deleted_user_id_list.append(user["user_id"])
 
     ## SET UPDATED LIST
     if len(deleted_user_id_list) > 0:
@@ -4567,6 +4649,99 @@ async def update_team(
                 data=user,
                 update_key_values={"user_id": user["user_id"], "teams": user["teams"]},
             )
+    return team_row
+
+
+@router.post(
+    "/team/member_add",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def team_member_add(
+    data: TeamMemberAddRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """ 
+    [BETA]
+
+    Add new members (either via user_email or user_id) to a team
+
+    If user doesn't exist, new user row will also be added to User Table
+
+    ```
+    curl -X POST 'http://0.0.0.0:8000/team/update' \
+    
+    -H 'Authorization: Bearer sk-1234' \
+        
+    -H 'Content-Type: application/json' \
+    
+    -D '{
+        "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
+        "member": {"role": "user", "user_id": "krrish247652@berri.ai"}
+    }'
+    ```
+    """
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.team_id is None:
+        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    if data.member is None:
+        raise HTTPException(status_code=400, detail={"error": "No member passed in"})
+
+    existing_team_row = await prisma_client.get_data(  # type: ignore
+        team_id=data.team_id, table_name="team", query_type="find_unique"
+    )
+
+    new_member = data.member
+
+    existing_team_row.members_with_roles.append(new_member)
+
+    complete_team_data = LiteLLM_TeamTable(
+        **existing_team_row.model_dump(),
+    )
+
+    team_row = await prisma_client.update_data(
+        update_key_values=complete_team_data.json(exclude_none=True),
+        data=complete_team_data.json(exclude_none=True),
+        table_name="team",
+        team_id=data.team_id,
+    )
+
+    ## ADD USER, IF NEW ##
+    user_data = {  # type: ignore
+        "teams": [team_row["team_id"]],
+        "models": team_row["data"].models,
+    }
+    if new_member.user_id is not None:
+        user_data["user_id"] = new_member.user_id  # type: ignore
+        await prisma_client.update_data(
+            user_id=new_member.user_id,
+            data=user_data,
+            update_key_values_custom_query={
+                "teams": {
+                    "push": [team_row["team_id"]],
+                }
+            },
+            table_name="user",
+        )
+    elif new_member.user_email is not None:
+        user_data["user_id"] = str(uuid.uuid4())
+        user_data["user_email"] = new_member.user_email
+        ## user email is not unique acc. to prisma schema -> future improvement
+        ### for now: check if it exists in db, if not - insert it
+        existing_user_row = await prisma_client.get_data(
+            key_val={"user_email": new_member.user_email},
+            table_name="user",
+            query_type="find_all",
+        )
+        if existing_user_row is None or (
+            isinstance(existing_user_row, list) and len(existing_user_row) == 0
+        ):
+
+            await prisma_client.insert_data(data=user_data, table_name="user")
+
     return team_row
 
 
