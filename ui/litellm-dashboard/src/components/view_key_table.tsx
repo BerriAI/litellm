@@ -43,7 +43,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
     // Set the key to delete and open the confirmation modal
     setKeyToDelete(token);
-    localStorage.removeItem("userData" + userID)
+    localStorage.removeItem("userData" + userID);
     setIsDeleteModalOpen(true);
   };
 
@@ -79,7 +79,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   console.log("RERENDER TRIGGERED");
   return (
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
-      <Title>API Keys</Title>
       <Table className="mt-5">
         <TableHead>
           <TableRow>

@@ -5,6 +5,7 @@ import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import ViewUserSpend from "./view_user_spend";
+import DashboardTeam from "./dashboard_default_team";
 import EnterProxyUrl from "./enter_proxy_url";
 import { message } from "antd";
 import Navbar from "./navbar";
@@ -24,16 +25,20 @@ interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
   userEmail: string | null;
+  teams: any[] | null;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
 
 const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
+  teams,
   setUserRole,
   userEmail,
   setUserEmail,
+  setTeams,
 }) => {
   const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
@@ -48,6 +53,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<any | null>(
+    teams ? teams[0] : null
+  );
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -111,8 +119,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         const fetchData = async () => {
           try {
             const response = await userInfoCall(accessToken, userID, userRole);
+            console.log(
+              `received teams in user dashboard: ${Object.keys(
+                response
+              )}; team values: ${Object.entries(response.teams)}`
+            );
             setUserSpendData(response["user_info"]);
             setData(response["keys"]); // Assuming this is the correct path to your data
+            setTeams(response["teams"]);
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -185,12 +199,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           />
           <CreateKey
             userID={userID}
+            teamID={selectedTeam ? selectedTeam["team_id"] : null}
             userRole={userRole}
             userModels={userModels}
             accessToken={accessToken}
             data={data}
             setData={setData}
           />
+          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
         </Col>
       </Grid>
     </div>

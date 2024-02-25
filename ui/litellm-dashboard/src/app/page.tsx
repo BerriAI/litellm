@@ -5,14 +5,16 @@ import Navbar from "../components/navbar";
 import UserDashboard from "../components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
+import Teams from "@/components/teams";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
 
 const CreateKeyPage = () => {
-  const [userRole, setUserRole] = useState('');
+  const [userRole, setUserRole] = useState("");
   const [userEmail, setUserEmail] = useState<null | string>(null);
+  const [teams, setTeams] = useState<null | any[]>(null);
   const searchParams = useSearchParams();
 
   const userID = searchParams.get("userID");
@@ -74,14 +76,20 @@ const CreateKeyPage = () => {
       <div className="flex flex-col min-h-screen">
         <Navbar userID={userID} userRole={userRole} userEmail={userEmail} />
         <div className="flex flex-1 overflow-auto">
-          <Sidebar setPage={setPage} userRole={userRole}/>
+          <Sidebar
+            setPage={setPage}
+            userRole={userRole}
+            defaultSelectedKey={null}
+          />
           {page == "api-keys" ? (
             <UserDashboard
               userID={userID}
               userRole={userRole}
+              teams={teams}
               setUserRole={setUserRole}
               userEmail={userEmail}
               setUserEmail={setUserEmail}
+              setTeams={setTeams}
             />
           ) : page == "models" ? (
             <ModelDashboard
@@ -97,16 +105,21 @@ const CreateKeyPage = () => {
               token={token}
               accessToken={accessToken}
             />
-          )
-          : page == "users" ? (
+          ) : page == "users" ? (
             <ViewUserDashboard
               userID={userID}
               userRole={userRole}
               token={token}
               accessToken={accessToken}
             />
-          )
-          : (
+          ) : page == "teams" ? (
+            <Teams
+              teams={teams}
+              setTeams={setTeams}
+              searchParams={searchParams}
+              accessToken={accessToken}
+            />
+          ) : (
             <Usage
               userID={userID}
               userRole={userRole}

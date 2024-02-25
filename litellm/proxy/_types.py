@@ -230,7 +230,14 @@ class UpdateUserRequest(GenerateRequestBase):
 
 class Member(LiteLLMBase):
     role: Literal["admin", "user"]
-    user_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
 
 
 class NewTeamRequest(LiteLLMBase):
@@ -240,6 +247,15 @@ class NewTeamRequest(LiteLLMBase):
     members: list = []
     members_with_roles: List[Member] = []
     metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: list = []
+
+
+class TeamMemberAddRequest(LiteLLMBase):
+    team_id: str
+    member: Optional[Member] = None
 
 
 class UpdateTeamRequest(LiteLLMBase):
@@ -256,23 +272,29 @@ class DeleteTeamRequest(LiteLLMBase):
 
 
 class LiteLLM_TeamTable(NewTeamRequest):
-    max_budget: Optional[float] = None
     spend: Optional[float] = None
-    models: list = []
     max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
 
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        dict_fields = [
+            "metadata",
+            "aliases",
+            "config",
+            "permissions",
+            "model_max_budget",
+        ]
+        for field in dict_fields:
+            value = values.get(field)
+            if value is not None and isinstance(value, str):
+                try:
+                    values[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Field {field} should be a valid dictionary")
 
-class NewTeamResponse(LiteLLMBase):
-    team_id: str
-    admins: list
-    members: list
-    metadata: dict
-    created_at: datetime
-    updated_at: datetime
+        return values
 
 
 class TeamRequest(LiteLLMBase):
