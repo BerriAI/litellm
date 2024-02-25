@@ -18,6 +18,7 @@ const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
+  teamID: string | null;
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
@@ -27,6 +28,7 @@ interface CreateKeyProps {
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
+  teamID,
   userRole,
   accessToken,
   data,
@@ -36,7 +38,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
-
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -89,7 +90,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <Input />
               </Form.Item>
               <Form.Item label="Team ID" name="team_id">
-                <Input placeholder="ai_team" />
+                <Input
+                  placeholder="ai_team"
+                  defaultValue={teamID ? teamID : ""}
+                />
               </Form.Item>
               <Form.Item label="Models" name="models">
                 <Select

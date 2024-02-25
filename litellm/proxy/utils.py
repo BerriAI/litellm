@@ -635,11 +635,15 @@ class PrismaClient:
                 table_name is not None and table_name == "user"
             ):
                 if query_type == "find_unique":
+                    if key_val is None:
+                        key_val = {"user_id": user_id}
                     response = await self.db.litellm_usertable.find_unique(  # type: ignore
-                        where={
-                            "user_id": user_id,  # type: ignore
-                        }
+                        where=key_val  # type: ignore
                     )
+                elif query_type == "find_all" and key_val is not None:
+                    response = await self.db.litellm_usertable.find_many(
+                        where=key_val  # type: ignore
+                    )  # type: ignore
                 elif query_type == "find_all" and reset_at is not None:
                     response = await self.db.litellm_usertable.find_many(
                         where={  # type:ignore
@@ -869,12 +873,15 @@ class PrismaClient:
         query_type: Literal["update", "update_many"] = "update",
         table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
         update_key_values: Optional[dict] = None,
+        update_key_values_custom_query: Optional[dict] = None,
     ):
         """
         Update existing data
         """
         try:
             db_data = self.jsonify_object(data=data)
+            if update_key_values is not None:
+                update_key_values = self.jsonify_object(data=update_key_values)
             if token is not None:
                 print_verbose(f"token: {token}")
                 # check if plain text or hash
@@ -902,7 +909,10 @@ class PrismaClient:
                 if user_id is None:
                     user_id = db_data["user_id"]
                 if update_key_values is None:
-                    update_key_values = db_data
+                    if update_key_values_custom_query is not None:
+                        update_key_values = update_key_values_custom_query
+                    else:
+                        update_key_values = db_data
                 update_user_row = await self.db.litellm_usertable.upsert(
                     where={"user_id": user_id},  # type: ignore
                     data={
@@ -944,7 +954,6 @@ class PrismaClient:
                     update_key_values["members_with_roles"] = json.dumps(
                         update_key_values["members_with_roles"]
                     )
-
                 update_team_row = await self.db.litellm_teamtable.upsert(
                     where={"team_id": team_id},  # type: ignore
                     data={
