@@ -7,28 +7,35 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import copy, httpx
-from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal, Any
-import random, threading, time, traceback, uuid
-import litellm, openai
-from litellm.caching import RedisCache, InMemoryCache, DualCache
-
-import logging, asyncio
-import inspect, concurrent
-from openai import AsyncOpenAI
-from collections import defaultdict
-from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
-from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
-from litellm.llms.custom_httpx.azure_dall_e_2 import (
-    CustomHTTPTransport,
-    AsyncCustomHTTPTransport,
-)
-from litellm.utils import ModelResponse, CustomStreamWrapper
+import asyncio
+import concurrent
 import copy
-from litellm._logging import verbose_router_logger
+import inspect
 import logging
+import random
+import threading
+import time
+import traceback
+import uuid
+from collections import defaultdict
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional, Union
+
+import httpx
+import openai
+from openai import AsyncOpenAI
+
+import litellm
+from litellm._logging import verbose_router_logger
+from litellm.caching import DualCache, InMemoryCache, RedisCache
+from litellm.llms.custom_httpx.azure_dall_e_2 import (
+    AsyncCustomHTTPTransport,
+    CustomHTTPTransport,
+)
+from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
+from litellm.utils import CustomStreamWrapper, ModelResponse
 
 
 class Router:
@@ -1501,6 +1508,14 @@ class Router:
                 api_key_env_name = api_key.replace("os.environ/", "")
                 api_key = litellm.get_secret(api_key_env_name)
                 litellm_params["api_key"] = api_key
+            # if deployment endpoint is behind an oauth setup
+            # we can also dynamically call the endpoint to get the token
+            # pass the token to the client as api_key
+            elif api_key and api_key.startswith("oauth/"):
+                # this requires client_id, client_secret, authentication_url
+                # to be set on environment level
+                api_key = litellm.get_oauth_token(self.client_ttl)
+                litellm_params["api_key"] = api_key
 
             api_base = litellm_params.get("api_base")
             base_url = litellm_params.get("base_url")
@@ -1542,6 +1557,7 @@ class Router:
 
             # proxy support
             import os
+
             import httpx
 
             # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
