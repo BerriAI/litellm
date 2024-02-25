@@ -41,9 +41,11 @@ const Sidebar: React.FC<SidebarProps> = ({
               Users
             </Menu.Item>
           ) : null}
-          <Menu.Item key="6" onClick={() => setPage("teams")}>
-            Teams
-          </Menu.Item>
+          {userRole == "Admin" ? (
+            <Menu.Item key="6" onClick={() => setPage("teams")}>
+              Teams
+            </Menu.Item>
+          ) : null}
         </Menu>
       </Sider>
     </Layout>

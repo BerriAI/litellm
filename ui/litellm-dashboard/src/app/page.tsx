@@ -14,7 +14,7 @@ import { jwtDecode } from "jwt-decode";
 const CreateKeyPage = () => {
   const [userRole, setUserRole] = useState("");
   const [userEmail, setUserEmail] = useState<null | string>(null);
-  const [teams, setTeams] = useState<null | string[]>(null);
+  const [teams, setTeams] = useState<null | any[]>(null);
   const searchParams = useSearchParams();
 
   const userID = searchParams.get("userID");
@@ -113,7 +113,12 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
             />
           ) : page == "teams" ? (
-            <Teams teams={teams} searchParams={searchParams} />
+            <Teams
+              teams={teams}
+              setTeams={setTeams}
+              searchParams={searchParams}
+              accessToken={accessToken}
+            />
           ) : (
             <Usage
               userID={userID}

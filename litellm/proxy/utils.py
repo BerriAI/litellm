@@ -635,11 +635,15 @@ class PrismaClient:
                 table_name is not None and table_name == "user"
             ):
                 if query_type == "find_unique":
+                    if key_val is None:
+                        key_val = {"user_id": user_id}
                     response = await self.db.litellm_usertable.find_unique(  # type: ignore
-                        where={
-                            "user_id": user_id,  # type: ignore
-                        }
+                        where=key_val  # type: ignore
                     )
+                elif query_type == "find_all" and key_val is not None:
+                    response = await self.db.litellm_usertable.find_many(
+                        where=key_val  # type: ignore
+                    )  # type: ignore
                 elif query_type == "find_all" and reset_at is not None:
                     response = await self.db.litellm_usertable.find_many(
                         where={  # type:ignore
@@ -875,6 +879,8 @@ class PrismaClient:
         """
         try:
             db_data = self.jsonify_object(data=data)
+            if update_key_values is not None:
+                update_key_values = self.jsonify_object(data=update_key_values)
             if token is not None:
                 print_verbose(f"token: {token}")
                 # check if plain text or hash
