@@ -22,7 +22,7 @@ response = completion(
 
 ## OpenRouter Completion Models
 
-🚨 LiteLLM supports ALL OpenRouter models, send `model=openrouter/<your-openrouter-model>` to send it to open router
+🚨 LiteLLM supports ALL OpenRouter models, send `model=openrouter/<your-openrouter-model>` to send it to open router. See all openrouter models [here](https://openrouter.ai/models)
 
 | Model Name                | Function Call                                       |
 |---------------------------|-----------------------------------------------------|
