@@ -873,6 +873,7 @@ class PrismaClient:
         query_type: Literal["update", "update_many"] = "update",
         table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
         update_key_values: Optional[dict] = None,
+        update_key_values_custom_query: Optional[dict] = None,
     ):
         """
         Update existing data
@@ -908,7 +909,10 @@ class PrismaClient:
                 if user_id is None:
                     user_id = db_data["user_id"]
                 if update_key_values is None:
-                    update_key_values = db_data
+                    if update_key_values_custom_query is not None:
+                        update_key_values = update_key_values_custom_query
+                    else:
+                        update_key_values = db_data
                 update_user_row = await self.db.litellm_usertable.upsert(
                     where={"user_id": user_id},  # type: ignore
                     data={
@@ -950,7 +954,6 @@ class PrismaClient:
                     update_key_values["members_with_roles"] = json.dumps(
                         update_key_values["members_with_roles"]
                     )
-
                 update_team_row = await self.db.litellm_teamtable.upsert(
                     where={"team_id": team_id},  # type: ignore
                     data={
