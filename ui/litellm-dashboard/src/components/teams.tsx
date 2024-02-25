@@ -22,19 +22,32 @@ import {
   Icon,
   Button,
   Col,
+  Text,
   Grid,
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 interface TeamProps {
-  teams: string[] | null;
+  teams: any[] | null;
   searchParams: any;
+  accessToken: string | null;
+  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
+import { teamCreateCall, teamMemberAddCall, Member } from "./networking";
 
-const Team: React.FC<TeamProps> = ({ teams, searchParams }) => {
+const Team: React.FC<TeamProps> = ({
+  teams,
+  searchParams,
+  accessToken,
+  setTeams,
+}) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
   const { Title, Paragraph } = Typography;
   const [value, setValue] = useState("");
+
+  const [selectedTeam, setSelectedTeam] = useState<null | any>(
+    teams ? teams[0] : null
+  );
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const handleOk = () => {
@@ -59,7 +72,17 @@ const Team: React.FC<TeamProps> = ({ teams, searchParams }) => {
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      console.log("reaches here");
+      if (accessToken != null) {
+        message.info("Making API Call");
+        const response: any = await teamCreateCall(accessToken, formValues);
+        if (teams !== null) {
+          setTeams([...teams, response]);
+        } else {
+          setTeams([response]);
+        }
+        console.log(`response for team create call: ${response}`);
+        setIsTeamModalVisible(false);
+      }
     } catch (error) {
       console.error("Error creating the key:", error);
     }
@@ -67,7 +90,36 @@ const Team: React.FC<TeamProps> = ({ teams, searchParams }) => {
 
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     try {
-      console.log("reaches here");
+      if (accessToken != null && teams != null) {
+        message.info("Making API Call");
+        const user_role: Member = {
+          role: "user",
+          user_email: formValues.user_email,
+          user_id: null,
+        };
+        const response: any = await teamMemberAddCall(
+          accessToken,
+          selectedTeam["team_id"],
+          user_role
+        );
+        console.log(`response for team create call: ${response["data"]}`);
+        // Checking if the team exists in the list and updating or adding accordingly
+        const foundIndex = teams.findIndex((team) => {
+          console.log(
+            `team.team_id=${team.team_id}; response.data.team_id=${response.data.team_id}`
+          );
+          return team.team_id === response.data.team_id;
+        });
+        console.log(`foundIndex: ${foundIndex}`);
+        if (foundIndex !== -1) {
+          // If the team is found, update it
+          const updatedTeams = [...teams]; // Copy the current state
+          updatedTeams[foundIndex] = response.data; // Update the specific team
+          setTeams(updatedTeams); // Set the new state
+          setSelectedTeam(response.data);
+        }
+        setIsAddMemberModalVisible(false);
+      }
     } catch (error) {
       console.error("Error creating the key:", error);
     }
@@ -90,24 +142,28 @@ const Team: React.FC<TeamProps> = ({ teams, searchParams }) => {
               </TableHead>
 
               <TableBody>
-                <TableRow>
-                  <TableCell>Wilhelm Tell</TableCell>
-                  <TableCell className="text-right">1</TableCell>
-                  <TableCell>Uri, Schwyz, Unterwalden</TableCell>
-                  <TableCell>National Hero</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>The Witcher</TableCell>
-                  <TableCell className="text-right">129</TableCell>
-                  <TableCell>Kaedwen</TableCell>
-                  <TableCell>Legend</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Mizutsune</TableCell>
-                  <TableCell className="text-right">82</TableCell>
-                  <TableCell>Japan</TableCell>
-                  <TableCell>N/A</TableCell>
-                </TableRow>
+                {teams && teams.length > 0
+                  ? teams.map((team: any) => (
+                      <TableRow>
+                        <TableCell>{team["team_alias"]}</TableCell>
+                        <TableCell>{team["spend"]}</TableCell>
+                        <TableCell>
+                          {team["max_budget"] ? team["max_budget"] : "No limit"}
+                        </TableCell>
+                        <TableCell>
+                          <Text>
+                            TPM Limit:{" "}
+                            {team.tpm_limit ? team.tpm_limit : "Unlimited"}{" "}
+                            <br></br> RPM Limit:{" "}
+                            {team.rpm_limit ? team.rpm_limit : "Unlimited"}
+                          </Text>
+                        </TableCell>
+                        <TableCell>
+                          <Icon icon={CogIcon} size="sm" />
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  : null}
               </TableBody>
             </Table>
           </Card>
@@ -180,14 +236,16 @@ const Team: React.FC<TeamProps> = ({ teams, searchParams }) => {
             members you see.
           </Paragraph>
           {teams && teams.length > 0 ? (
-            <Select
-              id="distance"
-              value={value}
-              onValueChange={setValue}
-              className="mt-2"
-            >
-              {teams.map((model) => (
-                <SelectItem value="model">{model}</SelectItem>
+            <Select defaultValue="0">
+              {teams.map((team: any, index) => (
+                <SelectItem
+                  value={String(index)}
+                  onClick={() => {
+                    setSelectedTeam(team);
+                  }}
+                >
+                  {team["team_alias"]}
+                </SelectItem>
               ))}
             </Select>
           ) : (
@@ -208,27 +266,23 @@ const Team: React.FC<TeamProps> = ({ teams, searchParams }) => {
               </TableHead>
 
               <TableBody>
-                <TableRow>
-                  <TableCell>Wilhelm Tell</TableCell>
-                  <TableCell>Uri, Schwyz, Unterwalden</TableCell>
-                  <TableCell>
-                    <Icon icon={CogIcon} size="sm" />
-                  </TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>The Witcher</TableCell>
-                  <TableCell>Kaedwen</TableCell>
-                  <TableCell>
-                    <Icon icon={CogIcon} size="sm" />
-                  </TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Mizutsune</TableCell>
-                  <TableCell>Japan</TableCell>
-                  <TableCell>
-                    <Icon icon={CogIcon} size="sm" />
-                  </TableCell>
-                </TableRow>
+                {selectedTeam
+                  ? selectedTeam["members_with_roles"].map((member: any) => (
+                      <TableRow>
+                        <TableCell>
+                          {member["user_email"]
+                            ? member["user_email"]
+                            : member["user_id"]
+                            ? member["user_id"]
+                            : null}
+                        </TableCell>
+                        <TableCell>{member["role"]}</TableCell>
+                        <TableCell>
+                          <Icon icon={CogIcon} size="sm" />
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  : null}
               </TableBody>
             </Table>
           </Card>
