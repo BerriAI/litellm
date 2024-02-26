@@ -33,7 +33,7 @@ def _start_clickhouse():
     port = os.getenv("CLICKHOUSE_PORT")
     clickhouse_host = os.getenv("CLICKHOUSE_HOST")
     if clickhouse_host is not None:
-        print("setting up clickhouse")
+        print_verbose("setting up clickhouse")
         if port is not None and isinstance(port, str):
             port = int(port)
 
@@ -43,19 +43,54 @@ def _start_clickhouse():
             username=os.getenv("CLICKHOUSE_USERNAME"),
             password=os.getenv("CLICKHOUSE_PASSWORD"),
         )
-
-        response = client.command(
-            "CREATE TABLE new_table (key UInt32, value String, metric Float64) ENGINE MergeTree ORDER BY key"
+        # view all tables in DB
+        response = client.query("SHOW TABLES")
+        print_verbose(
+            f"checking if litellm spend logs exists, all tables={response.result_rows}"
         )
+        # all tables is returned like this: all tables = [('new_table',), ('spend_logs',)]
+        # check if spend_logs in all tables
+        table_names = [all_tables[0] for all_tables in response.result_rows]
 
+        if "spend_logs" not in table_names:
+            print("Clickhouse: spend logs table does not exist... creating it")
 
-_start_clickhouse()
+            response = client.command(
+                """
+                CREATE TABLE default.spend_logs
+                (
+                    `request_id` String,
+                    `call_type` String,
+                    `api_key` String,
+                    `spend` Float64,
+                    `total_tokens` Int256,
+                    `prompt_tokens` Int256,
+                    `completion_tokens` Int256,
+                    `startTime` DateTime,
+                    `endTime` DateTime,
+                    `model` String,
+                    `user` String,
+                    `metadata` String,
+                    `cache_hit` String,
+                    `cache_key` String,
+                    `request_tags` String
+                )
+                ENGINE = MergeTree
+                ORDER BY tuple();
+                """
+            )
+        else:
+            # check if spend logs exist, if it does then return the schema
+            response = client.query("DESCRIBE default.spend_logs")
+            print_verbose(f"spend logs schema ={response.result_rows}")
 
 
 class ClickhouseLogger:
     # Class variables or attributes
     def __init__(self, endpoint=None, headers=None):
         import clickhouse_connect
+
+        _start_clickhouse()
 
         print_verbose(
             f"ClickhouseLogger init, host {os.getenv('CLICKHOUSE_HOST')}, port {os.getenv('CLICKHOUSE_PORT')}, username {os.getenv('CLICKHOUSE_USERNAME')}"
@@ -107,15 +142,6 @@ class ClickhouseLogger:
             )
             # Build the initial payload
 
-            # Ensure everything in the payload is converted to str
-            # for key, value in payload.items():
-            #     try:
-            #         print("key=", key, "type=", type(value))
-            #         # payload[key] = str(value)
-            #     except:
-            #         # non blocking if it can't cast to a str
-            #         pass
-
             print_verbose(f"\nClickhouse Logger - Logging payload = {payload}")
 
             # just get the payload items in one array and payload keys in 2nd array
@@ -126,15 +152,10 @@ class ClickhouseLogger:
                 values.append(value)
             data = [values]
 
-            # print("logging data=", data)
-            # print("logging keys=", keys)
-
             response = self.client.insert("spend_logs", data, column_names=keys)
 
             # make request to endpoint with payload
-            print_verbose(
-                f"Clickhouse Logger - final response status = {response_status}, response text = {response_text}"
-            )
+            print_verbose(f"Clickhouse Logger - final response = {response}")
         except Exception as e:
             traceback.print_exc()
             verbose_logger.debug(f"Clickhouse - {str(e)}\n{traceback.format_exc()}")
