@@ -36,9 +36,13 @@ class ClickhouseLogger:
             f"ClickhouseLogger init, host {os.getenv('CLICKHOUSE_HOST')}, port {os.getenv('CLICKHOUSE_PORT')}, username {os.getenv('CLICKHOUSE_USERNAME')}"
         )
 
+        port = os.getenv("CLICKHOUSE_PORT")
+        if port is not None and isinstance(port, str):
+            port = int(port)
+
         client = clickhouse_connect.get_client(
             host=os.getenv("CLICKHOUSE_HOST"),
-            port=os.getenv("CLICKHOUSE_PORT"),
+            port=port,
             username=os.getenv("CLICKHOUSE_USERNAME"),
             password=os.getenv("CLICKHOUSE_PASSWORD"),
         )
@@ -79,21 +83,34 @@ class ClickhouseLogger:
             # Build the initial payload
 
             # Ensure everything in the payload is converted to str
-            for key, value in payload.items():
-                try:
-                    payload[key] = str(value)
-                except:
-                    # non blocking if it can't cast to a str
-                    pass
+            # for key, value in payload.items():
+            #     try:
+            #         print("key=", key, "type=", type(value))
+            #         # payload[key] = str(value)
+            #     except:
+            #         # non blocking if it can't cast to a str
+            #         pass
 
-            print_verbose(f"\nGeneric Logger - Logging payload = {payload}")
+            print_verbose(f"\nClickhouse Logger - Logging payload = {payload}")
+
+            # just get the payload items in one array and payload keys in 2nd array
+            values = []
+            keys = []
+            for key, value in payload.items():
+                keys.append(key)
+                values.append(value)
+            data = [values]
+
+            # print("logging data=", data)
+            # print("logging keys=", keys)
+
+            response = self.client.insert("spend_logs", data, column_names=keys)
 
             # make request to endpoint with payload
-            # print_verbose(
-            #     f"Generic Logger - final response status = {response_status}, response text = {response_text}"
-            # )
-            # return response
+            print_verbose(
+                f"Clickhouse Logger - final response status = {response_status}, response text = {response_text}"
+            )
         except Exception as e:
             traceback.print_exc()
-            verbose_logger.debug(f"Generic - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.debug(f"Clickhouse - {str(e)}\n{traceback.format_exc()}")
             pass
