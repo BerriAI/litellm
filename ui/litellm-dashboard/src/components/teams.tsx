@@ -144,7 +144,7 @@ const Team: React.FC<TeamProps> = ({
               <TableBody>
                 {teams && teams.length > 0
                   ? teams.map((team: any) => (
-                      <TableRow>
+                      <TableRow key={team.team_id}>
                         <TableCell>{team["team_alias"]}</TableCell>
                         <TableCell>{team["spend"]}</TableCell>
                         <TableCell>
@@ -232,13 +232,14 @@ const Team: React.FC<TeamProps> = ({
         <Col numColSpan={1}>
           <Title level={4}>Team Members</Title>
           <Paragraph>
-            If you belong to multiple teams, this setting controls which teams'
+            If you belong to multiple teams, this setting controls which teams
             members you see.
           </Paragraph>
           {teams && teams.length > 0 ? (
             <Select defaultValue="0">
               {teams.map((team: any, index) => (
                 <SelectItem
+                  key={index}
                   value={String(index)}
                   onClick={() => {
                     setSelectedTeam(team);
@@ -267,21 +268,23 @@ const Team: React.FC<TeamProps> = ({
 
               <TableBody>
                 {selectedTeam
-                  ? selectedTeam["members_with_roles"].map((member: any) => (
-                      <TableRow>
-                        <TableCell>
-                          {member["user_email"]
-                            ? member["user_email"]
-                            : member["user_id"]
-                            ? member["user_id"]
-                            : null}
-                        </TableCell>
-                        <TableCell>{member["role"]}</TableCell>
-                        <TableCell>
-                          <Icon icon={CogIcon} size="sm" />
-                        </TableCell>
-                      </TableRow>
-                    ))
+                  ? selectedTeam["members_with_roles"].map(
+                      (member: any, index: number) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            {member["user_email"]
+                              ? member["user_email"]
+                              : member["user_id"]
+                              ? member["user_id"]
+                              : null}
+                          </TableCell>
+                          <TableCell>{member["role"]}</TableCell>
+                          <TableCell>
+                            <Icon icon={CogIcon} size="sm" />
+                          </TableCell>
+                        </TableRow>
+                      )
+                    )
                   : null}
               </TableBody>
             </Table>
