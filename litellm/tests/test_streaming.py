@@ -801,7 +801,6 @@ def test_completion_bedrock_claude_stream():
             raise Exception("finish reason not set for last chunk")
         if complete_response.strip() == "":
             raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
     except RateLimitError:
         pass
     except Exception as e:

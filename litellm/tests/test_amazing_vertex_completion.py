@@ -138,7 +138,7 @@ def test_vertex_ai():
 
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     litellm.vertex_project = "reliablekeys"
     import random
 
@@ -159,6 +159,8 @@ def test_vertex_ai_stream():
                 "code-gecko@latest",
                 "code-bison@001",
                 "text-bison@001",
+                "gemini-1.5-pro",
+                "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
                 continue
