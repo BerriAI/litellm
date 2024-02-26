@@ -8705,7 +8705,7 @@ class CustomStreamWrapper:
 
             model_response.model = self.model
             print_verbose(
-                f"model_response finish reason 3: {model_response.choices[0].finish_reason}"
+                f"model_response finish reason 3: {model_response.choices[0].finish_reason}; response_obj={response_obj}"
             )
             ## FUNCTION CALL PARSING
             if (
@@ -8773,11 +8773,11 @@ class CustomStreamWrapper:
 
             ## RETURN ARG
             if (
-                response_obj.get("text", None) is not None
+                completion_obj["content"] is not None
                 or response_obj.get("original_chunk", None) is not None
             ):
                 hold = False
-                if response_obj.get("content", None) is not None:
+                if completion_obj["content"] is not None:
                     hold, model_response_str = self.check_special_tokens(
                         chunk=completion_obj["content"],
                         finish_reason=model_response.choices[0].finish_reason,
