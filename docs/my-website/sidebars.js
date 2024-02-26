@@ -120,6 +120,7 @@ const sidebars = {
         "providers/openai", 
         "providers/openai_compatible",
         "providers/azure", 
+        "providers/azure_ai", 
         "providers/huggingface", 
         "providers/ollama", 
         "providers/vertex", 
