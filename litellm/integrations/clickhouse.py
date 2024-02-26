@@ -152,7 +152,7 @@ class ClickhouseLogger:
                 values.append(value)
             data = [values]
 
-            response = self.client.insert("spend_logs", data, column_names=keys)
+            response = self.client.insert("default.spend_logs", data, column_names=keys)
 
             # make request to endpoint with payload
             print_verbose(f"Clickhouse Logger - final response = {response}")
