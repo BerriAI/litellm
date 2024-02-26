@@ -109,6 +109,8 @@ def test_vertex_ai():
                 "code-gecko@latest",
                 "code-bison@001",
                 "text-bison@001",
+                "gemini-1.5-pro",
+                "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
                 continue
@@ -206,6 +208,8 @@ async def test_async_vertexai_response():
             "code-gecko@latest",
             "code-bison@001",
             "text-bison@001",
+            "gemini-1.5-pro",
+            "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
             continue
@@ -246,6 +250,8 @@ async def test_async_vertexai_streaming_response():
             "code-gecko@latest",
             "code-bison@001",
             "text-bison@001",
+            "gemini-1.5-pro",
+            "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
             continue
