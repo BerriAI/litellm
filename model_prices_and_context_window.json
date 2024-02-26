@@ -401,6 +401,20 @@
         "litellm_provider": "azure",
         "mode": "embedding"
     },
+    "azure/text-embedding-3-large": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "azure",
+        "mode": "embedding"
+    },
+    "azure/text-embedding-3-small": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.00000002,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "azure",
+        "mode": "embedding"
+    },    
     "azure/standard/1024-x-1024/dall-e-3": {
         "input_cost_per_pixel": 0.0000000381469,
         "output_cost_per_token": 0.0,
