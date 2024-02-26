@@ -33,7 +33,7 @@ def _start_clickhouse():
     port = os.getenv("CLICKHOUSE_PORT")
     clickhouse_host = os.getenv("CLICKHOUSE_HOST")
     if clickhouse_host is not None:
-        print_verbose("setting up clickhouse")
+        verbose_logger.debug("setting up clickhouse")
         if port is not None and isinstance(port, str):
             port = int(port)
 
@@ -45,7 +45,7 @@ def _start_clickhouse():
         )
         # view all tables in DB
         response = client.query("SHOW TABLES")
-        print_verbose(
+        verbose_logger.debug(
             f"checking if litellm spend logs exists, all tables={response.result_rows}"
         )
         # all tables is returned like this: all tables = [('new_table',), ('spend_logs',)]
@@ -53,7 +53,9 @@ def _start_clickhouse():
         table_names = [all_tables[0] for all_tables in response.result_rows]
 
         if "spend_logs" not in table_names:
-            print("Clickhouse: spend logs table does not exist... creating it")
+            verbose_logger.debug(
+                "Clickhouse: spend logs table does not exist... creating it"
+            )
 
             response = client.command(
                 """
@@ -82,7 +84,13 @@ def _start_clickhouse():
         else:
             # check if spend logs exist, if it does then return the schema
             response = client.query("DESCRIBE default.spend_logs")
-            print_verbose(f"spend logs schema ={response.result_rows}")
+            verbose_logger.debug(f"spend logs schema ={response.result_rows}")
+            # get all logs from spend logs
+            response = client.query("SELECT * FROM default.spend_logs")
+            verbose_logger.debug(f"spend logs ={response.result_rows}")
+            # get size of spend logs
+            response = client.query("SELECT count(*) FROM default.spend_logs")
+            verbose_logger.debug(f"spend logs count ={response.result_rows}")
 
 
 class ClickhouseLogger:
@@ -92,7 +100,7 @@ class ClickhouseLogger:
 
         _start_clickhouse()
 
-        print_verbose(
+        verbose_logger.debug(
             f"ClickhouseLogger init, host {os.getenv('CLICKHOUSE_HOST')}, port {os.getenv('CLICKHOUSE_PORT')}, username {os.getenv('CLICKHOUSE_USERNAME')}"
         )
 
@@ -117,21 +125,7 @@ class ClickhouseLogger:
             verbose_logger.debug(
                 f"ClickhouseLogger Logging - Enters logging function for model {kwargs}"
             )
-
-            # construct payload to send custom logger
             # follows the same params as langfuse.py
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
-            messages = kwargs.get("messages")
-            cost = kwargs.get("response_cost", 0.0)
-            optional_params = kwargs.get("optional_params", {})
-            call_type = kwargs.get("call_type", "litellm.completion")
-            cache_hit = kwargs.get("cache_hit", False)
-            usage = response_obj["usage"]
-            id = response_obj.get("id", str(uuid.uuid4()))
-
             from litellm.proxy.utils import get_logging_payload
 
             payload = get_logging_payload(
@@ -142,7 +136,7 @@ class ClickhouseLogger:
             )
             # Build the initial payload
 
-            print_verbose(f"\nClickhouse Logger - Logging payload = {payload}")
+            verbose_logger.debug(f"\nClickhouse Logger - Logging payload = {payload}")
 
             # just get the payload items in one array and payload keys in 2nd array
             values = []
@@ -155,7 +149,7 @@ class ClickhouseLogger:
             response = self.client.insert("default.spend_logs", data, column_names=keys)
 
             # make request to endpoint with payload
-            print_verbose(f"Clickhouse Logger - final response = {response}")
+            verbose_logger.debug(f"Clickhouse Logger - final response = {response}")
         except Exception as e:
             traceback.print_exc()
             verbose_logger.debug(f"Clickhouse - {str(e)}\n{traceback.format_exc()}")

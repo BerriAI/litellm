@@ -10,6 +10,8 @@ print("Modified sys.path:", sys.path)
 
 from litellm import completion
 import litellm
+from litellm._logging import verbose_logger
+import logging
 
 litellm.num_retries = 3
 
@@ -22,6 +24,7 @@ async def test_custom_api_logging():
     try:
         litellm.success_callback = ["clickhouse"]
         litellm.set_verbose = True
+        verbose_logger.setLevel(logging.DEBUG)
         await litellm.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": f"This is a test"}],
