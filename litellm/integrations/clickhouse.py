@@ -27,12 +27,80 @@ import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
+def _start_clickhouse():
+    import clickhouse_connect
+
+    port = os.getenv("CLICKHOUSE_PORT")
+    clickhouse_host = os.getenv("CLICKHOUSE_HOST")
+    if clickhouse_host is not None:
+        verbose_logger.debug("setting up clickhouse")
+        if port is not None and isinstance(port, str):
+            port = int(port)
+
+        client = clickhouse_connect.get_client(
+            host=os.getenv("CLICKHOUSE_HOST"),
+            port=port,
+            username=os.getenv("CLICKHOUSE_USERNAME"),
+            password=os.getenv("CLICKHOUSE_PASSWORD"),
+        )
+        # view all tables in DB
+        response = client.query("SHOW TABLES")
+        verbose_logger.debug(
+            f"checking if litellm spend logs exists, all tables={response.result_rows}"
+        )
+        # all tables is returned like this: all tables = [('new_table',), ('spend_logs',)]
+        # check if spend_logs in all tables
+        table_names = [all_tables[0] for all_tables in response.result_rows]
+
+        if "spend_logs" not in table_names:
+            verbose_logger.debug(
+                "Clickhouse: spend logs table does not exist... creating it"
+            )
+
+            response = client.command(
+                """
+                CREATE TABLE default.spend_logs
+                (
+                    `request_id` String,
+                    `call_type` String,
+                    `api_key` String,
+                    `spend` Float64,
+                    `total_tokens` Int256,
+                    `prompt_tokens` Int256,
+                    `completion_tokens` Int256,
+                    `startTime` DateTime,
+                    `endTime` DateTime,
+                    `model` String,
+                    `user` String,
+                    `metadata` String,
+                    `cache_hit` String,
+                    `cache_key` String,
+                    `request_tags` String
+                )
+                ENGINE = MergeTree
+                ORDER BY tuple();
+                """
+            )
+        else:
+            # check if spend logs exist, if it does then return the schema
+            response = client.query("DESCRIBE default.spend_logs")
+            verbose_logger.debug(f"spend logs schema ={response.result_rows}")
+            # get all logs from spend logs
+            response = client.query("SELECT * FROM default.spend_logs")
+            verbose_logger.debug(f"spend logs ={response.result_rows}")
+            # get size of spend logs
+            response = client.query("SELECT count(*) FROM default.spend_logs")
+            verbose_logger.debug(f"spend logs count ={response.result_rows}")
+
+
 class ClickhouseLogger:
     # Class variables or attributes
     def __init__(self, endpoint=None, headers=None):
         import clickhouse_connect
 
-        print_verbose(
+        _start_clickhouse()
+
+        verbose_logger.debug(
             f"ClickhouseLogger init, host {os.getenv('CLICKHOUSE_HOST')}, port {os.getenv('CLICKHOUSE_PORT')}, username {os.getenv('CLICKHOUSE_USERNAME')}"
         )
 
@@ -57,21 +125,7 @@ class ClickhouseLogger:
             verbose_logger.debug(
                 f"ClickhouseLogger Logging - Enters logging function for model {kwargs}"
             )
-
-            # construct payload to send custom logger
             # follows the same params as langfuse.py
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
-            messages = kwargs.get("messages")
-            cost = kwargs.get("response_cost", 0.0)
-            optional_params = kwargs.get("optional_params", {})
-            call_type = kwargs.get("call_type", "litellm.completion")
-            cache_hit = kwargs.get("cache_hit", False)
-            usage = response_obj["usage"]
-            id = response_obj.get("id", str(uuid.uuid4()))
-
             from litellm.proxy.utils import get_logging_payload
 
             payload = get_logging_payload(
@@ -82,16 +136,7 @@ class ClickhouseLogger:
             )
             # Build the initial payload
 
-            # Ensure everything in the payload is converted to str
-            # for key, value in payload.items():
-            #     try:
-            #         print("key=", key, "type=", type(value))
-            #         # payload[key] = str(value)
-            #     except:
-            #         # non blocking if it can't cast to a str
-            #         pass
-
-            print_verbose(f"\nClickhouse Logger - Logging payload = {payload}")
+            verbose_logger.debug(f"\nClickhouse Logger - Logging payload = {payload}")
 
             # just get the payload items in one array and payload keys in 2nd array
             values = []
@@ -101,15 +146,10 @@ class ClickhouseLogger:
                 values.append(value)
             data = [values]
 
-            # print("logging data=", data)
-            # print("logging keys=", keys)
-
-            response = self.client.insert("spend_logs", data, column_names=keys)
+            response = self.client.insert("default.spend_logs", data, column_names=keys)
 
             # make request to endpoint with payload
-            print_verbose(
-                f"Clickhouse Logger - final response status = {response_status}, response text = {response_text}"
-            )
+            verbose_logger.debug(f"Clickhouse Logger - final response = {response}")
         except Exception as e:
             traceback.print_exc()
             verbose_logger.debug(f"Clickhouse - {str(e)}\n{traceback.format_exc()}")
