@@ -25,6 +25,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
         <Select defaultValue="0">
           {teams.map((team: any, index) => (
             <SelectItem
+              key={index}
               value={String(index)}
               onClick={() => setSelectedTeam(team)}
             >
