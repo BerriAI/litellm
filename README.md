@@ -68,6 +68,8 @@ response = completion(model="command-nightly", messages=messages)
 print(response)
 ```
 
+To call any model supported by a provider, just use `model=<provider_name>/<model_name>`. This way, LiteLLM will know which provider to route it to. There might be provider-specific details here (e.g. for vertex ai, any unmapped model is assumed to be a model garden endpoint). So refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
+
 ## Async ([Docs](https://docs.litellm.ai/docs/completion/stream#async-completion))
 
 ```python
