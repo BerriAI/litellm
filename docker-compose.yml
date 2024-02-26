@@ -8,6 +8,8 @@ services:
       - "4000:4000"
     environment:
       - AZURE_API_KEY=sk-123
+  clickhouse:
+    image: clickhouse/clickhouse-server
 
 
 
