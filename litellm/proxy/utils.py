@@ -1369,6 +1369,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "user": kwargs.get("user", ""),
         "metadata": metadata,
         "cache_key": cache_key,
+        "spend": kwargs.get("response_cost", 0),
         "total_tokens": usage.get("total_tokens", 0),
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
