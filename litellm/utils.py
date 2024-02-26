@@ -8538,7 +8538,11 @@ class CustomStreamWrapper:
                     if hasattr(chunk, "candidates") == True:
                         try:
                             completion_obj["content"] = chunk.text
-                            if hasattr(chunk.candidates[0], "finish_reason"):
+                            if (
+                                hasattr(chunk.candidates[0], "finish_reason")
+                                and chunk.candidates[0].finish_reason.name
+                                != "FINISH_REASON_UNSPECIFIED"
+                            ):  # every non-final chunk in vertex ai has this
                                 model_response.choices[0].finish_reason = (
                                     map_finish_reason(
                                         chunk.candidates[0].finish_reason.name
