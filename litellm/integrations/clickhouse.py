@@ -27,6 +27,31 @@ import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
+def _start_clickhouse():
+    import clickhouse_connect
+
+    port = os.getenv("CLICKHOUSE_PORT")
+    clickhouse_host = os.getenv("CLICKHOUSE_HOST")
+    if clickhouse_host is not None:
+        print("setting up clickhouse")
+        if port is not None and isinstance(port, str):
+            port = int(port)
+
+        client = clickhouse_connect.get_client(
+            host=os.getenv("CLICKHOUSE_HOST"),
+            port=port,
+            username=os.getenv("CLICKHOUSE_USERNAME"),
+            password=os.getenv("CLICKHOUSE_PASSWORD"),
+        )
+
+        response = client.command(
+            "CREATE TABLE new_table (key UInt32, value String, metric Float64) ENGINE MergeTree ORDER BY key"
+        )
+
+
+_start_clickhouse()
+
+
 class ClickhouseLogger:
     # Class variables or attributes
     def __init__(self, endpoint=None, headers=None):
