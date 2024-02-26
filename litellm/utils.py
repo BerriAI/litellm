@@ -213,6 +213,13 @@ class Function(OpenAIObject):
     name: str
 
 
+class ChatCompletionDeltaToolCall(OpenAIObject):
+    id: str
+    function: Function
+    type: str
+    index: int
+
+
 class ChatCompletionMessageToolCall(OpenAIObject):
     id: str
     function: Function
@@ -269,7 +276,15 @@ class Delta(OpenAIObject):
         self.content = content
         self.role = role
         self.function_call = function_call
-        self.tool_calls = tool_calls
+        if tool_calls is not None:
+            if isinstance(tool_calls, dict):
+                self.tool_calls = []
+                for tool_call in tool_calls:
+                    if tool_call.get("index", None) is None:
+                        tool_call["index"] = 0
+                    self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+            else:
+                self.tool_calls = tool_calls
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -5847,6 +5862,18 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     choice_list = []
 
     for idx, choice in enumerate(response_object["choices"]):
+        if (
+            choice["message"].get("tool_calls", None) is not None
+            and isinstance(choice["message"]["tool_calls"], list)
+            and len(choice["message"]["tool_calls"]) > 0
+            and isinstance(choice["message"]["tool_calls"][0], dict)
+        ):
+            pydantic_tool_calls = []
+            for index, t in enumerate(choice["message"]["tool_calls"]):
+                if "index" not in t:
+                    t["index"] = index
+                pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
+            choice["message"]["tool_calls"] = pydantic_tool_calls
         delta = Delta(
             content=choice["message"].get("content", None),
             role=choice["message"]["role"],
@@ -8646,6 +8673,7 @@ class CustomStreamWrapper:
                     "text": chunk.choices[0].delta.content,
                     "is_finished": True,
                     "finish_reason": chunk.choices[0].finish_reason,
+                    "original_chunk": chunk,
                 }
 
                 completion_obj["content"] = response_obj["text"]
@@ -8677,79 +8705,10 @@ class CustomStreamWrapper:
 
             model_response.model = self.model
             print_verbose(
-                f"model_response: {model_response}; completion_obj: {completion_obj}"
-            )
-            print_verbose(
                 f"model_response finish reason 3: {model_response.choices[0].finish_reason}"
             )
+            ## FUNCTION CALL PARSING
             if (
-                len(completion_obj["content"]) > 0
-            ):  # cannot set content of an OpenAI Object to be an empty string
-                hold, model_response_str = self.check_special_tokens(
-                    chunk=completion_obj["content"],
-                    finish_reason=model_response.choices[0].finish_reason,
-                )  # filter out bos/eos tokens from openai-compatible hf endpoints
-                print_verbose(
-                    f"hold - {hold}, model_response_str - {model_response_str}"
-                )
-                if hold is False:
-                    ## check if openai/azure chunk
-                    original_chunk = response_obj.get("original_chunk", None)
-                    if original_chunk:
-                        model_response.id = original_chunk.id
-                        if len(original_chunk.choices) > 0:
-                            try:
-                                delta = dict(original_chunk.choices[0].delta)
-                                print_verbose(f"original delta: {delta}")
-                                model_response.choices[0].delta = Delta(**delta)
-                            except Exception as e:
-                                model_response.choices[0].delta = Delta()
-                        else:
-                            return
-                        model_response.system_fingerprint = (
-                            original_chunk.system_fingerprint
-                        )
-                        print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
-                        if self.sent_first_chunk == False:
-                            model_response.choices[0].delta["role"] = "assistant"
-                            self.sent_first_chunk = True
-                        elif self.sent_first_chunk == True and hasattr(
-                            model_response.choices[0].delta, "role"
-                        ):
-                            _initial_delta = model_response.choices[
-                                0
-                            ].delta.model_dump()
-                            _initial_delta.pop("role", None)
-                            model_response.choices[0].delta = Delta(**_initial_delta)
-                        print_verbose(
-                            f"model_response.choices[0].delta: {model_response.choices[0].delta}"
-                        )
-                    else:
-                        ## else
-                        completion_obj["content"] = model_response_str
-                        if self.sent_first_chunk == False:
-                            completion_obj["role"] = "assistant"
-                            self.sent_first_chunk = True
-                        model_response.choices[0].delta = Delta(**completion_obj)
-                    print_verbose(f"returning model_response: {model_response}")
-                    return model_response
-                else:
-                    return
-            elif model_response.choices[0].finish_reason:
-                # flush any remaining holding chunk
-                if len(self.holding_chunk) > 0:
-                    if model_response.choices[0].delta.content is None:
-                        model_response.choices[0].delta.content = self.holding_chunk
-                    else:
-                        model_response.choices[0].delta.content = (
-                            self.holding_chunk + model_response.choices[0].delta.content
-                        )
-                    self.holding_chunk = ""
-                model_response.choices[0].finish_reason = map_finish_reason(
-                    model_response.choices[0].finish_reason
-                )  # ensure consistent output to openai
-                return model_response
-            elif (
                 response_obj is not None
                 and response_obj.get("original_chunk", None) is not None
             ):  # function / tool calling branch - only set for openai/azure compatible endpoints
@@ -8783,26 +8742,75 @@ class CustomStreamWrapper:
                                     original_chunk.choices[0].delta.tool_calls, list
                                 ):
                                     for t in original_chunk.choices[0].delta.tool_calls:
-                                        if (
-                                            getattr(
-                                                t.function,
-                                                "arguments",
-                                            )
-                                            is None
+                                        if hasattr(t, "functions") and hasattr(
+                                            t.functions, "arguments"
                                         ):
-                                            t.function.arguments = ""
+                                            if (
+                                                getattr(
+                                                    t.function,
+                                                    "arguments",
+                                                )
+                                                is None
+                                            ):
+                                                t.function.arguments = ""
                             model_response.choices[0].delta = Delta(**delta)
                         except Exception as e:
                             traceback.print_exc()
                             model_response.choices[0].delta = Delta()
                     else:
-                        return
+                        try:
+                            delta = dict(original_chunk.choices[0].delta)
+                            print_verbose(f"original delta: {delta}")
+                            model_response.choices[0].delta = Delta(**delta)
+                        except Exception as e:
+                            model_response.choices[0].delta = Delta()
                 else:
                     return
                 model_response.system_fingerprint = original_chunk.system_fingerprint
                 if self.sent_first_chunk == False:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
+
+            ## RETURN ARG
+            if (
+                response_obj.get("text", None) is not None
+                or response_obj.get("original_chunk", None) is not None
+            ):
+                hold = False
+                if response_obj.get("content", None) is not None:
+                    hold, model_response_str = self.check_special_tokens(
+                        chunk=completion_obj["content"],
+                        finish_reason=model_response.choices[0].finish_reason,
+                    )  # filter out bos/eos tokens from openai-compatible hf endpoints
+                    print_verbose(
+                        f"hold - {hold}, model_response_str - {model_response_str}"
+                    )
+                if hold is False:
+                    original_chunk = response_obj.get("original_chunk", None)
+                    if original_chunk is None:
+                        completion_obj["content"] = model_response_str
+                        if self.sent_first_chunk == False:
+                            completion_obj["role"] = "assistant"
+                            self.sent_first_chunk = True
+                        model_response.choices[0].delta = Delta(**completion_obj)
+                    print_verbose(f"returning model_response: {model_response}")
+                    return model_response
+                else:
+                    return
+            elif model_response.choices[0].finish_reason is not None:
+                # flush any remaining holding chunk
+                if len(self.holding_chunk) > 0:
+                    if model_response.choices[0].delta.content is None:
+                        model_response.choices[0].delta.content = self.holding_chunk
+                    else:
+                        model_response.choices[0].delta.content = (
+                            self.holding_chunk + model_response.choices[0].delta.content
+                        )
+                    self.holding_chunk = ""
+                # get any function call arguments
+                model_response.choices[0].finish_reason = map_finish_reason(
+                    model_response.choices[0].finish_reason
+                )  # ensure consistent output to openai
                 return model_response
             else:
                 return
