@@ -1000,12 +1000,15 @@ async def async_streaming(
         if stream:
             response = TextStreamer(completion_response)
 
+    logging_obj.post_call(input=prompt, api_key=None, original_response=response)
+
     streamwrapper = CustomStreamWrapper(
         completion_stream=response,
         model=model,
         custom_llm_provider="vertex_ai",
         logging_obj=logging_obj,
     )
+
     return streamwrapper
 
 
