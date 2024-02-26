@@ -68,6 +68,7 @@ from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.dynamodb import DyanmoDBLogger
 from .integrations.s3 import S3Logger
+from .integrations.clickhouse import ClickhouseLogger
 from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
@@ -124,6 +125,7 @@ langFuseLogger = None
 dynamoLogger = None
 s3Logger = None
 genericAPILogger = None
+clickHouseLogger = None
 llmonitorLogger = None
 aispendLogger = None
 berrispendLogger = None
@@ -1406,6 +1408,37 @@ class Logging:
                         if genericAPILogger is None:
                             genericAPILogger = GenericAPILogger()
                         genericAPILogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "clickhouse":
+                        global clickHouseLogger
+                        verbose_logger.debug("reaches clickhouse for success logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            verbose_logger.debug(
+                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
+                            if complete_streaming_response is None:
+                                break
+                            else:
+                                print_verbose(
+                                    "reaches clickhouse for streaming logging!"
+                                )
+                                result = kwargs["complete_streaming_response"]
+                        if clickHouseLogger is None:
+                            clickHouseLogger = ClickhouseLogger()
+                        clickHouseLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
