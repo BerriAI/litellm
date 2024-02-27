@@ -138,7 +138,7 @@ def test_vertex_ai():
 
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     litellm.vertex_project = "reliablekeys"
     import random
 

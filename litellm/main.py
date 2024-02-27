@@ -3677,6 +3677,7 @@ def stream_chunk_builder(
     response["usage"]["total_tokens"] = (
         response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     )
+
     return convert_to_model_response_object(
         response_object=response,
         model_response_object=model_response,
