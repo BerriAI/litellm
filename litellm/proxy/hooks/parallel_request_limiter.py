@@ -73,7 +73,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         api_key = user_api_key_dict.api_key
         max_parallel_requests = user_api_key_dict.max_parallel_requests or sys.maxsize
         tpm_limit = getattr(user_api_key_dict, "tpm_limit", sys.maxsize)
+        if tpm_limit is None:
+            tpm_limit = sys.maxsize
         rpm_limit = getattr(user_api_key_dict, "rpm_limit", sys.maxsize)
+        if rpm_limit is None:
+            rpm_limit = sys.maxsize
 
         if api_key is None:
             return
@@ -157,7 +161,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         ## get team tpm/rpm limits
         team_id = user_api_key_dict.team_id
         team_tpm_limit = getattr(user_api_key_dict, "team_tpm_limit", sys.maxsize)
+        if team_tpm_limit is None:
+            team_tpm_limit = sys.maxsize
         team_rpm_limit = getattr(user_api_key_dict, "team_rpm_limit", sys.maxsize)
+        if team_rpm_limit is None:
+            team_rpm_limit = sys.maxsize
 
         if team_tpm_limit is None:
             team_tpm_limit = sys.maxsize
