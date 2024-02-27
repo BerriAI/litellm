@@ -698,14 +698,20 @@ async def user_api_key_auth(
                     # user can only access this route if
                     # - api_key they need logs for has the same user_id as the one used for auth
                     query_params = request.query_params
-                    api_key = query_params.get(
-                        "api_key"
-                    )  # UI, will only pass hashed tokens
-                    token_info = await prisma_client.get_data(
-                        token=api_key, table_name="key", query_type="find_unique"
-                    )
-                    if secrets.compare_digest(token_info.user_id, valid_token.user_id):
-                        pass
+                    if query_params.get("api_key") is not None:
+                        api_key = query_params.get("api_key")
+                        token_info = await prisma_client.get_data(
+                            token=api_key, table_name="key", query_type="find_unique"
+                        )
+                        if secrets.compare_digest(
+                            token_info.user_id, valid_token.user_id
+                        ):
+                            pass
+                    elif query_params.get("user_id") is not None:
+                        user_id = query_params.get("user_id")
+                        # check if user id == token.user_id
+                        if secrets.compare_digest(user_id, valid_token.user_id):
+                            pass
                     else:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
@@ -730,6 +736,7 @@ async def user_api_key_auth(
                 "/user",
                 "/model/info",
                 "/v2/model/info",
+                "/v2/key/info",
                 "/models",
                 "/v1/models",
             ]
