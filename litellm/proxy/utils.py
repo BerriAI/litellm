@@ -504,9 +504,8 @@ class PrismaClient:
         except Exception as e:
             # If an error occurs, the view does not exist, so create it
             value = await self.health_check()
-            if '"litellm_verificationtokenview" does not exist' in str(e):
-                await self.db.execute_raw(
-                    """
+            await self.db.execute_raw(
+                """
                     CREATE VIEW "LiteLLM_VerificationTokenView" AS
                     SELECT 
                     v.*, 
@@ -517,9 +516,7 @@ class PrismaClient:
                     FROM "LiteLLM_VerificationToken" v
                     LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
                 """
-                )
-            else:
-                raise e
+            )
 
         return "LiteLLM_VerificationTokenView Created!"
 
