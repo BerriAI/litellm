@@ -66,6 +66,22 @@ def _create_clickhouse_material_views(client=None, table_names=[]):
                 day, api_key
             """
         )
+    if "daily_aggregated_spend_per_user_mv" not in table_names:
+        verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend_per_user_mv")
+        client.command(
+            """
+            CREATE MATERIALIZED VIEW daily_aggregated_spend_per_user_mv
+            TO daily_aggregated_spend_per_user
+            AS
+            SELECT
+                toDate(startTime) as day,
+                sumState(spend) AS DailySpend,
+                user as user
+            FROM spend_logs
+            GROUP BY
+                day, user
+            """
+        )
     if "daily_aggregated_spend_mv" not in table_names:
         verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend_mv")
         client.command(
@@ -114,6 +130,20 @@ def _create_clickhouse_aggregate_tables(client=None, table_names=[]):
             )
             ENGINE = SummingMergeTree()
             ORDER BY (day, api_key);
+            """
+        )
+    if "daily_aggregated_spend_per_user" not in table_names:
+        verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend_per_user")
+        client.command(
+            """
+            CREATE TABLE daily_aggregated_spend_per_user
+            (
+                `day` Date,
+                `DailySpend` AggregateFunction(sum, Float64),
+                `user` String
+            )
+            ENGINE = SummingMergeTree()
+            ORDER BY (day, user);
             """
         )
     if "daily_aggregated_spend" not in table_names:
