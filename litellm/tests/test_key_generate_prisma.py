@@ -1241,7 +1241,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
 
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
-        print("result from user auth with new key", result)
+        print("result from user auth with new key: {result}")
 
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm.proxy.proxy_server import (
