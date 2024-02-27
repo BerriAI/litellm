@@ -6016,7 +6016,6 @@ async def health_readiness():
             except Exception as e:
                 index_info = "index does not exist - error: " + str(e)
             cache_type = {"type": cache_type, "index_info": index_info}
-
     if prisma_client is not None:  # if db passed in, check if it's connected
         await prisma_client.health_check()  # test the db connection
         response_object = {"db": "connected"}
