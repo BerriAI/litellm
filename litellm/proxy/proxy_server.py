@@ -2291,8 +2291,9 @@ async def startup_event():
         )
 
     ### CHECK IF VIEW EXISTS ###
-    create_view_response = await prisma_client.check_view_exists()
-    print(f"create_view_response: {create_view_response}")  # noqa
+    if prisma_client is not None:
+        create_view_response = await prisma_client.check_view_exists()
+        print(f"create_view_response: {create_view_response}")  # noqa
 
     ### START BUDGET SCHEDULER ###
     if prisma_client is not None:
