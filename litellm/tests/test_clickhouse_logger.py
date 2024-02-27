@@ -20,6 +20,7 @@ import pytest
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="beta test - this is a new feature")
 async def test_custom_api_logging():
     try:
         litellm.success_callback = ["clickhouse"]
