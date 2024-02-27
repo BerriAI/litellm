@@ -222,6 +222,8 @@ async def test_async_vertexai_response():
                 model=model, messages=messages, temperature=0.7, timeout=5
             )
             print(f"response: {response}")
+        except litellm.RateLimitError as e:
+            pass
         except litellm.Timeout as e:
             pass
         except Exception as e:
