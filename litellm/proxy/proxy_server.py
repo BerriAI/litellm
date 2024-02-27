@@ -3991,6 +3991,62 @@ async def view_spend_logs(
         )
 
 
+@router.get(
+    "/daily_metrics",
+    summary="Get daily spend metrics",
+    tags=["budget & spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def view_daily_metrics(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+    metric_type: Optional[Literal["per_api_key", "per_user", "per_model"]] = None,
+):
+    """ """
+    try:
+        if os.getenv("CLICKHOUSE_HOST") is not None:
+            # gettting spend logs from clickhouse
+            from litellm.integrations import clickhouse
+
+            return clickhouse.build_daily_metrics()
+
+            # create a response object
+            """
+            {
+                "date": "2022-01-01",
+                "spend": 0.0,
+                "users": {},
+                "models": {}
+            }
+            """
+        else:
+            raise Exception(
+                "Clickhouse: Clickhouse host not set. Required for viewing /daily/metrics"
+            )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/spend/logs Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/spend/logs Error" + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 #### USER MANAGEMENT ####
 @router.post(
     "/user/new",
