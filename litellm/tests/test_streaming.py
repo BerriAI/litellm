@@ -406,7 +406,7 @@ def test_completion_palm_stream():
 
 def test_completion_gemini_stream():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         print("Streaming gemini response")
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
