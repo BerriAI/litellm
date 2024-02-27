@@ -4285,9 +4285,7 @@ def get_optional_params(
         if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
         if frequency_penalty is not None:
-            optional_params["repetition_penalty"] = (
-                frequency_penalty  # https://docs.together.ai/reference/inference
-            )
+            optional_params["frequency_penalty"] = frequency_penalty
         if stop is not None:
             optional_params["stop"] = stop
         if tools is not None:
