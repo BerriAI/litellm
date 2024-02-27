@@ -2115,10 +2115,9 @@ async def async_data_generator(response, user_api_key_dict):
     try:
         start_time = time.time()
         async for chunk in response:
-            verbose_proxy_logger.debug(f"returned chunk: {chunk}")
-            assert isinstance(chunk, litellm.ModelResponse)
+            chunk = chunk.model_dump_json(exclude_none=True)
             try:
-                yield f"data: {json.dumps(chunk.model_dump(exclude_none=True))}\n\n"
+                yield f"data: {chunk}\n\n"
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
