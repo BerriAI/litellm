@@ -5548,7 +5548,11 @@ async def login(request: Request):
                 "user_id": "litellm-dashboard",
             }
         key = response["token"]  # type: ignore
-        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "") + "/ui/"
+        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
+        if litellm_dashboard_ui.endswith("/"):
+            litellm_dashboard_ui += "ui/"
+        else:
+            litellm_dashboard_ui += "/ui/"
         import jwt
 
         jwt_token = jwt.encode(
@@ -5557,6 +5561,7 @@ async def login(request: Request):
                 "key": key,
                 "user_email": user_id,
                 "user_role": "app_admin",  # this is the path without sso - we can assume only admins will use this
+                "login_method": "username_password",
             },
             "secret",
             algorithm="HS256",
@@ -5848,6 +5853,7 @@ async def auth_callback(request: Request):
             "key": key,
             "user_email": user_email,
             "user_role": user_role,
+            "login_method": "sso",
         },
         "secret",
         algorithm="HS256",
