@@ -1902,14 +1902,6 @@ async def generate_key_helper_fn(
             saved_token["expires"], datetime
         ):
             saved_token["expires"] = saved_token["expires"].isoformat()
-        if key_data["token"] is not None and isinstance(key_data["token"], str):
-            hashed_token = hash_token(key_data["token"])
-            saved_token["token"] = hashed_token
-            user_api_key_cache.set_cache(
-                key=hashed_token,
-                value=LiteLLM_VerificationToken(**saved_token),  # type: ignore
-                ttl=600,
-            )
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
