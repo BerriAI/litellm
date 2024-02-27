@@ -1196,7 +1196,8 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                         )
-                    except:
+                    except Exception as e:
+
                         complete_streaming_response = None
                 else:
                     self.sync_streaming_chunks.append(result)
@@ -8903,13 +8904,7 @@ class CustomStreamWrapper:
                     response: Optional[ModelResponse] = self.chunk_creator(chunk=chunk)
                     print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
-                    if response is None or (
-                        isinstance(response, ModelResponse)
-                        and isinstance(response.choices[0], StreamingChoices)
-                        and response.choices[0].delta.content is None
-                        and response.choices[0].delta.function_call is None
-                        and response.choices[0].delta.tool_calls is None
-                    ):
+                    if response is None:
                         continue
                     ## LOGGING
                     threading.Thread(
