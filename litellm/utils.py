@@ -4928,7 +4928,7 @@ def get_llm_provider(
                 dynamic_api_key = get_secret("GROQ_API_KEY")
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
-                api_base = "https://api.mistral.ai/v1"
+                api_base = api_base or "https://api.mistral.ai/v1"
                 dynamic_api_key = get_secret("MISTRAL_API_KEY")
             elif custom_llm_provider == "voyage":
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
