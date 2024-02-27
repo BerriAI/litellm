@@ -27,6 +27,111 @@ import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
+def _create_clickhouse_material_views(client=None, table_names=[]):
+    # Create Materialized Views if they don't exist
+    # Materialized Views send new inserted rows to the aggregate tables
+
+    verbose_logger.debug("Clickhouse: Creating Materialized Views")
+    if "daily_aggregated_spend_per_model_mv" not in table_names:
+        verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend_per_model_mv")
+        client.command(
+            """
+            CREATE MATERIALIZED VIEW daily_aggregated_spend_per_model_mv
+            TO daily_aggregated_spend_per_model
+            AS
+            SELECT
+                toDate(startTime) as day,
+                sumState(spend) AS DailySpend,
+                model as model
+            FROM spend_logs
+            GROUP BY
+                day, model
+            """
+        )
+    if "daily_aggregated_spend_per_api_key_mv" not in table_names:
+        verbose_logger.debug(
+            "Clickhouse: Creating daily_aggregated_spend_per_api_key_mv"
+        )
+        client.command(
+            """
+            CREATE MATERIALIZED VIEW daily_aggregated_spend_per_api_key_mv
+            TO daily_aggregated_spend_per_api_key
+            AS
+            SELECT
+                toDate(startTime) as day,
+                sumState(spend) AS DailySpend,
+                api_key as api_key
+            FROM spend_logs
+            GROUP BY
+                day, api_key
+            """
+        )
+    if "daily_aggregated_spend_mv" not in table_names:
+        verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend_mv")
+        client.command(
+            """
+            CREATE MATERIALIZED VIEW daily_aggregated_spend_mv
+            TO daily_aggregated_spend
+            AS
+            SELECT
+                toDate(startTime) as day,
+                sumState(spend) AS DailySpend
+            FROM spend_logs
+            GROUP BY
+                day
+            """
+        )
+
+
+def _create_clickhouse_aggregate_tables(client=None, table_names=[]):
+    # Basic Logging works without this - this is only used for low latency reporting apis
+    verbose_logger.debug("Clickhouse: Creating Aggregate Tables")
+
+    # Create Aggregeate Tables if they don't exist
+    if "daily_aggregated_spend_per_model" not in table_names:
+        verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend_per_model")
+        client.command(
+            """
+            CREATE TABLE daily_aggregated_spend_per_model
+            (
+                `day` Date,
+                `DailySpend` AggregateFunction(sum, Float64),
+                `model` String
+            )
+            ENGINE = SummingMergeTree()
+            ORDER BY (day, model);
+            """
+        )
+    if "daily_aggregated_spend_per_api_key" not in table_names:
+        verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend_per_api_key")
+        client.command(
+            """
+            CREATE TABLE daily_aggregated_spend_per_api_key
+            (
+                `day` Date,
+                `DailySpend` AggregateFunction(sum, Float64),
+                `api_key` String
+            )
+            ENGINE = SummingMergeTree()
+            ORDER BY (day, api_key);
+            """
+        )
+    if "daily_aggregated_spend" not in table_names:
+        verbose_logger.debug("Clickhouse: Creating daily_aggregated_spend")
+        client.command(
+            """
+            CREATE TABLE daily_aggregated_spend
+            (
+                `day` Date,
+                `DailySpend` AggregateFunction(sum, Float64),
+            )
+            ENGINE = SummingMergeTree()
+            ORDER BY (day);
+            """
+        )
+    return
+
+
 def _start_clickhouse():
     import clickhouse_connect
 
@@ -85,6 +190,11 @@ def _start_clickhouse():
             # check if spend logs exist, if it does then return the schema
             response = client.query("DESCRIBE default.spend_logs")
             verbose_logger.debug(f"spend logs schema ={response.result_rows}")
+
+        # RUN Enterprise Clickhouse Setup
+        # TLDR: For Enterprise - we create views / aggregate tables for low latency reporting APIs
+        _create_clickhouse_aggregate_tables(client=client, table_names=table_names)
+        _create_clickhouse_material_views(client=client, table_names=table_names)
 
 
 class ClickhouseLogger:
