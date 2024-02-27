@@ -95,5 +95,18 @@ async def view_spend_logs_from_clickhouse(
                     10
             """
         )
+
+        # get size of spend logs
+        num_rows = client.query("SELECT count(*) FROM default.spend_logs")
+        num_rows = num_rows.result_rows[0][0]
+
+        # safely access num_rows.result_rows[0][0]
+        if num_rows is None:
+            num_rows = 0
+
         raw_rows = list(response.result_rows)
-        return raw_rows
+        response_data = {
+            "logs": raw_rows,
+            "log_count": num_rows,
+        }
+        return response_data
