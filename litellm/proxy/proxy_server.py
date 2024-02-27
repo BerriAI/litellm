@@ -3782,6 +3782,17 @@ async def view_spend_logs(
 -H "Authorization: Bearer sk-1234"
     ```
     """
+    if os.getenv("CLICKHOUSE_HOST") is not None:
+        # gettting spend logs from clickhouse
+        from litellm.proxy.enterprise.utils import view_spend_logs_from_clickhouse
+
+        return await view_spend_logs_from_clickhouse(
+            api_key=api_key,
+            user_id=user_id,
+            request_id=request_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
     global prisma_client
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
