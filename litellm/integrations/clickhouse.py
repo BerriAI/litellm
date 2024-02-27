@@ -85,12 +85,6 @@ def _start_clickhouse():
             # check if spend logs exist, if it does then return the schema
             response = client.query("DESCRIBE default.spend_logs")
             verbose_logger.debug(f"spend logs schema ={response.result_rows}")
-            # get all logs from spend logs
-            response = client.query("SELECT * FROM default.spend_logs")
-            verbose_logger.debug(f"spend logs ={response.result_rows}")
-            # get size of spend logs
-            response = client.query("SELECT count(*) FROM default.spend_logs")
-            verbose_logger.debug(f"spend logs count ={response.result_rows}")
 
 
 class ClickhouseLogger:
