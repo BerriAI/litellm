@@ -350,8 +350,7 @@ async def user_api_key_auth(
         original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
-        # valid_token = user_api_key_cache.get_cache(key=api_key)
-        valid_token = None
+        valid_token = user_api_key_cache.get_cache(key=api_key)
         if valid_token is None:
             ## check db
             verbose_proxy_logger.debug(f"api key: {api_key}")
@@ -384,7 +383,6 @@ async def user_api_key_auth(
             # 6. If token spend per model is under budget per model
             # 7. If token spend is under team budget
             # 8. If team spend is under team budget
-
             request_data = await _read_request_body(
                 request=request
             )  # request data, used across all checks. Making this easily available
@@ -627,7 +625,7 @@ async def user_api_key_auth(
                     )
                 )
 
-                if valid_token.spend > valid_token.team_max_budget:
+                if valid_token.spend >= valid_token.team_max_budget:
                     raise Exception(
                         f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Team: {valid_token.team_max_budget}"
                     )
@@ -646,7 +644,7 @@ async def user_api_key_auth(
                     )
                 )
 
-                if valid_token.team_spend > valid_token.team_max_budget:
+                if valid_token.team_spend >= valid_token.team_max_budget:
                     raise Exception(
                         f"ExceededTokenBudget: Current Team Spend: {valid_token.team_spend}; Max Budget for Team: {valid_token.team_max_budget}"
                     )
