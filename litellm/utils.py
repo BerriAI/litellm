@@ -1183,7 +1183,7 @@ class Logging:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
-            if self.stream:
+            if self.stream and isinstance(result, ModelResponse):
                 if (
                     result.choices[0].finish_reason is not None
                 ):  # if it's the last chunk
@@ -8682,6 +8682,8 @@ class CustomStreamWrapper:
 
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
+                if hasattr(chunk, "id"):
+                    model_response.id = chunk.id
                 if response_obj["is_finished"]:
                     model_response.choices[0].finish_reason = response_obj[
                         "finish_reason"
@@ -8704,6 +8706,8 @@ class CustomStreamWrapper:
                     model_response.system_fingerprint = getattr(
                         response_obj["original_chunk"], "system_fingerprint", None
                     )
+                    if hasattr(response_obj["original_chunk"], "id"):
+                        model_response.id = response_obj["original_chunk"].id
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 

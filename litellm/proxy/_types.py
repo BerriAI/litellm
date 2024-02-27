@@ -458,8 +458,19 @@ class LiteLLM_VerificationToken(LiteLLMBase):
         protected_namespaces = ()
 
 
+class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
+    """
+    Combined view of litellm verification token + litellm team table (select values)
+    """
+
+    team_spend: Optional[float] = None
+    team_tpm_limit: Optional[int] = None
+    team_rpm_limit: Optional[int] = None
+    team_max_budget: Optional[float] = None
+
+
 class UserAPIKeyAuth(
-    LiteLLM_VerificationToken
+    LiteLLM_VerificationTokenView
 ):  # the expected response object for user api key auth
     """
     Return the row in the db

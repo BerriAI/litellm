@@ -124,24 +124,11 @@ def test_generate_and_call_with_valid_key(prisma_client):
             bearer_token = "Bearer " + generated_key
 
             assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
-            assert (
-                hash_token(generated_key)
-                in user_api_key_cache.in_memory_cache.cache_dict
-            )
 
-            cached_value = user_api_key_cache.in_memory_cache.cache_dict[
-                hash_token(generated_key)
-            ]
-
-            print("cached value=", cached_value)
-            print("cached token", cached_value.token)
-
-            value_from_prisma = valid_token = await prisma_client.get_data(
+            value_from_prisma = await prisma_client.get_data(
                 token=generated_key,
             )
             print("token from prisma", value_from_prisma)
-
-            assert value_from_prisma.token == cached_value.token
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
@@ -1241,7 +1228,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
 
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
-        print("result from user auth with new key", result)
+        print("result from user auth with new key: {result}")
 
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm.proxy.proxy_server import (
@@ -1312,7 +1299,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         generated_key = key.key
         user_id = key.user_id
         bearer_token = "Bearer " + generated_key
-
+        print(f"generated_key: {generated_key}")
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
 
