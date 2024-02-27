@@ -3,12 +3,13 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina
+# 🔎 Logging - Custom Callbacks, Langfuse, ClickHouse, s3 Bucket, Sentry, OpenTelemetry, Athina
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
+- [Logging to ClickHouse](#logging-proxy-inputoutput---clickHouse)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
@@ -536,6 +537,90 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+
+## Logging Proxy Input/Output - Clickhouse
+We will use the `--config` to set `litellm.success_callback = ["clickhouse"]` this will log all successfull LLM calls to ClickHouse DB
+
+### [Optional] - Docker Compose - LiteLLM Proxy + Self Hosted Clickhouse DB
+Use this docker compose yaml to start LiteLLM Proxy + Clickhouse DB
+```yaml
+version: "3.9"
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    volumes:
+      - ./proxy_server_config.yaml:/app/proxy_server_config.yaml # mount your litellm config.yaml
+    ports:
+      - "4000:4000"
+    environment:
+      - AZURE_API_KEY=sk-123
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    environment:
+      - CLICKHOUSE_DB=litellm-test
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_PASSWORD=admin
+    ports:
+      - "8123:8123"
+```
+
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["clickhouse"]
+```
+
+**Step 2**: Set Required env variables for clickhouse
+
+<Tabs>
+<TabItem value="self" label="Self Hosted Clickhouse">
+
+Env Variables for self hosted click house 
+```shell
+CLICKHOUSE_HOST = "localhost"
+CLICKHOUSE_PORT = "8123"
+CLICKHOUSE_USERNAME = "admin"
+CLICKHOUSE_PASSWORD = "admin"
+```
+
+</TabItem>
+
+
+
+<TabItem value="cloud" label="Clickhouse.cloud">
+
+Env Variables for cloud click house
+
+```shell
+CLICKHOUSE_HOST = "hjs1z7j37j.us-east1.gcp.clickhouse.cloud"
+CLICKHOUSE_PORT = "8443"
+CLICKHOUSE_USERNAME = "default"
+CLICKHOUSE_PASSWORD = "M~PimRs~c3Z6b"
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
 
 
 ## Logging Proxy Input/Output - s3 Buckets
