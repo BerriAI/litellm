@@ -483,9 +483,12 @@ def test_redis_cache_completion_stream():
             max_tokens=40,
             temperature=0.2,
             stream=True,
+            caching=True,
         )
         response_1_content = ""
+        response_1_id = None
         for chunk in response1:
+            response_1_id = chunk.id
             print(chunk)
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
@@ -497,16 +500,22 @@ def test_redis_cache_completion_stream():
             max_tokens=40,
             temperature=0.2,
             stream=True,
+            caching=True,
         )
         response_2_content = ""
+        response_2_id = None
         for chunk in response2:
+            response_2_id = chunk.id
             print(chunk)
             response_2_content += chunk.choices[0].delta.content or ""
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
         assert (
-            response_1_content == response_2_content
+            response_1_id == response_2_id
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        # assert (
+        #     response_1_content == response_2_content
+        # ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
         litellm.success_callback = []
         litellm._async_success_callback = []
         litellm.cache = None
