@@ -470,7 +470,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
 
 
 class UserAPIKeyAuth(
-    LiteLLM_VerificationToken
+    LiteLLM_VerificationTokenView
 ):  # the expected response object for user api key auth
     """
     Return the row in the db
