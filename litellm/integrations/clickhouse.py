@@ -128,6 +128,10 @@ class ClickhouseLogger:
                 start_time=start_time,
                 end_time=end_time,
             )
+            metadata = payload.get("metadata", "") or ""
+            request_tags = payload.get("request_tags", "") or ""
+            payload["metadata"] = str(metadata)
+            payload["request_tags"] = str(request_tags)
             # Build the initial payload
 
             verbose_logger.debug(f"\nClickhouse Logger - Logging payload = {payload}")
