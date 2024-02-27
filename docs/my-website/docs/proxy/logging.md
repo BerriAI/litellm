@@ -9,7 +9,7 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
-- [Logging to ClickHouse](#logging-proxy-inputoutput---clickHouse)
+- [Logging to ClickHouse](#logging-proxy-inputoutput---clickhouse)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
