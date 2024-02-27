@@ -83,6 +83,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }
 
+  // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
     if (token) {
@@ -127,6 +128,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setUserSpendData(response["user_info"]);
             setData(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
+            setSelectedTeam(response["teams"] ? response["teams"][0] : null);
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
