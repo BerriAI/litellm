@@ -282,9 +282,12 @@ class Delta(OpenAIObject):
         if tool_calls is not None and isinstance(tool_calls, list):
             self.tool_calls = []
             for tool_call in tool_calls:
-                if tool_call.get("index", None) is None:
-                    tool_call["index"] = 0
-                self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                if isinstance(tool_call, dict):
+                    if tool_call.get("index", None) is None:
+                        tool_call["index"] = 0
+                    self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    self.tool_calls.append(tool_call)
         else:
             self.tool_calls = tool_calls
 
