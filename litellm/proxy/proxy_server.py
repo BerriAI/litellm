@@ -614,6 +614,7 @@ async def user_api_key_auth(
             # Check 6. Token spend is under Team budget
             if (
                 valid_token.spend is not None
+                and hasattr(valid_token, "team_max_budget")
                 and valid_token.team_max_budget is not None
             ):
                 asyncio.create_task(
@@ -632,7 +633,9 @@ async def user_api_key_auth(
 
             # Check 7. Team spend is under Team budget
             if (
-                valid_token.team_spend is not None
+                hasattr(valid_token, "team_spend")
+                and valid_token.team_spend is not None
+                and hasattr(valid_token, "team_max_budget")
                 and valid_token.team_max_budget is not None
             ):
                 asyncio.create_task(
