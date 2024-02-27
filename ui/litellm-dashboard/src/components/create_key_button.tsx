@@ -111,6 +111,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item label="Max Budget (USD)" name="max_budget">
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
+              <Form.Item label="Reset Budget" name="budget_duration">
+                <Select defaultValue={null} placeholder="n/a">
+                  <Select.Option value="24h">daily</Select.Option>
+                  <Select.Option value="30d">monthly</Select.Option>
+                </Select>
+              </Form.Item>
               <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
                 <InputNumber step={1} width={400} />
               </Form.Item>
@@ -120,7 +126,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               >
                 <InputNumber step={1} width={400} />
               </Form.Item>
-              <Form.Item label="Duration (eg: 30s, 30h, 30d)" name="duration">
+              <Form.Item label="Expire Key (eg: 30s, 30h, 30d)" name="duration">
                 <Input />
               </Form.Item>
               <Form.Item label="Metadata" name="metadata">
