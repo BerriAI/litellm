@@ -477,6 +477,7 @@ class UserAPIKeyAuth(
     """
 
     api_key: Optional[str] = None
+    user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
 
     @root_validator(pre=True)
     def check_api_key(cls, values):
