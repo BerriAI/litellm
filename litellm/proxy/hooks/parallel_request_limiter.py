@@ -38,7 +38,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         current = cache.get_cache(
             key=request_count_api_key
         )  # {"current_requests": 1, "current_tpm": 1, "current_rpm": 10}
-        # print(f"current: {current}")
         if current is None:
             new_val = {
                 "current_requests": 1,
@@ -73,8 +72,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         self.print_verbose(f"Inside Max Parallel Request Pre-Call Hook")
         api_key = user_api_key_dict.api_key
         max_parallel_requests = user_api_key_dict.max_parallel_requests or sys.maxsize
-        tpm_limit = user_api_key_dict.tpm_limit or sys.maxsize
-        rpm_limit = user_api_key_dict.rpm_limit or sys.maxsize
+        tpm_limit = getattr(user_api_key_dict, "tpm_limit", sys.maxsize)
+        rpm_limit = getattr(user_api_key_dict, "rpm_limit", sys.maxsize)
 
         if api_key is None:
             return
@@ -131,35 +130,34 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         _user_id_rate_limits = user_api_key_dict.user_id_rate_limits
 
         # get user tpm/rpm limits
-        if _user_id_rate_limits is None or _user_id_rate_limits == {}:
-            return
-        user_tpm_limit = _user_id_rate_limits.get("tpm_limit")
-        user_rpm_limit = _user_id_rate_limits.get("rpm_limit")
-        if user_tpm_limit is None:
-            user_tpm_limit = sys.maxsize
-        if user_rpm_limit is None:
-            user_rpm_limit = sys.maxsize
+        if _user_id_rate_limits is not None and isinstance(_user_id_rate_limits, dict):
+            user_tpm_limit = _user_id_rate_limits.get("tpm_limit", None)
+            user_rpm_limit = _user_id_rate_limits.get("rpm_limit", None)
+            if user_tpm_limit is None:
+                user_tpm_limit = sys.maxsize
+            if user_rpm_limit is None:
+                user_rpm_limit = sys.maxsize
 
-        # now do the same tpm/rpm checks
-        request_count_api_key = f"{user_id}::{precise_minute}::request_count"
+            # now do the same tpm/rpm checks
+            request_count_api_key = f"{user_id}::{precise_minute}::request_count"
 
-        # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
-        await self.check_key_in_limits(
-            user_api_key_dict=user_api_key_dict,
-            cache=cache,
-            data=data,
-            call_type=call_type,
-            max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
-            request_count_api_key=request_count_api_key,
-            tpm_limit=user_tpm_limit,
-            rpm_limit=user_rpm_limit,
-        )
+            # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
+            await self.check_key_in_limits(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type=call_type,
+                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
+                request_count_api_key=request_count_api_key,
+                tpm_limit=user_tpm_limit,
+                rpm_limit=user_rpm_limit,
+            )
 
         # TEAM RATE LIMITS
         ## get team tpm/rpm limits
         team_id = user_api_key_dict.team_id
-        team_tpm_limit = user_api_key_dict.team_tpm_limit or sys.maxsize
-        team_rpm_limit = user_api_key_dict.team_rpm_limit or sys.maxsize
+        team_tpm_limit = getattr(user_api_key_dict, "team_tpm_limit", sys.maxsize)
+        team_rpm_limit = getattr(user_api_key_dict, "team_rpm_limit", sys.maxsize)
 
         if team_tpm_limit is None:
             team_tpm_limit = sys.maxsize
@@ -241,36 +239,36 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # ------------
             # Update usage - User
             # ------------
-            if user_api_key_user_id is None:
-                return
+            if user_api_key_user_id is not None:
+                total_tokens = 0
 
-            total_tokens = 0
+                if isinstance(response_obj, ModelResponse):
+                    total_tokens = response_obj.usage.total_tokens
 
-            if isinstance(response_obj, ModelResponse):
-                total_tokens = response_obj.usage.total_tokens
+                request_count_api_key = (
+                    f"{user_api_key_user_id}::{precise_minute}::request_count"
+                )
 
-            request_count_api_key = (
-                f"{user_api_key_user_id}::{precise_minute}::request_count"
-            )
+                current = self.user_api_key_cache.get_cache(
+                    key=request_count_api_key
+                ) or {
+                    "current_requests": 1,
+                    "current_tpm": total_tokens,
+                    "current_rpm": 1,
+                }
 
-            current = self.user_api_key_cache.get_cache(key=request_count_api_key) or {
-                "current_requests": 1,
-                "current_tpm": total_tokens,
-                "current_rpm": 1,
-            }
+                new_val = {
+                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_rpm": current["current_rpm"] + 1,
+                }
 
-            new_val = {
-                "current_requests": max(current["current_requests"] - 1, 0),
-                "current_tpm": current["current_tpm"] + total_tokens,
-                "current_rpm": current["current_rpm"] + 1,
-            }
-
-            self.print_verbose(
-                f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
-            )
-            self.user_api_key_cache.set_cache(
-                request_count_api_key, new_val, ttl=60
-            )  # store in cache for 1 min.
+                self.print_verbose(
+                    f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
+                )
+                self.user_api_key_cache.set_cache(
+                    request_count_api_key, new_val, ttl=60
+                )  # store in cache for 1 min.
 
             # ------------
             # Update usage - Team
