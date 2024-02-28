@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # VertexAI - Google [Gemini, Model Garden]
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb">
@@ -22,7 +25,15 @@ response = litellm.completion(model="gemini-pro", messages=[{"role": "user", "co
 
 ## OpenAI Proxy Usage 
 
+Here's how to use Vertex AI with the LiteLLM Proxy Server
+
 1. Modify the config.yaml 
+
+<Tabs>
+
+<TabItem value="completion_param" label="Different location per model">
+
+Use this when you need to set a different location for each vertex model
 
 ```yaml
 model_list:
@@ -37,6 +48,27 @@ model_list:
       vertex_project: "project-id2"
       vertex_location: "us-east"
 ```
+
+</TabItem>
+
+<TabItem value="litellm_param" label="One location all vertex models">
+
+Use this when you have one vertex location for all models
+
+```yaml
+litellm_settings: 
+  vertex_project: "hardy-device-38811" # Your Project ID
+  vertex_location: "us-central1" # proj location
+
+model_list: 
+  -model_name: team1-gemini-pro
+   litellm_params: 
+     model: gemini-pro
+```
+
+</TabItem>
+
+</Tabs>
 
 2. Start the proxy 
 
