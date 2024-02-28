@@ -149,6 +149,7 @@ def test_completion_bedrock_claude_external_client_auth():
 # test_completion_bedrock_claude_external_client_auth()
 
 
+@pytest.mark.skip(reason="Expired token, need to renew")
 def test_completion_bedrock_claude_sts_client_auth():
     print("\ncalling bedrock claude external client auth")
     import os
