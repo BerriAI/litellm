@@ -172,20 +172,32 @@ const UsagePage: React.FC<UsagePageProps> = ({
             startTime,
             endTime
           ).then(async (response) => {
-            const topKeysResponse = await keyInfoCall(
-              accessToken,
-              getTopKeys(response)
-            );
-            const filtered_keys = topKeysResponse["info"].map((k: any) => ({
-              key: (k["key_name"] || k["key_alias"] || k["token"]).substring(
-                0,
-                7
-              ),
-              spend: k["spend"],
-            }));
-            setTopKeys(filtered_keys);
-            setTopUsers(getTopUsers(response));
-            setKeySpendData(response);
+            console.log("result from spend logs call", response);
+            if ("daily_spend" in response) {
+              // this is from clickhouse analytics
+              // 
+              let daily_spend = response["daily_spend"];
+              console.log("daily spend", daily_spend);
+              setKeySpendData(daily_spend);
+              let topApiKeys = response.top_api_keys;
+              setTopKeys(topApiKeys);
+            }
+            else {
+              const topKeysResponse = await keyInfoCall(
+                accessToken,
+                getTopKeys(response)
+              );
+              const filtered_keys = topKeysResponse["info"].map((k: any) => ({
+                key: (k["key_name"] || k["key_alias"] || k["token"]).substring(
+                  0,
+                  7
+                ),
+                spend: k["spend"],
+              }));
+              setTopKeys(filtered_keys);
+              setTopUsers(getTopUsers(response));
+              setKeySpendData(response);
+            }
           });
         } catch (error) {
           console.error("There was an error fetching the data", error);
