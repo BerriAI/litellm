@@ -6,6 +6,8 @@ import {
   userSpendLogsCall,
   keyInfoCall,
   adminSpendLogsCall,
+  adminTopKeysCall,
+  adminTopModelsCall,
 } from "./networking";
 import { start } from "repl";
 
@@ -168,40 +170,61 @@ const UsagePage: React.FC<UsagePageProps> = ({
     if (accessToken && token && userRole && userID) {
       const fetchData = async () => {
         try {
-          await userSpendLogsCall(
-            accessToken,
-            token,
-            userRole,
-            userID,
-            startTime,
-            endTime
-          ).then(async (response) => {
-            console.log("result from spend logs call", response);
-            if ("daily_spend" in response) {
-              // this is from clickhouse analytics
-              //
-              let daily_spend = response["daily_spend"];
-              console.log("daily spend", daily_spend);
-              setKeySpendData(daily_spend);
-              let topApiKeys = response.top_api_keys;
-              setTopKeys(topApiKeys);
-            } else {
-              // const topKeysResponse = await keyInfoCall(
-              //   accessToken,
-              //   getTopKeys(response)
-              // );
-              // const filtered_keys = topKeysResponse["info"].map((k: any) => ({
-              //   key: (k["key_name"] || k["key_alias"] || k["token"]).substring(
-              //     0,
-              //     7
-              //   ),
-              //   spend: k["spend"],
-              // }));
-              // setTopKeys(filtered_keys);
-              // setTopUsers(getTopUsers(response));
-              setKeySpendData(response);
-            }
-          });
+          /**
+           * If user is Admin - query the global views endpoints
+           * If user is App Owner - use the normal spend logs call
+           */
+          console.log(`user role: ${userRole}`);
+          if (userRole == "Admin") {
+            const overall_spend = await adminSpendLogsCall(accessToken);
+            setKeySpendData(overall_spend);
+            const top_keys = await adminTopKeysCall(accessToken);
+            const filtered_keys = top_keys.map((k: any) => ({
+              key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
+                0,
+                7
+              ),
+              spend: k["total_spend"],
+            }));
+            setTopKeys(filtered_keys);
+            const top_models = await adminTopModelsCall(accessToken);
+          } else if (userRole == "App Owner") {
+            await userSpendLogsCall(
+              accessToken,
+              token,
+              userRole,
+              userID,
+              startTime,
+              endTime
+            ).then(async (response) => {
+              console.log("result from spend logs call", response);
+              if ("daily_spend" in response) {
+                // this is from clickhouse analytics
+                //
+                let daily_spend = response["daily_spend"];
+                console.log("daily spend", daily_spend);
+                setKeySpendData(daily_spend);
+                let topApiKeys = response.top_api_keys;
+                setTopKeys(topApiKeys);
+              } else {
+                const topKeysResponse = await keyInfoCall(
+                  accessToken,
+                  getTopKeys(response)
+                );
+                const filtered_keys = topKeysResponse["info"].map((k: any) => ({
+                  key: (
+                    k["key_name"] ||
+                    k["key_alias"] ||
+                    k["token"]
+                  ).substring(0, 7),
+                  spend: k["spend"],
+                }));
+                setTopKeys(filtered_keys);
+                setTopUsers(getTopUsers(response));
+                setKeySpendData(response);
+              }
+            });
+          }
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
