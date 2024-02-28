@@ -130,6 +130,7 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install numpydoc
             pip install prisma            
+            pip install fastapi            
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
