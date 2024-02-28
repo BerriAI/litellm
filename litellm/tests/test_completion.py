@@ -97,7 +97,7 @@ def test_completion_mistral_api():
                 }
             ],
         )
-        # Add any assertions here to check the response
+        # Add any assertions here, to check the response
         print(response)
 
         cost = litellm.completion_cost(completion_response=response)
