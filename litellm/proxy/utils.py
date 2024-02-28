@@ -489,18 +489,20 @@ class PrismaClient:
     )
     async def check_view_exists(self):
         """
-        Checks if the LiteLLM_VerificationTokenView exists in the user's db.
+        Checks if the LiteLLM_VerificationTokenView and MonthlyGlobalSpend exists in the user's db.
 
-        This is used for getting the token + team data in user_api_key_auth
+        LiteLLM_VerificationTokenView: This view is used for getting the token + team data in user_api_key_auth
+
+        MonthlyGlobalSpend: This view is used for the admin view to see global spend for this month
 
         If the view doesn't exist, one will be created.
         """
         try:
             # Try to select one row from the view
-            await self.db.execute_raw(
+            await self.db.query_raw(
                 """SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1"""
             )
-            return "LiteLLM_VerificationTokenView Exists!"
+            print("LiteLLM_VerificationTokenView Exists!")  # noqa
         except Exception as e:
             # If an error occurs, the view does not exist, so create it
             value = await self.health_check()
@@ -518,7 +520,29 @@ class PrismaClient:
                 """
             )
 
-        return "LiteLLM_VerificationTokenView Created!"
+            print("LiteLLM_VerificationTokenView Created!")  # noqa
+
+        try:
+            await self.db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
+            print("MonthlyGlobalSpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
+            SELECT
+            DATE("startTime") AS date, 
+            SUM("spend") AS spend 
+            FROM 
+            "LiteLLM_SpendLogs" 
+            WHERE 
+            "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+            GROUP BY 
+            DATE("startTime");
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("MonthlyGlobalSpend Created!")  # noqa
+
+        return
 
     @backoff.on_exception(
         backoff.expo,

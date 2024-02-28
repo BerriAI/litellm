@@ -2315,7 +2315,6 @@ async def startup_event():
     ### CHECK IF VIEW EXISTS ###
     if prisma_client is not None:
         create_view_response = await prisma_client.check_view_exists()
-        print(f"create_view_response: {create_view_response}")  # noqa
 
     ### START BUDGET SCHEDULER ###
     if prisma_client is not None:
@@ -4063,7 +4062,7 @@ async def global_spend_logs():
     """
     global prisma_client
 
-    sql_query = """SELECT * FROM "globalspendperdate";"""
+    sql_query = """SELECT * FROM "MonthlyGlobalSpend";"""
 
     response = await prisma_client.db.query_raw(query=sql_query)
 
