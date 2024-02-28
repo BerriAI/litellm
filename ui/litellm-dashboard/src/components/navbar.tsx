@@ -20,8 +20,14 @@ interface NavbarProps {
   userID: string | null;
   userRole: string | null;
   userEmail: string | null;
+  showSSOBanner: boolean;
 }
-const Navbar: React.FC<NavbarProps> = ({ userID, userRole, userEmail }) => {
+const Navbar: React.FC<NavbarProps> = ({
+  userID,
+  userRole,
+  userEmail,
+  showSSOBanner,
+}) => {
   console.log("User ID:", userID);
   console.log("userEmail:", userEmail);
 
@@ -46,8 +52,20 @@ const Navbar: React.FC<NavbarProps> = ({ userID, userRole, userEmail }) => {
           </Link>
         </div>
       </div>
-      <div className="text-right mx-4 my-2 absolute top-0 right-0">
-        <Button variant="secondary">
+      <div className="text-right mx-4 my-2 absolute top-0 right-0 flex items-center justify-end space-x-2">
+        {showSSOBanner ? (
+          <a
+            href="https://docs.litellm.ai/docs/proxy/ui#setup-ssoauth-for-ui"
+            target="_blank"
+            className="mr-2"
+          >
+            <Button variant="primary" size="lg">
+              Enable SSO
+            </Button>
+          </a>
+        ) : null}
+
+        <Button variant="secondary" size="lg">
           {userEmail}
           <p>Role: {userRole}</p>
           <p>ID: {userID}</p>

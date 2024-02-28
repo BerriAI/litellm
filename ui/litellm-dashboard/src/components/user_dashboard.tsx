@@ -6,9 +6,6 @@ import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import ViewUserSpend from "./view_user_spend";
 import DashboardTeam from "./dashboard_default_team";
-import EnterProxyUrl from "./enter_proxy_url";
-import { message } from "antd";
-import Navbar from "./navbar";
 import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
@@ -83,6 +80,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }
 
+  // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
     if (token) {
@@ -127,6 +125,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setUserSpendData(response["user_info"]);
             setData(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
+            setSelectedTeam(response["teams"] ? response["teams"][0] : null);
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])

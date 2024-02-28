@@ -95,7 +95,7 @@ const Team: React.FC<TeamProps> = ({
         const user_role: Member = {
           role: "user",
           user_email: formValues.user_email,
-          user_id: null,
+          user_id: formValues.user_id,
         };
         const response: any = await teamMemberAddCall(
           accessToken,
@@ -313,8 +313,18 @@ const Team: React.FC<TeamProps> = ({
               labelAlign="left"
             >
               <>
-                <Form.Item label="Email" name="user_email">
-                  <Input />
+                <Form.Item label="Email" name="user_email" className="mb-4">
+                  <Input
+                    name="user_email"
+                    className="px-3 py-2 border rounded-md w-full"
+                  />
+                </Form.Item>
+                <div className="text-center mb-4">OR</div>
+                <Form.Item label="User ID" name="user_id" className="mb-4">
+                  <Input
+                    name="user_id"
+                    className="px-3 py-2 border rounded-md w-full"
+                  />
                 </Form.Item>
               </>
               <div style={{ textAlign: "right", marginTop: "10px" }}>
