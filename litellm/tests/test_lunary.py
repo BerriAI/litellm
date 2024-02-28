@@ -9,7 +9,7 @@ import litellm
 
 litellm.success_callback = ["lunary"]
 litellm.set_verbose = True
-import time
+
 
 
 def test_lunary_logging():
@@ -19,6 +19,7 @@ def test_lunary_logging():
             messages=[{"role": "user", "content": "what llm are u"}],
             max_tokens=10,
             temperature=0.2,
+            user="test-user",
         )
         print(response)
     except Exception as e:
@@ -67,4 +68,4 @@ def test_lunary_logging_with_streaming_and_metadata():
         print(e)
 
 
-# test_lunary_logging_with_streaming_and_metadata()
+test_lunary_logging_with_streaming_and_metadata()

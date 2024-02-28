@@ -1,15 +1,12 @@
 #### What this does ####
-#    On success + failure, log events to aispend.io
-import datetime
+#    On success + failure, log events to lunary.ai
+from datetime import datetime, timezone
 import traceback
 import dotenv
-import os
-import requests
+import subprocess
+import sys
 
-dotenv.load_dotenv()  # Loading env variables using dotenv
-import traceback
-import datetime, subprocess, sys
-import litellm
+dotenv.load_dotenv() 
 
 # convert to {completion: xx, tokens: xx}
 def parse_usage(usage):
@@ -86,8 +83,8 @@ class LunaryLogger:
         input=None,
         user_id=None,
         response_obj=None,
-        start_time=datetime.datetime.now(),
-        end_time=datetime.datetime.now(),
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
         error=None,
     ):
         # Method definition
@@ -102,15 +99,27 @@ class LunaryLogger:
 
             tags = litellm_params.pop("tags", None) or []
 
-            template_id = extra.pop("templateId", None),
+            if extra:
+                template_id = extra.pop("templateId", None)
+                extra.pop("extra_body", None)
+                extra.pop("user", None)
 
+            # keep only serializable types
             for param, value in extra.items():
                 if not isinstance(value, (str, int, bool, float)):
                     try:
                         extra[param] = str(value)
                     except:
-                        # if casting value to str fails don't block logging
                         pass
+
+            for param, value in metadata.items():
+                if not isinstance(value, (str, int, bool, float)):
+                    try:
+                        extra[param] = str(value)
+                    except:
+                        pass
+
+
 
             if response_obj:
                 usage = (
@@ -118,7 +127,10 @@ class LunaryLogger:
                     if "usage" in response_obj
                     else None
                 )
+
                 output = response_obj["choices"] if "choices" in response_obj else None
+
+                print(output)
             else:
                 usage = None
                 output = None
@@ -128,7 +140,7 @@ class LunaryLogger:
             else:
                 error_obj = None
 
-            print(start_time.isoformat())
+
 
             self.lunary_client.track_event(
                 type,
@@ -137,8 +149,8 @@ class LunaryLogger:
                 user_id=user_id,
                 name=model,
                 input=parse_messages(input),
-                timestamp=start_time.isoformat(),
-                # template_id=template_id,
+                timestamp=start_time.astimezone(timezone.utc).isoformat(),
+                template_id=template_id,
                 metadata=metadata,
                 runtime="litellm",
                 tags=tags,
@@ -150,14 +162,11 @@ class LunaryLogger:
                 type,
                 event,
                 run_id,
-                timestamp=end_time.isoformat(),
+                timestamp=end_time.astimezone(timezone.utc).isoformat(),
                 runtime="litellm",
                 error=error_obj,
                 output=parse_messages(output),
-                token_usage={
-                    "prompt": usage.get("prompt_tokens"),
-                    "completion": usage.get("completion_tokens"),
-                }
+                token_usage=usage
             )
 
 
