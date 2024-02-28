@@ -239,6 +239,8 @@ health_check_interval = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
+proxy_budget_rescheduler_min_time = 597
+proxy_budget_rescheduler_max_time = 605
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -1406,7 +1408,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1713,6 +1715,13 @@ class ProxyConfig:
                 )
             ## COST TRACKING ##
             cost_tracking()
+            ## BUDGET RESCHEDULER ##
+            proxy_budget_rescheduler_min_time = general_settings.get(
+                "proxy_budget_rescheduler_min_time", proxy_budget_rescheduler_min_time
+            )
+            proxy_budget_rescheduler_max_time = general_settings.get(
+                "proxy_budget_rescheduler_max_time", proxy_budget_rescheduler_max_time
+            )
             ### BACKGROUND HEALTH CHECKS ###
             # Enable background health checks
             use_background_health_checks = general_settings.get(
@@ -2196,7 +2205,7 @@ def parse_cache_control(cache_control):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
     import json
 
     ### LOAD MASTER KEY ###
@@ -2307,7 +2316,7 @@ async def startup_event():
     if prisma_client is not None:
         scheduler = AsyncIOScheduler()
         interval = random.randint(
-            597, 605
+            proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
         )  # random interval, so multiple workers avoid resetting budget at the same time
         scheduler.add_job(
             reset_budget, "interval", seconds=interval, args=[prisma_client]

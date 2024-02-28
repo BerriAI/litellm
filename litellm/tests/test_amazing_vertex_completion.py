@@ -110,6 +110,7 @@ def test_vertex_ai():
                 "code-bison@001",
                 "text-bison@001",
                 "gemini-1.5-pro",
+                "gemini-1.5-pro-preview-0215",
                 "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
@@ -160,6 +161,7 @@ def test_vertex_ai_stream():
                 "code-bison@001",
                 "text-bison@001",
                 "gemini-1.5-pro",
+                "gemini-1.5-pro-preview-0215",
                 "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
@@ -211,6 +213,7 @@ async def test_async_vertexai_response():
             "code-bison@001",
             "text-bison@001",
             "gemini-1.5-pro",
+            "gemini-1.5-pro-preview-0215",
             "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
@@ -255,6 +258,7 @@ async def test_async_vertexai_streaming_response():
             "code-bison@001",
             "text-bison@001",
             "gemini-1.5-pro",
+            "gemini-1.5-pro-preview-0215",
             "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
