@@ -1,5 +1,10 @@
 # 💸 GET Daily Spend, Usage Metrics
 
+## Request Format
+```shell
+curl -X GET "http://0.0.0.0:4000/daily_metrics" -H "Authorization: Bearer sk-1234"
+```
+
 ## Response format 
 ```json
 [
