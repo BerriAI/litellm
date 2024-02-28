@@ -3869,11 +3869,15 @@ async def view_spend_logs(
             "spend:" : spend
         }
         """
-        response_keys = {}
+        # we need this to show on the Admin UI
+        response_keys = []
         for key in top_api_keys.items():
-            response_keys["key"] = key[0]
-            response_keys["spend"] = key[1]
-
+            response_keys.append(
+                {
+                    "key": key[0],
+                    "spend": key[1],
+                }
+            )
         daily_metrics["top_api_keys"] = response_keys
 
         return daily_metrics
