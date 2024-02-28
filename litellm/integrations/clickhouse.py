@@ -62,7 +62,6 @@ def build_daily_metrics():
     )
 
     # get daily spend per model
-
     daily_spend_per_model = click_house_client.query_df(
         """
         SELECT sumMerge(DailySpend) as daily_spend, day, model FROM daily_aggregated_spend_per_model GROUP BY day, model
@@ -82,6 +81,7 @@ def build_daily_metrics():
 
     # Display the resulting dictionary
 
+    # get daily spend per API key
     daily_spend_per_api_key = click_house_client.query_df(
         """
             SELECT
@@ -122,6 +122,23 @@ def build_daily_metrics():
 
     # Display the resulting dictionary
 
+    # Calculate total spend across all days
+    total_spend = daily_spend["daily_spend"].sum()
+
+    # Identify top models and top API keys with the highest spend across all days
+    top_models = {}
+    top_api_keys = {}
+
+    for day, spend_per_model in result_dict.items():
+        for model, model_spend in spend_per_model.items():
+            if model not in top_models or model_spend > top_models[model]:
+                top_models[model] = model_spend
+
+    for day, spend_per_api_key in api_key_result_dict.items():
+        for api_key, api_key_spend in spend_per_api_key.items():
+            if api_key not in top_api_keys or api_key_spend > top_api_keys[api_key]:
+                top_api_keys[api_key] = api_key_spend
+
     # for each day in daily spend, look up the day in result_dict and api_key_result_dict
     # Assuming daily_spend DataFrame has 'day' column
     result = []
@@ -143,8 +160,16 @@ def build_daily_metrics():
 
         result.append(data_day)
 
-    # print("FINAL daily metric", result)
-    return result
+    data_to_return = {}
+    data_to_return["daily_spend"] = result
+
+    data_to_return["total_spend"] = total_spend
+    data_to_return["top_models"] = top_models
+    data_to_return["top_api_keys"] = top_api_keys
+    return data_to_return
+
+
+# build_daily_metrics()
 
 
 def _create_clickhouse_material_views(client=None, table_names=[]):
