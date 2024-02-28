@@ -87,6 +87,7 @@ def test_router_timeouts():
         print("********** TOKENS USED SO FAR = ", total_tokens_used)
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_router_timeouts_bedrock():
     import openai
