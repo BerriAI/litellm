@@ -402,6 +402,9 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="sends alerts if requests hang for 5min+",
     )
+    ui_access_mode: Optional[Literal["admin_only", "all"]] = Field(
+        "all", description="Control access to the Proxy UI"
+    )
 
 
 class ConfigYAML(LiteLLMBase):
