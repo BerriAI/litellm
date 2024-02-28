@@ -1,3 +1,4 @@
+# @pytest.mark.skip(reason="AWS Suspended Account")
 # import sys, os
 # import traceback
 # from dotenv import load_dotenv
