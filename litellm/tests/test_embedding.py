@@ -302,6 +302,7 @@ def test_bedrock_embedding_titan():
 # test_bedrock_embedding_titan()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_bedrock_embedding_cohere():
     try:
         litellm.set_verbose = False
