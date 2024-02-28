@@ -25,14 +25,17 @@ response = litellm.completion(model="gemini-pro", messages=[{"role": "user", "co
 1. Modify the config.yaml 
 
 ```yaml
-litellm_settings: 
-  vertex_project: "hardy-device-38811" # Your Project ID
-  vertex_location: "us-central1" # proj location
-
-model_list: 
-  -model_name: team1-gemini-pro
-   litellm_params: 
-     model: gemini-pro
+model_list:
+  - model_name: gemini-vision
+    litellm_params:
+      model: vertex_ai/gemini-1.0-pro-vision-001
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+  - model_name: gemini-vision
+    litellm_params:
+      model: vertex_ai/gemini-1.0-pro-vision-001
+      vertex_project: "project-id2"
+      vertex_location: "us-east"
 ```
 
 2. Start the proxy 
