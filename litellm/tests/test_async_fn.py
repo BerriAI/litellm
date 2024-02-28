@@ -193,11 +193,20 @@ async def test_hf_completion_tgi():
         # Add any assertions here to check the response
         print(response)
     except litellm.APIError as e:
+        print("got an api error")
         pass
     except litellm.Timeout as e:
+        print("got a timeout error")
+        pass
+    except litellm.RateLimitError as e:
+        # this will catch the model is overloaded error
+        print("got a rate limit error")
         pass
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        if "Model is overloaded" in str(e):
+            pass
+        else:
+            pytest.fail(f"Error occurred: {e}")
 
 
 # test_get_cloudflare_response_streaming()
