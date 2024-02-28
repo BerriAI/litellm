@@ -314,10 +314,6 @@ export const userSpendLogsCall = async (
 ) => {
   try {
     console.log(`user role in spend logs call: ${userRole}`);
-    if (userRole == "Admin") {
-      return await adminSpendLogsCall(accessToken);
-    }
-
     let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs` : `/spend/logs`;
     if (userRole == "App Owner") {
       url = `${url}/?user_id=${userID}&start_date=${startTime}&end_date=${endTime}`;
@@ -355,6 +351,66 @@ export const adminSpendLogsCall = async (accessToken: String) => {
       : `/global/spend/logs`;
 
     message.info("Making spend logs request");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    message.success("Spend Logs received");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const adminTopKeysCall = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/spend/keys?limit=5`
+      : `/global/spend/keys?limit=5`;
+
+    message.info("Making spend keys request");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    message.success("Spend Logs received");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const adminTopModelsCall = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/spend/models?limit=5`
+      : `/global/spend/models?limit=5`;
+
+    message.info("Making spend models request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
