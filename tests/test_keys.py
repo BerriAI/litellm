@@ -490,6 +490,7 @@ async def test_key_crossing_budget():
             assert "ExceededTokenBudget: Current spend for token:" in str(e)
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_key_info_spend_values_sagemaker():
     """
