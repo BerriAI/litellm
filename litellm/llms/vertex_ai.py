@@ -278,7 +278,11 @@ def completion(
         import google.auth
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
+        print_verbose(
+            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
+        )
         creds, _ = google.auth.default(quota_project_id=vertex_project)
+        print_verbose(f"VERTEX AI: creds={creds}")
         vertexai.init(
             project=vertex_project, location=vertex_location, credentials=creds
         )
