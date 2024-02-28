@@ -203,7 +203,7 @@ def test_completion_bedrock_claude_sts_client_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_claude_sts_client_auth()
+# test_completion_bedrock_claude_sts_client_auth()
 
 
 def test_provisioned_throughput():
