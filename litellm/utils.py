@@ -4357,6 +4357,7 @@ def get_optional_params(
         or model in litellm.vertex_code_text_models
         or model in litellm.vertex_language_models
         or model in litellm.vertex_embedding_models
+        or model in litellm.vertex_vision_models
     ):
         print_verbose(f"(start) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK")
         ## check if unsupported param passed in
