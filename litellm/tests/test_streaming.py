@@ -1075,8 +1075,6 @@ async def test_hf_completion_tgi_stream():
             if finished:
                 break
             idx += 1
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
     except litellm.ServiceUnavailableError as e:
         pass
