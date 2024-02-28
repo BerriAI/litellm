@@ -33,7 +33,7 @@
   - Call all models using the OpenAI format - `completion(model, messages)`
   - Text responses will always be available at `['choices'][0]['message']['content']`
 - **Error Handling** Using Model Fallbacks (if `GPT-4` fails, try `llama2`)
-- **Logging** - Log Requests, Responses and Errors to `Supabase`, `Posthog`, `Mixpanel`, `Sentry`, `LLMonitor`,`Athina`, `Helicone` (Any of the supported providers here: https://litellm.readthedocs.io/en/latest/advanced/
+- **Logging** - Log Requests, Responses and Errors to `Supabase`, `Posthog`, `Mixpanel`, `Sentry`, `Lunary`,`Athina`, `Helicone` (Any of the supported providers here: https://litellm.readthedocs.io/en/latest/advanced/
 
   **Example: Logs sent to Supabase**
   <img width="1015" alt="Screenshot 2023-08-11 at 4 02 46 PM" src="https://github.com/ishaan-jaff/proxy-server/assets/29436595/237557b8-ba09-4917-982c-8f3e1b2c8d08">
