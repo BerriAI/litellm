@@ -3832,13 +3832,51 @@ async def view_spend_logs(
         # gettting spend logs from clickhouse
         from litellm.proxy.enterprise.utils import view_spend_logs_from_clickhouse
 
-        return await view_spend_logs_from_clickhouse(
-            api_key=api_key,
-            user_id=user_id,
-            request_id=request_id,
+        daily_metrics = await view_daily_metrics(
             start_date=start_date,
             end_date=end_date,
         )
+
+        # get the top api keys across all daily_metrics
+        top_api_keys = {}  # type: ignore
+
+        # make this compatible with the admin UI
+        for response in daily_metrics.get("daily_spend", {}):
+            response["startTime"] = response["day"]
+            response["spend"] = response["daily_spend"]
+            response["models"] = response["spend_per_model"]
+            response["users"] = {"ishaan": 0.0}
+            spend_per_api_key = response["spend_per_api_key"]
+
+            # insert spend_per_api_key key, values in response
+            for key, value in spend_per_api_key.items():
+                response[key] = value
+                top_api_keys[key] = top_api_keys.get(key, 0.0) + value
+
+            del response["day"]
+            del response["daily_spend"]
+            del response["spend_per_model"]
+            del response["spend_per_api_key"]
+
+        # get top 5 api keys
+        top_api_keys = sorted(top_api_keys.items(), key=lambda x: x[1], reverse=True)  # type: ignore
+        top_api_keys = top_api_keys[:5]  # type: ignore
+        top_api_keys = dict(top_api_keys)  # type: ignore
+        """
+        set it like this 
+        {
+            "key" : key,
+            "spend:" : spend
+        }
+        """
+        response_keys = {}
+        for key in top_api_keys.items():
+            response_keys["key"] = key[0]
+            response_keys["spend"] = key[1]
+
+        daily_metrics["top_api_keys"] = response_keys
+
+        return daily_metrics
     global prisma_client
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
@@ -4006,7 +4044,6 @@ async def view_daily_metrics(
         default=None,
         description="Time till which to view key spend",
     ),
-    metric_type: Optional[Literal["per_api_key", "per_user", "per_model"]] = None,
 ):
     """ """
     try:
@@ -4022,7 +4059,7 @@ async def view_daily_metrics(
                 "date": "2022-01-01",
                 "spend": 0.0,
                 "users": {},
-                "models": {}
+                "models": {},
             }
             """
         else:
