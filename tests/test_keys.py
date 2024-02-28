@@ -449,7 +449,7 @@ async def test_key_with_budgets():
         reset_at_init_value = key_info["info"]["budget_reset_at"]
         reset_at_new_value = None
         i = 0
-        await asyncio.sleep(610)
+        await asyncio.sleep(120)
         while i < 3:
             key_info = await get_key_info(session=session, get_key=key, call_key=key)
             reset_at_new_value = key_info["info"]["budget_reset_at"]
