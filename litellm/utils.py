@@ -60,7 +60,7 @@ from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
-from .integrations.llmonitor import LLMonitorLogger
+from .integrations.lunary import LunaryLogger
 from .integrations.prompt_layer import PromptLayerLogger
 from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
@@ -126,7 +126,7 @@ dynamoLogger = None
 s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
-llmonitorLogger = None
+lunaryLogger = None
 aispendLogger = None
 berrispendLogger = None
 supabaseClient = None
@@ -788,7 +788,7 @@ class CallTypes(Enum):
 
 # Logging function -> log the exact model details + what's being sent | Non-BlockingP
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb, llmonitorLogger
+    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb, lunaryLogger
 
     def __init__(
         self,
@@ -1327,27 +1327,28 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-                    if callback == "llmonitor":
-                        print_verbose("reaches llmonitor for logging!")
+                    if callback == "lunary":
+                        print_verbose("reaches lunary for logging!")
                         model = self.model
 
                         input = self.model_call_details.get(
                             "messages", self.model_call_details.get("input", None)
                         )
 
-                        # if contains input, it's 'embedding', otherwise 'llm'
                         type = (
                             "embed"
                             if self.call_type == CallTypes.embedding.value
                             else "llm"
                         )
 
-                        llmonitorLogger.log_event(
+                        lunaryLogger.log_event(
                             type=type,
+                            kwargs=self.model_call_details,
                             event="end",
                             model=model,
                             input=input,
                             user_id=self.model_call_details.get("user", "default"),
+                            extra=self.model_call_details.get("optional_params", {}),
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -1842,8 +1843,8 @@ class Logging:
                             call_type=self.call_type,
                             stream=self.stream,
                         )
-                    elif callback == "llmonitor":
-                        print_verbose("reaches llmonitor for logging error!")
+                    elif callback == "lunary":
+                        print_verbose("reaches lunary for logging error!")
 
                         model = self.model
 
@@ -1855,7 +1856,7 @@ class Logging:
                             else "llm"
                         )
 
-                        llmonitorLogger.log_event(
+                        lunaryLogger.log_event(
                             type=_type,
                             event="error",
                             user_id=self.model_call_details.get("user", "default"),
@@ -5593,7 +5594,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 
 def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -5653,8 +5654,8 @@ def set_callbacks(callback_list, function_id=None):
                 print_verbose("Initialized Athina Logger")
             elif callback == "helicone":
                 heliconeLogger = HeliconeLogger()
-            elif callback == "llmonitor":
-                llmonitorLogger = LLMonitorLogger()
+            elif callback == "lunary":
+                lunaryLogger = LunaryLogger()
             elif callback == "promptlayer":
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
@@ -5692,7 +5693,7 @@ def set_callbacks(callback_list, function_id=None):
 
 # NOTE: DEPRECATING this in favor of using failure_handler() in Logging:
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger
     try:
         # print_verbose(f"handle_failure args: {args}")
         # print_verbose(f"handle_failure kwargs: {kwargs}")
