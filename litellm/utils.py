@@ -1734,6 +1734,7 @@ class Logging:
                     )
                     if self.stream:
                         if "complete_streaming_response" in self.model_call_details:
+
                             await customLogger.async_log_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details[
@@ -4717,7 +4718,14 @@ def get_optional_params(
         if max_tokens:
             optional_params["max_tokens"] = max_tokens
     elif custom_llm_provider == "mistral":
-        supported_params = ["temperature", "top_p", "stream", "max_tokens"]
+        supported_params = [
+            "temperature",
+            "top_p",
+            "stream",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+        ]
         _check_valid_arg(supported_params=supported_params)
         if temperature is not None:
             optional_params["temperature"] = temperature
@@ -4727,6 +4735,10 @@ def get_optional_params(
             optional_params["stream"] = stream
         if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
 
         # check safe_mode, random_seed: https://docs.mistral.ai/api/#operation/createChatCompletion
         safe_mode = passed_params.pop("safe_mode", None)
