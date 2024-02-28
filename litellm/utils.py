@@ -205,18 +205,18 @@ def map_finish_reason(
 
 class FunctionCall(OpenAIObject):
     arguments: str
-    name: str
+    name: Optional[str] = None
 
 
 class Function(OpenAIObject):
     arguments: str
-    name: str
+    name: Optional[str] = None
 
 
 class ChatCompletionDeltaToolCall(OpenAIObject):
-    id: str
+    id: Optional[str] = None
     function: Function
-    type: str
+    type: Optional[str] = None
     index: int
 
 
@@ -275,13 +275,19 @@ class Delta(OpenAIObject):
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
-        self.function_call = function_call
-        if tool_calls is not None and isinstance(tool_calls, dict):
+        if function_call is not None and isinstance(function_call, dict):
+            self.function_call = FunctionCall(**function_call)
+        else:
+            self.function_call = function_call
+        if tool_calls is not None and isinstance(tool_calls, list):
             self.tool_calls = []
             for tool_call in tool_calls:
-                if tool_call.get("index", None) is None:
-                    tool_call["index"] = 0
-                self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                if isinstance(tool_call, dict):
+                    if tool_call.get("index", None) is None:
+                        tool_call["index"] = 0
+                    self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    self.tool_calls.append(tool_call)
         else:
             self.tool_calls = tool_calls
 
@@ -8728,7 +8734,7 @@ class CustomStreamWrapper:
                         or original_chunk.choices[0].delta.tool_calls is not None
                     ):
                         try:
-                            delta = dict(original_chunk.choices[0].delta)
+                            delta = original_chunk.choices[0].delta
                             model_response.system_fingerprint = (
                                 original_chunk.system_fingerprint
                             )
@@ -8763,7 +8769,9 @@ class CustomStreamWrapper:
                                                 is None
                                             ):
                                                 t.function.arguments = ""
-                            model_response.choices[0].delta = Delta(**delta)
+                            _json_delta = delta.model_dump()
+                            print_verbose(f"_json_delta: {_json_delta}")
+                            model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
                             traceback.print_exc()
                             model_response.choices[0].delta = Delta()
