@@ -332,8 +332,7 @@ async def user_api_key_auth(
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         is_master_key_valid = secrets.compare_digest(api_key, master_key)
         if is_master_key_valid:
-            return UserAPIKeyAuth(api_key=master_key)
-
+            return UserAPIKeyAuth(api_key=master_key, user_role="proxy_admin")
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
@@ -794,7 +793,9 @@ async def user_api_key_auth(
                 pass
             else:
                 if _is_user_proxy_admin(user_id_information):
-                    pass
+                    return UserAPIKeyAuth(
+                        api_key=api_key, user_role="proxy_admin", **valid_token_dict
+                    )
                 else:
                     raise Exception(
                         f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
@@ -2114,9 +2115,9 @@ async def async_data_generator(response, user_api_key_dict):
     try:
         start_time = time.time()
         async for chunk in response:
-            verbose_proxy_logger.debug(f"returned chunk: {chunk}")
+            chunk = chunk.model_dump_json(exclude_none=True)
             try:
-                yield f"data: {json.dumps(chunk.dict())}\n\n"
+                yield f"data: {chunk}\n\n"
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
@@ -4621,50 +4622,54 @@ async def new_team(
         data.team_id = str(uuid.uuid4())
 
     if (
-        data.tpm_limit is not None
-        and user_api_key_dict.tpm_limit is not None
-        and data.tpm_limit > user_api_key_dict.tpm_limit
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}"
-            },
-        )
+        user_api_key_dict.user_role is None
+        or user_api_key_dict.user_role != "proxy_admin"
+    ):  # don't restrict proxy admin
+        if (
+            data.tpm_limit is not None
+            and user_api_key_dict.tpm_limit is not None
+            and data.tpm_limit > user_api_key_dict.tpm_limit
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}"
+                },
+            )
 
-    if (
-        data.rpm_limit is not None
-        and user_api_key_dict.rpm_limit is not None
-        and data.rpm_limit > user_api_key_dict.rpm_limit
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}"
-            },
-        )
+        if (
+            data.rpm_limit is not None
+            and user_api_key_dict.rpm_limit is not None
+            and data.rpm_limit > user_api_key_dict.rpm_limit
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}"
+                },
+            )
 
-    if (
-        data.max_budget is not None
-        and user_api_key_dict.max_budget is not None
-        and data.max_budget > user_api_key_dict.max_budget
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}"
-            },
-        )
+        if (
+            data.max_budget is not None
+            and user_api_key_dict.max_budget is not None
+            and data.max_budget > user_api_key_dict.max_budget
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}"
+                },
+            )
 
-    if data.models is not None:
-        for m in data.models:
-            if m not in user_api_key_dict.models:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}"
-                    },
-                )
+        if data.models is not None:
+            for m in data.models:
+                if m not in user_api_key_dict.models:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}"
+                        },
+                    )
 
     if user_api_key_dict.user_id is not None:
         creating_user_in_list = False
@@ -5645,7 +5650,11 @@ async def login(request: Request):
                 "user_id": "litellm-dashboard",
             }
         key = response["token"]  # type: ignore
-        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "") + "/ui/"
+        litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
+        if litellm_dashboard_ui.endswith("/"):
+            litellm_dashboard_ui += "ui/"
+        else:
+            litellm_dashboard_ui += "/ui/"
         import jwt
 
         jwt_token = jwt.encode(
@@ -5654,6 +5663,7 @@ async def login(request: Request):
                 "key": key,
                 "user_email": user_id,
                 "user_role": "app_admin",  # this is the path without sso - we can assume only admins will use this
+                "login_method": "username_password",
             },
             "secret",
             algorithm="HS256",
@@ -5945,6 +5955,7 @@ async def auth_callback(request: Request):
             "key": key,
             "user_email": user_email,
             "user_role": user_role,
+            "login_method": "sso",
         },
         "secret",
         algorithm="HS256",
