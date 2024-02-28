@@ -3788,7 +3788,7 @@ async def view_spend_tags(
 
 @router.get(
     "/spend/logs",
-    tags=["budget & spend Tracking"],
+    tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
@@ -4046,6 +4046,28 @@ async def view_spend_logs(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.get(
+    "/global/spend/logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_logs():
+    """
+    [BETA] This is a beta endpoint.
+
+    Use this to get global spend (spend per day for last 30d). Admin-only endpoint
+
+    More efficient implementation of /spend/logs, by creating a view over the spend logs table.
+    """
+    global prisma_client
+
+    sql_query = """SELECT * FROM "globalspendperdate";"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
 
 
 @router.get(
