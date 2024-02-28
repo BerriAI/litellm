@@ -239,6 +239,7 @@ health_check_interval = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
+ui_access_mode: Literal["admin", "all"] = "all"
 proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
@@ -1408,7 +1409,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1715,6 +1716,10 @@ class ProxyConfig:
                 )
             ## COST TRACKING ##
             cost_tracking()
+            ## ADMIN UI ACCESS ##
+            ui_access_mode = general_settings.get(
+                "ui_access_mode", "all"
+            )  # can be either ["admin_only" or "all"]
             ## BUDGET RESCHEDULER ##
             proxy_budget_rescheduler_min_time = general_settings.get(
                 "proxy_budget_rescheduler_min_time", proxy_budget_rescheduler_min_time
@@ -5725,7 +5730,7 @@ def get_image():
 @app.get("/sso/callback", tags=["experimental"])
 async def auth_callback(request: Request):
     """Verify login"""
-    global general_settings
+    global general_settings, ui_access_mode
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
@@ -5956,6 +5961,20 @@ async def auth_callback(request: Request):
     ):
         # checks if user is admin
         user_role = "app_admin"
+
+    verbose_proxy_logger.debug(
+        f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
+    )
+    ## CHECK IF ROLE ALLOWED TO USE PROXY ##
+    if ui_access_mode == "admin_only" and "admin" not in user_role:
+        verbose_proxy_logger.debug("EXCEPTION RAISED")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
+            },
+        )
+
     import jwt
 
     jwt_token = jwt.encode(
