@@ -6,6 +6,7 @@ import UserDashboard from "../components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
+import AdminPanel from "@/components/admins";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
@@ -73,6 +74,10 @@ const CreateKeyPage = () => {
         return "App Owner";
       case "app_admin":
         return "Admin";
+      case "proxy_admin":
+        return "Admin";
+      case "proxy_admin_viewer":
+        return "Admin Viewer";
       case "app_user":
         return "App User";
       default:
@@ -129,6 +134,12 @@ const CreateKeyPage = () => {
           ) : page == "teams" ? (
             <Teams
               teams={teams}
+              setTeams={setTeams}
+              searchParams={searchParams}
+              accessToken={accessToken}
+            />
+          ) : page == "admin-panel" ? (
+            <AdminPanel
               setTeams={setTeams}
               searchParams={searchParams}
               accessToken={accessToken}

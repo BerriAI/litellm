@@ -110,6 +110,7 @@ def test_vertex_ai():
                 "code-bison@001",
                 "text-bison@001",
                 "gemini-1.5-pro",
+                "gemini-1.5-pro-preview-0215",
                 "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
@@ -129,6 +130,8 @@ def test_vertex_ai():
                 f"response.choices[0].finish_reason: {response.choices[0].finish_reason}"
             )
             assert response.choices[0].finish_reason in litellm._openai_finish_reasons
+        except litellm.RateLimitError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -160,6 +163,7 @@ def test_vertex_ai_stream():
                 "code-bison@001",
                 "text-bison@001",
                 "gemini-1.5-pro",
+                "gemini-1.5-pro-preview-0215",
                 "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
@@ -181,6 +185,8 @@ def test_vertex_ai_stream():
                 assert type(content) == str
                 # pass
             assert len(completed_str) > 4
+        except litellm.RateLimitError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -211,6 +217,7 @@ async def test_async_vertexai_response():
             "code-bison@001",
             "text-bison@001",
             "gemini-1.5-pro",
+            "gemini-1.5-pro-preview-0215",
             "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
@@ -255,6 +262,7 @@ async def test_async_vertexai_streaming_response():
             "code-bison@001",
             "text-bison@001",
             "gemini-1.5-pro",
+            "gemini-1.5-pro-preview-0215",
             "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
