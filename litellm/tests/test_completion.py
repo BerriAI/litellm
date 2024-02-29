@@ -107,6 +107,26 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_mistral_azure():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="mistral/Mistral-large-nmefg",
+            max_tokens=5,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hi from litellm",
+                }
+            ],
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_mistral_api()
 
 
