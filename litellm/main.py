@@ -557,7 +557,6 @@ def completion(
         "output_cost_per_second",
         "hf_model_name",
         "model_info",
-        "templateId",
         "proxy_server_request",
         "preset_cache_key",
         "caching_groups",
