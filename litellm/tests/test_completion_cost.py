@@ -171,6 +171,7 @@ def test_cost_openai_image_gen():
     assert cost == 0.019922944
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_cost_bedrock_pricing():
     """
     - get pricing specific to region for a model
@@ -226,6 +227,7 @@ def test_cost_bedrock_pricing():
     assert cost == predicted_cost
 
 
+@pytest.mark.skip(reason="AWS disabled our access")
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
     model = "anthropic.claude-instant-v1"

@@ -12,6 +12,7 @@ import litellm
 from litellm import completion
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_sagemaker():
     litellm.set_verbose = True
     litellm.drop_params = True
