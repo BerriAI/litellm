@@ -98,24 +98,17 @@ class LunaryLogger:
             )
 
             tags = litellm_params.pop("tags", None) or []
-            template_id = litellm_params.pop("templateId", None)
 
-            print(litellm_params)
-            print(template_id)
+
+
 
             if extra:
                 extra.pop("extra_body", None)
                 extra.pop("user", None)
+                template_id = extra.pop("extra_headers", {}).get("Template-Id", None)
 
             # keep only serializable types
             for param, value in extra.items():
-                if not isinstance(value, (str, int, bool, float)):
-                    try:
-                        extra[param] = str(value)
-                    except:
-                        pass
-
-            for param, value in metadata.items():
                 if not isinstance(value, (str, int, bool, float)):
                     try:
                         extra[param] = str(value)
