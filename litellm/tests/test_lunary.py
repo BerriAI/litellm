@@ -26,8 +26,20 @@ def test_lunary_logging():
         print(e)
 
 
-test_lunary_logging()
+# test_lunary_logging()
 
+
+def test_lunary_template():
+    import lunary
+
+    try:
+        template = lunary.render_template("test-template", {"question": "Hello!"})
+        response = completion(**template)
+        print(response)
+    except Exception as e:
+        print(e)
+
+test_lunary_template()
 
 def test_lunary_logging_with_metadata():
     try:
@@ -68,4 +80,4 @@ def test_lunary_logging_with_streaming_and_metadata():
         print(e)
 
 
-test_lunary_logging_with_streaming_and_metadata()
+#test_lunary_logging_with_streaming_and_metadata()
