@@ -3,7 +3,6 @@
  * Use this to avoid sharing master key with others
  */
 import React, { useState, useEffect } from "react";
-import Link from "next/link";
 import { Typography } from "antd";
 import {
   Button as Button2,
@@ -31,42 +30,73 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 interface AdminPanelProps {
-  teams: any[] | null;
   searchParams: any;
   accessToken: string | null;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
-import { teamCreateCall, teamMemberAddCall, Member } from "./networking";
+import {
+  userUpdateUserCall,
+  Member,
+  userGetAllUsersCall,
+  User,
+} from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
-  teams,
   searchParams,
   accessToken,
-  setTeams,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
   const { Title, Paragraph } = Typography;
   const [value, setValue] = useState("");
+  const [admins, setAdmins] = useState<null | any[]>(null);
 
-  const [selectedTeam, setSelectedTeam] = useState<null | any>(
-    teams ? teams[0] : null
-  );
-  const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
-  const handleOk = () => {
-    setIsTeamModalVisible(false);
-    form.resetFields();
-  };
+
+  useEffect(() => {
+    // Fetch model info and set the default selected model
+    const fetchProxyAdminInfo = async () => {
+      if (accessToken != null) {
+        const combinedList: any[] = [];
+        const proxyViewers = await userGetAllUsersCall(
+          accessToken,
+          "proxy_admin_viewer"
+        );
+        proxyViewers.forEach((viewer: User) => {
+          combinedList.push({
+            user_role: viewer.user_role,
+            user_id: viewer.user_id,
+            user_email: viewer.user_email,
+          });
+        });
+
+        console.log(`proxy viewers: ${proxyViewers}`);
+
+        const proxyAdmins = await userGetAllUsersCall(
+          accessToken,
+          "proxy_admin"
+        );
+
+        proxyAdmins.forEach((admins: User) => {
+          combinedList.push({
+            user_role: admins.user_role,
+            user_id: admins.user_id,
+            user_email: admins.user_email,
+          });
+        });
+
+        console.log(`proxy admins: ${proxyAdmins}`);
+        console.log(`combinedList: ${combinedList}`);
+        setAdmins(combinedList);
+      }
+    };
+
+    fetchProxyAdminInfo();
+  }, [accessToken]);
 
   const handleMemberOk = () => {
     setIsAddMemberModalVisible(false);
     memberForm.resetFields();
-  };
-
-  const handleCancel = () => {
-    setIsTeamModalVisible(false);
-    form.resetFields();
   };
 
   const handleMemberCancel = () => {
@@ -74,53 +104,30 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     memberForm.resetFields();
   };
 
-  const handleCreate = async (formValues: Record<string, any>) => {
-    try {
-      if (accessToken != null) {
-        message.info("Making API Call");
-        const response: any = await teamCreateCall(accessToken, formValues);
-        if (teams !== null) {
-          setTeams([...teams, response]);
-        } else {
-          setTeams([response]);
-        }
-        console.log(`response for team create call: ${response}`);
-        setIsTeamModalVisible(false);
-      }
-    } catch (error) {
-      console.error("Error creating the key:", error);
-    }
-  };
-
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     try {
-      if (accessToken != null && teams != null) {
+      if (accessToken != null && admins != null) {
         message.info("Making API Call");
         const user_role: Member = {
           role: "user",
           user_email: formValues.user_email,
           user_id: formValues.user_id,
         };
-        const response: any = await teamMemberAddCall(
-          accessToken,
-          selectedTeam["team_id"],
-          user_role
-        );
-        console.log(`response for team create call: ${response["data"]}`);
+        const response: any = await userUpdateUserCall(accessToken, formValues);
+        console.log(`response for team create call: ${response}`);
         // Checking if the team exists in the list and updating or adding accordingly
-        const foundIndex = teams.findIndex((team) => {
+        const foundIndex = admins.findIndex((user) => {
           console.log(
-            `team.team_id=${team.team_id}; response.data.team_id=${response.data.team_id}`
+            `user.user_id=${user.user_id}; response.user_id=${response.user_id}`
           );
-          return team.team_id === response.data.team_id;
+          return user.user_id === response.user_id;
         });
         console.log(`foundIndex: ${foundIndex}`);
-        if (foundIndex !== -1) {
-          // If the team is found, update it
-          const updatedTeams = [...teams]; // Copy the current state
-          updatedTeams[foundIndex] = response.data; // Update the specific team
-          setTeams(updatedTeams); // Set the new state
-          setSelectedTeam(response.data);
+        if (foundIndex == -1) {
+          console.log(`updates admin with new user`);
+          admins.push(response);
+          // If new user is found, update it
+          setAdmins(admins); // Set the new state
         }
         setIsAddMemberModalVisible(false);
       }
@@ -128,11 +135,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       console.error("Error creating the key:", error);
     }
   };
-  console.log(`received teams ${teams}`);
+  console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2">
       <Title level={4}>Proxy Admins</Title>
-      <Paragraph>Add other people to just view global spend.</Paragraph>
+      <Paragraph>
+        Add other people to just view global spend. They cannot create teams or
+        grant users access to new models.
+      </Paragraph>
       <Grid numItems={1} className="gap-2 p-0 w-full">
         <Col numColSpan={1}>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
@@ -146,24 +156,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               </TableHead>
 
               <TableBody>
-                {selectedTeam
-                  ? selectedTeam["members_with_roles"].map(
-                      (member: any, index: number) => (
-                        <TableRow key={index}>
-                          <TableCell>
-                            {member["user_email"]
-                              ? member["user_email"]
-                              : member["user_id"]
-                              ? member["user_id"]
-                              : null}
-                          </TableCell>
-                          <TableCell>{member["role"]}</TableCell>
-                          <TableCell>
-                            <Icon icon={CogIcon} size="sm" />
-                          </TableCell>
-                        </TableRow>
-                      )
-                    )
+                {admins
+                  ? admins.map((member: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell>
+                          {member["user_email"]
+                            ? member["user_email"]
+                            : member["user_id"]
+                            ? member["user_id"]
+                            : null}
+                        </TableCell>
+                        <TableCell>{member["user_role"]}</TableCell>
+                        <TableCell>
+                          <Icon icon={CogIcon} size="sm" />
+                        </TableCell>
+                      </TableRow>
+                    ))
                   : null}
               </TableBody>
             </Table>
@@ -174,10 +182,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             className="mx-auto mb-5"
             onClick={() => setIsAddMemberModalVisible(true)}
           >
-            + Add member
+            + Add viewer
           </Button>
           <Modal
-            title="Add member"
+            title="Add viewer"
             visible={isAddMemberModalVisible}
             width={800}
             footer={null}
