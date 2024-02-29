@@ -1336,9 +1336,10 @@ class Logging:
                     if callback == "lunary":
                         print_verbose("reaches lunary for logging!")
                         model = self.model
+                        kwargs = self.model_call_details
 
-                        input = self.model_call_details.get(
-                            "messages", self.model_call_details.get("input", None)
+                        input = kwargs.get(
+                            "messages", kwargs.get("input", None)
                         )
 
                         type = (
@@ -1347,15 +1348,27 @@ class Logging:
                             else "llm"
                         )
 
+                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            print_verbose("reaches lunary for streaming logging!")
+                            print(kwargs)
+                            if "complete_streaming_response" not in kwargs:
+                                break
+                            else:
+                                print_verbose(
+                                    "reaches lunary for streaming logging!"
+                                )
+                                result = kwargs["complete_streaming_response"]
+
                         lunaryLogger.log_event(
                             type=type,
-                            kwargs=self.model_call_details,
+                            kwargs=kwargs,
                             event="end",
                             model=model,
                             input=input,
-                            user_id=self.model_call_details.get("user_id", self.model_call_details.get("user", None)),
+                            user_id=kwargs.get("user", None),
                             #user_props=self.model_call_details.get("user_props", None),
-                            extra=self.model_call_details.get("optional_params", {}),
+                            extra=kwargs.get("optional_params", {}),
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -1872,6 +1885,8 @@ class Logging:
                             if self.call_type == CallTypes.embedding.value
                             else "llm"
                         )
+
+                       
 
                         lunaryLogger.log_event(
                             type=_type,
