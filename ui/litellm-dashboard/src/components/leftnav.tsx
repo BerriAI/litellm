@@ -16,6 +16,34 @@ const Sidebar: React.FC<SidebarProps> = ({
   userRole,
   defaultSelectedKey,
 }) => {
+  if (userRole == "Admin Viewer") {
+    return (
+      <Layout style={{ minHeight: "100vh", maxWidth: "120px" }}>
+        <Sider width={120}>
+          <Menu
+            mode="inline"
+            defaultSelectedKeys={
+              defaultSelectedKey ? defaultSelectedKey : ["4"]
+            }
+            style={{ height: "100%", borderRight: 0 }}
+          >
+            <Menu.Item key="4" onClick={() => setPage("api-keys")}>
+              API Keys
+            </Menu.Item>
+            <Menu.Item key="2" onClick={() => setPage("models")}>
+              Models
+            </Menu.Item>
+            <Menu.Item key="3" onClick={() => setPage("llm-playground")}>
+              Chat UI
+            </Menu.Item>
+            <Menu.Item key="1" onClick={() => setPage("usage")}>
+              Usage
+            </Menu.Item>
+          </Menu>
+        </Sider>
+      </Layout>
+    );
+  }
   return (
     <Layout style={{ minHeight: "100vh", maxWidth: "120px" }}>
       <Sider width={120}>
