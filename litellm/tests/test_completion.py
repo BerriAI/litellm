@@ -107,11 +107,16 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(
+    reason="Since we already test mistral/mistral-tiny in test_completion_mistral_api. This is only for locally verifying azure mistral works"
+)
 def test_completion_mistral_azure():
     try:
         litellm.set_verbose = True
         response = completion(
             model="mistral/Mistral-large-nmefg",
+            api_key=os.environ["MISTRAL_AZURE_API_KEY"],
+            api_base=os.environ["MISTRAL_AZURE_API_BASE"],
             max_tokens=5,
             messages=[
                 {
