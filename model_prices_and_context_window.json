@@ -1775,6 +1775,23 @@
         "output_cost_per_token": 0.0000009,
         "litellm_provider": "together_ai"
     },
+    "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "together_ai/mistralai/Mistral-7B-Instruct-v0.1": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "together_ai/togethercomputer/CodeLlama-34b-Instruct": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
     "ollama/llama2": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.0,
