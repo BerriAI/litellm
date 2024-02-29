@@ -1,4 +1,4 @@
-# Virtual Keys, Users
+# 🔑 Virtual Keys, Users
 Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
@@ -343,18 +343,83 @@ A key will be generated for the new user created
   "key_name": null,
   "expires": null
 }
-
 ```
 
-Request Params:
-- keys: List[str] - List of keys to delete
+
+## /user/info
+
+### Request
+
+#### View all Users
+If you're trying to view all users, we recommend using pagination with the following args
+- `view_all=true`
+- `page=0` Optional(int) min = 0, default=0
+- `page_size=25` Optional(int) min = 1, default = 25
+```shell
+curl -X GET "http://0.0.0.0:4000/user/info?view_all=true&page=0&page_size=25" -H "Authorization: Bearer sk-1234"
+```
+
+#### View specific user_id
+```shell
+curl -X GET "http://0.0.0.0:4000/user/info?user_id=228da235-eef0-4c30-bf53-5d6ac0d278c2" -H "Authorization: Bearer sk-1234"
+```
 
 ### Response
+View user spend, budget, models, keys and teams 
 
 ```json
 {
-  "deleted_keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+  "user_id": "228da235-eef0-4c30-bf53-5d6ac0d278c2",
+  "user_info": {
+    "user_id": "228da235-eef0-4c30-bf53-5d6ac0d278c2",
+    "team_id": null,
+    "teams": [],
+    "user_role": "app_user",
+    "max_budget": null,
+    "spend": 200000.0,
+    "user_email": null,
+    "models": [],
+    "max_parallel_requests": null,
+    "tpm_limit": null,
+    "rpm_limit": null,
+    "budget_duration": null,
+    "budget_reset_at": null,
+    "allowed_cache_controls": [],
+    "model_spend": {
+      "chatgpt-v-2": 200000
+    },
+    "model_max_budget": {}
+  },
+  "keys": [
+    {
+      "token": "16c337f9df00a0e6472627e39a2ed02e67bc9a8a760c983c4e9b8cad7954f3c0",
+      "key_name": null,
+      "key_alias": null,
+      "spend": 200000.0,
+      "expires": null,
+      "models": [],
+      "aliases": {},
+      "config": {},
+      "user_id": "228da235-eef0-4c30-bf53-5d6ac0d278c2",
+      "team_id": null,
+      "permissions": {},
+      "max_parallel_requests": null,
+      "metadata": {},
+      "tpm_limit": null,
+      "rpm_limit": null,
+      "max_budget": null,
+      "budget_duration": null,
+      "budget_reset_at": null,
+      "allowed_cache_controls": [],
+      "model_spend": {
+        "chatgpt-v-2": 200000
+      },
+      "model_max_budget": {}
+    }
+  ],
+  "teams": []
 }
+
 ```
 
 ## Advanced 
