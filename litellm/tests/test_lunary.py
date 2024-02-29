@@ -39,7 +39,7 @@ def test_lunary_template():
     except Exception as e:
         print(e)
 
-test_lunary_template()
+# test_lunary_template()
 
 def test_lunary_logging_with_metadata():
     try:
@@ -80,4 +80,4 @@ def test_lunary_logging_with_streaming_and_metadata():
         print(e)
 
 
-#test_lunary_logging_with_streaming_and_metadata()
+test_lunary_logging_with_streaming_and_metadata()
