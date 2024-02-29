@@ -317,3 +317,24 @@ def test_token_counter():
 
 
 # test_token_counter()
+
+
+def test_supports_function_calling():
+    try:
+        assert litellm.supports_function_calling(model="gpt-3.5-turbo") == True
+        assert (
+            litellm.supports_function_calling(model="azure/gpt-4-1106-preview") == True
+        )
+        assert (
+            litellm.supports_function_calling(model="anthropic.claude-instant-v1")
+            == False
+        )
+        assert litellm.supports_function_calling(model="palm/chat-bison") == False
+        assert litellm.supports_function_calling(model="ollama/llama2") == False
+        assert (
+            litellm.supports_function_calling(model="anthropic.claude-instant-v1")
+            == False
+        )
+        assert litellm.supports_function_calling(model="claude-2") == False
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
