@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔑 [BETA] Proxy UI 
+# [BETA] Proxy UI 
 ### **Create + delete keys through a UI**
 
 [Let users create their own keys](#setup-ssoauth-for-ui)
