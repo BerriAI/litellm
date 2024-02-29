@@ -1553,6 +1553,7 @@ def test_completion_bedrock_titan():
 # test_completion_bedrock_titan()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_claude():
     print("calling claude")
     try:
