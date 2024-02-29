@@ -212,6 +212,7 @@ async def test_hf_completion_tgi():
 # test_get_cloudflare_response_streaming()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_completion_sagemaker():
     # litellm.set_verbose=True
