@@ -4311,11 +4311,11 @@ async def user_info(
         default=False,
         description="set to true to View all users. When using view_all, don't pass user_id",
     ),
-    page: int = fastapi.Query(
+    page: Optional[int] = fastapi.Query(
         default=0,
         description="Page number for pagination. Only use when view_all is true",
     ),
-    page_size: int = fastapi.Query(
+    page_size: Optional[int] = fastapi.Query(
         default=25,
         description="Number of items per page. Only use when view_all is true",
     ),
@@ -4340,6 +4340,10 @@ async def user_info(
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
         elif view_all == True:
+            if page is None:
+                page = 0
+            if page_size is None:
+                page_size = 25
             offset = (page) * page_size  # default is 0
             limit = page_size  # default is 10
             user_info = await prisma_client.get_data(
