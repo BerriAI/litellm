@@ -519,7 +519,9 @@ def _set_env_vars_based_on_arn(aws_arn_arguments):
     aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
     aws_session_token = assumed_role["Credentials"]["SessionToken"]
 
-    verbose_logger.debug(f"Got STS assumed Role, aws_access_key_id={aws_access_key_id}")
+    verbose_logger.debug(
+        f"Got STS assumed Role, AWS_ACCESS_KEY_ID={aws_access_key_id}, AWS_SECRET_ACCESS_KEY={aws_secret_access_key}, AWS_SESSION_TOKEN={aws_session_token}"
+    )
     # set these in the env so aiodynamo can use them
     os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
     os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
@@ -598,6 +600,59 @@ def completion(
         # aws_arn_arguments
         if aws_arn_arguments is not None:
             _set_env_vars_based_on_arn(aws_arn_arguments=aws_arn_arguments)
+            verbose_logger.debug("Bedrock: Done setting env vars based on arn")
+
+            # init boto3 client based on arn
+            import boto3
+
+            ### SET REGION NAME
+            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+            standard_aws_region_name = get_secret("AWS_REGION", None)
+            region_name = None
+
+            if aws_region_name:
+                region_name = aws_region_name
+            elif litellm_aws_region_name:
+                region_name = litellm_aws_region_name
+            elif standard_aws_region_name:
+                region_name = standard_aws_region_name
+            else:
+                raise BedrockError(
+                    message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
+                    status_code=401,
+                )
+
+            ### SET ENDPOINT URL
+            env_aws_bedrock_runtime_endpoint = get_secret(
+                "AWS_BEDROCK_RUNTIME_ENDPOINT"
+            )
+            if aws_bedrock_runtime_endpoint:
+                endpoint_url = aws_bedrock_runtime_endpoint
+            elif env_aws_bedrock_runtime_endpoint:
+                endpoint_url = env_aws_bedrock_runtime_endpoint
+            else:
+                endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+
+            # Init boto3 client
+            import boto3
+
+            boto3_config = boto3.session.Config(
+                connect_timeout=timeout, read_timeout=timeout
+            )
+
+            verbose_logger.debug(
+                f"Bedrock: Initializing client, region_name={region_name}, endpoint_url={endpoint_url}"
+            )
+            verbose_logger.debug(
+                f"Bedrock: using env vars, AWS_ACCESS_KEY_ID{os.environ.get('AWS_ACCESS_KEY_ID')}, AWS_SECRET_ACCESS_KEY{os.environ.get('AWS_SECRET_ACCESS_KEY')}, AWS_SESSION_TOKEN{os.environ.get('AWS_SESSION_TOKEN')}"
+            )
+
+            client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name=region_name,
+                endpoint_url=endpoint_url,
+                config=boto3_config,
+            )
 
         # only init client, if user did not pass one
         if client is None:
