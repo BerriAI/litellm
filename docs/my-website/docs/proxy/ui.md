@@ -186,6 +186,20 @@ If you don't see all your keys this could be due to a cached token. So just re-l
 
 :::
 
+### Restrict UI Access
+
+You can restrict UI Access to just admins - includes you (proxy_admin) and people you give view only access to (proxy_admin_viewer) for seeing global spend.
+
+**Step 1. Set 'admin_only' access**
+```yaml
+general_settings:
+    ui_access_mode: "admin_only"
+```
+
+**Step 2. Invite view-only users**
+
+<Image img={require('../../img/admin_ui_viewer.png')} />
+
 ### Custom Branding Admin UI
 
 Use your companies custom branding on the LiteLLM Admin UI
