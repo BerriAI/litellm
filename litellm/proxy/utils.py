@@ -542,6 +542,34 @@ class PrismaClient:
 
             print("MonthlyGlobalSpend Created!")  # noqa
 
+        try:
+            await self.db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
+            print("Last30dKeysBySpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
+            SELECT 
+            L."api_key", 
+            V."key_alias",
+            V."key_name",
+            SUM(L."spend") AS total_spend
+            FROM
+            "LiteLLM_SpendLogs" L
+            LEFT JOIN 
+            "LiteLLM_VerificationToken" V
+            ON
+            L."api_key" = V."token"
+            WHERE
+            L."startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+            GROUP BY
+            L."api_key", V."key_alias", V."key_name"
+            ORDER BY
+            total_spend DESC;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("Last30dKeysBySpend Created!")  # noqa
+
         return
 
     @backoff.on_exception(
@@ -1034,7 +1062,7 @@ class PrismaClient:
                     + f"DB User Table - update succeeded {update_user_row}"
                     + "\033[0m"
                 )
-                return {"user_id": user_id, "data": db_data}
+                return {"user_id": user_id, "data": update_user_row}
             elif (
                 team_id is not None
                 or (table_name is not None and table_name == "team")

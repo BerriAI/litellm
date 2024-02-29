@@ -175,7 +175,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
            * If user is App Owner - use the normal spend logs call
            */
           console.log(`user role: ${userRole}`);
-          if (userRole == "Admin") {
+          if (userRole == "Admin" || userRole == "Admin Viewer") {
             const overall_spend = await adminSpendLogsCall(accessToken);
             setKeySpendData(overall_spend);
             const top_keys = await adminTopKeysCall(accessToken);
