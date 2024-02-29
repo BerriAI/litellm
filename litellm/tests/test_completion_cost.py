@@ -227,6 +227,7 @@ def test_cost_bedrock_pricing():
     assert cost == predicted_cost
 
 
+@pytest.mark.skip(reason="AWS disabled our access")
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
     model = "anthropic.claude-instant-v1"
