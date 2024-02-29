@@ -326,9 +326,7 @@ def test_supports_function_calling():
             litellm.supports_function_calling(model="azure/gpt-4-1106-preview") == True
         )
         assert (
-            litellm.supports_function_calling(
-                model="bedrock/anthropic.claude-instant-v1"
-            )
+            litellm.supports_function_calling(model="anthropic.claude-instant-v1")
             == False
         )
         assert litellm.supports_function_calling(model="palm/chat-bison") == False
@@ -338,6 +336,5 @@ def test_supports_function_calling():
             == False
         )
         assert litellm.supports_function_calling(model="claude-2") == False
-
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
