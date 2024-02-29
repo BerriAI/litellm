@@ -74,6 +74,10 @@ const CreateKeyPage = () => {
         return "App Owner";
       case "app_admin":
         return "Admin";
+      case "proxy_admin":
+        return "Admin";
+      case "proxy_admin_viewer":
+        return "Admin Viewer";
       case "app_user":
         return "App User";
       default:
@@ -136,7 +140,6 @@ const CreateKeyPage = () => {
             />
           ) : page == "admin-panel" ? (
             <AdminPanel
-              teams={teams}
               setTeams={setTeams}
               searchParams={searchParams}
               accessToken={accessToken}
