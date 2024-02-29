@@ -3720,6 +3720,54 @@ def completion_cost(
         raise e
 
 
+def supports_function_calling(model: str):
+    """
+    Check if the given model supports function calling and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+
+    Returns:
+    bool: True if the model supports function calling, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    if model in litellm.model_cost:
+        model_info = litellm.model_cost[model]
+        if model_info.get("supports_function_calling", False):
+            return True
+        return False
+    else:
+        raise Exception(
+            f"Model not in model_prices_and_context_window.json. You passed model={model}."
+        )
+
+
+def supports_parallel_function_calling(model: str):
+    """
+    Check if the given model supports parallel function calling and return True if it does, False otherwise.
+
+    Parameters:
+        model (str): The model to check for support of parallel function calling.
+
+    Returns:
+        bool: True if the model supports parallel function calling, False otherwise.
+
+    Raises:
+        Exception: If the model is not found in the model_cost dictionary.
+    """
+    if model in litellm.model_cost:
+        model_info = litellm.model_cost[model]
+        if model_info.get("supports_parallel_function_calling", False):
+            return True
+        return False
+    else:
+        raise Exception(
+            f"Model not in model_prices_and_context_window.json. You passed model={model}."
+        )
+
+
 ####### HELPER FUNCTIONS ################
 def register_model(model_cost: Union[str, dict]):
     """
@@ -4048,6 +4096,7 @@ def get_optional_params(
             and custom_llm_provider != "vertex_ai"
             and custom_llm_provider != "anyscale"
             and custom_llm_provider != "together_ai"
+            and custom_llm_provider != "mistral"
         ):
             if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
                 # ollama actually supports json output
