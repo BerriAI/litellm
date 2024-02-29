@@ -98,9 +98,12 @@ class LunaryLogger:
             )
 
             tags = litellm_params.pop("tags", None) or []
+            template_id = litellm_params.pop("templateId", None)
+
+            print(litellm_params)
+            print(template_id)
 
             if extra:
-                template_id = extra.pop("templateId", None)
                 extra.pop("extra_body", None)
                 extra.pop("user", None)
 
@@ -119,8 +122,6 @@ class LunaryLogger:
                     except:
                         pass
 
-
-
             if response_obj:
                 usage = (
                     parse_usage(response_obj["usage"])
@@ -130,7 +131,6 @@ class LunaryLogger:
 
                 output = response_obj["choices"] if "choices" in response_obj else None
 
-                print(output)
             else:
                 usage = None
                 output = None
@@ -139,8 +139,6 @@ class LunaryLogger:
                 error_obj = {"stack": error}
             else:
                 error_obj = None
-
-
 
             self.lunary_client.track_event(
                 type,
