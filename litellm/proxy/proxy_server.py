@@ -240,6 +240,8 @@ health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 ui_access_mode: Literal["admin", "all"] = "all"
+proxy_budget_rescheduler_min_time = 597
+proxy_budget_rescheduler_max_time = 605
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -1407,7 +1409,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, ui_access_mode
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1718,6 +1720,13 @@ class ProxyConfig:
             ui_access_mode = general_settings.get(
                 "ui_access_mode", "all"
             )  # can be either ["admin_only" or "all"]
+            ## BUDGET RESCHEDULER ##
+            proxy_budget_rescheduler_min_time = general_settings.get(
+                "proxy_budget_rescheduler_min_time", proxy_budget_rescheduler_min_time
+            )
+            proxy_budget_rescheduler_max_time = general_settings.get(
+                "proxy_budget_rescheduler_max_time", proxy_budget_rescheduler_max_time
+            )
             ### BACKGROUND HEALTH CHECKS ###
             # Enable background health checks
             use_background_health_checks = general_settings.get(
@@ -2120,10 +2129,9 @@ async def async_data_generator(response, user_api_key_dict):
     try:
         start_time = time.time()
         async for chunk in response:
-            verbose_proxy_logger.debug(f"returned chunk: {chunk}")
-            assert isinstance(chunk, litellm.ModelResponse)
+            chunk = chunk.model_dump_json(exclude_none=True)
             try:
-                yield f"data: {json.dumps(chunk.model_dump(exclude_none=True))}\n\n"
+                yield f"data: {chunk}\n\n"
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
@@ -2202,7 +2210,7 @@ def parse_cache_control(cache_control):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
     import json
 
     ### LOAD MASTER KEY ###
@@ -2307,13 +2315,12 @@ async def startup_event():
     ### CHECK IF VIEW EXISTS ###
     if prisma_client is not None:
         create_view_response = await prisma_client.check_view_exists()
-        print(f"create_view_response: {create_view_response}")  # noqa
 
     ### START BUDGET SCHEDULER ###
     if prisma_client is not None:
         scheduler = AsyncIOScheduler()
         interval = random.randint(
-            597, 605
+            proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
         )  # random interval, so multiple workers avoid resetting budget at the same time
         scheduler.add_job(
             reset_budget, "interval", seconds=interval, args=[prisma_client]
@@ -3780,7 +3787,7 @@ async def view_spend_tags(
 
 @router.get(
     "/spend/logs",
-    tags=["budget & spend Tracking"],
+    tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
@@ -3839,13 +3846,55 @@ async def view_spend_logs(
         # gettting spend logs from clickhouse
         from litellm.proxy.enterprise.utils import view_spend_logs_from_clickhouse
 
-        return await view_spend_logs_from_clickhouse(
-            api_key=api_key,
-            user_id=user_id,
-            request_id=request_id,
+        daily_metrics = await view_daily_metrics(
             start_date=start_date,
             end_date=end_date,
         )
+
+        # get the top api keys across all daily_metrics
+        top_api_keys = {}  # type: ignore
+
+        # make this compatible with the admin UI
+        for response in daily_metrics.get("daily_spend", {}):
+            response["startTime"] = response["day"]
+            response["spend"] = response["daily_spend"]
+            response["models"] = response["spend_per_model"]
+            response["users"] = {"ishaan": 0.0}
+            spend_per_api_key = response["spend_per_api_key"]
+
+            # insert spend_per_api_key key, values in response
+            for key, value in spend_per_api_key.items():
+                response[key] = value
+                top_api_keys[key] = top_api_keys.get(key, 0.0) + value
+
+            del response["day"]
+            del response["daily_spend"]
+            del response["spend_per_model"]
+            del response["spend_per_api_key"]
+
+        # get top 5 api keys
+        top_api_keys = sorted(top_api_keys.items(), key=lambda x: x[1], reverse=True)  # type: ignore
+        top_api_keys = top_api_keys[:5]  # type: ignore
+        top_api_keys = dict(top_api_keys)  # type: ignore
+        """
+        set it like this 
+        {
+            "key" : key,
+            "spend:" : spend
+        }
+        """
+        # we need this to show on the Admin UI
+        response_keys = []
+        for key in top_api_keys.items():
+            response_keys.append(
+                {
+                    "key": key[0],
+                    "spend": key[1],
+                }
+            )
+        daily_metrics["top_api_keys"] = response_keys
+
+        return daily_metrics
     global prisma_client
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
@@ -3980,6 +4029,142 @@ async def view_spend_logs(
 
         return None
 
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/spend/logs Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/spend/logs Error" + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
+    "/global/spend/logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_logs():
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get global spend (spend per day for last 30d). Admin-only endpoint
+
+    More efficient implementation of /spend/logs, by creating a view over the spend logs table.
+    """
+    global prisma_client
+
+    sql_query = """SELECT * FROM "MonthlyGlobalSpend";"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
+    "/global/spend/keys",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_keys(
+    limit: int = fastapi.Query(
+        default=None,
+        description="Number of keys to get. Will return Top 'n' keys.",
+    )
+):
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
+    "/global/spend/models",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_models(
+    limit: int = fastapi.Query(
+        default=None,
+        description="Number of models to get. Will return Top 'n' models.",
+    )
+):
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    sql_query = f"""SELECT * FROM "Last30dModelsBySpend" LIMIT {limit};"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
+    "/daily_metrics",
+    summary="Get daily spend metrics",
+    tags=["budget & spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def view_daily_metrics(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
+    """
+    [BETA] This is a beta endpoint. It might change without notice.
+
+    Please give feedback - https://github.com/BerriAI/litellm/issues
+    """
+    try:
+        if os.getenv("CLICKHOUSE_HOST") is not None:
+            # gettting spend logs from clickhouse
+            from litellm.integrations import clickhouse
+
+            return clickhouse.build_daily_metrics()
+
+            # create a response object
+            """
+            {
+                "date": "2022-01-01",
+                "spend": 0.0,
+                "users": {},
+                "models": {},
+            }
+            """
+        else:
+            raise Exception(
+                "Clickhouse: Clickhouse host not set. Required for viewing /daily/metrics"
+            )
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
