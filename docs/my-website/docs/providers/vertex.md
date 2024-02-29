@@ -152,8 +152,14 @@ LiteLLM Supports the following image types passed in `url`
 - Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 - Videos with Cloud Storage URIs - https://storage.googleapis.com/github-repo/img/gemini/multimodality_usecases_overview/pixel8.mp4
+- Base64 Encoded Local Images
 
-**Example Request**
+**Example Request - image url**
+
+<Tabs>
+
+<TabItem value="direct" label="Images with direct links">
+
 ```python
 import litellm
 
@@ -179,6 +185,43 @@ response = litellm.completion(
 )
 print(response)
 ```
+</TabItem>
+
+<TabItem value="base" label="Local Base64 Images">
+
+```python
+import litellm
+
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+image_path = "cached_logo.jpg"
+# Getting the base64 string
+base64_image = encode_image(image_path)
+response = litellm.completion(
+    model="vertex_ai/gemini-pro-vision",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Whats in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/jpeg;base64," + base64_image
+                    },
+                },
+            ],
+        }
+    ],
+)
+print(response)
+```
+</TabItem>
+</Tabs>
 
 
 ## Chat Models
