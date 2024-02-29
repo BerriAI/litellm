@@ -424,6 +424,22 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "azure/mistral-large-latest": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "azure/mistral-large-2402": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "azure/ada": {
         "max_tokens": 8191,
         "input_cost_per_token": 0.0000001,
