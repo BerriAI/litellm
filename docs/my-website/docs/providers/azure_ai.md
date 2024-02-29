@@ -4,10 +4,11 @@
 
 ### Sample Usage - setting env vars 
 
-Set `MISTRAL_API_KEY` and `MISTRAL_API_BASE` in your env
+Set `MISTRAL_AZURE_API_KEY` and `MISTRAL_AZURE_API_BASE` in your env
+
 ```shell
-MISTRAL_API_KEY = "zE************"
-MISTRAL_API_BASE = "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com"
+MISTRAL_AZURE_API_KEY = "zE************""
+MISTRAL_AZURE_API_BASE = "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com"
 ```
 
 ```python
