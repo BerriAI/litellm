@@ -41,6 +41,9 @@ const CreateKeyPage = () => {
           const formattedUserRole = formatUserRole(decoded.user_role);
           console.log("Decoded user_role:", formattedUserRole);
           setUserRole(formattedUserRole);
+          if (formattedUserRole == "Admin Viewer") {
+            setPage("usage");
+          }
         } else {
           console.log("User role not defined");
         }
@@ -66,7 +69,8 @@ const CreateKeyPage = () => {
     if (!userRole) {
       return "Undefined Role";
     }
-    console.log(`Received user role: ${userRole}`);
+    console.log(`Received user role: ${userRole.toLowerCase()}`);
+    console.log(`Received user role length: ${userRole.toLowerCase().length}`);
     switch (userRole.toLowerCase()) {
       case "app_owner":
         return "App Owner";

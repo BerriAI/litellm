@@ -783,6 +783,8 @@ async def user_api_key_auth(
                 "/v2/key/info",
                 "/models",
                 "/v1/models",
+                "/global/spend/logs",
+                "/global/spend/keys",
             ]
             # check if the current route startswith any of the allowed routes
             if (
@@ -4455,31 +4457,42 @@ async def user_update(data: UpdateUserRequest):
                 non_default_values[k] = v
 
         ## ADD USER, IF NEW ##
-        if data.user_id is not None and len(data.user_id) == 0:
+        verbose_proxy_logger.debug(f"/user/update: Received data = {data}")
+        if data.user_id is not None and len(data.user_id) > 0:
             non_default_values["user_id"] = data.user_id  # type: ignore
-            await prisma_client.update_data(
+            verbose_proxy_logger.debug(f"In update user, user_id condition block.")
+            response = await prisma_client.update_data(
                 user_id=data.user_id,
                 data=non_default_values,
                 table_name="user",
+            )
+            verbose_proxy_logger.debug(
+                f"received response from updating prisma client. response={response}"
             )
         elif data.user_email is not None:
             non_default_values["user_id"] = str(uuid.uuid4())
             non_default_values["user_email"] = data.user_email
             ## user email is not unique acc. to prisma schema -> future improvement
             ### for now: check if it exists in db, if not - insert it
-            existing_user_row = await prisma_client.get_data(
+            existing_user_rows = await prisma_client.get_data(
                 key_val={"user_email": data.user_email},
                 table_name="user",
                 query_type="find_all",
             )
-            if existing_user_row is None or (
-                isinstance(existing_user_row, list) and len(existing_user_row) == 0
+            if existing_user_rows is None or (
+                isinstance(existing_user_rows, list) and len(existing_user_rows) == 0
             ):
-                await prisma_client.insert_data(
+                response = await prisma_client.insert_data(
                     data=non_default_values, table_name="user"
                 )
-
-        return non_default_values
+            elif isinstance(existing_user_rows, list) and len(existing_user_rows) > 0:
+                for existing_user in existing_user_rows:
+                    response = await prisma_client.update_data(
+                        user_id=existing_user.user_id,
+                        data=non_default_values,
+                        table_name="user",
+                    )
+        return response
         # update based on remaining passed in values
     except Exception as e:
         traceback.print_exc()
