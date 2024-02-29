@@ -546,6 +546,7 @@ def test_redis_cache_acompletion_stream():
 # test_redis_cache_acompletion_stream()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_redis_cache_acompletion_stream_bedrock():
     import asyncio
 
@@ -571,7 +572,7 @@ def test_redis_cache_acompletion_stream_bedrock():
         async def call1():
             nonlocal response_1_content
             response1 = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v1",
+                model="bedrock/anthropic.claude-v2",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -589,7 +590,7 @@ def test_redis_cache_acompletion_stream_bedrock():
         async def call2():
             nonlocal response_2_content
             response2 = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v1",
+                model="bedrock/anthropic.claude-v2",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -615,6 +616,7 @@ def test_redis_cache_acompletion_stream_bedrock():
         raise e
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_s3_cache_acompletion_stream_azure():
     import asyncio
 
@@ -697,6 +699,7 @@ def test_s3_cache_acompletion_stream_azure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="AWS Suspended Account")
 async def test_s3_cache_acompletion_azure():
     import asyncio
     import logging

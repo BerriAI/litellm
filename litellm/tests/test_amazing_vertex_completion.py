@@ -130,6 +130,8 @@ def test_vertex_ai():
                 f"response.choices[0].finish_reason: {response.choices[0].finish_reason}"
             )
             assert response.choices[0].finish_reason in litellm._openai_finish_reasons
+        except litellm.RateLimitError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -183,6 +185,8 @@ def test_vertex_ai_stream():
                 assert type(content) == str
                 # pass
             assert len(completed_str) > 4
+        except litellm.RateLimitError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 

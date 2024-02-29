@@ -388,6 +388,7 @@ async def test_async_custom_handler_embedding_optional_param():
 # asyncio.run(test_async_custom_handler_embedding_optional_param())
 
 
+@pytest.mark.skip(reason="AWS Account suspended. Pending their approval")
 @pytest.mark.asyncio
 async def test_async_custom_handler_embedding_optional_param_bedrock():
     """
