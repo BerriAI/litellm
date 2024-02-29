@@ -71,7 +71,7 @@ def test_parallel_function_call():
             }
         ]
         response = litellm.completion(
-            model="gpt-3.5-turbo-1106",
+            model="mistral/mistral-medium-latest",
             messages=messages,
             tools=tools,
             tool_choice="auto",  # auto is default, but we'll be explicit
