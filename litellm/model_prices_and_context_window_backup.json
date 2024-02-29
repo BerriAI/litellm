@@ -6,7 +6,8 @@
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-4-turbo-preview": {
         "max_tokens": 8192, 
@@ -15,7 +16,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-4-0314": {
         "max_tokens": 8192,
@@ -33,7 +36,8 @@
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-4-32k": {
         "max_tokens": 32768,
@@ -69,7 +73,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-4-0125-preview": {
         "max_tokens": 128000,
@@ -78,7 +84,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-4-vision-preview": {
         "max_tokens": 128000,
@@ -105,7 +113,8 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-3.5-turbo-0301": {
         "max_tokens": 4097,
@@ -123,7 +132,8 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-3.5-turbo-1106": {
         "max_tokens": 16385,
@@ -132,7 +142,9 @@
         "input_cost_per_token": 0.0000010,
         "output_cost_per_token": 0.0000020,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-3.5-turbo-0125": {
         "max_tokens": 16385,
@@ -141,7 +153,9 @@
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000015,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-3.5-turbo-16k": {
         "max_tokens": 16385,
