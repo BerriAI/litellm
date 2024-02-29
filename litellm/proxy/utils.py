@@ -641,6 +641,10 @@ class PrismaClient:
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
         reset_at: Optional[datetime] = None,
+        offset: Optional[int] = None,  # pagination, what row number to start from
+        limit: Optional[
+            int
+        ] = None,  # pagination, number of rows to getch when find_all==True
     ):
         try:
             response: Any = None
@@ -776,7 +780,7 @@ class PrismaClient:
                         )
                     else:
                         response = await self.db.litellm_usertable.find_many(  # type: ignore
-                            order={"spend": "desc"},
+                            order={"spend": "desc"}, take=limit, skip=offset
                         )
                 return response
             elif table_name == "spend":
