@@ -1687,7 +1687,7 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
     )
 
 
-# @pytest.mark.skip(reason="High traffic load test for spend tracking")
+@pytest.mark.skip(reason="High traffic load test for spend tracking")
 @pytest.mark.asyncio
 async def test_proxy_load_test_db(prisma_client):
     """
