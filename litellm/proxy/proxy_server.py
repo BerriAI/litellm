@@ -4316,7 +4316,7 @@ async def user_info(
         description="Page number for pagination. Only use when view_all is true",
     ),
     page_size: int = fastapi.Query(
-        default=10,
+        default=25,
         description="Number of items per page. Only use when view_all is true",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
