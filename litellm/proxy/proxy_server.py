@@ -785,6 +785,7 @@ async def user_api_key_auth(
                 "/v1/models",
                 "/global/spend/logs",
                 "/global/spend/keys",
+                "/global/spend/models",
             ]
             # check if the current route startswith any of the allowed routes
             if (

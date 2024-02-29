@@ -11,8 +11,10 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
+import { Typography } from "antd";
 
 const CreateKeyPage = () => {
+  const { Title, Paragraph } = Typography;
   const [userRole, setUserRole] = useState("");
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
