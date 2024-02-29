@@ -2315,7 +2315,6 @@ async def startup_event():
     ### CHECK IF VIEW EXISTS ###
     if prisma_client is not None:
         create_view_response = await prisma_client.check_view_exists()
-        print(f"create_view_response: {create_view_response}")  # noqa
 
     ### START BUDGET SCHEDULER ###
     if prisma_client is not None:
@@ -3788,7 +3787,7 @@ async def view_spend_tags(
 
 @router.get(
     "/spend/logs",
-    tags=["budget & spend Tracking"],
+    tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
@@ -4049,6 +4048,83 @@ async def view_spend_logs(
 
 
 @router.get(
+    "/global/spend/logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_logs():
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get global spend (spend per day for last 30d). Admin-only endpoint
+
+    More efficient implementation of /spend/logs, by creating a view over the spend logs table.
+    """
+    global prisma_client
+
+    sql_query = """SELECT * FROM "MonthlyGlobalSpend";"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
+    "/global/spend/keys",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_keys(
+    limit: int = fastapi.Query(
+        default=None,
+        description="Number of keys to get. Will return Top 'n' keys.",
+    )
+):
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
+    "/global/spend/models",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_models(
+    limit: int = fastapi.Query(
+        default=None,
+        description="Number of models to get. Will return Top 'n' models.",
+    )
+):
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    sql_query = f"""SELECT * FROM "Last30dModelsBySpend" LIMIT {limit};"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
     "/daily_metrics",
     summary="Get daily spend metrics",
     tags=["budget & spend Tracking"],
@@ -4064,7 +4140,11 @@ async def view_daily_metrics(
         description="Time till which to view key spend",
     ),
 ):
-    """ """
+    """
+    [BETA] This is a beta endpoint. It might change without notice.
+
+    Please give feedback - https://github.com/BerriAI/litellm/issues
+    """
     try:
         if os.getenv("CLICKHOUSE_HOST") is not None:
             # gettting spend logs from clickhouse

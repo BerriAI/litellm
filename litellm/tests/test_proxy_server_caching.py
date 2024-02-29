@@ -61,6 +61,7 @@ def generate_random_word(length=4):
     return "".join(random.choice(letters) for _ in range(length))
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_chat_completion(client_no_auth):
     global headers
     try:
