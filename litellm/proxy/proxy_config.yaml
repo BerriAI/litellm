@@ -43,9 +43,9 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
-  success_callback: ['clickhouse', 'langfuse']
+  success_callback: ['langfuse']
   # setting callback class
-  # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
+  callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
 general_settings: 
   master_key: sk-1234
