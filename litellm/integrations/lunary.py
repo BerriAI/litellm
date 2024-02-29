@@ -3,7 +3,8 @@
 from datetime import datetime, timezone
 import traceback
 import dotenv
-import subprocess
+import importlib
+from pkg_resources import parse_version
 import sys
 
 dotenv.load_dotenv() 
@@ -56,19 +57,16 @@ class LunaryLogger:
     def __init__(self):
         try:
             import lunary
-            # lunary.__version__ doesn't exist throws if lunary is not installed
-            if not hasattr(lunary, "track_event"):
+            version = importlib.metadata.version("lunary")
+            # if version < 0.1.43 then raise ImportError
+            if parse_version(version) < parse_version("0.1.43"):
+                print("Lunary version outdated. Required: > 0.1.43. Upgrade via 'pip install lunary --upgrade'")
                 raise ImportError
             
             self.lunary_client = lunary
         except ImportError:
-            print("Lunary not installed. Installing now...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "lunary", "--upgrade"])
-            import importlib
-            import lunary
-            importlib.reload(lunary)
-
-            self.lunary_client = lunary
+            print("Lunary not installed. Please install it using 'pip install lunary'")
+            raise ImportError
 
 
     def log_event(
