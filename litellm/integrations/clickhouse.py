@@ -27,6 +27,151 @@ import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
+def create_client():
+    try:
+        import clickhouse_connect
+
+        port = os.getenv("CLICKHOUSE_PORT")
+        clickhouse_host = os.getenv("CLICKHOUSE_HOST")
+        if clickhouse_host is not None:
+            verbose_logger.debug("setting up clickhouse")
+            if port is not None and isinstance(port, str):
+                port = int(port)
+
+            client = clickhouse_connect.get_client(
+                host=os.getenv("CLICKHOUSE_HOST"),
+                port=port,
+                username=os.getenv("CLICKHOUSE_USERNAME"),
+                password=os.getenv("CLICKHOUSE_PASSWORD"),
+            )
+            return client
+        else:
+            raise Exception("Clickhouse: Clickhouse host not set")
+    except Exception as e:
+        raise ValueError(f"Clickhouse: {e}")
+
+
+def build_daily_metrics():
+    click_house_client = create_client()
+
+    # get daily spend
+    daily_spend = click_house_client.query_df(
+        """
+        SELECT sumMerge(DailySpend) as daily_spend, day FROM daily_aggregated_spend GROUP BY day
+        """
+    )
+
+    # get daily spend per model
+    daily_spend_per_model = click_house_client.query_df(
+        """
+        SELECT sumMerge(DailySpend) as daily_spend, day, model FROM daily_aggregated_spend_per_model GROUP BY day, model
+        """
+    )
+    new_df = daily_spend_per_model.to_dict(orient="records")
+    import pandas as pd
+
+    df = pd.DataFrame(new_df)
+    # Group by 'day' and create a dictionary for each group
+    result_dict = {}
+    for day, group in df.groupby("day"):
+        models = group["model"].tolist()
+        spend = group["daily_spend"].tolist()
+        spend_per_model = {model: spend for model, spend in zip(models, spend)}
+        result_dict[day] = spend_per_model
+
+    # Display the resulting dictionary
+
+    # get daily spend per API key
+    daily_spend_per_api_key = click_house_client.query_df(
+        """
+            SELECT
+                daily_spend,
+                day,
+                api_key
+            FROM (
+                SELECT
+                    sumMerge(DailySpend) as daily_spend,
+                    day,
+                    api_key,
+                    RANK() OVER (PARTITION BY day ORDER BY sumMerge(DailySpend) DESC) as spend_rank
+                FROM
+                    daily_aggregated_spend_per_api_key
+                GROUP BY
+                    day,
+                    api_key
+            ) AS ranked_api_keys
+            WHERE
+                spend_rank <= 5
+                AND day IS NOT NULL
+            ORDER BY
+                day,
+                daily_spend DESC
+        """
+    )
+    new_df = daily_spend_per_api_key.to_dict(orient="records")
+    import pandas as pd
+
+    df = pd.DataFrame(new_df)
+    # Group by 'day' and create a dictionary for each group
+    api_key_result_dict = {}
+    for day, group in df.groupby("day"):
+        api_keys = group["api_key"].tolist()
+        spend = group["daily_spend"].tolist()
+        spend_per_api_key = {api_key: spend for api_key, spend in zip(api_keys, spend)}
+        api_key_result_dict[day] = spend_per_api_key
+
+    # Display the resulting dictionary
+
+    # Calculate total spend across all days
+    total_spend = daily_spend["daily_spend"].sum()
+
+    # Identify top models and top API keys with the highest spend across all days
+    top_models = {}
+    top_api_keys = {}
+
+    for day, spend_per_model in result_dict.items():
+        for model, model_spend in spend_per_model.items():
+            if model not in top_models or model_spend > top_models[model]:
+                top_models[model] = model_spend
+
+    for day, spend_per_api_key in api_key_result_dict.items():
+        for api_key, api_key_spend in spend_per_api_key.items():
+            if api_key not in top_api_keys or api_key_spend > top_api_keys[api_key]:
+                top_api_keys[api_key] = api_key_spend
+
+    # for each day in daily spend, look up the day in result_dict and api_key_result_dict
+    # Assuming daily_spend DataFrame has 'day' column
+    result = []
+    for index, row in daily_spend.iterrows():
+        day = row["day"]
+        data_day = row.to_dict()
+
+        # Look up in result_dict
+        if day in result_dict:
+            spend_per_model = result_dict[day]
+            # Assuming there is a column named 'model' in daily_spend
+            data_day["spend_per_model"] = spend_per_model  # Assign 0 if model not found
+
+        # Look up in api_key_result_dict
+        if day in api_key_result_dict:
+            spend_per_api_key = api_key_result_dict[day]
+            # Assuming there is a column named 'api_key' in daily_spend
+            data_day["spend_per_api_key"] = spend_per_api_key
+
+        result.append(data_day)
+
+    data_to_return = {}
+    data_to_return["daily_spend"] = result
+
+    data_to_return["total_spend"] = total_spend
+    data_to_return["top_models"] = top_models
+    data_to_return["top_api_keys"] = top_api_keys
+    return data_to_return
+
+
+# build_daily_metrics()
+
+
 def _start_clickhouse():
     import clickhouse_connect
 
@@ -85,6 +230,14 @@ def _start_clickhouse():
             # check if spend logs exist, if it does then return the schema
             response = client.query("DESCRIBE default.spend_logs")
             verbose_logger.debug(f"spend logs schema ={response.result_rows}")
+
+        # RUN Enterprise Clickhouse Setup
+        # TLDR: For Enterprise - we create views / aggregate tables for low latency reporting APIs
+        from litellm.proxy.enterprise.utils import _create_clickhouse_aggregate_tables
+        from litellm.proxy.enterprise.utils import _create_clickhouse_material_views
+
+        _create_clickhouse_aggregate_tables(client=client, table_names=table_names)
+        _create_clickhouse_material_views(client=client, table_names=table_names)
 
 
 class ClickhouseLogger:

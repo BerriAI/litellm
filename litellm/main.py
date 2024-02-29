@@ -10,7 +10,6 @@
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union
 from functools import partial
-
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
@@ -1468,12 +1467,14 @@ def completion(
             response = model_response
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
-                optional_params.pop("vertex_ai_project", None)
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
                 or litellm.vertex_project
                 or get_secret("VERTEXAI_PROJECT")
             )
             vertex_ai_location = (
-                optional_params.pop("vertex_ai_location", None)
+                optional_params.pop("vertex_location", None)
+                or optional_params.pop("vertex_ai_location", None)
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
@@ -2567,12 +2568,14 @@ def embedding(
             )
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
-                optional_params.pop("vertex_ai_project", None)
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
                 or litellm.vertex_project
                 or get_secret("VERTEXAI_PROJECT")
             )
             vertex_ai_location = (
-                optional_params.pop("vertex_ai_location", None)
+                optional_params.pop("vertex_location", None)
+                or optional_params.pop("vertex_ai_location", None)
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
