@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from litellm import completion
 import litellm
 
+litellm.failure_callback = ["lunary"]
 litellm.success_callback = ["lunary"]
 litellm.set_verbose = True
 
