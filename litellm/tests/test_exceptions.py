@@ -42,6 +42,7 @@ exception_models = [
 
 
 # Test 1: Context Window Errors
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.parametrize("model", exception_models)
 def test_context_window(model):
     print("Testing context window error")
@@ -120,9 +121,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["AI21_API_KEY"] = "bad-key"
         elif "togethercomputer" in model:
             temporary_key = os.environ["TOGETHERAI_API_KEY"]
-            os.environ[
-                "TOGETHERAI_API_KEY"
-            ] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
+            os.environ["TOGETHERAI_API_KEY"] = (
+                "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
+            )
         elif model in litellm.openrouter_models:
             temporary_key = os.environ["OPENROUTER_API_KEY"]
             os.environ["OPENROUTER_API_KEY"] = "bad-key"

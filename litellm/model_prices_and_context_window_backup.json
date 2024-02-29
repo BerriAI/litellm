@@ -6,7 +6,8 @@
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-4-turbo-preview": {
         "max_tokens": 8192, 
@@ -15,7 +16,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-4-0314": {
         "max_tokens": 8192,
@@ -33,7 +36,8 @@
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-4-32k": {
         "max_tokens": 32768,
@@ -69,7 +73,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-4-0125-preview": {
         "max_tokens": 128000,
@@ -78,7 +84,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-4-vision-preview": {
         "max_tokens": 128000,
@@ -105,7 +113,8 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-3.5-turbo-0301": {
         "max_tokens": 4097,
@@ -123,7 +132,8 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gpt-3.5-turbo-1106": {
         "max_tokens": 16385,
@@ -132,7 +142,9 @@
         "input_cost_per_token": 0.0000010,
         "output_cost_per_token": 0.0000020,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-3.5-turbo-0125": {
         "max_tokens": 16385,
@@ -141,7 +153,9 @@
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000015,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "gpt-3.5-turbo-16k": {
         "max_tokens": 16385,
@@ -286,7 +300,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "azure/gpt-4-1106-preview": {
         "max_tokens": 128000,
@@ -295,7 +311,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "azure/gpt-4-0613": {
         "max_tokens": 8192,
@@ -304,7 +322,8 @@
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "azure/gpt-4-32k-0613": {
         "max_tokens": 32768,
@@ -331,7 +350,8 @@
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "azure/gpt-4-turbo": {
         "max_tokens": 128000,
@@ -340,7 +360,9 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "azure", 
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "azure/gpt-4-turbo-vision-preview": {
         "max_tokens": 128000,
@@ -358,7 +380,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "azure/gpt-35-turbo-1106": {
         "max_tokens": 16384,
@@ -367,7 +390,20 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "azure/gpt-35-turbo-0125": {
+        "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "azure/gpt-35-turbo-16k": {
         "max_tokens": 16385,
@@ -385,7 +421,8 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "azure",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "azure/ada": {
         "max_tokens": 8191,
@@ -514,11 +551,12 @@
         "mode": "chat"
     },
     "mistral/mistral-large-latest": {
-        "max_tokens": 8192,
+        "max_tokens": 32000,
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "mistral/mistral-embed": {
         "max_tokens": 8192,
@@ -676,7 +714,8 @@
         "input_cost_per_token": 0.00000025, 
         "output_cost_per_token": 0.0000005,
         "litellm_provider": "vertex_ai-language-models",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "gemini-1.5-pro": { 
         "max_tokens": 8192,
@@ -1738,6 +1777,23 @@
         "output_cost_per_token": 0.0000009,
         "litellm_provider": "together_ai"
     },
+    "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "together_ai/mistralai/Mistral-7B-Instruct-v0.1": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "together_ai/togethercomputer/CodeLlama-34b-Instruct": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
     "ollama/llama2": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.0,
@@ -1990,7 +2046,16 @@
         "input_cost_per_token": 0.00000015, 
         "output_cost_per_token": 0.00000015,
         "litellm_provider": "anyscale", 
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
+      },
+      "anyscale/Mixtral-8x7B-Instruct-v0.1": {
+        "max_tokens": 16384, 
+        "input_cost_per_token": 0.00000015, 
+        "output_cost_per_token": 0.00000015,
+        "litellm_provider": "anyscale", 
+        "mode": "chat",
+        "supports_function_calling": true
       },
       "anyscale/HuggingFaceH4/zephyr-7b-beta": {
         "max_tokens": 16384, 

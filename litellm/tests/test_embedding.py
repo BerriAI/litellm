@@ -256,6 +256,7 @@ async def test_vertexai_aembedding():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_bedrock_embedding_titan():
     try:
         # this tests if we support str input for bedrock embedding
@@ -301,6 +302,7 @@ def test_bedrock_embedding_titan():
 # test_bedrock_embedding_titan()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_bedrock_embedding_cohere():
     try:
         litellm.set_verbose = False
@@ -422,6 +424,7 @@ def test_aembedding_azure():
 # test_aembedding_azure()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_sagemaker_embeddings():
     try:
         response = litellm.embedding(
@@ -438,6 +441,7 @@ def test_sagemaker_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_sagemaker_aembeddings():
     try:

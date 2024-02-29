@@ -221,11 +221,18 @@ class NewUserResponse(GenerateKeyResponse):
 class UpdateUserRequest(GenerateRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    user_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     user_role: Optional[str] = None
     max_budget: Optional[float] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
 
 
 class Member(LiteLLMBase):
@@ -401,6 +408,9 @@ class ConfigGeneralSettings(LiteLLMBase):
     alerting_threshold: Optional[int] = Field(
         None,
         description="sends alerts if requests hang for 5min+",
+    )
+    ui_access_mode: Optional[Literal["admin_only", "all"]] = Field(
+        "all", description="Control access to the Proxy UI"
     )
 
 
