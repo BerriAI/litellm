@@ -941,8 +941,7 @@ async def _PROXY_track_cost_callback(
                 raise Exception("User API key missing from custom callback.")
         else:
             if kwargs["stream"] != True or (
-                kwargs["stream"] == True
-                and kwargs.get("complete_streaming_response") in kwargs
+                kwargs["stream"] == True and "complete_streaming_response" in kwargs
             ):
                 raise Exception(
                     f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
