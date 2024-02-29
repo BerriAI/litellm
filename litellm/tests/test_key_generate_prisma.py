@@ -80,6 +80,14 @@ request_data = {
 
 @pytest.fixture
 def prisma_client():
+    from litellm.proxy.proxy_cli import append_query_params
+
+    ### add connection pool + pool timeout args
+    params = {"connection_limit": 100, "pool_timeout": 60}
+    database_url = os.getenv("DATABASE_URL")
+    modified_url = append_query_params(database_url, params)
+    os.environ["DATABASE_URL"] = modified_url
+
     # Assuming DBClient is a class that needs to be instantiated
     prisma_client = PrismaClient(
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
@@ -1633,3 +1641,99 @@ async def test_key_with_no_permissions(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         print(e.message)
+
+
+async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
+    from litellm import ModelResponse, Choices, Message, Usage
+    from litellm.proxy.proxy_server import (
+        _PROXY_track_cost_callback as track_cost_callback,
+    )
+
+    import uuid
+
+    request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
+    resp = ModelResponse(
+        id=request_id,
+        choices=[
+            Choices(
+                finish_reason=None,
+                index=0,
+                message=Message(
+                    content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                    role="assistant",
+                ),
+            )
+        ],
+        model="gpt-35-turbo",  # azure always has model written like this
+        usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
+    )
+    await track_cost_callback(
+        kwargs={
+            "call_type": "acompletion",
+            "model": "sagemaker-chatgpt-v-2",
+            "stream": True,
+            "complete_streaming_response": resp,
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": hash_token(generated_key),
+                    "user_api_key_user_id": user_id,
+                }
+            },
+            "response_cost": 0.00005,
+        },
+        completion_response=resp,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+
+@pytest.mark.skip(reason="High traffic load test for spend tracking")
+@pytest.mark.asyncio
+async def test_proxy_load_test_db(prisma_client):
+    """
+    Run 1500 req./s against track_cost_callback function
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    from litellm._logging import verbose_proxy_logger
+    import logging, time
+
+    litellm.set_verbose = True
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    try:
+        start_time = time.time()
+        await litellm.proxy.proxy_server.prisma_client.connect()
+        request = GenerateKeyRequest(max_budget=0.00001)
+        key = await generate_key_fn(request)
+        print(key)
+
+        generated_key = key.key
+        user_id = key.user_id
+        bearer_token = "Bearer " + generated_key
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        # use generated key to auth in
+        result = await user_api_key_auth(request=request, api_key=bearer_token)
+        print("result from user auth with new key", result)
+        # update spend using track_cost callback, make 2nd request, it should fail
+        n = 5000
+        tasks = [
+            track_cost_callback_helper_fn(generated_key=generated_key, user_id=user_id)
+            for _ in range(n)
+        ]
+        completions = await asyncio.gather(*tasks)
+        await asyncio.sleep(120)
+        try:
+            # call spend logs
+            spend_logs = await view_spend_logs(api_key=generated_key)
+
+            print(f"len responses: {len(spend_logs)}")
+            assert len(spend_logs) == n
+            print(n, time.time() - start_time, len(spend_logs))
+        except:
+            print(n, time.time() - start_time, 0)
+        raise Exception(f"it worked! key={key.key}")
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")

@@ -167,14 +167,6 @@ def test_call_one_endpoint():
                 "rpm": 1800,
             },
             {
-                "model_name": "claude-v1",
-                "litellm_params": {
-                    "model": "bedrock/anthropic.claude-instant-v1",
-                },
-                "tpm": 100000,
-                "rpm": 10000,
-            },
-            {
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
                     "model": "azure/azure-embedding-model",
@@ -202,15 +194,6 @@ def test_call_one_endpoint():
             )
             print("\n response", response)
 
-        async def call_bedrock_claude():
-            response = await router.acompletion(
-                model="bedrock/anthropic.claude-instant-v1",
-                messages=[{"role": "user", "content": "hello this request will pass"}],
-                specific_deployment=True,
-            )
-
-            print("\n response", response)
-
         async def call_azure_embedding():
             response = await router.aembedding(
                 model="azure/azure-embedding-model",
@@ -221,7 +204,6 @@ def test_call_one_endpoint():
             print("\n response", response)
 
         asyncio.run(call_azure_completion())
-        asyncio.run(call_bedrock_claude())
         asyncio.run(call_azure_embedding())
 
         os.environ["AZURE_API_BASE"] = old_api_base
@@ -593,6 +575,7 @@ def test_azure_embedding_on_router():
 # test_azure_embedding_on_router()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_bedrock_on_router():
     litellm.set_verbose = True
     print("\n Testing bedrock on router\n")

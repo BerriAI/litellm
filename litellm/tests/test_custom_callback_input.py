@@ -478,17 +478,18 @@ async def test_async_chat_azure_stream():
 
 
 ## Test Bedrock + sync
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_chat_bedrock_stream():
     try:
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = litellm.completion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
         )
         # test streaming
         response = litellm.completion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
             stream=True,
         )
@@ -497,7 +498,7 @@ def test_chat_bedrock_stream():
         # test failure callback
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-v1",
+                model="bedrock/anthropic.claude-v2",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
                 aws_region_name="my-bad-region",
                 stream=True,
@@ -518,18 +519,19 @@ def test_chat_bedrock_stream():
 
 
 ## Test Bedrock + Async
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_async_chat_bedrock_stream():
     try:
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
         )
         # test streaming
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
             stream=True,
         )
@@ -540,7 +542,7 @@ async def test_async_chat_bedrock_stream():
         ## test failure callback
         try:
             response = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v1",
+                model="bedrock/anthropic.claude-v2",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
                 aws_region_name="my-bad-key",
                 stream=True,
@@ -561,6 +563,7 @@ async def test_async_chat_bedrock_stream():
 
 
 ## Test Sagemaker + Async
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_async_chat_sagemaker_stream():
     try:
@@ -793,6 +796,7 @@ async def test_async_embedding_azure():
 
 
 ## Test Bedrock + Async
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_async_embedding_bedrock():
     try:
