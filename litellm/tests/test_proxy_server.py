@@ -146,6 +146,7 @@ def test_bedrock_embedding(client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_sagemaker_embedding(client_no_auth):
     global headers
     from litellm.proxy.proxy_server import user_custom_auth
