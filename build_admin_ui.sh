@@ -9,7 +9,14 @@ pwd
 
 
 # only run this step for litellm enterprise, we run this if enterprise/enterprise_ui/_enterprise.json exists
-if [ ! -f "enterprise/enterprise_ui/enterprise_colors.json" ]; then
+# Check if the path to enterprise_colors.json is provided as an env variable
+if [ -z "$ENTERPRISE_COLORS_PATH" ]; then
+    # If not provided, use the default path
+    ENTERPRISE_COLORS_PATH="enterprise/enterprise_ui/enterprise_colors.json"
+fi
+
+# Check if enterprise_colors.json exists at the specified path
+if [ ! -f "$ENTERPRISE_COLORS_PATH" ]; then
     echo "Admin UI - using default LiteLLM UI"
     exit 0
 fi
@@ -32,7 +39,7 @@ else
         apt-get update
         apt-get install -y curl
     elif command -v apk &> /dev/null; then
-        # Try using apk if apt-get is not available
+    # Try using apk if apt-get is not available
         apk update
         apk add curl
     else
@@ -46,17 +53,17 @@ nvm install v18.17.0
 nvm use v18.17.0
 npm install -g npm
 
-# copy _enterprise.json from this directory to /ui/litellm-dashboard, and rename it to ui_colors.json
-cp enterprise/enterprise_ui/enterprise_colors.json ui/litellm-dashboard/ui_colors.json
+# Copy enterprise_colors.json from the specified path to /ui/litellm-dashboard, and rename it to ui_colors.json
+cp "$ENTERPRISE_COLORS_PATH" ui/litellm-dashboard/ui_colors.json
 
-# cd in to /ui/litellm-dashboard
+# Change directory to /ui/litellm-dashboard
 cd ui/litellm-dashboard
 
-# ensure have access to build_ui.sh
+# Ensure access to build_ui.sh
 chmod +x ./build_ui.sh
 
-# run ./build_ui.sh
+# Run ./build_ui.sh
 ./build_ui.sh
 
-# return to root directory
+# Return to the root directory
 cd ../..

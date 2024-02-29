@@ -209,9 +209,8 @@ Exaple setting a local image (on your container)
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```
 #### Set Custom Color Theme
-- Navigate to [/enterprise/enterprise_ui](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_ui/_enterprise_colors.json)
-- Inside the `enterprise_ui` directory, rename `_enterprise_colors.json` to `enterprise_colors.json`
-- Set your companies custom color scheme in `enterprise_colors.json`
+- Create a file called `enterprise_colors.json` and mount it to your Docker container,  
+- Set `ENTERPRISE_COLORS_PATH=path_to_your_colors.json` in your environment 
 Example contents of `enterprise_colors.json` 
 Set your colors to any of the following colors: https://www.tremor.so/docs/layout/color-palette#default-colors
 ```json
