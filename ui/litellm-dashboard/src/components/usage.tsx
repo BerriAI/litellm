@@ -132,6 +132,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
   const [topKeys, setTopKeys] = useState<any[]>([]);
+  const [topModels, setTopModels] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
 
   const firstDay = new Date(
@@ -188,6 +189,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
             }));
             setTopKeys(filtered_keys);
             const top_models = await adminTopModelsCall(accessToken);
+            const filtered_models = top_models.map((k: any) => ({
+              key: k["model"],
+              spend: k["total_spend"],
+            }));
+            setTopModels(filtered_models);
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -276,6 +282,22 @@ const UsagePage: React.FC<UsagePageProps> = ({
               className="mt-4 h-40"
               data={topUsers}
               index="user_id"
+              categories={["spend"]}
+              colors={["blue"]}
+              yAxisWidth={200}
+              layout="vertical"
+              showXAxis={false}
+              showLegend={false}
+            />
+          </Card>
+        </Col>
+        <Col numColSpan={1}>
+          <Card>
+            <Title>Top Models</Title>
+            <BarChart
+              className="mt-4 h-40"
+              data={topModels}
+              index="key"
               categories={["spend"]}
               colors={["blue"]}
               yAxisWidth={200}
