@@ -549,6 +549,8 @@ from .utils import (
     token_counter,
     cost_per_token,
     completion_cost,
+    supports_function_calling,
+    supports_parallel_function_calling,
     get_litellm_params,
     Logging,
     acreate,
