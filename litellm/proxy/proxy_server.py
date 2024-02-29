@@ -2406,6 +2406,9 @@ async def completion(
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -2577,6 +2580,9 @@ async def chat_completion(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -2810,6 +2816,9 @@ async def embeddings(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -2984,6 +2993,9 @@ async def image_generation(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -3142,6 +3154,9 @@ async def moderations(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -5534,6 +5549,9 @@ async def async_queue_request(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
