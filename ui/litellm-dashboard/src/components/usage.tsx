@@ -248,7 +248,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             <Title>Monthly Spend</Title>
             <BarChart
               data={keySpendData}
-              index="startTime"
+              index="date"
               categories={["spend"]}
               colors={["blue"]}
               valueFormatter={valueFormatter}
