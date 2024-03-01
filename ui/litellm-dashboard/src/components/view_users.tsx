@@ -8,6 +8,9 @@ import {
   TableRow,
   TableCell,
   TableBody,
+  Tab,
+  TabGroup,
+  TabList,
   Metric,
   Grid,
 } from "@tremor/react";
@@ -29,8 +32,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   userRole,
   userID,
 }) => {
-  const [userData, setuserData] = useState<null | any[]>(null);
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [userData, setUserData] = useState<null | any[]>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const defaultPageSize = 25;
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
@@ -46,7 +50,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           true
         );
         console.log("user data response:", userDataResponse);
-        setuserData(userDataResponse);
+        setUserData(userDataResponse);
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -65,11 +69,49 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     return <div>Loading...</div>;
   }
 
+  function renderPagination() {
+    if (!userData) return null;
+
+    const totalPages = Math.ceil(userData.length / defaultPageSize);
+    const startItem = (currentPage - 1) * defaultPageSize + 1;
+    const endItem = Math.min(currentPage * defaultPageSize, userData.length);
+
+    return (
+      <div className="flex justify-between items-center">
+        <div>
+          Showing {startItem} – {endItem} of {userData.length}
+        </div>
+        <div className="flex">
+          <button
+            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(currentPage - 1)}
+          >
+            &larr; Prev
+          </button>
+          <button
+            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(currentPage + 1)}
+          >
+            Next &rarr;
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "100%" }}>
       <Grid className="gap-2 p-10 h-[75vh] w-full">
         <CreateUser userID={userID} accessToken={accessToken} />
         <Card>
+          <TabGroup>
+            <TabList variant="line" defaultValue="1">
+              <Tab value="1">Key Owners</Tab>
+              <Tab value="2">End-Users</Tab>
+            </TabList>
+          </TabGroup>
           <Table className="mt-5">
             <TableHead>
               <TableRow>
@@ -93,34 +135,25 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             <TableBody>
               {userData.map((user: any) => (
                 <TableRow key={user.user_id}>
+                  <TableCell>{user.user_id}</TableCell>
                   <TableCell>
-                    <Title>{user.user_id}</Title>
+                    {user.user_role ? user.user_role : "app_owner"}
                   </TableCell>
                   <TableCell>
-                    <Title>
-                      {user.user_role ? user.user_role : "app_user"}
-                    </Title>
+                    {user.models && user.models.length > 0
+                      ? user.models
+                      : "All Models"}
                   </TableCell>
+                  <TableCell>{user.spend ? user.spend : 0}</TableCell>
                   <TableCell>
-                    <Title>
-                      {user.models && user.models.length > 0
-                        ? user.models
-                        : "All Models"}
-                    </Title>
-                  </TableCell>
-                  <TableCell>
-                    <Title>{user.spend ? user.spend : 0}</Title>
-                  </TableCell>
-                  <TableCell>
-                    <Title>
-                      {user.max_budget ? user.max_budget : "Unlimited"}
-                    </Title>
+                    {user.max_budget ? user.max_budget : "Unlimited"}
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </Card>
+        {renderPagination()}
       </Grid>
     </div>
   );

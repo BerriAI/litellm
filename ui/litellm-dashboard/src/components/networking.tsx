@@ -404,13 +404,13 @@ export const adminTopKeysCall = async (accessToken: String) => {
   }
 };
 
-export const adminTopModelsCall = async (accessToken: String) => {
+export const adminTopEndUsersCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/models?limit=5`
-      : `/global/spend/models?limit=5`;
+      ? `${proxyBaseUrl}/global/spend/end_users`
+      : `/global/spend/end_users`;
 
-    message.info("Making spend models request");
+    message.info("Making top end users request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -426,7 +426,37 @@ export const adminTopModelsCall = async (accessToken: String) => {
 
     const data = await response.json();
     console.log(data);
-    message.success("Spend Logs received");
+    message.success("Top End users received");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const adminTopModelsCall = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/spend/models?limit=5`
+      : `/global/spend/models?limit=5`;
+
+    message.info("Making top models request");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    message.success("Top Models received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);

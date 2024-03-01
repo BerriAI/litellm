@@ -593,6 +593,26 @@ class PrismaClient:
 
             print("Last30dModelsBySpend Created!")  # noqa
 
+        try:
+            await self.db.query_raw(
+                """SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1"""
+            )
+            print("Last30dTopEndUsersSpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE VIEW "Last30dTopEndUsersSpend" AS
+            SELECT end_user, SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE end_user <> '' AND end_user <> user
+            AND "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY end_user
+            ORDER BY total_spend DESC
+            LIMIT 100;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("Last30dTopEndUsersSpend Created!")  # noqa
+
         return
 
     @backoff.on_exception(
