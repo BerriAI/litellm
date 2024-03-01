@@ -8,7 +8,7 @@ import ViewUserSpend from "./view_user_spend";
 import DashboardTeam from "./dashboard_default_team";
 import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
-
+import { Typography } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
 console.log("isLocal:", isLocal);
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -73,6 +73,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         return "App Owner";
       case "app_admin":
         return "Admin";
+      case "proxy_admin":
+        return "Admin";
+      case "proxy_admin_viewer":
+        return "Admin Viewer";
       case "app_user":
         return "App User";
       default:
@@ -178,6 +182,16 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   if (userRole == null) {
     setUserRole("App Owner");
+  }
+
+  if (userRole && userRole == "Admin Viewer") {
+    const { Title, Paragraph } = Typography;
+    return (
+      <div>
+        <Title level={1}>Access Denied</Title>
+        <Paragraph>Ask your proxy admin for access to create keys</Paragraph>
+      </div>
+    );
   }
 
   return (
