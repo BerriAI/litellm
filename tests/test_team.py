@@ -35,6 +35,25 @@ async def new_user(session, i, user_id=None, budget=None, budget_duration=None):
         return await response.json()
 
 
+async def delete_member(session, i, team_id, user_id):
+    url = "http://0.0.0.0:4000/team/member_delete"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {"team_id": team_id, "user_id": user_id}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response {i} (Status code: {status}):")
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request {i} did not return a 200 status code: {status}")
+
+        return await response.json()
+
+
 async def generate_key(
     session,
     i,
@@ -290,3 +309,45 @@ async def test_team_delete():
         response = await chat_completion(session=session, key=key)
         ## Delete team
         await delete_team(session=session, i=0, team_id=team_data["team_id"])
+
+
+@pytest.mark.asyncio
+async def test_member_delete():
+    """
+    - Create team
+    - Add member
+    - Get team info (check if member in team)
+    - Delete member
+    - Get team info (check if member in team)
+    """
+    async with aiohttp.ClientSession() as session:
+        # Create Team
+        ## Create admin
+        admin_user = f"{uuid.uuid4()}"
+        await new_user(session=session, i=0, user_id=admin_user)
+        ## Create normal user
+        normal_user = f"{uuid.uuid4()}"
+        print(f"normal_user: {normal_user}")
+        await new_user(session=session, i=0, user_id=normal_user)
+        ## Create team with 1 admin and 1 user
+        member_list = [
+            {"role": "admin", "user_id": admin_user},
+            {"role": "user", "user_id": normal_user},
+        ]
+        team_data = await new_team(session=session, i=0, member_list=member_list)
+        print(f"team_data: {team_data}")
+        member_id_list = []
+        for member in team_data["members_with_roles"]:
+            member_id_list.append(member["user_id"])
+
+        assert normal_user in member_id_list
+        # Delete member
+        updated_team_data = await delete_member(
+            session=session, i=0, team_id=team_data["team_id"], user_id=normal_user
+        )
+        print(f"updated_team_data: {updated_team_data}")
+        member_id_list = []
+        for member in updated_team_data["members_with_roles"]:
+            member_id_list.append(member["user_id"])
+
+        assert normal_user not in member_id_list
