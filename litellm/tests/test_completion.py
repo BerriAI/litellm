@@ -292,7 +292,7 @@ def test_completion_gpt4_vision():
 
 
 def test_completion_azure_gpt4_vision():
-    # azure/gpt-4, vision takes 5 seconds to respond
+    # azure/gpt-4, vision takes 5seconds to respond
     try:
         litellm.set_verbose = True
         response = completion(
