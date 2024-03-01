@@ -2071,6 +2071,36 @@
         "litellm_provider": "perplexity",
         "mode": "chat"
     },
+    "perplexity/sonar-small-chat": {
+        "max_tokens": 16384,
+        "input_cost_per_token": 0.00000007,
+        "output_cost_per_token": 0.00000028,
+        "litellm_provider": "perplexity",
+        "mode": "chat"
+    },
+    "perplexity/sonar-small-online": {
+        "max_tokens": 12000,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0.00000028,
+        "input_cost_per_request": 0.005,
+        "litellm_provider": "perplexity",
+        "mode": "chat"
+    },
+    "perplexity/sonar-medium-chat": {
+        "max_tokens": 16384,
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000018,
+        "litellm_provider": "perplexity",
+        "mode": "chat"
+    },
+    "perplexity/sonar-medium-online": {
+        "max_tokens": 12000,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0.0000018,
+        "input_cost_per_request": 0.005,
+        "litellm_provider": "perplexity",
+        "mode": "chat"
+    },
       "anyscale/mistralai/Mistral-7B-Instruct-v0.1": {
         "max_tokens": 16384, 
         "input_cost_per_token": 0.00000015, 
