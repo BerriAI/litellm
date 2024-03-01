@@ -48,9 +48,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
   const [data, setData] = useState<{ day: string; spend: number }[] | null>(
     null
   );
-  const [predictedSpend, setPredictedSpend] = useState<{ day: string; spend: number }[] | null>(
-    null
-  );
+  const [predictedSpendString, setPredictedSpendString] = useState("");
   const [userData, setUserData] = useState<
     { name: string; value: number }[] | null
   >(null);
@@ -88,8 +86,9 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
       console.log("Response2:", predictedSpend);
 
       // append predictedSpend to data
-      const combinedData = [...response, ...predictedSpend];
+      const combinedData = [...response, ...predictedSpend.response];
       setData(combinedData);
+      setPredictedSpendString(predictedSpend.predicted_spend)
 
       console.log("Combined Data:", combinedData);
       // setPredictedSpend(predictedSpend);
@@ -111,7 +110,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
       </Button>
       <Modal
         visible={isModalVisible}
-        width={1000}
+        width={1400}
         onOk={handleOk}
         onCancel={handleCancel}
         footer={null}
@@ -119,6 +118,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
         <Title style={{ textAlign: "left" }}>Key Name: {keyName}</Title>
 
         <Metric>Monthly Spend ${keySpend}</Metric>
+        <Title>{predictedSpendString}</Title>
 
         <Card className="mt-6 mb-6">
           {data && (
@@ -128,7 +128,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
               colors={["blue", "amber"]}
               index="date"
               categories={["spend", "predicted_spend"]}
-              yAxisWidth={48}
+              yAxisWidth={80}
             />
           )}
         </Card>
