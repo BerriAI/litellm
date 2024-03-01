@@ -4190,6 +4190,18 @@ async def global_spend_models(
     return response
 
 
+@router.post(
+    "/global/predict/spend/logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_predict_spend_logs(request: Request):
+    from litellm.proxy.enterprise.utils import _forecast_daily_cost
+
+    data = await request.json()
+    return _forecast_daily_cost(data)
+
+
 @router.get(
     "/daily_metrics",
     summary="Get daily spend metrics",

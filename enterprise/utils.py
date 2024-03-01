@@ -245,3 +245,84 @@ def _create_clickhouse_aggregate_tables(client=None, table_names=[]):
             """
         )
     return
+
+
+def _forecast_daily_cost(data: list):
+    import requests
+    from datetime import datetime, timedelta
+
+    # Get the last entry in the data
+    last_entry = data[-1]
+
+    # Parse the date from the last entry
+    last_entry_date = datetime.strptime(last_entry["date"], "%Y-%m-%d").date()
+    # print("Last Entry Date:", last_entry_date)
+
+    # Get the month of the last entry
+    last_entry_month = last_entry_date.month
+    # print("Last Entry Month:", last_entry_month)
+
+    # Calculate the last day of the month
+    last_day_of_month = (
+        datetime(last_entry_date.year, last_entry_date.month % 12 + 1, 1)
+        - timedelta(days=1)
+    ).day
+    # print("Last Day of Month:", last_day_of_month)
+
+    # Calculate the remaining days in the month
+    remaining_days = last_day_of_month - last_entry_date.day
+    # print("Remaining Days:", remaining_days)
+
+    series = {}
+    for entry in data:
+        date = entry["date"]
+        spend = entry["spend"]
+        series[date] = spend
+
+    payload = {"series": series, "count": remaining_days}
+    print("Prediction Data:", payload)
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+
+    response = requests.post(
+        url="https://trend-api-production.up.railway.app/forecast",
+        json=payload,
+        headers=headers,
+    )
+
+    json_response = response.json()
+    forecast_data = json_response["forecast"]
+
+    # print("Forecast Data:", forecast_data)
+
+    response_data = []
+    for date in forecast_data:
+        spend = forecast_data[date]
+        entry = {
+            "date": date,
+            "predicted_spend": spend,
+        }
+        response_data.append(entry)
+    # print("Response Data:", response_data)
+    return response_data
+
+    # print(f"Date: {entry['date']}, Spend: {entry['spend']}, Response: {response.text}")
+
+
+# _forecast_daily_cost(
+#     [
+#         {"date": "2022-01-01", "spend": 100},
+#         {"date": "2022-01-02", "spend": 200},
+#         {"date": "2022-01-03", "spend": 300},
+#         {"date": "2022-01-04", "spend": 400},
+#         {"date": "2022-01-05", "spend": 500},
+#         {"date": "2022-01-06", "spend": 600},
+#         {"date": "2022-01-07", "spend": 700},
+#         {"date": "2022-01-08", "spend": 800},
+#         {"date": "2022-01-09", "spend": 900},
+#         {"date": "2022-01-10", "spend": 1000},
+#         {"date": "2022-01-11", "spend": 50},
+#     ]
+# )
