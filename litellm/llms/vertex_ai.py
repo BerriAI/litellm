@@ -300,7 +300,9 @@ def completion(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
         creds, _ = google.auth.default(quota_project_id=vertex_project)
-        print_verbose(f"VERTEX AI: creds={creds}")
+        print_verbose(
+            f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
+        )
         vertexai.init(
             project=vertex_project, location=vertex_location, credentials=creds
         )
