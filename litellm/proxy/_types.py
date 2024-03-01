@@ -262,7 +262,19 @@ class NewTeamRequest(LiteLLMBase):
 
 class TeamMemberAddRequest(LiteLLMBase):
     team_id: str
-    member: Optional[Member] = None
+    member: Member
+
+
+class TeamMemberDeleteRequest(LiteLLMBase):
+    team_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
 
 
 class UpdateTeamRequest(LiteLLMBase):
