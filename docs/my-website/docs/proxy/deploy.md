@@ -269,9 +269,7 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
 
 **Step 1**
 
-- (Recommended) Use the example file `docker-compose.example.yml` given in the project root. e.g. https://github.com/BerriAI/litellm/blob/main/docker-compose.example.yml
-
-- Rename the file `docker-compose.example.yml` to `docker-compose.yml`.
+- (Recommended) Use the example file `docker-compose.yml` given in the project root. e.g. https://github.com/BerriAI/litellm/blob/main/docker-compose.yml
 
 Here's an example `docker-compose.yml` file
 ```yaml
