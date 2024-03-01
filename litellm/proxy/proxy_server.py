@@ -786,6 +786,7 @@ async def user_api_key_auth(
                 "/global/spend/logs",
                 "/global/spend/keys",
                 "/global/spend/models",
+                "/global/predict/spend/logs",
             ]
             # check if the current route startswith any of the allowed routes
             if (
@@ -4199,6 +4200,7 @@ async def global_predict_spend_logs(request: Request):
     from litellm.proxy.enterprise.utils import _forecast_daily_cost
 
     data = await request.json()
+    data = data.get("data")
     return _forecast_daily_cost(data)
 
 

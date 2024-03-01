@@ -748,3 +748,42 @@ export const userUpdateUserCall = async (
     throw error;
   }
 };
+
+
+export const PredictedSpendLogsCall = async (accessToken: string, requestData: any) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/predict/spend/logs`
+      : `/global/predict/spend/logs`;
+
+    //message.info("Predicting spend logs request");
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        {
+          data: requestData
+        }
+      ),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    //message.success("Predicted Logs received");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
