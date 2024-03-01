@@ -100,7 +100,6 @@ model LiteLLM_SpendLogs {
   team_id             String? 
   end_user            String? 
 }
-
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
   request_id          String @unique

@@ -1152,9 +1152,9 @@ async def update_database(
                 payload["spend"] = response_cost
                 if prisma_client is not None:
                     await prisma_client.insert_data(data=payload, table_name="spend")
-
                 elif custom_db_client is not None:
                     await custom_db_client.insert_data(payload, table_name="spend")
+
             except Exception as e:
                 verbose_proxy_logger.info(f"Update Spend Logs DB failed to execute")
 
@@ -4134,6 +4134,28 @@ async def global_spend_keys(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
     sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
+    "/global/spend/end_users",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_end_users():
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    sql_query = f"""SELECT * FROM "Last30dTopEndUsersSpend";"""
 
     response = await prisma_client.db.query_raw(query=sql_query)
 

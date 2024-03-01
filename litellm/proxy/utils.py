@@ -616,6 +616,26 @@ class PrismaClient:
 
             print("MonthlyGlobalSpendPerKey Created!")  # noqa
 
+        try:
+            await self.db.query_raw(
+                """SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1"""
+            )
+            print("Last30dTopEndUsersSpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE VIEW "Last30dTopEndUsersSpend" AS
+            SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE end_user <> '' AND end_user <> user
+            AND "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY end_user
+            ORDER BY total_spend DESC
+            LIMIT 100;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("Last30dTopEndUsersSpend Created!")  # noqa
+
         return
 
     @backoff.on_exception(
@@ -1551,7 +1571,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "startTime": start_time,
         "endTime": end_time,
         "model": kwargs.get("model", ""),
-        "user": kwargs.get("user", ""),
+        "user": kwargs.get("litellm_params", {})
+        .get("metadata", {})
+        .get("user_api_key_user_id", ""),
+        "team_id": kwargs.get("litellm_params", {})
+        .get("metadata", {})
+        .get("user_api_key_team_id", ""),
         "metadata": metadata,
         "cache_key": cache_key,
         "spend": kwargs.get("response_cost", 0),
@@ -1559,6 +1584,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
         "request_tags": metadata.get("tags", []),
+        "end_user": kwargs.get("user", ""),
     }
 
     verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
