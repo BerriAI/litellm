@@ -580,6 +580,20 @@
         "litellm_provider": "mistral",
         "mode": "embedding"
     },
+    "groq/llama2-70b-4096": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000070,
+        "output_cost_per_token": 0.00000080,
+        "litellm_provider": "groq",
+        "mode": "chat"
+    },
+    "groq/mixtral-8x7b-32768": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 0.00000027,
+        "output_cost_per_token": 0.00000027,
+        "litellm_provider": "groq",
+        "mode": "chat"
+    },
     "claude-instant-1.2": {
         "max_tokens": 100000,
         "max_output_tokens": 8191,
