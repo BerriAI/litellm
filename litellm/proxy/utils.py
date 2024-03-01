@@ -592,6 +592,29 @@ class PrismaClient:
             await self.db.execute_raw(query=sql_query)
 
             print("Last30dModelsBySpend Created!")  # noqa
+        try:
+            await self.db.query_raw(
+                """SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1"""
+            )
+            print("MonthlyGlobalSpendPerKey Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+                CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
+                SELECT
+                DATE("startTime") AS date, 
+                SUM("spend") AS spend,
+                api_key as api_key
+                FROM 
+                "LiteLLM_SpendLogs" 
+                WHERE 
+                "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+                GROUP BY 
+                DATE("startTime"),
+                api_key;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("MonthlyGlobalSpendPerKey Created!")  # noqa
 
         try:
             await self.db.query_raw(

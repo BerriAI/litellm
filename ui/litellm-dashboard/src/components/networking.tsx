@@ -280,7 +280,7 @@ export const modelAvailableCall = async (
 
 export const keySpendLogsCall = async (accessToken: String, token: String) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs` : `/spend/logs`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/logs` : `/global/spend/logs`;
     console.log("in keySpendLogsCall:", url);
     const response = await fetch(`${url}/?api_key=${token}`, {
       method: "GET",
