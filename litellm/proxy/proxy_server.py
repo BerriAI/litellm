@@ -4114,6 +4114,28 @@ async def global_spend_keys(
 
 
 @router.get(
+    "/global/spend/end_users",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_end_users():
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    sql_query = f"""SELECT * FROM "Last30dTopEndUsersSpend";"""
+
+    response = await prisma_client.db.query_raw(query=sql_query)
+
+    return response
+
+
+@router.get(
     "/global/spend/models",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
