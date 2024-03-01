@@ -21,7 +21,7 @@ import {
   BarList,
   Metric,
 } from "@tremor/react";
-import { keySpendLogsCall } from "./networking";
+import { keySpendLogsCall, PredictedSpendLogsCall } from "./networking";
 
 interface ViewKeySpendReportProps {
   token: string;
@@ -46,6 +46,9 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
 }) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [data, setData] = useState<{ day: string; spend: number }[] | null>(
+    null
+  );
+  const [predictedSpend, setPredictedSpend] = useState<{ day: string; spend: number }[] | null>(
     null
   );
   const [userData, setUserData] = useState<
@@ -79,6 +82,18 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
       );
       console.log("Response:", response);
       setData(response);
+
+      // predict spend based on response
+      const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
+      console.log("Response2:", predictedSpend);
+
+      // append predictedSpend to data
+      const combinedData = [...response, ...predictedSpend];
+      setData(combinedData);
+
+      console.log("Combined Data:", combinedData);
+      // setPredictedSpend(predictedSpend);
+      
     } catch (error) {
       console.error("There was an error fetching the data", error);
     }
@@ -110,9 +125,9 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
             <BarChart
               className="mt-6"
               data={data}
-              colors={["blue"]}
+              colors={["blue", "amber"]}
               index="date"
-              categories={["spend"]}
+              categories={["spend", "predicted_spend"]}
               yAxisWidth={48}
             />
           )}
