@@ -68,9 +68,9 @@ class OllamaConfig:
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
-    stop: Optional[
-        list
-    ] = None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    stop: Optional[list] = (
+        None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -147,6 +147,11 @@ def get_ollama_response(
 
     stream = optional_params.pop("stream", False)
     format = optional_params.pop("format", None)
+
+    for m in messages:
+        if "role" in m and m["role"] == "tool":
+            m["role"] = "assistant"
+
     data = {
         "model": model,
         "messages": messages,
