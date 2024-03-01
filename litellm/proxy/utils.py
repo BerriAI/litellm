@@ -601,7 +601,7 @@ class PrismaClient:
         except Exception as e:
             sql_query = """
             CREATE VIEW "Last30dTopEndUsersSpend" AS
-            SELECT end_user, SUM(spend) AS total_spend
+            SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend
             FROM "LiteLLM_SpendLogs"
             WHERE end_user <> '' AND end_user <> user
             AND "startTime" >= CURRENT_DATE - INTERVAL '30 days'
