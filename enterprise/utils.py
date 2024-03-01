@@ -274,13 +274,18 @@ def _forecast_daily_cost(data: list):
     ) - timedelta(days=1)
 
     # Calculate the remaining days in the month
-    remaining_days = (last_day_of_todays_month - last_entry_date).days + 1
+    remaining_days = (last_day_of_todays_month - last_entry_date).days
 
+    current_spend_this_month = 0
     series = {}
     for entry in data:
         date = entry["date"]
         spend = entry["spend"]
         series[date] = spend
+
+        # check if the date is in this month
+        if datetime.strptime(date, "%Y-%m-%d").month == today_day_month:
+            current_spend_this_month += spend
 
     if len(series) < 10:
         num_items_to_fill = 11 - len(series)
@@ -314,15 +319,22 @@ def _forecast_daily_cost(data: list):
     # print("Forecast Data:", forecast_data)
 
     response_data = []
+    total_predicted_spend = current_spend_this_month
     for date in forecast_data:
         spend = forecast_data[date]
         entry = {
             "date": date,
             "predicted_spend": spend,
         }
+        total_predicted_spend += spend
         response_data.append(entry)
-    # print("Response Data:", response_data)
-    return response_data
+
+    # get month as a string, Jan, Feb, etc.
+    today_month = today_date.strftime("%B")
+    predicted_spend = (
+        f"Predicted Spend for { today_month } 2024, ${total_predicted_spend}"
+    )
+    return {"response": response_data, "predicted_spend": predicted_spend}
 
     # print(f"Date: {entry['date']}, Spend: {entry['spend']}, Response: {response.text}")
 
