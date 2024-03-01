@@ -336,6 +336,52 @@ def test_gemini_pro_vision():
 # test_gemini_pro_vision()
 
 
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+@pytest.mark.skip(
+    reason="we already test gemini-pro-vision, this is just another way to pass images"
+)
+def test_gemini_pro_vision_base64():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+        litellm.num_retries = 3
+        image_path = "cached_logo.jpg"
+        # Getting the base64 string
+        base64_image = encode_image(image_path)
+        resp = litellm.completion(
+            model="vertex_ai/gemini-pro-vision",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + base64_image
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+        print(resp)
+
+        prompt_tokens = resp.usage.prompt_tokens
+
+    except Exception as e:
+        if "500 Internal error encountered.'" in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
+
+
 def test_gemini_pro_function_calling():
     load_vertex_ai_credentials()
     tools = [
