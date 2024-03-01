@@ -225,6 +225,24 @@ def _gemini_vision_convert_messages(messages: list):
                 part_mime = "video/mp4"
                 google_clooud_part = Part.from_uri(img, mime_type=part_mime)
                 processed_images.append(google_clooud_part)
+            elif "base64" in img:
+                # Case 4: Images with base64 encoding
+                import base64, re
+
+                # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
+                image_metadata, img_without_base_64 = img.split(",")
+
+                # read mime_type from img_without_base_64=data:image/jpeg;base64
+                # Extract MIME type using regular expression
+                mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
+
+                if mime_type_match:
+                    mime_type = mime_type_match.group(1)
+                else:
+                    mime_type = "image/jpeg"
+                decoded_img = base64.b64decode(img_without_base_64)
+                processed_image = Part.from_data(data=decoded_img, mime_type=mime_type)
+                processed_images.append(processed_image)
         return prompt, processed_images
     except Exception as e:
         raise e
