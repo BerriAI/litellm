@@ -5512,7 +5512,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
         }
     ## EXTRACT LLM PROVIDER - if model name provided
     try:
-        custom_llm_provider = get_llm_provider(model=model)
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except:
         custom_llm_provider = None
     # # check if llm provider part of model name
@@ -5606,7 +5606,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
         ## openai - chatcompletion + text completion
         if (
             model in litellm.open_ai_chat_completion_models
-            or litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_text_completion_models
         ):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
