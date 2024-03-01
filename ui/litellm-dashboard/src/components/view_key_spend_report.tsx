@@ -110,7 +110,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
       </Button>
       <Modal
         visible={isModalVisible}
-        width={1000}
+        width={1400}
         onOk={handleOk}
         onCancel={handleCancel}
         footer={null}
@@ -128,7 +128,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
               colors={["blue", "amber"]}
               index="date"
               categories={["spend", "predicted_spend"]}
-              yAxisWidth={48}
+              yAxisWidth={80}
             />
           )}
         </Card>
