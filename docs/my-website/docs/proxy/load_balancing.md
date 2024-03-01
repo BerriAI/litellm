@@ -103,4 +103,7 @@ router_settings:
   routing_strategy: least-busy                  # Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"]
   num_retries: 2
   timeout: 30                                  # 30 seconds
+  redis_host: <your redis host>
+  redis_password: <your redis password>
+  redis_port: 1992
 ```
