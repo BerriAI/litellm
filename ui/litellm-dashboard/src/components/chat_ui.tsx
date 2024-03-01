@@ -21,6 +21,7 @@ import {
 import { modelAvailableCall } from "./networking";
 import openai from "openai";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { Typography } from "antd";
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -144,6 +145,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     setInputMessage("");
   };
+
+  if (userRole && userRole == "Admin Viewer") {
+    const { Title, Paragraph } = Typography;
+    return (
+      <div>
+        <Title level={1}>Access Denied</Title>
+        <Paragraph>Ask your proxy admin for access to test models</Paragraph>
+      </div>
+    );
+  }
 
   return (
     <div style={{ width: "100%", position: "relative" }}>
