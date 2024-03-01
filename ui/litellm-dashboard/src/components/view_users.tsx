@@ -5,16 +5,19 @@ import {
   Subtitle,
   Table,
   TableHead,
+  TableHeaderCell,
   TableRow,
   TableCell,
   TableBody,
   Tab,
   TabGroup,
   TabList,
+  TabPanels,
   Metric,
   Grid,
+  TabPanel,
 } from "@tremor/react";
-import { userInfoCall } from "./networking";
+import { userInfoCall, adminTopEndUsersCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
@@ -33,6 +36,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   userID,
 }) => {
   const [userData, setUserData] = useState<null | any[]>(null);
+  const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const defaultPageSize = 25;
 
@@ -56,8 +60,25 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       }
     };
 
-    if (accessToken && token && userRole && userID) {
+    if (accessToken && token && userRole && userID && !userData) {
       fetchData();
+    }
+
+    const fetchEndUserSpend = async () => {
+      try {
+        const topEndUsers = await adminTopEndUsersCall(accessToken);
+        console.log("user data response:", topEndUsers);
+        setEndUsers(topEndUsers);
+      } catch (error) {
+        console.error("There was an error fetching the model data", error);
+      }
+    };
+    if (
+      userRole &&
+      (userRole == "Admin" || userRole == "Admin Viewer") &&
+      !endUsers
+    ) {
+      fetchEndUserSpend();
     }
   }, [accessToken, token, userRole, userID]);
 
@@ -105,53 +126,68 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <div style={{ width: "100%" }}>
       <Grid className="gap-2 p-10 h-[75vh] w-full">
         <CreateUser userID={userID} accessToken={accessToken} />
-        <Card>
+        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
           <TabGroup>
             <TabList variant="line" defaultValue="1">
               <Tab value="1">Key Owners</Tab>
               <Tab value="2">End-Users</Tab>
             </TabList>
+            <TabPanels>
+              <TabPanel>
+                <Table className="mt-5">
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>User ID</TableHeaderCell>
+                      <TableHeaderCell>User Role</TableHeaderCell>
+                      <TableHeaderCell>User Models</TableHeaderCell>
+                      <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
+                      <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {userData.map((user: any) => (
+                      <TableRow key={user.user_id}>
+                        <TableCell>{user.user_id}</TableCell>
+                        <TableCell>
+                          {user.user_role ? user.user_role : "app_owner"}
+                        </TableCell>
+                        <TableCell>
+                          {user.models && user.models.length > 0
+                            ? user.models
+                            : "All Models"}
+                        </TableCell>
+                        <TableCell>{user.spend ? user.spend : 0}</TableCell>
+                        <TableCell>
+                          {user.max_budget ? user.max_budget : "Unlimited"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TabPanel>
+              <TabPanel>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>End User</TableHeaderCell>
+                      <TableHeaderCell>Spend</TableHeaderCell>
+                      <TableHeaderCell>Total Events</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+
+                  <TableBody>
+                    {endUsers?.map((user: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell>{user.end_user}</TableCell>
+                        <TableCell>{user.total_spend}</TableCell>
+                        <TableCell>{user.total_events}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TabPanel>
+            </TabPanels>
           </TabGroup>
-          <Table className="mt-5">
-            <TableHead>
-              <TableRow>
-                <TableCell>
-                  <Title>User ID </Title>
-                </TableCell>
-                <TableCell>
-                  <Title>User Role</Title>
-                </TableCell>
-                <TableCell>
-                  <Title>User Models</Title>
-                </TableCell>
-                <TableCell>
-                  <Title>User Spend ($ USD)</Title>
-                </TableCell>
-                <TableCell>
-                  <Title>User Max Budget ($ USD)</Title>
-                </TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {userData.map((user: any) => (
-                <TableRow key={user.user_id}>
-                  <TableCell>{user.user_id}</TableCell>
-                  <TableCell>
-                    {user.user_role ? user.user_role : "app_owner"}
-                  </TableCell>
-                  <TableCell>
-                    {user.models && user.models.length > 0
-                      ? user.models
-                      : "All Models"}
-                  </TableCell>
-                  <TableCell>{user.spend ? user.spend : 0}</TableCell>
-                  <TableCell>
-                    {user.max_budget ? user.max_budget : "Unlimited"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
         </Card>
         {renderPagination()}
       </Grid>
