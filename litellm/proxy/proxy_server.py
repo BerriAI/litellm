@@ -4069,7 +4069,12 @@ async def view_spend_logs(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def global_spend_logs():
+async def global_spend_logs(
+    api_key: str = fastapi.Query(
+        default=None,
+        description="API Key to get global spend (spend per day for last 30d). Admin-only endpoint",
+    )
+):
     """
     [BETA] This is a beta endpoint. It will change.
 
@@ -4078,12 +4083,34 @@ async def global_spend_logs():
     More efficient implementation of /spend/logs, by creating a view over the spend logs table.
     """
     global prisma_client
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if api_key is None:
+        sql_query = """SELECT * FROM "MonthlyGlobalSpend";"""
 
-    sql_query = """SELECT * FROM "MonthlyGlobalSpend";"""
+        response = await prisma_client.db.query_raw(query=sql_query)
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+        return response
+    else:
+        sql_query = (
+            """
+            SELECT * FROM "MonthlyGlobalSpendPerKey"
+            WHERE "api_key" = '"""
+            + api_key
+            + """'
+            ORDER BY "date";
+        """
+        )
 
-    return response
+        response = await prisma_client.db.query_raw(query=sql_query)
+
+        return response
+    return
 
 
 @router.get(
