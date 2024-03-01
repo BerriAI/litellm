@@ -251,33 +251,47 @@ def _forecast_daily_cost(data: list):
     import requests
     from datetime import datetime, timedelta
 
-    # Get the last entry in the data
+    first_entry = data[0]
     last_entry = data[-1]
 
-    # Parse the date from the last entry
-    last_entry_date = datetime.strptime(last_entry["date"], "%Y-%m-%d").date()
-    # print("Last Entry Date:", last_entry_date)
+    # get the date today
+    today_date = datetime.today().date()
 
-    # Get the month of the last entry
-    last_entry_month = last_entry_date.month
-    # print("Last Entry Month:", last_entry_month)
+    today_day_month = today_date.month
+
+    # Parse the date from the first entry
+    first_entry_date = datetime.strptime(first_entry["date"], "%Y-%m-%d").date()
+    last_entry_date = datetime.strptime(last_entry["date"], "%Y-%m-%d")
+
+    print("last entry date", last_entry_date)
+
+    # Assuming today_date is a datetime object
+    today_date = datetime.now()
 
     # Calculate the last day of the month
-    last_day_of_month = (
-        datetime(last_entry_date.year, last_entry_date.month % 12 + 1, 1)
-        - timedelta(days=1)
-    ).day
-    # print("Last Day of Month:", last_day_of_month)
+    last_day_of_todays_month = datetime(
+        today_date.year, today_date.month % 12 + 1, 1
+    ) - timedelta(days=1)
 
     # Calculate the remaining days in the month
-    remaining_days = last_day_of_month - last_entry_date.day
-    # print("Remaining Days:", remaining_days)
+    remaining_days = (last_day_of_todays_month - last_entry_date).days + 1
 
     series = {}
     for entry in data:
         date = entry["date"]
         spend = entry["spend"]
         series[date] = spend
+
+    if len(series) < 10:
+        num_items_to_fill = 11 - len(series)
+
+        # avg spend for all days in series
+        avg_spend = sum(series.values()) / len(series)
+        for i in range(num_items_to_fill):
+            # go backwards from the first entry
+            date = first_entry_date - timedelta(days=i)
+            series[date.strftime("%Y-%m-%d")] = avg_spend
+            series[date.strftime("%Y-%m-%d")] = avg_spend
 
     payload = {"series": series, "count": remaining_days}
     print("Prediction Data:", payload)
@@ -291,6 +305,8 @@ def _forecast_daily_cost(data: list):
         json=payload,
         headers=headers,
     )
+    # check the status code
+    response.raise_for_status()
 
     json_response = response.json()
     forecast_data = json_response["forecast"]
@@ -314,15 +330,6 @@ def _forecast_daily_cost(data: list):
 # _forecast_daily_cost(
 #     [
 #         {"date": "2022-01-01", "spend": 100},
-#         {"date": "2022-01-02", "spend": 200},
-#         {"date": "2022-01-03", "spend": 300},
-#         {"date": "2022-01-04", "spend": 400},
-#         {"date": "2022-01-05", "spend": 500},
-#         {"date": "2022-01-06", "spend": 600},
-#         {"date": "2022-01-07", "spend": 700},
-#         {"date": "2022-01-08", "spend": 800},
-#         {"date": "2022-01-09", "spend": 900},
-#         {"date": "2022-01-10", "spend": 1000},
-#         {"date": "2022-01-11", "spend": 50},
+
 #     ]
 # )
