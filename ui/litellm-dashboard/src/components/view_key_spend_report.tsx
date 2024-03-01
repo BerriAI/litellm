@@ -164,7 +164,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
 
   return (
     <div>
-      <Button className="mx-auto" onClick={showModal}>
+      <Button size = "xs" onClick={showModal}>
         View Spend Report
       </Button>
       <Modal
