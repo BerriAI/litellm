@@ -542,6 +542,100 @@ class PrismaClient:
 
             print("MonthlyGlobalSpend Created!")  # noqa
 
+        try:
+            await self.db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
+            print("Last30dKeysBySpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
+            SELECT 
+            L."api_key", 
+            V."key_alias",
+            V."key_name",
+            SUM(L."spend") AS total_spend
+            FROM
+            "LiteLLM_SpendLogs" L
+            LEFT JOIN 
+            "LiteLLM_VerificationToken" V
+            ON
+            L."api_key" = V."token"
+            WHERE
+            L."startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+            GROUP BY
+            L."api_key", V."key_alias", V."key_name"
+            ORDER BY
+            total_spend DESC;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("Last30dKeysBySpend Created!")  # noqa
+
+        try:
+            await self.db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
+            print("Last30dModelsBySpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
+            SELECT
+            "model",
+            SUM("spend") AS total_spend
+            FROM
+            "LiteLLM_SpendLogs"
+            WHERE
+            "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+            AND "model" != ''
+            GROUP BY
+            "model"
+            ORDER BY
+            total_spend DESC;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("Last30dModelsBySpend Created!")  # noqa
+        try:
+            await self.db.query_raw(
+                """SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1"""
+            )
+            print("MonthlyGlobalSpendPerKey Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+                CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
+                SELECT
+                DATE("startTime") AS date, 
+                SUM("spend") AS spend,
+                api_key as api_key
+                FROM 
+                "LiteLLM_SpendLogs" 
+                WHERE 
+                "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+                GROUP BY 
+                DATE("startTime"),
+                api_key;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("MonthlyGlobalSpendPerKey Created!")  # noqa
+
+        try:
+            await self.db.query_raw(
+                """SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1"""
+            )
+            print("Last30dTopEndUsersSpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE VIEW "Last30dTopEndUsersSpend" AS
+            SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE end_user <> '' AND end_user <> user
+            AND "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY end_user
+            ORDER BY total_spend DESC
+            LIMIT 100;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("Last30dTopEndUsersSpend Created!")  # noqa
+
         return
 
     @backoff.on_exception(
@@ -613,6 +707,10 @@ class PrismaClient:
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
         reset_at: Optional[datetime] = None,
+        offset: Optional[int] = None,  # pagination, what row number to start from
+        limit: Optional[
+            int
+        ] = None,  # pagination, number of rows to getch when find_all==True
     ):
         try:
             response: Any = None
@@ -748,7 +846,7 @@ class PrismaClient:
                         )
                     else:
                         response = await self.db.litellm_usertable.find_many(  # type: ignore
-                            order={"spend": "desc"},
+                            order={"spend": "desc"}, take=limit, skip=offset
                         )
                 return response
             elif table_name == "spend":
@@ -1034,7 +1132,7 @@ class PrismaClient:
                     + f"DB User Table - update succeeded {update_user_row}"
                     + "\033[0m"
                 )
-                return {"user_id": user_id, "data": db_data}
+                return {"user_id": user_id, "data": update_user_row}
             elif (
                 team_id is not None
                 or (table_name is not None and table_name == "team")
@@ -1473,7 +1571,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "startTime": start_time,
         "endTime": end_time,
         "model": kwargs.get("model", ""),
-        "user": kwargs.get("user", ""),
+        "user": kwargs.get("litellm_params", {})
+        .get("metadata", {})
+        .get("user_api_key_user_id", ""),
+        "team_id": kwargs.get("litellm_params", {})
+        .get("metadata", {})
+        .get("user_api_key_team_id", ""),
         "metadata": metadata,
         "cache_key": cache_key,
         "spend": kwargs.get("response_cost", 0),
@@ -1481,6 +1584,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
         "request_tags": metadata.get("tags", []),
+        "end_user": kwargs.get("user", ""),
     }
 
     verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
