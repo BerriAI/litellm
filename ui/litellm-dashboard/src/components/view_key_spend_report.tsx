@@ -183,7 +183,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
             <BarChart
               className="mt-6"
               data={data}
-              colors={["green"]}
+              colors={["blue"]}
               index="day"
               categories={["spend"]}
               yAxisWidth={48}
@@ -193,7 +193,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
         <Title className="mt-6">Top 5 Users Spend (USD)</Title>
         <Card className="mb-6">
           {userData && (
-            <BarList className="mt-6" data={userData} color="teal" />
+            <BarList className="mt-6" data={userData} color="blue" />
           )}
         </Card>
       </Modal>
