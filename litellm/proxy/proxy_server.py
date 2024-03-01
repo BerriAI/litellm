@@ -4102,7 +4102,8 @@ async def global_spend_logs(
             SELECT * FROM "MonthlyGlobalSpendPerKey"
             WHERE "api_key" = '"""
             + api_key
-            + """';
+            + """'
+            ORDER BY "date";
         """
         )
 
