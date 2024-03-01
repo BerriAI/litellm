@@ -334,10 +334,14 @@ class OpenAIChatCompletion(BaseLLM):
                             model_response_object=model_response,
                         )
                 except Exception as e:
+                    if print_verbose is not None:
+                        print_verbose(f"openai.py: Received openai error - {str(e)}")
                     if (
                         "Conversation roles must alternate user/assistant" in str(e)
                         or "user and assistant roles should be alternating" in str(e)
                     ) and messages is not None:
+                        if print_verbose is not None:
+                            print_verbose("openai.py: REFORMATS THE MESSAGE!")
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
                         new_messages = []
                         for i in range(len(messages) - 1):  # type: ignore
