@@ -4893,7 +4893,7 @@ def get_optional_params(
             extra_body  # openai client supports `extra_body` param
         )
     else:  # assume passing in params for openai/azure openai
-        print_verbose(f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZUREs")
+        print_verbose(f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZURE")
         supported_params = [
             "functions",
             "function_call",
@@ -5015,8 +5015,21 @@ def get_llm_provider(
                 dynamic_api_key = get_secret("GROQ_API_KEY")
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
-                api_base = api_base or "https://api.mistral.ai/v1"
-                dynamic_api_key = get_secret("MISTRAL_API_KEY")
+                api_base = (
+                    api_base
+                    or get_secret("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
+                    or "https://api.mistral.ai/v1"
+                )
+                # if api_base does not end with /v1 we add it
+                if api_base is not None and not api_base.endswith(
+                    "/v1"
+                ):  # Mistral always needs a /v1 at the end
+                    api_base = api_base + "/v1"
+                dynamic_api_key = (
+                    api_key
+                    or get_secret("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
+                    or get_secret("MISTRAL_API_KEY")
+                )
             elif custom_llm_provider == "voyage":
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
                 api_base = "https://api.voyageai.com/v1"
@@ -5511,7 +5524,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
         }
     ## EXTRACT LLM PROVIDER - if model name provided
     try:
-        custom_llm_provider = get_llm_provider(model=model)
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except:
         custom_llm_provider = None
     # # check if llm provider part of model name
@@ -5605,7 +5618,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
         ## openai - chatcompletion + text completion
         if (
             model in litellm.open_ai_chat_completion_models
-            or litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_text_completion_models
         ):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
