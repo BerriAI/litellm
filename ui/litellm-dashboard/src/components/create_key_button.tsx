@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Card, Metric, Text } from "@tremor/react";
+import { Card, Metric, Text, Title, Subtitle } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -38,6 +38,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
+  const [softBudget, setSoftBudget] = useState(null);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -54,8 +55,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       message.info("Making API Call");
       setIsModalVisible(true);
       const response = await keyCreateCall(accessToken, userID, formValues);
+
+      console.log("key create Response:", response);
       setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
       setApiKey(response["key"]);
+      setSoftBudget(response["soft_budget"]);
       message.success("API Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
@@ -108,7 +112,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   ))}
                 </Select>
               </Form.Item>
-              <Form.Item label="Soft Budget (USD) Monthly" name="soft_budget">
+              <Form.Item label="Soft Budget (USD) Monthly" name="soft_budget" initialValue={50.00}>
                 <InputNumber step={0.01} precision={2} defaultValue={50.00} width={200} />
               </Form.Item>
               <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -157,28 +161,38 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       </Modal>
       {apiKey && (
         <Modal
-          title="Save your key"
           visible={isModalVisible}
           onOk={handleOk}
           onCancel={handleCancel}
           footer={null}
         >
           <Grid numItems={1} className="gap-2 w-full">
-            <Col numColSpan={1}>
-              <p>
-                Please save this secret key somewhere safe and accessible. For
-                security reasons, <b>you will not be able to view it again</b>{" "}
-                through your LiteLLM account. If you lose this secret key, you
-                will need to generate a new one.
-              </p>
-            </Col>
-            <Col numColSpan={1}>
-              {apiKey != null ? (
-                <Text>API Key: {apiKey}</Text>
-              ) : (
-                <Text>Key being created, this might take 30s</Text>
-              )}
-            </Col>
+            <Card>
+              <Title>Save your Key</Title>
+              <Col numColSpan={1}>
+                <p>
+                  Please save this secret key somewhere safe and accessible. For
+                  security reasons, <b>you will not be able to view it again</b>{" "}
+                  through your LiteLLM account. If you lose this secret key, you
+                  will need to generate a new one.
+                </p>
+              </Col>
+              <Col numColSpan={1}>
+                {apiKey != null ? (
+                  <div>
+                    <Text>API Key: {apiKey}</Text>
+                    <Title className="mt-6">Budgets</Title>
+                      <Text>Soft Limit Budget: ${softBudget}</Text>
+                      <Button className="mt-3">
+                        Test Alert
+                      </Button>
+
+                  </div>
+                ) : (
+                  <Text>Key being created, this might take 30s</Text>
+                )}
+              </Col>
+            </Card>
           </Grid>
         </Modal>
       )}
