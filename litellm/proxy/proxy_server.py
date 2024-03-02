@@ -239,6 +239,7 @@ health_check_interval = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
+litellm_proxy_admin_name = "default_user_id"
 ui_access_mode: Literal["admin", "all"] = "all"
 proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
@@ -335,7 +336,11 @@ async def user_api_key_auth(
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         is_master_key_valid = secrets.compare_digest(api_key, master_key)
         if is_master_key_valid:
-            return UserAPIKeyAuth(api_key=master_key, user_role="proxy_admin")
+            return UserAPIKeyAuth(
+                api_key=master_key,
+                user_role="proxy_admin",
+                user_id=litellm_proxy_admin_name,
+            )
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
@@ -360,7 +365,6 @@ async def user_api_key_auth(
                 valid_token = await prisma_client.get_data(
                     token=api_key, table_name="combined_view"
                 )
-
             elif custom_db_client is not None:
                 try:
                     valid_token = await custom_db_client.get_data(
@@ -2213,7 +2217,7 @@ def parse_cache_control(cache_control):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name
     import json
 
     ### LOAD MASTER KEY ###
@@ -2260,9 +2264,8 @@ async def startup_event():
 
     if prisma_client is not None and master_key is not None:
         # add master key to db
-        user_id = "default_user_id"
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
-            user_id = os.getenv("PROXY_ADMIN_ID")
+            litellm_proxy_admin_name = os.getenv("PROXY_ADMIN_ID")
 
         asyncio.create_task(
             generate_key_helper_fn(
@@ -2272,7 +2275,7 @@ async def startup_event():
                 config={},
                 spend=0,
                 token=master_key,
-                user_id=user_id,
+                user_id=litellm_proxy_admin_name,
                 user_role="proxy_admin",
                 query_type="update_data",
                 update_key_values={
@@ -5410,6 +5413,81 @@ async def team_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+#### ORGANIZATION MANAGEMENT ####
+
+
+@router.post(
+    "/organization/new",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_OrganizationTable,
+)
+async def new_organization(
+    data: NewOrganizationRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.budget_id is None:
+        """
+        Every organization needs a budget attached.
+
+        If none provided, create one based on user max
+        """
+        budget_row = LiteLLM_BudgetTable(
+            max_budget=user_api_key_dict.max_budget,
+            max_parallel_requests=user_api_key_dict.max_parallel_requests,
+            model_max_budget=user_api_key_dict.model_max_budget,
+            tpm_limit=user_api_key_dict.tpm_limit,
+            rpm_limit=user_api_key_dict.rpm_limit,
+            budget_duration=user_api_key_dict.budget_duration,
+            budget_reset_at=user_api_key_dict.budget_reset_at,
+            created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+            updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+        )
+
+        new_budget = prisma_client.jsonify_object(
+            budget_row.model_dump(exclude_none=True)
+        )
+
+        _budget = await prisma_client.db.litellm_budgettable.create(data={**new_budget})  # type: ignore
+
+        data.budget_id = _budget.budget_id
+
+    response = await prisma_client.db.litellm_organizationtable.create(
+        data={
+            **data.model_dump(exclude_none=True),  # type: ignore
+            "created_by": user_api_key_dict.user_id,
+            "updated_by": user_api_key_dict.user_id,
+        }
+    )
+
+    return response
+
+
+@router.post(
+    "/organization/update",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_TeamTable,
+)
+async def update_organization():
+    pass
+
+
+@router.post(
+    "/organization/delete",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_TeamTable,
+)
+async def delete_organization():
+    pass
 
 
 #### MODEL MANAGEMENT ####
