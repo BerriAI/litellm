@@ -108,6 +108,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   ))}
                 </Select>
               </Form.Item>
+              <Form.Item label="Soft Budget (USD) Monthly" name="soft_budget">
+                <InputNumber step={0.01} precision={2} defaultValue={50.00} width={200} />
+              </Form.Item>
               <Form.Item label="Max Budget (USD)" name="max_budget">
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
