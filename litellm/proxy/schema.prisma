@@ -97,8 +97,9 @@ model LiteLLM_SpendLogs {
   cache_hit           String   @default("")
   cache_key           String   @default("")
   request_tags        Json     @default("[]")
+  team_id             String? 
+  end_user            String? 
 }
-
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
   request_id          String @unique
