@@ -280,7 +280,9 @@ export const modelAvailableCall = async (
 
 export const keySpendLogsCall = async (accessToken: String, token: String) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/logs` : `/global/spend/logs`;
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/spend/logs`
+      : `/global/spend/logs`;
     console.log("in keySpendLogsCall:", url);
     const response = await fetch(`${url}/?api_key=${token}`, {
       method: "GET",
@@ -404,20 +406,42 @@ export const adminTopKeysCall = async (accessToken: String) => {
   }
 };
 
-export const adminTopEndUsersCall = async (accessToken: String) => {
+export const adminTopEndUsersCall = async (
+  accessToken: String,
+  keyToken: String | null
+) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/global/spend/end_users`
       : `/global/spend/end_users`;
 
+    let body = "";
+    if (keyToken) {
+      body = JSON.stringify({ api_key: keyToken });
+    }
     message.info("Making top end users request");
-    const response = await fetch(url, {
-      method: "GET",
+
+    // Define requestOptions with body as an optional property
+    const requestOptions: {
+      method: string;
+      headers: {
+        Authorization: string;
+        "Content-Type": string;
+      };
+      body?: string; // The body is optional and might not be present
+    } = {
+      method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-    });
+    };
+
+    if (keyToken) {
+      requestOptions.body = JSON.stringify({ api_key: keyToken });
+    }
+
+    const response = await fetch(url, requestOptions);
     if (!response.ok) {
       const errorData = await response.text();
       message.error(errorData);
@@ -749,8 +773,10 @@ export const userUpdateUserCall = async (
   }
 };
 
-
-export const PredictedSpendLogsCall = async (accessToken: string, requestData: any) => {
+export const PredictedSpendLogsCall = async (
+  accessToken: string,
+  requestData: any
+) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/global/predict/spend/logs`
@@ -764,11 +790,9 @@ export const PredictedSpendLogsCall = async (accessToken: string, requestData: a
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(
-        {
-          data: requestData
-        }
-      ),
+      body: JSON.stringify({
+        data: requestData,
+      }),
     });
 
     if (!response.ok) {
@@ -786,4 +810,3 @@ export const PredictedSpendLogsCall = async (accessToken: string, requestData: a
     throw error;
   }
 };
-

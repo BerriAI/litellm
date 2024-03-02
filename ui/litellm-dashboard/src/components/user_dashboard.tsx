@@ -23,21 +23,24 @@ interface UserDashboardProps {
   userRole: string | null;
   userEmail: string | null;
   teams: any[] | null;
+  keys: any[] | null;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
 
 const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
   teams,
+  keys,
   setUserRole,
   userEmail,
   setUserEmail,
   setTeams,
+  setKeys,
 }) => {
-  const [data, setData] = useState<null | any[]>(null); // Keep the initialization of state here
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
     null
   );
@@ -113,7 +116,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         }
       }
     }
-    if (userID && accessToken && userRole && !data) {
+    if (userID && accessToken && userRole && !keys && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
@@ -127,7 +130,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               )}; team values: ${Object.entries(response.teams)}`
             );
             setUserSpendData(response["user_info"]);
-            setData(response["keys"]); // Assuming this is the correct path to your data
+            setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
             setSelectedTeam(response["teams"] ? response["teams"][0] : null);
             sessionStorage.setItem(
@@ -165,7 +168,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchData();
       }
     }
-  }, [userID, token, accessToken, data, userRole]);
+  }, [userID, token, accessToken, keys, userRole]);
 
   if (userID == null || token == null) {
     // Now you can construct the full URL
@@ -207,8 +210,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           <ViewKeyTable
             userID={userID}
             accessToken={accessToken}
-            data={data}
-            setData={setData}
+            data={keys}
+            setData={setKeys}
           />
           <CreateKey
             userID={userID}
@@ -216,8 +219,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             userModels={userModels}
             accessToken={accessToken}
-            data={data}
-            setData={setData}
+            data={keys}
+            setData={setKeys}
           />
           <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
         </Col>

@@ -4141,12 +4141,12 @@ async def global_spend_keys(
     return response
 
 
-@router.get(
+@router.post(
     "/global/spend/end_users",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def global_spend_end_users(data: GlobalEndUsersSpend):
+async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     """
     [BETA] This is a beta endpoint. It will change.
 
@@ -4157,7 +4157,7 @@ async def global_spend_end_users(data: GlobalEndUsersSpend):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    if data.api_key is None:
+    if data is None:
         sql_query = f"""SELECT * FROM "Last30dTopEndUsersSpend";"""
 
         response = await prisma_client.db.query_raw(query=sql_query)
@@ -4170,12 +4170,22 @@ async def global_spend_end_users(data: GlobalEndUsersSpend):
         response = await prisma_client.db.litellm_spendlogs.group_by(  # type: ignore
             by=["end_user"],
             where={
-                "AND": [{"startTime": {"gte": past_date}}, {"api_key": data.api_key}]
+                "AND": [{"startTime": {"gte": past_date}}, {"api_key": data.api_key}]  # type: ignore
             },
             sum={"spend": True},
             order={"_sum": {"spend": "desc"}},  # type: ignore
             take=100,
+            count=True,
         )
+        if response is not None and isinstance(response, list):
+            new_response = []
+            for r in response:
+                new_r = r
+                new_r["total_spend"] = r["_sum"]["spend"]
+                new_r["total_count"] = r["_count"]["_all"]
+                new_r.pop("_sum")
+                new_r.pop("_count")
+                new_response.append(new_r)
 
     return response
 
