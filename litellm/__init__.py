@@ -591,6 +591,7 @@ from .llms.bedrock import (
     AmazonCohereConfig,
     AmazonLlamaConfig,
     AmazonStabilityConfig,
+    AmazonMistralConfig
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
