@@ -250,6 +250,7 @@ class Member(LiteLLMBase):
 class NewTeamRequest(LiteLLMBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
+    organization_id: Optional[str] = None
     admins: list = []
     members: list = []
     members_with_roles: List[Member] = []
