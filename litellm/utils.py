@@ -1350,14 +1350,9 @@ class Logging:
 
                          # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
-                            print_verbose("reaches lunary for streaming logging!")
-                            print(kwargs)
                             if "complete_streaming_response" not in kwargs:
                                 break
                             else:
-                                print_verbose(
-                                    "reaches lunary for streaming logging!"
-                                )
                                 result = kwargs["complete_streaming_response"]
 
                         lunaryLogger.log_event(
