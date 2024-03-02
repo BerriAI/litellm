@@ -1,33 +1,33 @@
 # @pytest.mark.skip(reason="AWS Suspended Account")
-import sys, os
-import traceback
-from dotenv import load_dotenv
-
-load_dotenv()
-import os, io
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import pytest
-import litellm
-from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
-from litellm import RateLimitError
-
-# litellm.num_retries = 3
-litellm.cache = None
-litellm.success_callback = []
-user_message = "Write a short poem about the sky"
-messages = [{"content": user_message, "role": "user"}]
-
-
-@pytest.fixture(autouse=True)
-def reset_callbacks():
-    print("\npytest fixture - resetting callbacks")
-    litellm.success_callback = []
-    litellm._async_success_callback = []
-    litellm.failure_callback = []
-    litellm.callbacks = []
+# import sys, os
+# import traceback
+# from dotenv import load_dotenv
+#
+# load_dotenv()
+# import os, io
+#
+# sys.path.insert(
+#     0, os.path.abspath("../..")
+# )  # Adds the parent directory to the system path
+# import pytest
+# import litellm
+# from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
+# from litellm import RateLimitError
+#
+# # litellm.num_retries = 3
+# litellm.cache = None
+# litellm.success_callback = []
+# user_message = "Write a short poem about the sky"
+# messages = [{"content": user_message, "role": "user"}]
+#
+#
+# @pytest.fixture(autouse=True)
+# def reset_callbacks():
+#     print("\npytest fixture - resetting callbacks")
+#     litellm.success_callback = []
+#     litellm._async_success_callback = []
+#     litellm.failure_callback = []
+#     litellm.callbacks = []
 
 
 # def test_completion_bedrock_claude_completion_auth():
@@ -257,36 +257,37 @@ def reset_callbacks():
 
 
 # # test_provisioned_throughput()
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_bedrock_mistral_completion_auth():
-    print("calling bedrock mistral completion params auth")
-    import os
-
-    # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-    # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-    # aws_region_name = os.environ["AWS_REGION_NAME"]
-
-    # os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    # os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    # os.environ.pop("AWS_REGION_NAME", None)
-    try:
-        response:ModelResponse = completion(
-            model="bedrock/mistral.mistral-7b-instruct-v0:2",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-        )
-        # Add any assertions here to check the response
-        assert len(response.choices) > 0
-        assert len(response.choices[0].message.content) > 0
-
-        # os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        # os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        # os.environ["AWS_REGION_NAME"] = aws_region_name
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_mistral_completion_auth()
+# def test_completion_bedrock_mistral_completion_auth():
+#     print("calling bedrock mistral completion params auth")
+#     import os
+#
+#     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+#     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+#     # aws_region_name = os.environ["AWS_REGION_NAME"]
+#
+#     # os.environ.pop("AWS_ACCESS_KEY_ID", None)
+#     # os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+#     # os.environ.pop("AWS_REGION_NAME", None)
+#     try:
+#         response:ModelResponse = completion(
+#             model="bedrock/mistral.mistral-7b-instruct-v0:2",
+#             messages=messages,
+#             max_tokens=10,
+#             temperature=0.1,
+#         )
+#         # Add any assertions here to check the response
+#         assert len(response.choices) > 0
+#         assert len(response.choices[0].message.content) > 0
+#
+#         # os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+#         # os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+#         # os.environ["AWS_REGION_NAME"] = aws_region_name
+#     except RateLimitError:
+#         pass
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+#
+#
+# test_completion_bedrock_mistral_completion_auth()
