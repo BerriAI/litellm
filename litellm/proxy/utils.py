@@ -64,6 +64,7 @@ class ProxyLogging:
         litellm.callbacks.append(self.max_parallel_request_limiter)
         litellm.callbacks.append(self.max_budget_limiter)
         litellm.callbacks.append(self.cache_control_check)
+        litellm.callbacks.append(self.response_taking_too_long_callback)
         for callback in litellm.callbacks:
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)
@@ -142,6 +143,30 @@ class ProxyLogging:
                 raise e
         return data
 
+    async def response_taking_too_long_callback(
+        self,
+        kwargs,  # kwargs to completion
+        completion_response,  # response from completion
+        start_time,
+        end_time,  # start/end time
+    ):
+        if self.alerting is None:
+            return
+        time_difference = end_time - start_time
+        # Convert the timedelta to float (in seconds)
+        time_difference_float = time_difference.total_seconds()
+        litellm_params = kwargs.get("litellm_params", {})
+        api_base = litellm_params.get("api_base", "")
+        model = kwargs.get("model", "")
+        messages = kwargs.get("messages", "")
+        request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
+        slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
+        if time_difference_float > self.alerting_threshold:
+            await self.alerting_handler(
+                message=slow_message + request_info,
+                level="Low",
+            )
+
     async def response_taking_too_long(
         self,
         start_time: Optional[float] = None,
@@ -187,16 +212,6 @@ class ProxyLogging:
                 await self.alerting_handler(
                     message=alerting_message + request_info,
                     level="Medium",
-                )
-
-        elif (
-            type == "slow_response" and start_time is not None and end_time is not None
-        ):
-            slow_message = f"`Responses are slow - {round(end_time-start_time,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
-            if end_time - start_time > self.alerting_threshold:
-                await self.alerting_handler(
-                    message=slow_message + request_info,
-                    level="Low",
                 )
 
     async def budget_alerts(
