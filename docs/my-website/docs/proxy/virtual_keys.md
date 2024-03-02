@@ -79,6 +79,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
   "metadata": {"user": "ishaan@berri.ai"},
   "team_id": "core-infra",
   "max_budget": 10,
+  "soft_budget": 5,
 }'
 ```
 
@@ -93,6 +94,7 @@ Request Params:
 - `config`: *Optional[dict]* - any key-specific configs, overrides config in config.yaml
 - `spend`: *Optional[int]* - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
 - `max_budget`: *Optional[float]* - Specify max budget for a given key.
+- `soft_budget`: *Optional[float]* - Specify soft limit budget for a given key. Get Alerts when key hits its soft budget
 - `model_max_budget`: *Optional[dict[str, float]]* - Specify max budget for each model, `model_max_budget={"gpt4": 0.5, "gpt-5": 0.01}`
 - `max_parallel_requests`: *Optional[int]* - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
 - `metadata`: *Optional[dict]* - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
