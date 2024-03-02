@@ -168,6 +168,13 @@ response = completion(
 )
 ```
 
+## Azure Instruct Models
+
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| gpt-3.5-turbo-instruct | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+
 
 ## Advanced
 ### Azure API Load-Balancing
