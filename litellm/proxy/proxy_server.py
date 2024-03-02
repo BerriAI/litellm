@@ -1869,6 +1869,19 @@ async def generate_key_helper_fn(
     rpm_limit = rpm_limit
     allowed_cache_controls = allowed_cache_controls
 
+    # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
+    if prisma_client is not None:
+        # create the Budget Row for the LiteLLM Verification Token
+        budget_row = LiteLLM_BudgetTable(
+            soft_budget=50,
+            model_max_budget=model_max_budget or {},
+            created_by=user_id,
+            updated_by=user_id,
+        )
+        new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
+        _budget = await prisma_client.db.litellm_budgettable.create(data={**new_budget})  # type: ignore
+        _budget_id = getattr(_budget, "id", None)
+
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
@@ -1906,6 +1919,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "budget_id": _budget_id,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
