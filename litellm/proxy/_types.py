@@ -151,6 +151,7 @@ class GenerateRequestBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
+    soft_budget: Optional[float] = None
 
 
 class GenerateKeyRequest(GenerateRequestBase):
