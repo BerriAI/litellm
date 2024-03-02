@@ -21,11 +21,12 @@ model LiteLLM_BudgetTable {
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
+  organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
 }
 
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
-    organization_alias  String? 
+    organization_alias  String
     budget_id String
     metadata  Json  @default("{}")
     models     String[]
@@ -35,7 +36,8 @@ model LiteLLM_OrganizationTable {
     created_by String
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     updated_by String
-    litellm_budget_table LiteLLM_BudgetTable   @relation(fields: [budget_id], references: [budget_id])
+    litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+    teams LiteLLM_TeamTable[] 
 }
 
 // Assign prod keys to groups, not individuals 
@@ -59,7 +61,7 @@ model LiteLLM_TeamTable {
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
-    litellm_organization_table LiteLLM_OrganizationTable   @relation(fields: [organization_id], references: [organization_id])
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
 }
 
 // Track spend, rate limit, budget Users
