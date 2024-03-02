@@ -6514,6 +6514,11 @@ async def health_services_endpoint(
 
     if "slack" in general_settings.get("alerting", []):
         await proxy_logging_obj.alerting_handler(message="This is a test", level="Low")
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "No slack connection setup. Unable to test this."},
+        )
 
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
