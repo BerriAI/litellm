@@ -125,6 +125,7 @@ model LiteLLM_SpendLogs {
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
   model               String   @default("")
+  api_base            String   @default("")
   user                String   @default("")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
