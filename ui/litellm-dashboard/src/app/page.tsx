@@ -18,6 +18,7 @@ const CreateKeyPage = () => {
   const [userRole, setUserRole] = useState("");
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
+  const [keys, setKeys] = useState<null | any[]>(null);
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams();
 
@@ -111,10 +112,12 @@ const CreateKeyPage = () => {
               userID={userID}
               userRole={userRole}
               teams={teams}
+              keys={keys}
               setUserRole={setUserRole}
               userEmail={userEmail}
               setUserEmail={setUserEmail}
               setTeams={setTeams}
+              setKeys={setKeys}
             />
           ) : page == "models" ? (
             <ModelDashboard
@@ -135,7 +138,9 @@ const CreateKeyPage = () => {
               userID={userID}
               userRole={userRole}
               token={token}
+              keys={keys}
               accessToken={accessToken}
+              setKeys={setKeys}
             />
           ) : page == "teams" ? (
             <Teams
