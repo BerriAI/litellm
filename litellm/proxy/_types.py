@@ -542,6 +542,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
     api_key: str
     model: Optional[str] = ""
+    api_base: Optional[str] = ""
     call_type: str
     spend: Optional[float] = 0.0
     total_tokens: Optional[int] = 0
