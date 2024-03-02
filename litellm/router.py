@@ -357,11 +357,6 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
             )
-            # set used api_base in response
-            if hasattr(response, "_hidden_params"):
-                response._hidden_params["api_base"] = deployment.get(
-                    "litellm_params", {}
-                ).get("api_base", None)
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -451,12 +446,6 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
             )
-
-            # set used api_base in response
-            if hasattr(response, "_hidden_params"):
-                response._hidden_params["api_base"] = deployment.get(
-                    "litellm_params", {}
-                ).get("api_base", None)
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -613,12 +602,6 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.aimage_generation(model={model_name})\033[32m 200 OK\033[0m"
             )
-
-            # set used api_base in response
-            if hasattr(response, "_hidden_params"):
-                response._hidden_params["api_base"] = deployment.get(
-                    "litellm_params", {}
-                ).get("api_base", None)
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -711,11 +694,6 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.amoderation(model={model_name})\033[32m 200 OK\033[0m"
             )
-            # set used api_base in response
-            if hasattr(response, "_hidden_params"):
-                response._hidden_params["api_base"] = deployment.get(
-                    "litellm_params", {}
-                ).get("api_base", None)
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -847,12 +825,6 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.atext_completion(model={model_name})\033[32m 200 OK\033[0m"
             )
-
-            # set used api_base in response
-            if hasattr(response, "_hidden_params"):
-                response._hidden_params["api_base"] = deployment.get(
-                    "litellm_params", {}
-                ).get("api_base", None)
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -982,12 +954,6 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.aembedding(model={model_name})\033[32m 200 OK\033[0m"
             )
-
-            # set used api_base in response
-            if hasattr(response, "_hidden_params"):
-                response._hidden_params["api_base"] = deployment.get(
-                    "litellm_params", {}
-                ).get("api_base", None)
             return response
         except Exception as e:
             verbose_router_logger.info(
