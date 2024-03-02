@@ -492,6 +492,8 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
             )
+    elif provider == "mistral":
+        prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
     else:
         prompt = ""
         for message in messages:
@@ -623,7 +625,16 @@ def completion(
                     "textGenerationConfig": inference_params,
                 }
             )
+        elif provider == "mistral":  
+            ## LOAD CONFIG
+            config = litellm.AmazonLlamaConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
 
+            data = json.dumps({"prompt": prompt, **inference_params})
         else:
             data = json.dumps({})
 
@@ -729,6 +740,9 @@ def completion(
             outputText = response_body["generations"][0]["text"]
         elif provider == "meta":
             outputText = response_body["generation"]
+        elif provider == "mistral":
+            outputText = response_body["outputs"][0]["text"]
+            model_response["finish_reason"] = response_body["outputs"][0]["stop_reason"]
         else:  # amazon titan
             outputText = response_body.get("results")[0].get("outputText")
 
