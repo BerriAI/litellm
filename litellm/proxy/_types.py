@@ -260,6 +260,10 @@ class NewTeamRequest(LiteLLMBase):
     models: list = []
 
 
+class GlobalEndUsersSpend(LiteLLMBase):
+    api_key: Optional[str] = None
+
+
 class TeamMemberAddRequest(LiteLLMBase):
     team_id: str
     member: Optional[Member] = None
