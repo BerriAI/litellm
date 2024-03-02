@@ -4146,7 +4146,7 @@ async def global_spend_keys(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def global_spend_end_users():
+async def global_spend_end_users(data: GlobalEndUsersSpend):
     """
     [BETA] This is a beta endpoint. It will change.
 
@@ -4156,9 +4156,26 @@ async def global_spend_end_users():
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = f"""SELECT * FROM "Last30dTopEndUsersSpend";"""
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+    if data.api_key is None:
+        sql_query = f"""SELECT * FROM "Last30dTopEndUsersSpend";"""
+
+        response = await prisma_client.db.query_raw(query=sql_query)
+    else:
+        """
+        Gets the top 100 end-users for a given api key
+        """
+        current_date = datetime.now()
+        past_date = current_date - timedelta(days=30)
+        response = await prisma_client.db.litellm_spendlogs.group_by(  # type: ignore
+            by=["end_user"],
+            where={
+                "AND": [{"startTime": {"gte": past_date}}, {"api_key": data.api_key}]
+            },
+            sum={"spend": True},
+            order={"_sum": {"spend": "desc"}},  # type: ignore
+            take=100,
+        )
 
     return response
 
