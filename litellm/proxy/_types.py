@@ -358,6 +358,14 @@ class NewOrganizationResponse(LiteLLM_OrganizationTable):
     updated_at: datetime
 
 
+class OrganizationRequest(LiteLLMBase):
+    organizations: List[str]
+
+
+class BudgetRequest(LiteLLMBase):
+    budgets: List[str]
+
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"

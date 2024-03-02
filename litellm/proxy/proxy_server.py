@@ -5580,11 +5580,59 @@ async def delete_organization():
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def info_organization():
+async def info_organization(data: OrganizationRequest):
     """
     Get the org specific information
     """
-    pass
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if len(data.organizations) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Specify list of organization id's to query. Passed in={data.organizations}"
+            },
+        )
+    response = await prisma_client.db.litellm_organizationtable.find_many(
+        where={"organization_id": {"in": data.organizations}},
+        include={"litellm_budget_table": True},
+    )
+
+    return response
+
+
+#### BUDGET TABLE MANAGEMENT ####
+
+
+@router.post(
+    "/budget/info",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def info_budget(data: BudgetRequest):
+    """
+    Get the budget id specific information
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if len(data.budgets) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Specify list of budget id's to query. Passed in={data.budgets}"
+            },
+        )
+    response = await prisma_client.db.litellm_budgettable.find_many(
+        where={"budget_id": {"in": data.budgets}},
+    )
+
+    return response
 
 
 #### MODEL MANAGEMENT ####
