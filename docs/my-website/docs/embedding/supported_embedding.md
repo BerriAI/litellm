@@ -235,6 +235,35 @@ print(response)
 | mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
 
 
+## Vertex AI Embedding Models
+
+### Usage - Embedding
+```python
+import litellm
+from litellm import embedding
+litellm.vertex_project = "hardy-device-38811" # Your Project ID
+litellm.vertex_location = "us-central1"  # proj location
+
+
+os.environ['VOYAGE_API_KEY'] = ""
+response = embedding(
+    model="vertex_ai/textembedding-gecko",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+## Supported Models
+All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| textembedding-gecko | `embedding(model="vertex_ai/textembedding-gecko", input)` | 
+| textembedding-gecko-multilingual | `embedding(model="vertex_ai/textembedding-gecko-multilingual", input)` | 
+| textembedding-gecko-multilingual@001 | `embedding(model="vertex_ai/textembedding-gecko-multilingual@001", input)` | 
+| textembedding-gecko@001 | `embedding(model="vertex_ai/textembedding-gecko@001", input)` | 
+| textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
+
 ## Voyage AI Embedding Models
 
 ### Usage - Embedding
