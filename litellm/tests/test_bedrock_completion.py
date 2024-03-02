@@ -257,7 +257,7 @@ def reset_callbacks():
 
 
 # # test_provisioned_throughput()
-
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
     import os
