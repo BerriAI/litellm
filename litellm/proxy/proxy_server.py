@@ -1810,6 +1810,9 @@ async def generate_key_helper_fn(
     spend: float,
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: Optional[str] = None,
+    key_soft_budget: Optional[
+        float
+    ] = None,  # key_soft_budget is used to Budget Per key
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
@@ -1873,7 +1876,7 @@ async def generate_key_helper_fn(
     if prisma_client is not None:
         # create the Budget Row for the LiteLLM Verification Token
         budget_row = LiteLLM_BudgetTable(
-            soft_budget=50,
+            soft_budget=key_soft_budget or litellm.default_soft_budget,
             model_max_budget=model_max_budget or {},
             created_by=user_id,
             updated_by=user_id,
@@ -3347,6 +3350,8 @@ async def generate_key_fn(
         # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
+        if "soft_budget" in data_json:
+            data_json["key_soft_budget"] = data_json.pop("soft_budget", None)
 
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
