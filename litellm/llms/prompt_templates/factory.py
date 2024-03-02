@@ -674,6 +674,8 @@ def prompt_factory(
                 return claude_2_1_pt(messages=messages)
             else:
                 return anthropic_pt(messages=messages)
+        elif "mistral." in model:
+            return mistral_instruct_pt(messages=messages)
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
