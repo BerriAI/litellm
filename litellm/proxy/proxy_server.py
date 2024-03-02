@@ -2138,14 +2138,6 @@ async def async_data_generator(response, user_api_key_dict):
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
-        ### ALERTING ###
-        end_time = time.time()
-        asyncio.create_task(
-            proxy_logging_obj.response_taking_too_long(
-                start_time=start_time, end_time=end_time, type="slow_response"
-            )
-        )
-
         # Streaming is done, yield the [DONE] chunk
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
@@ -2494,14 +2486,6 @@ async def completion(
                 headers=custom_headers,
             )
 
-        ### ALERTING ###
-        end_time = time.time()
-        asyncio.create_task(
-            proxy_logging_obj.response_taking_too_long(
-                start_time=start_time, end_time=end_time, type="slow_response"
-            )
-        )
-
         fastapi_response.headers["x-litellm-model-id"] = model_id
         return response
     except Exception as e:
@@ -2699,14 +2683,6 @@ async def chat_completion(
                 media_type="text/event-stream",
                 headers=custom_headers,
             )
-
-        ### ALERTING ###
-        end_time = time.time()
-        asyncio.create_task(
-            proxy_logging_obj.response_taking_too_long(
-                start_time=start_time, end_time=end_time, type="slow_response"
-            )
-        )
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
 
@@ -2915,12 +2891,6 @@ async def embeddings(
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
-        end_time = time.time()
-        asyncio.create_task(
-            proxy_logging_obj.response_taking_too_long(
-                start_time=start_time, end_time=end_time, type="slow_response"
-            )
-        )
 
         return response
     except Exception as e:
@@ -3066,12 +3036,6 @@ async def image_generation(
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
-        end_time = time.time()
-        asyncio.create_task(
-            proxy_logging_obj.response_taking_too_long(
-                start_time=start_time, end_time=end_time, type="slow_response"
-            )
-        )
 
         return response
     except Exception as e:
@@ -3225,12 +3189,6 @@ async def moderations(
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
-        end_time = time.time()
-        asyncio.create_task(
-            proxy_logging_obj.response_taking_too_long(
-                start_time=start_time, end_time=end_time, type="slow_response"
-            )
-        )
 
         return response
     except Exception as e:
