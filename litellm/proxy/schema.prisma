@@ -21,12 +21,12 @@ model LiteLLM_BudgetTable {
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
-  organization LiteLLM_OrganizationTable[]
+  organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
 }
 
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
-    organization_alias  String? 
+    organization_alias  String
     budget_id String
     metadata  Json  @default("{}")
     models     String[]
