@@ -5451,9 +5451,7 @@ async def new_organization(
             updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         )
 
-        new_budget = prisma_client.jsonify_object(
-            budget_row.model_dump(exclude_none=True)
-        )
+        new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
         _budget = await prisma_client.db.litellm_budgettable.create(data={**new_budget})  # type: ignore
 
@@ -5461,7 +5459,7 @@ async def new_organization(
 
     response = await prisma_client.db.litellm_organizationtable.create(
         data={
-            **data.model_dump(exclude_none=True),  # type: ignore
+            **data.json(exclude_none=True),  # type: ignore
             "created_by": user_api_key_dict.user_id,
             "updated_by": user_api_key_dict.user_id,
         }
