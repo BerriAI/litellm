@@ -138,10 +138,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2">
-      <Title level={4}>Proxy Admins</Title>
+      <Title level={4}>Restricted Access</Title>
       <Paragraph>
-        Add other people to just view global spend. They cannot create teams or
-        grant users access to new models.
+        Add other people to just view spend. They cannot create keys, teams or
+        grant users access to new models.{" "}
+        <a href="https://docs.litellm.ai/docs/proxy/ui#restrict-ui-access">
+          Requires SSO Setup
+        </a>
       </Paragraph>
       <Grid numItems={1} className="gap-2 p-0 w-full">
         <Col numColSpan={1}>

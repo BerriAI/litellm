@@ -107,6 +107,31 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(
+    reason="Since we already test mistral/mistral-tiny in test_completion_mistral_api. This is only for locally verifying azure mistral works"
+)
+def test_completion_mistral_azure():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="mistral/Mistral-large-nmefg",
+            api_key=os.environ["MISTRAL_AZURE_API_KEY"],
+            api_base=os.environ["MISTRAL_AZURE_API_BASE"],
+            max_tokens=5,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hi from litellm",
+                }
+            ],
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_mistral_api()
 
 
@@ -267,7 +292,7 @@ def test_completion_gpt4_vision():
 
 
 def test_completion_azure_gpt4_vision():
-    # azure/gpt-4, vision takes 5seconds to respond
+    # azure/gpt-4, vision takes 5 seconds to respond
     try:
         litellm.set_verbose = True
         response = completion(
