@@ -324,15 +324,6 @@ class TeamRequest(LiteLLMBase):
     teams: List[str]
 
 
-class NewOrganizationRequest(LiteLLMBase):
-    organization_alias: Optional[str] = None
-    models: List = []
-    budget_id: Optional[str] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    max_budget: Optional[float] = None
-
-
 class LiteLLM_BudgetTable(LiteLLMBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record"""
 
@@ -340,26 +331,31 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
-    model_max_budget: dict
+    model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    created_by: str
-    updated_by: str
+
+
+class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_alias: str
+    models: List = []
+    budget_id: Optional[str] = None
 
 
 class LiteLLM_OrganizationTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
-    organization_id: str
     organization_alias: Optional[str] = None
     budget_id: str
-    metadata: dict
+    metadata: Optional[dict] = None
     models: List[str]
-    spend: float
-    model_spend: dict
-    created_at: datetime
     created_by: str
-    updated_at: datetime
     updated_by: str
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class KeyManagementSystem(enum.Enum):
