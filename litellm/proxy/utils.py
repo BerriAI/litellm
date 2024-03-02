@@ -1600,6 +1600,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "completion_tokens": usage.get("completion_tokens", 0),
         "request_tags": metadata.get("tags", []),
         "end_user": kwargs.get("user", ""),
+        "api_base": litellm_params.get("api_base", ""),
     }
 
     verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
