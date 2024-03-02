@@ -1995,6 +1995,9 @@ async def generate_key_helper_fn(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Add budget related info in key_data - this ensures it's returned
+    key_data["soft_budget"] = key_soft_budget
     return key_data
 
 
