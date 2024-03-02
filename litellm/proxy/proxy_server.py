@@ -787,6 +787,7 @@ async def user_api_key_auth(
                 "/global/spend/keys",
                 "/global/spend/models",
                 "/global/predict/spend/logs",
+                "/health/services",
             ]
             # check if the current route startswith any of the allowed routes
             if (
@@ -6477,6 +6478,42 @@ async def test_endpoint(request: Request):
     """
     # ping the proxy server to check if its healthy
     return {"route": request.url.path}
+
+
+@router.get(
+    "/health/services",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def health_services_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    service: Literal["slack_budget_alerts"] = fastapi.Query(
+        description="Specify the service being hit."
+    ),
+):
+    """
+    Hidden endpoint.
+
+    Used by the UI to let user check if slack alerting is working as expected.
+    """
+    global general_settings, proxy_logging_obj
+
+    if service is None:
+        raise HTTPException(
+            status_code=400, detail={"error": "Service must be specified."}
+        )
+
+    if service not in ["slack_budget_alerts"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
+            },
+        )
+
+    if "slack" in general_settings.get("alerting", []):
+        await proxy_logging_obj.alerting_handler(message="This is a test", level="Low")
 
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
