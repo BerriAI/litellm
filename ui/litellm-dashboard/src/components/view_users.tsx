@@ -10,17 +10,21 @@ import {
   TableCell,
   TableBody,
   Tab,
+  Text,
   TabGroup,
   TabList,
   TabPanels,
   Metric,
   Grid,
   TabPanel,
+  Select,
+  SelectItem,
 } from "@tremor/react";
 import { userInfoCall, adminTopEndUsersCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
+import Paragraph from "antd/es/skeleton/Paragraph";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -166,6 +170,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 </Table>
               </TabPanel>
               <TabPanel>
+                <div className="flex items-center">
+                  <div className="flex-1"></div>
+                  <div className="flex-1 flex justify-between items-center">
+                    <Text className="w-1/4 mr-2 text-right">Key</Text>
+                    <Select defaultValue="1" className="w-3/4">
+                      <SelectItem value="1">Option One</SelectItem>
+                      <SelectItem value="2">Option Two</SelectItem>
+                      <SelectItem value="3">Option Three</SelectItem>
+                    </Select>
+                  </div>
+                </div>
                 <Table>
                   <TableHead>
                     <TableRow>
