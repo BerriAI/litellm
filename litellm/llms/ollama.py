@@ -213,12 +213,13 @@ def get_ollama_response(
     ## RESPONSE OBJECT
     model_response["choices"][0]["finish_reason"] = "stop"
     if optional_params.get("format", "") == "json":
+        function_call = json.loads(response_json["response"])
         message = litellm.Message(
             content=None,
             tool_calls=[
                 {
                     "id": f"call_{str(uuid.uuid4())}",
-                    "function": {"arguments": response_json["response"], "name": ""},
+                    "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
                     "type": "function",
                 }
             ],
@@ -310,15 +311,13 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             ## RESPONSE OBJECT
             model_response["choices"][0]["finish_reason"] = "stop"
             if data.get("format", "") == "json":
+                function_call = json.loads(response_json["response"])
                 message = litellm.Message(
                     content=None,
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
-                            "function": {
-                                "arguments": response_json["response"],
-                                "name": "",
-                            },
+                            "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
                             "type": "function",
                         }
                     ],
