@@ -16,7 +16,6 @@ def parse_usage(usage):
         "prompt": usage["prompt_tokens"] if "prompt_tokens" in usage else 0,
     }
 
-
 def parse_messages(input):
     if input is None:
         return None
@@ -68,7 +67,6 @@ class LunaryLogger:
             print("Lunary not installed. Please install it using 'pip install lunary'")
             raise ImportError
 
-
     def log_event(
         self,
         kwargs,
@@ -87,7 +85,6 @@ class LunaryLogger:
     ):
         # Method definition
         try:
-            
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 
             litellm_params = kwargs.get("litellm_params", {})
@@ -96,9 +93,6 @@ class LunaryLogger:
             )
 
             tags = litellm_params.pop("tags", None) or []
-
-
-
 
             if extra:
                 extra.pop("extra_body", None)
@@ -144,7 +138,6 @@ class LunaryLogger:
                 runtime="litellm",
                 tags=tags,
                 extra=extra,
-                # user_props=user_props,
             )
 
             self.lunary_client.track_event(
@@ -157,7 +150,6 @@ class LunaryLogger:
                 output=parse_messages(output),
                 token_usage=usage
             )
-
 
         except:
             # traceback.print_exc()
