@@ -1810,6 +1810,9 @@ async def generate_key_helper_fn(
     spend: float,
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: Optional[str] = None,
+    key_soft_budget: Optional[
+        float
+    ] = None,  # key_soft_budget is used to Budget Per key
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
@@ -1869,6 +1872,19 @@ async def generate_key_helper_fn(
     rpm_limit = rpm_limit
     allowed_cache_controls = allowed_cache_controls
 
+    # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
+    if prisma_client is not None:
+        # create the Budget Row for the LiteLLM Verification Token
+        budget_row = LiteLLM_BudgetTable(
+            soft_budget=key_soft_budget or litellm.default_soft_budget,
+            model_max_budget=model_max_budget or {},
+            created_by=user_id,
+            updated_by=user_id,
+        )
+        new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
+        _budget = await prisma_client.db.litellm_budgettable.create(data={**new_budget})  # type: ignore
+        _budget_id = getattr(_budget, "id", None)
+
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
@@ -1906,6 +1922,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "budget_id": _budget_id,
         }
         if (
             general_settings.get("allow_user_auth", False) == True
@@ -1978,6 +1995,9 @@ async def generate_key_helper_fn(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Add budget related info in key_data - this ensures it's returned
+    key_data["soft_budget"] = key_soft_budget
     return key_data
 
 
@@ -3333,6 +3353,8 @@ async def generate_key_fn(
         # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
+        if "soft_budget" in data_json:
+            data_json["key_soft_budget"] = data_json.pop("soft_budget", None)
 
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)

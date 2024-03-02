@@ -151,6 +151,7 @@ class GenerateRequestBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
+    soft_budget: Optional[float] = None
 
 
 class GenerateKeyRequest(GenerateRequestBase):
@@ -322,6 +323,21 @@ class LiteLLM_TeamTable(NewTeamRequest):
 
 class TeamRequest(LiteLLMBase):
     teams: List[str]
+
+
+class LiteLLM_BudgetTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_BudgetTable record"""
+
+    max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    model_max_budget: dict
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+    created_by: str
+    updated_by: str
 
 
 class KeyManagementSystem(enum.Enum):
