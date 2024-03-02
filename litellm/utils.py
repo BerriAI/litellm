@@ -6571,6 +6571,17 @@ def exception_type(
                         model=model,
                         response=original_exception.response,
                     )
+                elif "Mistral API raised a streaming error" in error_str:
+                    exception_mapping_worked = True
+                    _request = httpx.Request(
+                        method="POST", url="https://api.openai.com/v1"
+                    )
+                    raise APIError(
+                        message=f"{exception_provider} - {message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=httpx.Response(status_code=500, request=_request),
+                    )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
                     if original_exception.status_code == 401:
@@ -8787,6 +8798,10 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
+                    if response_obj["finish_reason"] == "error":
+                        raise Exception(
+                            "Mistral API raised a streaming error - finish_reason: error, no content string given."
+                        )
                     model_response.choices[0].finish_reason = response_obj[
                         "finish_reason"
                     ]
