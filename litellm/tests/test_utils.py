@@ -1,4 +1,6 @@
-import sys, os
+import sys
+from unittest import mock
+
 from dotenv import load_dotenv
 import copy
 
@@ -214,8 +216,19 @@ def test_validate_environment_empty_model():
         raise Exception()
 
 
-# test_validate_environment_empty_model()
+@mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
+def test_validate_environment_ollama():
+    for provider in ["ollama", "ollama_chat"]:
+        kv = validate_environment(provider+"/mistral")
+        assert kv["keys_in_environment"]
+        assert kv["missing_keys"] == []
 
+@mock.patch.dict(os.environ, {}, clear=True)
+def test_validate_environment_ollama_failed():
+    for provider in ["ollama", "ollama_chat"]:
+        kv = validate_environment(provider+"/mistral")
+        assert not kv["keys_in_environment"]
+        assert kv["missing_keys"] == ["OLLAMA_API_BASE"]
 
 def test_function_to_dict():
     print("testing function to dict for get current weather")
