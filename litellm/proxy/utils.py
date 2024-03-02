@@ -163,11 +163,11 @@ class ProxyLogging:
                 # try casting messages to str and get the first 100 characters, else mark as None
                 try:
                     messages = str(messages)
-                    messages = messages[:10000]
+                    messages = messages[:100]
                 except:
                     messages = None
 
-            request_info = f"\nRequest Model: {model}\nMessages: {messages}"
+            request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
         else:
             request_info = ""
 
@@ -182,7 +182,7 @@ class ProxyLogging:
             ):
                 # only alert hanging responses if they have not been marked as success
                 alerting_message = (
-                    f"Requests are hanging - {self.alerting_threshold}s+ request time"
+                    f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
                 )
                 await self.alerting_handler(
                     message=alerting_message + request_info,
@@ -192,7 +192,7 @@ class ProxyLogging:
         elif (
             type == "slow_response" and start_time is not None and end_time is not None
         ):
-            slow_message = f"Responses are slow - {round(end_time-start_time,2)}s response time > Alerting threshold: {self.alerting_threshold}s"
+            slow_message = f"`Responses are slow - {round(end_time-start_time,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
             if end_time - start_time > self.alerting_threshold:
                 await self.alerting_handler(
                     message=slow_message + request_info,
@@ -303,7 +303,7 @@ class ProxyLogging:
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
         formatted_message = (
-            f"Level: {level}\nTimestamp: {current_time}\n\nMessage: {message}"
+            f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
         )
         if self.alerting is None:
             return
