@@ -5602,6 +5602,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
             else:
                 missing_keys.append("AWS_ACCESS_KEY_ID")
                 missing_keys.append("AWS_SECRET_ACCESS_KEY")
+        elif custom_llm_provider in ["ollama", "ollama_chat"]:
+            if "OLLAMA_API_BASE" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("OLLAMA_API_BASE")
     else:
         ## openai - chatcompletion + text completion
         if (
