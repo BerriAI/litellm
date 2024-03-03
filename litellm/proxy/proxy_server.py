@@ -94,6 +94,8 @@ from litellm.proxy.utils import (
     _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
+    _is_projected_spend_over_limit,
+    _get_projected_spend_over_limit,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -936,6 +938,7 @@ async def _PROXY_track_cost_callback(
                 f"user_api_key {user_api_key}, prisma_client: {prisma_client}, custom_db_client: {custom_db_client}"
             )
             if user_api_key is not None:
+                ## UPDATE DATABASE
                 await update_database(
                     token=user_api_key,
                     response_cost=response_cost,
@@ -1089,6 +1092,39 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
+                    ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
+                    soft_budget_cooldown = existing_spend_obj.soft_budget_cooldown
+                    if existing_spend_obj.soft_budget_cooldown == False and (
+                        _is_projected_spend_over_limit(
+                            current_spend=new_spend,
+                            soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                        )
+                        == True
+                    ):
+                        key_alias = existing_spend_obj.key_alias
+                        projected_spend, projected_exceeded_date = (
+                            _get_projected_spend_over_limit(
+                                current_spend=new_spend,
+                                soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                            )
+                        )
+                        soft_limit = existing_spend_obj.litellm_budget_table.soft_budget
+                        user_info = {
+                            "key_alias": key_alias,
+                            "projected_spend": projected_spend,
+                            "projected_exceeded_date": projected_exceeded_date,
+                        }
+                        # alert user
+                        asyncio.create_task(
+                            proxy_logging_obj.budget_alerts(
+                                type="projected_limit_exceeded",
+                                user_info=user_info,
+                                user_max_budget=soft_limit,
+                                user_current_spend=new_spend,
+                            )
+                        )
+                        # set cooldown on alert
+                        soft_budget_cooldown = True
                     # track cost per model, for the given key
                     spend_per_model = existing_spend_obj.model_spend or {}
                     current_model = kwargs.get("model")
@@ -1104,7 +1140,11 @@ async def update_database(
                     # Update the cost column for the given token
                     await prisma_client.update_data(
                         token=token,
-                        data={"spend": new_spend, "model_spend": spend_per_model},
+                        data={
+                            "spend": new_spend,
+                            "model_spend": spend_per_model,
+                            "soft_budget_cooldown": soft_budget_cooldown,
+                        },
                     )
 
                     valid_token = user_api_key_cache.get_cache(key=token)
@@ -1881,6 +1921,7 @@ async def generate_key_helper_fn(
     allowed_cache_controls = allowed_cache_controls
 
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
+    _budget_id = None
     if prisma_client is not None and key_soft_budget is not None:
         # create the Budget Row for the LiteLLM Verification Token
         budget_row = LiteLLM_BudgetTable(
@@ -1888,6 +1929,7 @@ async def generate_key_helper_fn(
             model_max_budget=model_max_budget or {},
         )
         new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
+
         _budget = await prisma_client.db.litellm_budgettable.create(
             data={
                 **new_budget,  # type: ignore
@@ -1895,8 +1937,8 @@ async def generate_key_helper_fn(
                 "updated_by": user_id,
             }
         )
-        _budget_id = getattr(_budget, "id", None)
-
+        _budget_id = getattr(_budget, "budget_id", None)
+        
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
