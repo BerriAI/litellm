@@ -1881,16 +1881,20 @@ async def generate_key_helper_fn(
     allowed_cache_controls = allowed_cache_controls
 
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
-    if prisma_client is not None:
+    if prisma_client is not None and key_soft_budget is not None:
         # create the Budget Row for the LiteLLM Verification Token
         budget_row = LiteLLM_BudgetTable(
-            soft_budget=key_soft_budget or litellm.default_soft_budget,
+            soft_budget=key_soft_budget,
             model_max_budget=model_max_budget or {},
-            created_by=user_id,
-            updated_by=user_id,
         )
         new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
-        _budget = await prisma_client.db.litellm_budgettable.create(data={**new_budget})  # type: ignore
+        _budget = await prisma_client.db.litellm_budgettable.create(
+            data={
+                **new_budget,  # type: ignore
+                "created_by": user_id,
+                "updated_by": user_id,
+            }
+        )
         _budget_id = getattr(_budget, "id", None)
 
     try:
