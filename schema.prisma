@@ -23,6 +23,7 @@ model LiteLLM_BudgetTable {
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
+  keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
 }
 
 model LiteLLM_OrganizationTable {
@@ -90,6 +91,7 @@ model LiteLLM_VerificationToken {
     token      String   @id
     key_name   String?
     key_alias   String?
+    soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
     spend      Float    @default(0.0)
     expires    DateTime?
     models     String[]
@@ -109,6 +111,7 @@ model LiteLLM_VerificationToken {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
+    litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
 }
 
 // store proxy config.yaml
