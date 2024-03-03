@@ -12,7 +12,7 @@ import {
   Select,
   message,
 } from "antd";
-import { keyCreateCall } from "./networking";
+import { keyCreateCall, slackBudgetAlertsHealthCheck } from "./networking";
 
 const { Option } = Select;
 
@@ -67,6 +67,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       console.error("Error creating the key:", error);
     }
   };
+
+  const sendSlackAlert = async () => {
+    try {
+      console.log("Sending Slack alert...");
+      message.info("Sending Test Slack alert...");
+      const response = await slackBudgetAlertsHealthCheck(accessToken);
+      console.log("slackBudgetAlertsHealthCheck Response:", response);
+      message.success("Test Slack Alert worked - check your Slack!");
+      console.log("Testing Slack alert successful");
+    } catch (error) {
+      console.error("Error sending Slack alert:", error);
+    }
+  };
+  
 
   return (
     <div>
@@ -183,7 +197,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     <Text>API Key: {apiKey}</Text>
                     <Title className="mt-6">Budgets</Title>
                       <Text>Soft Limit Budget: ${softBudget}</Text>
-                      <Button className="mt-3">
+                      <Button className="mt-3" onClick={sendSlackAlert}>
                         Test Alert
                       </Button>
 
