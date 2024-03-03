@@ -1094,12 +1094,16 @@ async def update_database(
 
                     ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
                     soft_budget_cooldown = existing_spend_obj.soft_budget_cooldown
-                    if existing_spend_obj.soft_budget_cooldown == False and (
-                        _is_projected_spend_over_limit(
-                            current_spend=new_spend,
-                            soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                    if (
+                        existing_spend_obj.soft_budget_cooldown == False
+                        and existing_spend_obj.litellm_budget_table is not None
+                        and (
+                            _is_projected_spend_over_limit(
+                                current_spend=new_spend,
+                                soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                            )
+                            == True
                         )
-                        == True
                     ):
                         key_alias = existing_spend_obj.key_alias
                         projected_spend, projected_exceeded_date = (
@@ -1938,7 +1942,7 @@ async def generate_key_helper_fn(
             }
         )
         _budget_id = getattr(_budget, "budget_id", None)
-        
+
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
