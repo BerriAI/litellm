@@ -251,6 +251,7 @@ class Member(LiteLLMBase):
 class NewTeamRequest(LiteLLMBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
+    organization_id: Optional[str] = None
     admins: list = []
     members: list = []
     members_with_roles: List[Member] = []
@@ -327,19 +328,46 @@ class TeamRequest(LiteLLMBase):
 
 class LiteLLM_BudgetTable(LiteLLMBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record"""
-
-    max_budget: Optional[float] = None
     soft_budget: Optional[float] = None
+    max_budget: Optional[float] = None
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
-    model_max_budget: dict
+    model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
+
+
+class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_alias: str
+    models: List = []
+    budget_id: Optional[str] = None
+
+
+class LiteLLM_OrganizationTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
     created_by: str
     updated_by: str
 
 
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class OrganizationRequest(LiteLLMBase):
+    organizations: List[str]
+
+
+class BudgetRequest(LiteLLMBase):
+    budgets: List[str]
+
+      
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
