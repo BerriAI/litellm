@@ -23,7 +23,7 @@ Install redis
 pip install redis
 ```
 
-For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
+**Set up a Redis DB in the cloud (Free): https://redis.com/try-free**
 
 ```python
 import litellm
@@ -90,10 +90,10 @@ response2 = completion(
 
 Install redis
 ```shell
-pip install redisvl==0.0.7
+pip install redisvl>=0.1.2
 ```
 
-For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
+**Set up a Redis DB in the cloud (Free): https://redis.com/try-free**
 
 ```python
 import litellm
@@ -110,7 +110,8 @@ litellm.cache = Cache(
     host=os.environ["REDIS_HOST"],
     port=os.environ["REDIS_PORT"],
     password=os.environ["REDIS_PASSWORD"],
-    similarity_threshold=0.8, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
+    # similarity threshold for cache hits, 0 == not similar, 1 = exact match, 0.5 == 50% similar
+    similarity_threshold=0.8, 
     redis_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
 )
 response1 = completion(

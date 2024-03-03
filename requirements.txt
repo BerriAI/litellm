@@ -9,6 +9,7 @@ uvicorn==0.22.0 # server dep
 gunicorn==21.2.0 # server dep
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
+redisvl>=0.1.2 # semantic caching
 numpy==1.24.3 # semantic caching
 pandas==2.1.1 # for viewing clickhouse spend analytics
 prisma==0.11.0 # for db

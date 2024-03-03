@@ -11,4 +11,4 @@ boto3
 orjson
 pydantic
 google-cloud-aiplatform
-redisvl==0.0.7 # semantic caching
+redisvl>=0.1.2 # semantic caching
