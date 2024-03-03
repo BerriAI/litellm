@@ -200,10 +200,10 @@ def completion(
 
         ## CALCULATING USAGE
         prompt_tokens = len(
-            encoding.encode(prompt)
+            encoding.encode(prompt,disallowed_special=())
         )  ##[TODO] use the anthropic tokenizer here
         completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+            encoding.encode(model_response["choices"][0]["message"].get("content", ""),disallowed_special=())
         )  ##[TODO] use the anthropic tokenizer here
 
         model_response["created"] = int(time.time())
