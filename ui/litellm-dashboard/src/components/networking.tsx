@@ -810,3 +810,38 @@ export const PredictedSpendLogsCall = async (
     throw error;
   }
 };
+
+export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/health/services?service=slack_budget_alerts`
+      : `health/services?service=slack_budget_alerts`;
+
+    console.log("Checking Slack Budget Alerts service health");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error("Health Check failed:", errorData);
+      throw new Error("Health Check failed");
+    }
+
+    const data = await response.json();
+    console.log("Service Health Response:", data);
+
+    // You can add additional logic here based on the response if needed
+
+    return data;
+  } catch (error) {
+    console.error("Failed to perform health check:", error);
+    throw error;
+  }
+};
+
