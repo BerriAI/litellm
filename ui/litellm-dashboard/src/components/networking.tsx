@@ -815,7 +815,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/health/services?service=slack_budget_alerts`
-      : `health/services?service=slack_budget_alerts`;
+      : `/health/services?service=slack_budget_alerts`;
 
     console.log("Checking Slack Budget Alerts service health");
     message.info("Sending Test Slack alert...");
