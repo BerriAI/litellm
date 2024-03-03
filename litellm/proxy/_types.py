@@ -151,6 +151,7 @@ class GenerateRequestBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
+    soft_budget: Optional[float] = None
 
 
 class GenerateKeyRequest(GenerateRequestBase):
@@ -327,7 +328,7 @@ class TeamRequest(LiteLLMBase):
 
 class LiteLLM_BudgetTable(LiteLLMBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record"""
-
+    soft_budget: Optional[float] = None
     max_budget: Optional[float] = None
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
@@ -366,7 +367,7 @@ class OrganizationRequest(LiteLLMBase):
 class BudgetRequest(LiteLLMBase):
     budgets: List[str]
 
-
+      
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
@@ -585,6 +586,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
     api_key: str
     model: Optional[str] = ""
+    api_base: Optional[str] = ""
     call_type: str
     spend: Optional[float] = 0.0
     total_tokens: Optional[int] = 0

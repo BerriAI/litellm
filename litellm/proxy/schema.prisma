@@ -11,10 +11,11 @@ generator client {
 model LiteLLM_BudgetTable {
   budget_id String @id @default(uuid())
   max_budget Float?
+  soft_budget Float?
   max_parallel_requests Int?
   tpm_limit     BigInt?
   rpm_limit     BigInt?
-  model_max_budget Json @default("{}")
+  model_max_budget Json?
   budget_duration String? 
   budget_reset_at DateTime?
   created_at    DateTime               @default(now()) @map("created_at")
@@ -107,6 +108,7 @@ model LiteLLM_VerificationToken {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    budget_id String?
 }
 
 // store proxy config.yaml
@@ -127,6 +129,7 @@ model LiteLLM_SpendLogs {
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
   model               String   @default("")
+  api_base            String   @default("")
   user                String   @default("")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
