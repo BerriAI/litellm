@@ -6497,32 +6497,50 @@ async def health_services_endpoint(
 
     Used by the UI to let user check if slack alerting is working as expected.
     """
-    global general_settings, proxy_logging_obj
+    try:
+        global general_settings, proxy_logging_obj
 
-    if service is None:
-        raise HTTPException(
-            status_code=400, detail={"error": "Service must be specified."}
-        )
+        if service is None:
+            raise HTTPException(
+                status_code=400, detail={"error": "Service must be specified."}
+            )
 
-    if service not in ["slack_budget_alerts"]:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
-            },
-        )
+        if service not in ["slack_budget_alerts"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
+                },
+            )
 
-    test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` my-secret-project \n`Expected Day of Error`: 28th March \n`Current Spend`: 100 \n`Projected Spend at end of month`: 1000 \n
-    """
 
-    if "slack" in general_settings.get("alerting", []):
-        await proxy_logging_obj.alerting_handler(message=test_message, level="Low")
-    else:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "No slack connection setup. Unable to test this."},
-        )
-
+        if "slack" in general_settings.get("alerting", []):
+            test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` my-secret-project \n`Expected Day of Error`: 28th March \n`Current Spend`: 100 \n`Projected Spend at end of month`: 1000 \n"""
+            await proxy_logging_obj.alerting_handler(
+                message=test_message, level="Low"
+            )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": '"slack" not in proxy config: general_settings. Unable to test this.'
+                },
+            )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_401_UNAUTHORIZED,
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(
