@@ -6512,8 +6512,11 @@ async def health_services_endpoint(
             },
         )
 
+    test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` my-secret-project \n`Expected Day of Error`: 28th March \n`Current Spend`: 100 \n`Projected Spend at end of month`: 1000 \n
+    """
+
     if "slack" in general_settings.get("alerting", []):
-        await proxy_logging_obj.alerting_handler(message="This is a test", level="Low")
+        await proxy_logging_obj.alerting_handler(message=test_message, level="Low")
     else:
         raise HTTPException(
             status_code=422,
