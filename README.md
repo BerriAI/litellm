@@ -251,6 +251,19 @@ Step 4: Submit a PR with your changes! 🚀
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
+# Enterprise
+For companies that need better security, user management and professional support
+
+[Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+This covers: 
+- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Feature Prioritization**
+- ✅ **Custom Integrations**
+- ✅ **Professional Support - Dedicated discord + slack**
+- ✅ **Custom SLAs**
+- ✅ **Secure access with Single Sign-On**
+
 # Why did we build this 
 - **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI and Cohere.
 
