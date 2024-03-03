@@ -1142,7 +1142,10 @@ class PrismaClient:
                 )
                 _data: dict = {}
                 if response is not None:
-                    _data = response.dict()
+                    try:
+                        _data = response.model_dump()  # type: ignore
+                    except Exception as e:
+                        _data = response.dict()
                 return {"token": token, "data": _data}
             elif (
                 user_id is not None
