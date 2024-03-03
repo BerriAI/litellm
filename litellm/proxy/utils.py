@@ -1140,7 +1140,13 @@ class PrismaClient:
                     + f"DB Token Table update succeeded {response}"
                     + "\033[0m"
                 )
-                return {"token": token, "data": db_data}
+                _data: dict = {}
+                if response is not None:
+                    try:
+                        _data = response.model_dump()
+                    except:
+                        _data = response.dict()
+                return {"token": token, "data": _data}
             elif (
                 user_id is not None
                 or (table_name is not None and table_name == "user")
@@ -1228,9 +1234,11 @@ class PrismaClient:
                     if t.token.startswith("sk-"):  # type: ignore
                         t.token = self.hash_token(token=t.token)  # type: ignore
                     try:
-                        data_json = self.jsonify_object(data=t.model_dump())
+                        data_json = self.jsonify_object(
+                            data=t.model_dump(exclude_none=True)
+                        )
                     except:
-                        data_json = self.jsonify_object(data=t.dict())
+                        data_json = self.jsonify_object(data=t.dict(exclude_none=True))
                     batcher.litellm_verificationtoken.update(
                         where={"token": t.token},  # type: ignore
                         data={**data_json},  # type: ignore

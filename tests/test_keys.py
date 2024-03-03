@@ -438,6 +438,15 @@ async def test_key_with_budgets():
     """
     from litellm.proxy.utils import hash_token
 
+    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+        for attempt in range(_max_attempts):
+            try:
+                return await func(*args, **kwargs)
+            except aiohttp.client_exceptions.ClientOSError as e:
+                if attempt + 1 == _max_attempts:
+                    raise  # re-raise the last ClientOSError if all attempts failed
+                print(f"Attempt {attempt+1} failed, retrying...")
+
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(
             session=session, i=0, budget=10, budget_duration="5s"
@@ -449,9 +458,11 @@ async def test_key_with_budgets():
         reset_at_init_value = key_info["info"]["budget_reset_at"]
         reset_at_new_value = None
         i = 0
-        await asyncio.sleep(120)
-        while i < 3:
-            key_info = await get_key_info(session=session, get_key=key, call_key=key)
+        await asyncio.sleep(10)
+        for i in range(3):
+            key_info = await retry_request(
+                get_key_info, session=session, get_key=key, call_key=key
+            )
             reset_at_new_value = key_info["info"]["budget_reset_at"]
             try:
                 assert reset_at_init_value != reset_at_new_value

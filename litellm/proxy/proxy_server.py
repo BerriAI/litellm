@@ -3464,7 +3464,7 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
         )
-        return {"key": key, **non_default_values}
+        return {"key": key, **response["data"]}
         # update based on remaining passed in values
     except Exception as e:
         if isinstance(e, HTTPException):
