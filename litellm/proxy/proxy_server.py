@@ -1814,6 +1814,9 @@ async def generate_key_helper_fn(
     key_soft_budget: Optional[
         float
     ] = None,  # key_soft_budget is used to Budget Per key
+    soft_budget: Optional[
+        float
+    ] = None,  # soft_budget is used to set soft Budgets Per user
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
