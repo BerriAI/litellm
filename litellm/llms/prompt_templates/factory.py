@@ -110,9 +110,9 @@ def mistral_instruct_pt(messages):
                 "post_message": " [/INST]\n",
             },
             "user": {"pre_message": "[INST] ", "post_message": " [/INST]\n"},
-            "assistant": {"pre_message": " ", "post_message": " "},
+            "assistant": {"pre_message": " ", "post_message": "</s> "},
         },
-        final_prompt_value="</s>",
+        final_prompt_value="",
         messages=messages,
     )
     return prompt
