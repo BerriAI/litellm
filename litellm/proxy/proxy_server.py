@@ -6517,7 +6517,7 @@ async def health_services_endpoint(
             )
 
         if "slack" in general_settings.get("alerting", []):
-            test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n"""
+            test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
             await proxy_logging_obj.alerting_handler(message=test_message, level="Low")
         else:
             raise HTTPException(
