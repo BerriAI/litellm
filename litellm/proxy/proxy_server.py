@@ -239,6 +239,7 @@ health_check_interval = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
+litellm_proxy_admin_name = "default_user_id"
 ui_access_mode: Literal["admin", "all"] = "all"
 proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
@@ -335,7 +336,11 @@ async def user_api_key_auth(
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         is_master_key_valid = secrets.compare_digest(api_key, master_key)
         if is_master_key_valid:
-            return UserAPIKeyAuth(api_key=master_key, user_role="proxy_admin")
+            return UserAPIKeyAuth(
+                api_key=master_key,
+                user_role="proxy_admin",
+                user_id=litellm_proxy_admin_name,
+            )
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
@@ -360,7 +365,6 @@ async def user_api_key_auth(
                 valid_token = await prisma_client.get_data(
                     token=api_key, table_name="combined_view"
                 )
-
             elif custom_db_client is not None:
                 try:
                     valid_token = await custom_db_client.get_data(
@@ -2229,7 +2233,7 @@ def parse_cache_control(cache_control):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name
     import json
 
     ### LOAD MASTER KEY ###
@@ -2276,9 +2280,8 @@ async def startup_event():
 
     if prisma_client is not None and master_key is not None:
         # add master key to db
-        user_id = "default_user_id"
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
-            user_id = os.getenv("PROXY_ADMIN_ID")
+            litellm_proxy_admin_name = os.getenv("PROXY_ADMIN_ID")
 
         asyncio.create_task(
             generate_key_helper_fn(
@@ -2288,7 +2291,7 @@ async def startup_event():
                 config={},
                 spend=0,
                 token=master_key,
-                user_id=user_id,
+                user_id=litellm_proxy_admin_name,
                 user_role="proxy_admin",
                 query_type="update_data",
                 update_key_values={
@@ -5394,6 +5397,226 @@ async def team_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+#### ORGANIZATION MANAGEMENT ####
+
+
+@router.post(
+    "/organization/new",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=NewOrganizationResponse,
+)
+async def new_organization(
+    data: NewOrganizationRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Allow orgs to own teams
+
+    Set org level budgets + model access.
+
+    Only admins can create orgs.
+
+    # Parameters 
+
+    - `organization_alias`: *str* = The name of the organization.
+    - `models`: *List* = The models the organization has access to.
+    - `budget_id`: *Optional[str]* = The id for a budget (tpm/rpm/max budget) for the organization. 
+    ### IF NO BUDGET - CREATE ONE WITH THESE PARAMS ### 
+    - `max_budget`: *Optional[float]* = Max budget for org
+    - `tpm_limit`: *Optional[int]* = Max tpm limit for org
+    - `rpm_limit`: *Optional[int]* = Max rpm limit for org
+    - `model_max_budget`: *Optional[dict]* = Max budget for a specific model
+    - `budget_duration`: *Optional[str]* = Frequency of reseting org budget
+
+    Case 1: Create new org **without** a budget_id 
+
+    ```bash
+    curl --location 'http://0.0.0.0:4000/organization/new' \
+    
+    --header 'Authorization: Bearer sk-1234' \
+    
+    --header 'Content-Type: application/json' \
+    
+    --data '{
+        "organization_alias": "my-secret-org",
+        "models": ["model1", "model2"],
+        "max_budget": 100
+    }'
+
+
+    ```
+
+    Case 2: Create new org **with** a budget_id 
+
+    ```bash
+    curl --location 'http://0.0.0.0:4000/organization/new' \
+    
+    --header 'Authorization: Bearer sk-1234' \
+    
+    --header 'Content-Type: application/json' \
+    
+    --data '{
+        "organization_alias": "my-secret-org",
+        "models": ["model1", "model2"],
+        "budget_id": "428eeaa8-f3ac-4e85-a8fb-7dc8d7aa8689"
+    }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if (
+        user_api_key_dict.user_role is None
+        or user_api_key_dict.user_role != "proxy_admin"
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": f"Only admins can create orgs. Your role is = {user_api_key_dict.user_role}"
+            },
+        )
+
+    if data.budget_id is None:
+        """
+        Every organization needs a budget attached.
+
+        If none provided, create one based on provided values
+        """
+        budget_row = LiteLLM_BudgetTable(**data.json(exclude_none=True))
+
+        new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
+
+        _budget = await prisma_client.db.litellm_budgettable.create(
+            data={
+                **new_budget,  # type: ignore
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }
+        )  # type: ignore
+
+        data.budget_id = _budget.budget_id
+
+    """
+    Ensure only models that user has access to, are given to org
+    """
+    if len(user_api_key_dict.models) == 0:  # user has access to all models
+        pass
+    else:
+        if len(data.models) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"User not allowed to give access to all models. Select models you want org to have access to."
+                },
+            )
+        for m in data.models:
+            if m not in user_api_key_dict.models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"User not allowed to give access to model={m}. Models you have access to = {user_api_key_dict.models}"
+                    },
+                )
+    organization_row = LiteLLM_OrganizationTable(
+        **data.json(exclude_none=True),
+        created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+        updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+    )
+    new_organization_row = prisma_client.jsonify_object(
+        organization_row.json(exclude_none=True)
+    )
+    response = await prisma_client.db.litellm_organizationtable.create(
+        data={
+            **new_organization_row,  # type: ignore
+        }
+    )
+
+    return response
+
+
+@router.post(
+    "/organization/update",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_organization():
+    """[TODO] Not Implemented yet. Let us know if you need this - https://github.com/BerriAI/litellm/issues"""
+    pass
+
+
+@router.post(
+    "/organization/delete",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_organization():
+    """[TODO] Not Implemented yet. Let us know if you need this - https://github.com/BerriAI/litellm/issues"""
+    pass
+
+
+@router.post(
+    "/organization/info",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def info_organization(data: OrganizationRequest):
+    """
+    Get the org specific information
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if len(data.organizations) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Specify list of organization id's to query. Passed in={data.organizations}"
+            },
+        )
+    response = await prisma_client.db.litellm_organizationtable.find_many(
+        where={"organization_id": {"in": data.organizations}},
+        include={"litellm_budget_table": True},
+    )
+
+    return response
+
+
+#### BUDGET TABLE MANAGEMENT ####
+
+
+@router.post(
+    "/budget/info",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def info_budget(data: BudgetRequest):
+    """
+    Get the budget id specific information
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if len(data.budgets) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Specify list of budget id's to query. Passed in={data.budgets}"
+            },
+        )
+    response = await prisma_client.db.litellm_budgettable.find_many(
+        where={"budget_id": {"in": data.budgets}},
+    )
+
+    return response
 
 
 #### MODEL MANAGEMENT ####
