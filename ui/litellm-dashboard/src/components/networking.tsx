@@ -818,6 +818,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
       : `health/services?service=slack_budget_alerts`;
 
     console.log("Checking Slack Budget Alerts service health");
+    message.info("Sending Test Slack alert...");
 
     const response = await fetch(url, {
       method: "GET",
@@ -829,11 +830,13 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      console.error("Health Check failed:", errorData);
-      throw new Error("Health Check failed");
+      message.error("Failed Slack Alert test: " + errorData);
+      // throw error with message
+      throw new Error(errorData);
     }
-
+    
     const data = await response.json();
+    message.success("Test Slack Alert worked - check your Slack!");
     console.log("Service Health Response:", data);
 
     // You can add additional logic here based on the response if needed
