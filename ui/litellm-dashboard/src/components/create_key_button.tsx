@@ -12,7 +12,7 @@ import {
   Select,
   message,
 } from "antd";
-import { keyCreateCall } from "./networking";
+import { keyCreateCall, slackBudgetAlertsHealthCheck } from "./networking";
 
 const { Option } = Select;
 
@@ -67,6 +67,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       console.error("Error creating the key:", error);
     }
   };
+
+  const sendSlackAlert = async () => {
+    try {
+      console.log("Sending Slack alert...");
+      const response = await slackBudgetAlertsHealthCheck(accessToken);
+      console.log("slackBudgetAlertsHealthCheck Response:", response);
+      console.log("Testing Slack alert successful");
+    } catch (error) {
+      console.error("Error sending Slack alert:", error);
+    }
+  };
+  
 
   return (
     <div>
@@ -183,10 +195,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     <Text>API Key: {apiKey}</Text>
                     <Title className="mt-6">Budgets</Title>
                       <Text>Soft Limit Budget: ${softBudget}</Text>
-                      <Button className="mt-3">
-                        Test Alert
+                      <Button className="mt-3" onClick={sendSlackAlert}>
+                        Test Slack Alert
                       </Button>
-
+                      <Text className="mt-2">
+                        (LiteLLM Docs - 
+                        <a href="https://docs.litellm.ai/docs/proxy/alerting" target="_blank" className="text-blue-500">
+                           Set Up Slack Alerting)
+                        </a>
+                      </Text>
                   </div>
                 ) : (
                   <Text>Key being created, this might take 30s</Text>
