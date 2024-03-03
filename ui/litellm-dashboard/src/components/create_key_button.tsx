@@ -71,10 +71,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const sendSlackAlert = async () => {
     try {
       console.log("Sending Slack alert...");
-      message.info("Sending Test Slack alert...");
       const response = await slackBudgetAlertsHealthCheck(accessToken);
       console.log("slackBudgetAlertsHealthCheck Response:", response);
-      message.success("Test Slack Alert worked - check your Slack!");
       console.log("Testing Slack alert successful");
     } catch (error) {
       console.error("Error sending Slack alert:", error);
@@ -198,9 +196,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     <Title className="mt-6">Budgets</Title>
                       <Text>Soft Limit Budget: ${softBudget}</Text>
                       <Button className="mt-3" onClick={sendSlackAlert}>
-                        Test Alert
+                        Test Slack Alert
                       </Button>
-
+                      <Text className="mt-2">
+                        (LiteLLM Docs - 
+                        <a href="https://docs.litellm.ai/docs/proxy/alerting" target="_blank" className="text-blue-500">
+                           Set Up Slack Alerting)
+                        </a>
+                      </Text>
                   </div>
                 ) : (
                   <Text>Key being created, this might take 30s</Text>
