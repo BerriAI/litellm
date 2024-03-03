@@ -245,6 +245,19 @@ Step 4: Submit a PR with your changes! 🚀
 - push your fork to your GitHub repo 
 - submit a PR from there 
 
+# Enterprise
+For companies that need better security, user management and professional support
+
+[Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+This covers: 
+- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Feature Prioritization**
+- ✅ **Custom Integrations**
+- ✅ **Professional Support - Dedicated discord + slack**
+- ✅ **Custom SLAs**
+- ✅ **Secure access with Single Sign-On**
+
 # Support / talk with founders
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
