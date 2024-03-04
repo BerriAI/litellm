@@ -4106,6 +4106,7 @@ def get_optional_params(
             and custom_llm_provider != "anyscale"
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "mistral"
+            and custom_llm_provider != "anthropic"
         ):
             if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
                 # ollama actually supports json output
@@ -4186,7 +4187,15 @@ def get_optional_params(
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
-        supported_params = ["stream", "stop", "temperature", "top_p", "max_tokens"]
+        supported_params = [
+            "stream",
+            "stop",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+        ]
         _check_valid_arg(supported_params=supported_params)
         # handle anthropic params
         if stream:
@@ -4201,6 +4210,8 @@ def get_optional_params(
             optional_params["top_p"] = top_p
         if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
+        if tools is not None:
+            optional_params["tools"] = tools
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
         supported_params = [
