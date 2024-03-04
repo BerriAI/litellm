@@ -247,7 +247,7 @@ def completion(
                     ],
                     content=None,
                 )
-                model_response.choices[0].message = _message
+                model_response.choices[0].message = _message  # type: ignore
             else:
                 model_response.choices[0].message.content = text_content  # type: ignore
             model_response.choices[0].finish_reason = map_finish_reason(
