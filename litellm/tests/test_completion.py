@@ -92,7 +92,6 @@ def test_completion_claude_3():
         response = completion(
             model="anthropic/claude-3-opus-20240229",
             messages=messages,
-            max_tokens=10,
         )
         # Add any assertions, here to check response args
         print(response)
@@ -198,19 +197,17 @@ def test_completion_mistral_api_modified_input():
 
 def test_completion_claude2_1():
     try:
+        litellm.set_verbose = True
         print("claude2.1 test request")
         messages = [
             {
                 "role": "system",
-                "content": "Your goal is generate a joke on the topic user gives",
+                "content": "Your goal is generate a joke on the topic user gives.",
             },
-            {"role": "assistant", "content": "Hi, how can i assist you today?"},
             {"role": "user", "content": "Generate a 3 liner joke for me"},
         ]
         # test without max tokens
-        response = completion(
-            model="claude-2.1", messages=messages, request_timeout=10, max_tokens=10
-        )
+        response = completion(model="claude-2.1", messages=messages)
         # Add any assertions here to check the response
         print(response)
         print(response.usage)
