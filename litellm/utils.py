@@ -200,6 +200,10 @@ def map_finish_reason(
         return "content_filter"
     elif finish_reason == "STOP":  # vertex ai
         return "stop"
+    elif finish_reason == "end_turn" or finish_reason == "stop_sequence":  # anthropic
+        return "stop"
+    elif finish_reason == "max_tokens":  # anthropic
+        return "length"
     return finish_reason
 
 
