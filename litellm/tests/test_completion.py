@@ -84,6 +84,22 @@ def test_completion_claude():
 # test_completion_claude()
 
 
+def test_completion_claude_3():
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "Hello, world"}]
+    try:
+        # test without max tokens
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+            max_tokens=10,
+        )
+        # Add any assertions, here to check response args
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_mistral_api():
     try:
         litellm.set_verbose = True
