@@ -56,7 +56,7 @@ def test_completion_custom_provider_model_name():
 def test_completion_claude():
     litellm.set_verbose = True
     litellm.cache = None
-    litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
+    litellm.AnthropicConfig(max_tokens=200, metadata={"user_id": "1224"})
     messages = [
         {
             "role": "system",
@@ -67,7 +67,7 @@ def test_completion_claude():
     try:
         # test without max tokens
         response = completion(
-            model="claude-instant-1",
+            model="claude-instant-1.2",
             messages=messages,
             request_timeout=10,
         )
