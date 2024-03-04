@@ -1252,6 +1252,20 @@
         "litellm_provider": "bedrock", 
         "mode": "embedding"
     },
+    "bedrock/us-west-2/mistral.mixtral-8x7b-instruct": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 0.00000045,
+        "output_cost_per_token": 0.0000007,
+        "litellm_provider": "bedrock",
+        "mode": "completion"
+    },
+    "bedrock/us-west-2/mistral.mistral-7b-instruct": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "bedrock",
+        "mode": "completion"
+    },
     "anthropic.claude-v1": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
