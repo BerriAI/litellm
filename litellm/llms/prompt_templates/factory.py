@@ -390,7 +390,7 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
     return prompt
 
 
-###
+### ANTHROPIC ###
 
 
 def anthropic_pt(
@@ -422,6 +422,62 @@ def anthropic_pt(
     if messages[-1]["role"] != "assistant":
         prompt += f"{AnthropicConstants.AI_PROMPT.value}"
     return prompt
+
+
+def construct_format_parameters_prompt(parameters: dict):
+    parameter_str = "<parameter>\n"
+    for k, v in parameters.items():
+        parameter_str += f"<{k}>"
+        parameter_str += f"{v}"
+        parameter_str += f"</{k}>"
+    parameter_str += "\n</parameter>"
+    return parameter_str
+
+
+def construct_format_tool_for_claude_prompt(name, description, parameters):
+    constructed_prompt = (
+        "<tool_description>\n"
+        f"<tool_name>{name}</tool_name>\n"
+        "<description>\n"
+        f"{description}\n"
+        "</description>\n"
+        "<parameters>\n"
+        f"{construct_format_parameters_prompt(parameters)}\n"
+        "</parameters>\n"
+        "</tool_description>"
+    )
+    return constructed_prompt
+
+
+def construct_tool_use_system_prompt(
+    tools,
+):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
+    tool_str_list = []
+    for tool in tools:
+        tool_str = construct_format_tool_for_claude_prompt(
+            tool["function"]["name"],
+            tool["function"].get("description", ""),
+            tool["function"].get("parameters", {}),
+        )
+        tool_str_list.append(tool_str)
+    tool_use_system_prompt = (
+        "In this environment you have access to a set of tools you can use to answer the user's question.\n"
+        "\n"
+        "You may call them like this:\n"
+        "<function_calls>\n"
+        "<invoke>\n"
+        "<tool_name>$TOOL_NAME</tool_name>\n"
+        "<parameters>\n"
+        "<$PARAMETER_NAME>$PARAMETER_VALUE</$PARAMETER_NAME>\n"
+        "...\n"
+        "</parameters>\n"
+        "</invoke>\n"
+        "</function_calls>\n"
+        "\n"
+        "Here are the tools available:\n"
+        "<tools>\n" + "\n".join([tool_str for tool_str in tool_str_list]) + "\n</tools>"
+    )
+    return tool_use_system_prompt
 
 
 def anthropic_messages_pt(messages: list):
@@ -462,6 +518,9 @@ def anthropic_messages_pt(messages: list):
         ].strip()  # no trailing whitespace for final assistant message
 
     return new_messages
+
+
+###
 
 
 def amazon_titan_pt(
@@ -690,6 +749,8 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
+        if model == "claude-instant-1" or model == "claude-2.1":
+            return anthropic_pt(messages=messages)
         return anthropic_messages_pt(messages=messages)
     elif custom_llm_provider == "together_ai":
         prompt_format, chat_template = get_model_info(token=api_key, model=model)

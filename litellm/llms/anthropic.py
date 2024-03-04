@@ -6,7 +6,11 @@ import time
 from typing import Callable, Optional
 from litellm.utils import ModelResponse, Usage
 import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from .prompt_templates.factory import (
+    prompt_factory,
+    custom_prompt,
+    construct_tool_use_system_prompt,
+)
 import httpx
 
 
@@ -141,6 +145,15 @@ def completion(
             k not in optional_params
         ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
+
+    ## Handle Tool Calling
+    if "tools" in optional_params:
+        tool_calling_system_prompt = construct_tool_use_system_prompt(
+            tools=optional_params["tools"]
+        )
+        optional_params["system"] = (
+            optional_params("system", "\n") + tool_calling_system_prompt
+        )  # add the anthropic tool calling prompt to the system prompt
 
     data = {
         "model": model,
