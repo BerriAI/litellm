@@ -125,11 +125,18 @@ def completion(
     format messages for anthropic
     1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
     2. The first message always needs to be of role "user"
+    3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
+    4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
     """
     # 1. Anthropic only supports roles like "user" and "assistant"
-    for message in messages:
+    for idx, message in enumerate(messages):
         if message["role"] == "system":
             message["role"] = "assistant"
+
+        # if this is the final assistant message, remove trailing whitespace
+        # TODO: only do this if it's the final assistant message
+        if message["role"] == "assistant":
+            message["content"] = message["content"].strip()
 
     # 2. The first message always needs to be of role "user"
     if len(messages) > 0:
@@ -209,6 +216,11 @@ def completion(
         if "error" in completion_response:
             raise AnthropicError(
                 message=str(completion_response["error"]),
+                status_code=response.status_code,
+            )
+        elif len(completion_response["content"]) == 0:
+            raise AnthropicError(
+                message="No content in response",
                 status_code=response.status_code,
             )
         else:
