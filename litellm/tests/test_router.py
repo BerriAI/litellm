@@ -933,7 +933,7 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": "claude-instant-1",
+                "model": "claude-instant-1.2",
                 "api_key": anthropic_api_key,
             },
         }
