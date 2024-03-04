@@ -1,9 +1,9 @@
 # Anthropic
 LiteLLM supports
 
+- `claude-3` (`claude-3-opus-20240229`, `claude-3-sonnet-20240229`)
 - `claude-2`
 - `claude-2.1`
-- `claude-instant-1`
 - `claude-instant-1.2`
 
 ## API Keys
@@ -24,11 +24,42 @@ from litellm import completion
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
-response = completion(model="claude-instant-1", messages=messages)
+response = completion(model="claude-3-opus-20240229", messages=messages)
 print(response)
 ```
 
-## Usage - "Assistant Pre-fill"
+
+## Usage - Streaming
+Just set `stream=True` when calling completion.
+
+```python
+import os
+from litellm import completion
+
+# set env
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+messages = [{"role": "user", "content": "Hey! how's it going?"}]
+response = completion(model="claude-3-opus-20240229", messages=messages, stream=True)
+for chunk in response:
+    print(chunk["choices"][0]["delta"]["content"])  # same as openai format
+```
+
+
+
+## Supported Models
+
+| Model Name       | Function Call                              |
+|------------------|--------------------------------------------|
+| claude-3-opus  | `completion('claude-3-opus-20240229', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-3-sonnet  | `completion('claude-3-sonnet-20240229', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-2.1  | `completion('claude-2.1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-2  | `completion('claude-2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-instant-1.2  | `completion('claude-instant-1.2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+
+## Advanced
+
+### Usage - "Assistant Pre-fill"
 
 You can "put words in Claude's mouth" by including an `assistant` role message as the last item in the `messages` array.
 
@@ -50,7 +81,7 @@ response = completion(model="claude-2.1", messages=messages)
 print(response)
 ```
 
-### Example prompt sent to Claude
+#### Example prompt sent to Claude
 
 ```
 
@@ -61,7 +92,7 @@ Human: How do you say 'Hello' in German? Return your answer as a JSON object, li
 Assistant: {
 ```
 
-## Usage - "System" messages
+### Usage - "System" messages
 If you're using Anthropic's Claude 2.1 with Bedrock, `system` role messages are properly formatted for you.
 
 ```python
@@ -78,7 +109,7 @@ messages = [
 response = completion(model="claude-2.1", messages=messages)
 ```
 
-### Example prompt sent to Claude
+#### Example prompt sent to Claude
 
 ```
 You are a snarky assistant.
@@ -88,28 +119,3 @@ Human: How do I boil water?
 Assistant:
 ```
 
-## Streaming
-Just set `stream=True` when calling completion.
-
-```python
-import os
-from litellm import completion
-
-# set env
-os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
-
-messages = [{"role": "user", "content": "Hey! how's it going?"}]
-response = completion(model="claude-instant-1", messages=messages, stream=True)
-for chunk in response:
-    print(chunk["choices"][0]["delta"]["content"])  # same as openai format
-```
-
-
-### Model Details
-
-| Model Name       | Function Call                              | Required OS Variables                |
-|------------------|--------------------------------------------|--------------------------------------|
-| claude-2.1  | `completion('claude-2.1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
-| claude-2  | `completion('claude-2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
-| claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
-| claude-instant-1.2  | `completion('claude-instant-1.2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |

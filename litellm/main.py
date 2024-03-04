@@ -1023,7 +1023,7 @@ def completion(
                 api_base
                 or litellm.api_base
                 or get_secret("ANTHROPIC_API_BASE")
-                or "https://api.anthropic.com/v1/complete"
+                or "https://api.anthropic.com/v1/messages"
             )
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             response = anthropic.completion(
