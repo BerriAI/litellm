@@ -75,8 +75,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   // loop through model data and edit each row
   for (let i = 0; i < modelData.data.length; i++) {
     let curr_model = modelData.data[i];
-    let litellm_model_name = curr_model?.litellm_params?.model;
-
+    let litellm_model_name = curr_model?.litellm_params?.mode
     let model_info = curr_model?.model_info;
 
     let defaultProvider = "openai";
@@ -109,6 +108,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
     modelData.data[i].max_tokens = max_tokens;
+    modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
 
     all_models_on_proxy.push(curr_model.model_name);
 
@@ -141,6 +141,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <TableCell>
                   <Title>Provider</Title>
                 </TableCell>
+                {
+                  userRole === "Admin" && (
+                    <TableCell>
+                      <Title>API Base</Title>
+                    </TableCell>
+                  )
+                }
+                
                 <TableCell>
                   <Title>Access</Title>
                 </TableCell>
@@ -162,6 +170,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     <Title>{model.model_name}</Title>
                   </TableCell>
                   <TableCell>{model.provider}</TableCell>
+                  {
+                    userRole === "Admin" && (
+                      <TableCell>{model.api_base}</TableCell>
+                    )
+                  }
 
                   <TableCell>
                     {model.user_access ? (
