@@ -167,6 +167,15 @@ class ProxyException(Exception):
         self.param = param
         self.code = code
 
+    def to_dict(self) -> dict:
+        """Converts the ProxyException instance to a dictionary."""
+        return {
+            "message": self.message,
+            "type": self.type,
+            "param": self.param,
+            "code": self.code,
+        }
+
 
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
@@ -2241,12 +2250,14 @@ async def async_data_generator(response, user_api_key_dict):
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
 
-        raise ProxyException(
+        proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
+        error_returned = json.dumps({"error": proxy_exception.to_dict()})
+        yield f"data: {error_returned}\n\n"
 
 
 def select_data_generator(response, user_api_key_dict):
