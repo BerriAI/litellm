@@ -829,7 +829,7 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if model == "claude-instant-1" or model == "claude-2.1":
+        if model == "claude-instant-1" or model == "claude-2":
             return anthropic_pt(messages=messages)
         return anthropic_messages_pt(messages=messages)
     elif custom_llm_provider == "together_ai":
