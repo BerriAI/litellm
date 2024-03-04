@@ -499,7 +499,11 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
     # Infer image format from the URL
     image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
 
-    return {"type": "base64", "media_type": image_format, "data": base64_data}
+    return {
+        "type": "base64",
+        "media_type": f"image/{image_format}",
+        "data": base64_data,
+    }
 
 
 def anthropic_messages_pt(messages: list):
@@ -515,10 +519,35 @@ def anthropic_messages_pt(messages: list):
     last_assistant_message_idx: Optional[int] = None
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
     new_messages = []
+    if len(messages) == 1:
+        # check if the message is a user message
+        if messages[0]["role"] == "assistant":
+            new_messages.append({"role": "user", "content": ""})
+
+        # check if content is a list (vision)
+        if isinstance(messages[0]["content"], list):  # vision input
+            new_content = []
+            for m in messages[0]["content"]:
+                if m.get("type", "") == "image_url":
+                    new_content.append(
+                        {
+                            "type": "image",
+                            "source": convert_to_anthropic_image_obj(
+                                m["image_url"]["url"]
+                            ),
+                        }
+                    )
+                elif m.get("type", "") == "text":
+                    new_content.append({"type": "text", "text": m["text"]})
+            new_messages.append({"role": messages[0]["role"], "content": new_content})  # type: ignore
+        else:
+            new_messages.append(messages[0])
+
+        return new_messages
+
     for i in range(len(messages) - 1):  # type: ignore
         if i == 0 and messages[i]["role"] == "assistant":
             new_messages.append({"role": "user", "content": ""})
-
         if isinstance(messages[i]["content"], list):  # vision input
             new_content = []
             for m in messages[i]["content"]:
@@ -545,8 +574,6 @@ def anthropic_messages_pt(messages: list):
 
         if messages[i]["role"] == "assistant":
             last_assistant_message_idx = i
-
-    new_messages.append(messages[-1])
 
     if last_assistant_message_idx is not None:
         new_messages[last_assistant_message_idx]["content"] = new_messages[
