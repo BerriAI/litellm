@@ -4200,7 +4200,7 @@ def get_optional_params(
         if top_p is not None:
             optional_params["top_p"] = top_p
         if max_tokens is not None:
-            optional_params["max_tokens_to_sample"] = max_tokens
+            optional_params["max_tokens"] = max_tokens
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
         supported_params = [
