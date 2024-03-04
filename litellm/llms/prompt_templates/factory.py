@@ -1,6 +1,6 @@
 from enum import Enum
 import requests, traceback
-import json
+import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, Environment, meta
 from typing import Optional, Any
 
@@ -518,6 +518,21 @@ def anthropic_messages_pt(messages: list):
         ].strip()  # no trailing whitespace for final assistant message
 
     return new_messages
+
+
+def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
+    ext_list = re.findall(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
+    if strip:
+        ext_list = [e.strip() for e in ext_list]
+    return ext_list
+
+
+def parse_xml_params(xml_content):
+    root = ET.fromstring(xml_content)
+    params = {}
+    for child in root.findall(".//parameters/*"):
+        params[child.tag] = child.text
+    return params
 
 
 ###
