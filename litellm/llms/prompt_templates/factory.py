@@ -3,6 +3,7 @@ import requests, traceback
 import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, Environment, meta
 from typing import Optional, Any
+import imghdr, base64
 
 
 def default_pt(messages):
@@ -480,6 +481,27 @@ def construct_tool_use_system_prompt(
     return tool_use_system_prompt
 
 
+def convert_to_anthropic_image_obj(openai_image_url: str):
+    """
+    Input:
+    "image_url": "data:image/jpeg;base64,{base64_image}",
+
+    Return:
+    "source": {
+      "type": "base64",
+      "media_type": "image/jpeg",
+      "data": {base64_image},
+    }
+    """
+    # Extract the base64 image data
+    base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
+
+    # Infer image format from the URL
+    image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
+
+    return {"type": "base64", "media_type": image_format, "data": base64_data}
+
+
 def anthropic_messages_pt(messages: list):
     """
     format messages for anthropic
@@ -497,7 +519,23 @@ def anthropic_messages_pt(messages: list):
         if i == 0 and messages[i]["role"] == "assistant":
             new_messages.append({"role": "user", "content": ""})
 
-        new_messages.append(messages[i])
+        if isinstance(messages[i]["content"], list):  # vision input
+            new_content = []
+            for m in messages[i]["content"]:
+                if m.get("type", "") == "image_url":
+                    new_content.append(
+                        {
+                            "type": "image",
+                            "source": convert_to_anthropic_image_obj(
+                                m["image_url"]["url"]
+                            ),
+                        }
+                    )
+                elif m.get("type", "") == "text":
+                    new_content.append({"type": "text", "content": m["text"]})
+            new_messages.append({"role": messages[i]["role"], "content": new_content})  # type: ignore
+        else:
+            new_messages.append(messages[i])
 
         if messages[i]["role"] == messages[i + 1]["role"]:
             if messages[i]["role"] == "user":
