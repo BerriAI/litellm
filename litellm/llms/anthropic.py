@@ -41,6 +41,7 @@ class AnthropicConfig:
     top_p: Optional[int] = None
     top_k: Optional[int] = None
     metadata: Optional[dict] = None
+    system: Optional[str] = None
 
     def __init__(
         self,
@@ -50,6 +51,7 @@ class AnthropicConfig:
         top_p: Optional[int] = None,
         top_k: Optional[int] = None,
         metadata: Optional[dict] = None,
+        system: Optional[str] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -118,38 +120,19 @@ def completion(
             messages=messages,
         )
     else:
-        prompt = prompt_factory(
+        # Separate system prompt from rest of message
+        system_prompt_idx: Optional[int] = None
+        for idx, message in enumerate(messages):
+            if message["role"] == "system":
+                optional_params["system"] = message["content"]
+                system_prompt_idx = idx
+                break
+        if system_prompt_idx is not None:
+            messages.pop(system_prompt_idx)
+        # Format rest of message according to anthropic guidelines
+        messages = prompt_factory(
             model=model, messages=messages, custom_llm_provider="anthropic"
         )
-    """
-    format messages for anthropic
-    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
-    2. The first message always needs to be of role "user"
-    3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
-    4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
-    """
-    # 1. Anthropic only supports roles like "user" and "assistant"
-    for idx, message in enumerate(messages):
-        if message["role"] == "system":
-            message["role"] = "assistant"
-
-        # if this is the final assistant message, remove trailing whitespace
-        # TODO: only do this if it's the final assistant message
-        if message["role"] == "assistant":
-            message["content"] = message["content"].strip()
-
-    # 2. The first message always needs to be of role "user"
-    if len(messages) > 0:
-        if messages[0]["role"] != "user":
-            # find the index of the first user message
-            for i, message in enumerate(messages):
-                if message["role"] == "user":
-                    break
-
-            # remove the user message at existing position and add it to the front
-            messages.pop(i)
-            # move the first user message to the front
-            messages = [message] + messages
 
     ## Load Config
     config = litellm.AnthropicConfig.get_config()
@@ -167,7 +150,7 @@ def completion(
 
     ## LOGGING
     logging_obj.pre_call(
-        input=prompt,
+        input=messages,
         api_key=api_key,
         additional_args={
             "complete_input_dict": data,
