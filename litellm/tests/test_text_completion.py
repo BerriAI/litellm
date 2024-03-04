@@ -2836,6 +2836,8 @@ def test_completion_hf_prompt_array():
         print(str(e))
         if "is currently loading" in str(e):
             return
+        if "Service Unavailable" in str(e):
+            return
         pytest.fail(f"Error occurred: {e}")
 
 
