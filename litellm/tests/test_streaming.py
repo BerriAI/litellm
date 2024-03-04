@@ -348,7 +348,7 @@ def test_completion_claude_stream():
             },
         ]
         response = completion(
-            model="claude-instant-1", messages=messages, stream=True, max_tokens=50
+            model="claude-instant-1.2", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
