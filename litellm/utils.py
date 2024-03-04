@@ -4551,6 +4551,21 @@ def get_optional_params(
                 optional_params["temperature"] = temperature
             if max_tokens is not None:
                 optional_params["max_tokens"] = max_tokens
+        elif "mistral" in model:
+            supported_params = ["max_tokens", "temperature", "stop", "top_p", "stream"]
+            _check_valid_arg(supported_params=supported_params)
+            # mistral params on bedrock
+            # \"max_tokens\":400,\"temperature\":0.7,\"top_p\":0.7,\"stop\":[\"\\\\n\\\\nHuman:\"]}"
+            if max_tokens is not None:
+                optional_params["max_tokens"] = max_tokens
+            if temperature is not None:
+                optional_params["temperature"] = temperature
+            if top_p is not None:
+                optional_params["top_p"] = top_p
+            if stop is not None:
+                optional_params["stop"] = stop
+            if stream is not None:
+                optional_params["stream"] = stream
     elif custom_llm_provider == "aleph_alpha":
         supported_params = [
             "max_tokens",

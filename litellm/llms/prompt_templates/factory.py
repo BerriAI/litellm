@@ -110,9 +110,9 @@ def mistral_instruct_pt(messages):
                 "post_message": " [/INST]\n",
             },
             "user": {"pre_message": "[INST] ", "post_message": " [/INST]\n"},
-            "assistant": {"pre_message": " ", "post_message": " "},
+            "assistant": {"pre_message": " ", "post_message": "</s> "},
         },
-        final_prompt_value="</s>",
+        final_prompt_value="",
         messages=messages,
     )
     return prompt
@@ -674,6 +674,8 @@ def prompt_factory(
                 return claude_2_1_pt(messages=messages)
             else:
                 return anthropic_pt(messages=messages)
+        elif "mistral." in model:
+            return mistral_instruct_pt(messages=messages)
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
