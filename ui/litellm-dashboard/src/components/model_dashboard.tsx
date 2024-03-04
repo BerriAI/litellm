@@ -196,7 +196,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </TableBody>
           </Table>
         </Card>
-        {userRole === "Admin" &&
+        <Card>
+          <Title>Model Statistics</Title>
+
+          
+        </Card>
+        {/* {userRole === "Admin" &&
         pendingRequests &&
         pendingRequests.length > 0 ? (
           <Card>
@@ -242,7 +247,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </TableBody>
             </Table>
           </Card>
-        ) : null}
+        ) : null} */}
       </Grid>
     </div>
   );
