@@ -8117,7 +8117,8 @@ class CustomStreamWrapper:
                     text = ""  # don't return the final bos token
                     is_finished = True
                     finish_reason = "stop"
-
+                elif data_json.get("error", False):
+                    raise Exception(data_json.get("error"))
                 return {
                     "text": text,
                     "is_finished": is_finished,
@@ -8132,7 +8133,7 @@ class CustomStreamWrapper:
             }
         except Exception as e:
             traceback.print_exc()
-            # raise(e)
+            raise e
 
     def handle_ai21_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
