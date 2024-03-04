@@ -20,7 +20,7 @@ class AnthropicError(Exception):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(
-            method="POST", url="https://api.anthropic.com/v1/complete"
+            method="POST", url="https://api.anthropic.com/v1/messages"
         )
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
@@ -35,9 +35,7 @@ class AnthropicConfig:
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens_to_sample: Optional[
-        int
-    ] = litellm.max_tokens  # anthropic requires a default
+    max_tokens: Optional[int] = litellm.max_tokens  # anthropic requires a default
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -46,7 +44,7 @@ class AnthropicConfig:
 
     def __init__(
         self,
-        max_tokens_to_sample: Optional[int] = 256,  # anthropic requires a default
+        max_tokens: Optional[int] = 256,  # anthropic requires a default
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -123,6 +121,35 @@ def completion(
         prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="anthropic"
         )
+    """
+    format messages for anthropic
+    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
+    2. The first message always needs to be of role "user"
+    3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
+    4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
+    """
+    # 1. Anthropic only supports roles like "user" and "assistant"
+    for idx, message in enumerate(messages):
+        if message["role"] == "system":
+            message["role"] = "assistant"
+
+        # if this is the final assistant message, remove trailing whitespace
+        # TODO: only do this if it's the final assistant message
+        if message["role"] == "assistant":
+            message["content"] = message["content"].strip()
+
+    # 2. The first message always needs to be of role "user"
+    if len(messages) > 0:
+        if messages[0]["role"] != "user":
+            # find the index of the first user message
+            for i, message in enumerate(messages):
+                if message["role"] == "user":
+                    break
+
+            # remove the user message at existing position and add it to the front
+            messages.pop(i)
+            # move the first user message to the front
+            messages = [message] + messages
 
     ## Load Config
     config = litellm.AnthropicConfig.get_config()
@@ -134,7 +161,7 @@ def completion(
 
     data = {
         "model": model,
-        "prompt": prompt,
+        "messages": messages,
         **optional_params,
     }
 
@@ -173,7 +200,7 @@ def completion(
 
         ## LOGGING
         logging_obj.post_call(
-            input=prompt,
+            input=messages,
             api_key=api_key,
             original_response=response.text,
             additional_args={"complete_input_dict": data},
@@ -191,20 +218,20 @@ def completion(
                 message=str(completion_response["error"]),
                 status_code=response.status_code,
             )
+        elif len(completion_response["content"]) == 0:
+            raise AnthropicError(
+                message="No content in response",
+                status_code=response.status_code,
+            )
         else:
-            if len(completion_response["completion"]) > 0:
-                model_response["choices"][0]["message"][
-                    "content"
-                ] = completion_response["completion"]
+            text_content = completion_response["content"][0].get("text", None)
+            model_response.choices[0].message.content = text_content  # type: ignore
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE
-        prompt_tokens = len(
-            encoding.encode(prompt)
-        )  ##[TODO] use the anthropic tokenizer here
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-        )  ##[TODO] use the anthropic tokenizer here
+        prompt_tokens = completion_response["usage"]["input_tokens"]
+        completion_tokens = completion_response["usage"]["output_tokens"]
+        total_tokens = prompt_tokens + completion_tokens
 
         model_response["created"] = int(time.time())
         model_response["model"] = model

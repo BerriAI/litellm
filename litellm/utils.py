@@ -4200,7 +4200,7 @@ def get_optional_params(
         if top_p is not None:
             optional_params["top_p"] = top_p
         if max_tokens is not None:
-            optional_params["max_tokens_to_sample"] = max_tokens
+            optional_params["max_tokens"] = max_tokens
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
         supported_params = [
@@ -8032,10 +8032,21 @@ class CustomStreamWrapper:
         finish_reason = None
         if str_line.startswith("data:"):
             data_json = json.loads(str_line[5:])
-            text = data_json.get("completion", "")
-            if data_json.get("stop_reason", None):
+            type_chunk = data_json.get("type", None)
+            if type_chunk == "content_block_delta":
+                """
+                Anthropic content chunk
+                chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
+                """
+                text = data_json.get("delta", {}).get("text", "")
+            elif type_chunk == "message_delta":
+                """
+                Anthropic
+                chunk = {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens', 'stop_sequence': None}, 'usage': {'output_tokens': 10}}
+                """
+                # TODO - get usage from this chunk, set in response
+                finish_reason = data_json.get("delta", {}).get("stop_reason", None)
                 is_finished = True
-                finish_reason = data_json["stop_reason"]
             return {
                 "text": text,
                 "is_finished": is_finished,
