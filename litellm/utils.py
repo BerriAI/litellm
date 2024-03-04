@@ -2585,7 +2585,7 @@ def client(original_function):
                     if (
                         isinstance(e, openai.APIError)
                         or isinstance(e, openai.Timeout)
-                        or isinstance(openai.APIConnectionError)
+                        or isinstance(e, openai.APIConnectionError)
                     ):
                         print_verbose(f"RETRY TRIGGERED!")
                         kwargs["num_retries"] = num_retries
