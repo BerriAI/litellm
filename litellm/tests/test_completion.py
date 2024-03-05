@@ -56,7 +56,7 @@ def test_completion_custom_provider_model_name():
 def test_completion_claude():
     litellm.set_verbose = True
     litellm.cache = None
-    litellm.AnthropicConfig(max_tokens=200, metadata={"user_id": "1224"})
+    litellm.AnthropicTextConfig(max_tokens=200, metadata={"user_id": "1224"})
     messages = [
         {
             "role": "system",
@@ -70,6 +70,7 @@ def test_completion_claude():
             model="claude-instant-1.2",
             messages=messages,
             request_timeout=10,
+            max_tokens=10,
         )
         # Add any assertions, here to check response args
         print(response)
