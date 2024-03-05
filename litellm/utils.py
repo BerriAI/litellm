@@ -245,10 +245,14 @@ class Message(OpenAIObject):
         self.role = role
         if function_call is not None:
             self.function_call = FunctionCall(**function_call)
+        else:
+            self.function_call = function_call
         if tool_calls is not None:
             self.tool_calls = []
             for tool_call in tool_calls:
                 self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
+        else:
+            self.tool_calls = tool_calls
         if logprobs is not None:
             self._logprobs = logprobs
 
@@ -4111,6 +4115,7 @@ def get_optional_params(
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "mistral"
             and custom_llm_provider != "anthropic"
+            and custom_llm_provider != "bedrock"
         ):
             if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
                 # ollama actually supports json output
@@ -4521,13 +4526,13 @@ def get_optional_params(
             # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
             if model.startswith("anthropic.claude-3"):
                 optional_params = (
-                    litellm.AmazonAnthropicClaude3Config.map_openai_params(
+                    litellm.AmazonAnthropicClaude3Config().map_openai_params(
                         non_default_params=non_default_params,
                         optional_params=optional_params,
                     )
                 )
             else:
-                optional_params = litellm.AmazonAnthropicConfig.map_openai_params(
+                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                 )
