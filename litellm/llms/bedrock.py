@@ -1,11 +1,17 @@
 import json, copy, types
 import os
 from enum import Enum
-import time
+import time, uuid
 from typing import Callable, Optional, Any, Union, List
 import litellm
 from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from .prompt_templates.factory import (
+    prompt_factory,
+    custom_prompt,
+    construct_tool_use_system_prompt,
+    extract_between_tags,
+    parse_xml_params,
+)
 import httpx
 
 
@@ -70,6 +76,59 @@ class AmazonTitanConfig:
         }
 
 
+class AmazonAnthropicClaude3Config:
+    """
+    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
+
+    Supported Params for the Amazon / Anthropic Claude 3 models:
+
+    - `max_tokens` (integer) max tokens,
+    - `anthropic_version` (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
+    """
+
+    max_tokens: Optional[int] = litellm.max_tokens
+    anthropic_version: Optional[str] = "bedrock-2023-05-31"
+
+    def __init__(
+        self,
+        max_tokens: Optional[int] = None,
+        anthropic_version: Optional[str] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return ["max_tokens", "tools", "tool_choice", "stream"]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if param == "tools":
+                optional_params["tools"] = value
+        return optional_params
+
+
 class AmazonAnthropicConfig:
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
@@ -122,6 +181,25 @@ class AmazonAnthropicConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(
+        self,
+    ):
+        return ["max_tokens", "temperature", "stop", "top_p", "stream"]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["max_tokens_to_sample"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "stop":
+                optional_params["stop_sequences"] = value
+            if param == "stream" and value == True:
+                optional_params["stream"] = value
+        return optional_params
 
 
 class AmazonCohereConfig:
@@ -330,7 +408,8 @@ class AmazonMistralConfig:
             )
             and v is not None
         }
-                
+
+
 class AmazonStabilityConfig:
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=stability.stable-diffusion-xl-v0
@@ -542,7 +621,9 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
                 model=model, messages=messages, custom_llm_provider="bedrock"
             )
     elif provider == "mistral":
-        prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
+        prompt = prompt_factory(
+            model=model, messages=messages, custom_llm_provider="bedrock"
+        )
     else:
         prompt = ""
         for message in messages:
@@ -619,14 +700,47 @@ def completion(
         inference_params = copy.deepcopy(optional_params)
         stream = inference_params.pop("stream", False)
         if provider == "anthropic":
-            ## LOAD CONFIG
-            config = litellm.AmazonAnthropicConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-            data = json.dumps({"prompt": prompt, **inference_params})
+            if model.startswith("anthropic.claude-3"):
+                # Separate system prompt from rest of message
+                system_prompt_idx: Optional[int] = None
+                for idx, message in enumerate(messages):
+                    if message["role"] == "system":
+                        inference_params["system"] = message["content"]
+                        system_prompt_idx = idx
+                        break
+                if system_prompt_idx is not None:
+                    messages.pop(system_prompt_idx)
+                # Format rest of message according to anthropic guidelines
+                messages = prompt_factory(
+                    model=model, messages=messages, custom_llm_provider="anthropic"
+                )
+                ## LOAD CONFIG
+                config = litellm.AmazonAnthropicClaude3Config.get_config()
+                for k, v in config.items():
+                    if (
+                        k not in inference_params
+                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                        inference_params[k] = v
+                ## Handle Tool Calling
+                if "tools" in inference_params:
+                    tool_calling_system_prompt = construct_tool_use_system_prompt(
+                        tools=inference_params["tools"]
+                    )
+                    inference_params["system"] = (
+                        inference_params.get("system", "\n")
+                        + tool_calling_system_prompt
+                    )  # add the anthropic tool calling prompt to the system prompt
+                    inference_params.pop("tools")
+                data = json.dumps({"messages": messages, **inference_params})
+            else:
+                ## LOAD CONFIG
+                config = litellm.AmazonAnthropicConfig.get_config()
+                for k, v in config.items():
+                    if (
+                        k not in inference_params
+                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                        inference_params[k] = v
+                data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "ai21":
             ## LOAD CONFIG
             config = litellm.AmazonAI21Config.get_config()
@@ -646,9 +760,9 @@ def completion(
                 ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                     inference_params[k] = v
             if optional_params.get("stream", False) == True:
-                inference_params[
-                    "stream"
-                ] = True  # cohere requires stream = True in inference params
+                inference_params["stream"] = (
+                    True  # cohere requires stream = True in inference params
+                )
             data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "meta":
             ## LOAD CONFIG
@@ -674,7 +788,7 @@ def completion(
                     "textGenerationConfig": inference_params,
                 }
             )
-        elif provider == "mistral":  
+        elif provider == "mistral":
             ## LOAD CONFIG
             config = litellm.AmazonMistralConfig.get_config()
             for k, v in config.items():
@@ -783,8 +897,42 @@ def completion(
         if provider == "ai21":
             outputText = response_body.get("completions")[0].get("data").get("text")
         elif provider == "anthropic":
-            outputText = response_body["completion"]
-            model_response["finish_reason"] = response_body["stop_reason"]
+            if model.startswith("anthropic.claude-3"):
+                outputText = response_body.get("content")[0].get("text", None)
+                if "<invoke>" in outputText:  # OUTPUT PARSE FUNCTION CALL
+                    function_name = extract_between_tags("tool_name", outputText)[0]
+                    function_arguments_str = extract_between_tags("invoke", outputText)[
+                        0
+                    ].strip()
+                    function_arguments_str = (
+                        f"<invoke>{function_arguments_str}</invoke>"
+                    )
+                    function_arguments = parse_xml_params(function_arguments_str)
+                    _message = litellm.Message(
+                        tool_calls=[
+                            {
+                                "id": f"call_{uuid.uuid4()}",
+                                "type": "function",
+                                "function": {
+                                    "name": function_name,
+                                    "arguments": json.dumps(function_arguments),
+                                },
+                            }
+                        ],
+                        content=None,
+                    )
+                    model_response.choices[0].message = _message  # type: ignore
+                model_response["finish_reason"] = response_body["stop_reason"]
+                _usage = litellm.Usage(
+                    prompt_tokens=response_body["usage"]["input_tokens"],
+                    completion_tokens=response_body["usage"]["output_tokens"],
+                    total_tokens=response_body["usage"]["input_tokens"]
+                    + response_body["usage"]["output_tokens"],
+                )
+                model_response.usage = _usage
+            else:
+                outputText = response_body["completion"]
+                model_response["finish_reason"] = response_body["stop_reason"]
         elif provider == "cohere":
             outputText = response_body["generations"][0]["text"]
         elif provider == "meta":
@@ -803,8 +951,19 @@ def completion(
             )
         else:
             try:
-                if len(outputText) > 0:
+                if (
+                    len(outputText) > 0
+                    and hasattr(model_response.choices[0], "message")
+                    and getattr(model_response.choices[0].message, "tool_calls", None)
+                    is None
+                ):
                     model_response["choices"][0]["message"]["content"] = outputText
+                elif (
+                    hasattr(model_response.choices[0], "message")
+                    and getattr(model_response.choices[0].message, "tool_calls", None)
+                    is not None
+                ):
+                    pass
                 else:
                     raise Exception()
             except:
@@ -814,26 +973,28 @@ def completion(
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = response_metadata.get(
-            "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
-        )
-        completion_tokens = response_metadata.get(
-            "x-amzn-bedrock-output-token-count",
-            len(
-                encoding.encode(
-                    model_response["choices"][0]["message"].get("content", "")
-                )
-            ),
-        )
+        if getattr(model_response.usage, "total_tokens", None) is None:
+            prompt_tokens = response_metadata.get(
+                "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
+            )
+            completion_tokens = response_metadata.get(
+                "x-amzn-bedrock-output-token-count",
+                len(
+                    encoding.encode(
+                        model_response["choices"][0]["message"].get("content", "")
+                    )
+                ),
+            )
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            model_response.usage = usage
 
         model_response["created"] = int(time.time())
         model_response["model"] = model
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        )
-        model_response.usage = usage
+
         model_response._hidden_params["region_name"] = client.meta.region_name
         print_verbose(f"model_response._hidden_params: {model_response._hidden_params}")
         return model_response

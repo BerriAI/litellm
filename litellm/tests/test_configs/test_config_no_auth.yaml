@@ -116,3 +116,12 @@ model_list:
     description: this is a test openai model
     id: 34cb2419-7c63-44ae-a189-53f1d1ce5953
   model_name: test_openai_models
+- litellm_params:
+    model: amazon.titan-embed-text-v1
+  model_name: amazon-embeddings
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 753dca9a-898d-4ff7-9961-5acf7cdf38cf
+  model_name: test_openai_models
