@@ -5828,18 +5828,21 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
     sql_query = """
         SELECT
-        CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-        COUNT(*) AS num_requests,
-        AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
+            CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
+            COUNT(*) AS num_requests,
+            AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
         FROM
-        "LiteLLM_SpendLogs"
+            "LiteLLM_SpendLogs"
         WHERE
-        "startTime" >= NOW() - INTERVAL '24 hours'
+            "startTime" >= NOW() - INTERVAL '10000 hours'
         GROUP BY
-        CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END;
-
+            CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
+        ORDER BY
+            num_requests DESC
+        LIMIT 50;
     """
 
     db_response = await prisma_client.db.query_raw(query=sql_query)
