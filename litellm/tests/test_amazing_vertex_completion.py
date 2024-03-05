@@ -351,7 +351,7 @@ def test_gemini_pro_vision_base64():
         load_vertex_ai_credentials()
         litellm.set_verbose = True
         litellm.num_retries = 3
-        image_path = "cached_logo.jpg"
+        image_path = "../proxy/cached_logo.jpg"
         # Getting the base64 string
         base64_image = encode_image(image_path)
         resp = litellm.completion(
