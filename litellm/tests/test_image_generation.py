@@ -121,7 +121,6 @@ async def test_async_image_generation_azure():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_image_generation_bedrock():
     try:
         litellm.set_verbose = True
@@ -142,7 +141,6 @@ def test_image_generation_bedrock():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_aimage_generation_bedrock_with_optional_params():
     try:

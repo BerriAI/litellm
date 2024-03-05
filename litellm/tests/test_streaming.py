@@ -764,7 +764,6 @@ def test_completion_replicate_stream_bad_key():
 # test_completion_replicate_stream_bad_key()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_claude_stream():
     try:
         litellm.set_verbose = False
@@ -811,7 +810,6 @@ def test_completion_bedrock_claude_stream():
 # test_completion_bedrock_claude_stream()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_ai21_stream():
     try:
         litellm.set_verbose = False
