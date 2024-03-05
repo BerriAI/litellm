@@ -5812,6 +5812,58 @@ async def model_info_v2(
 
 
 @router.get(
+    "/model/metrics",
+    description="View number of requests & avg latency per model on config.yaml",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_metrics(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    global prisma_client
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    sql_query = """
+        SELECT
+            CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
+            COUNT(*) AS num_requests,
+            AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
+        FROM
+            "LiteLLM_SpendLogs"
+        WHERE
+            "startTime" >= NOW() - INTERVAL '10000 hours'
+        GROUP BY
+            CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
+        ORDER BY
+            num_requests DESC
+        LIMIT 50;
+    """
+
+    db_response = await prisma_client.db.query_raw(query=sql_query)
+    response: List[dict] = []
+    if response is not None:
+        # loop through all models
+        for model_data in db_response:
+            model = model_data.get("combined_model_api_base", "")
+            num_requests = model_data.get("num_requests", 0)
+            avg_latency_seconds = model_data.get("avg_latency_seconds", 0)
+            response.append(
+                {
+                    "model": model,
+                    "num_requests": num_requests,
+                    "avg_latency_seconds": avg_latency_seconds,
+                }
+            )
+    return response
+
+
+@router.get(
     "/model/info",
     description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
