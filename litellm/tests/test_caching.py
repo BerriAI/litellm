@@ -546,7 +546,6 @@ def test_redis_cache_acompletion_stream():
 # test_redis_cache_acompletion_stream()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_redis_cache_acompletion_stream_bedrock():
     import asyncio
 
