@@ -658,36 +658,26 @@ class Huggingface(BaseLLM):
                         message=first_chunk,
                     )
 
-                return self.async_streaming_generator(
-                    first_chunk=first_chunk,
-                    response_iterator=response_iterator,
+                # Create a new async generator that begins with the first_chunk and includes the remaining items
+                async def custom_stream_with_first_chunk():
+                    yield first_chunk  # Yield back the first chunk
+                    async for (
+                        chunk
+                    ) in response_iterator:  # Continue yielding the rest of the chunks
+                        yield chunk
+
+                # Creating a new completion stream that starts with the first chunk
+                completion_stream = custom_stream_with_first_chunk()
+
+                streamwrapper = CustomStreamWrapper(
+                    completion_stream=completion_stream,
                     model=model,
+                    custom_llm_provider="huggingface",
                     logging_obj=logging_obj,
                 )
 
-    async def async_streaming_generator(
-        self, first_chunk, response_iterator, model, logging_obj
-    ):
-        # Create a new async generator that begins with the first_chunk and includes the remaining items
-        async def custom_stream_with_first_chunk():
-            yield first_chunk  # Yield back the first chunk
-            async for (
-                chunk
-            ) in response_iterator:  # Continue yielding the rest of the chunks
-                yield chunk
-
-        # Creating a new completion stream that starts with the first chunk
-        completion_stream = custom_stream_with_first_chunk()
-
-        streamwrapper = CustomStreamWrapper(
-            completion_stream=completion_stream,
-            model=model,
-            custom_llm_provider="huggingface",
-            logging_obj=logging_obj,
-        )
-
-        async for transformed_chunk in streamwrapper:
-            yield transformed_chunk
+                async for transformed_chunk in streamwrapper:
+                    yield transformed_chunk
 
     def embedding(
         self,
