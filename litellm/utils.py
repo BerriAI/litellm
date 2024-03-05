@@ -245,14 +245,12 @@ class Message(OpenAIObject):
         self.role = role
         if function_call is not None:
             self.function_call = FunctionCall(**function_call)
-        else:
-            self.function_call = function_call
+
         if tool_calls is not None:
             self.tool_calls = []
             for tool_call in tool_calls:
                 self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
-        else:
-            self.tool_calls = tool_calls
+
         if logprobs is not None:
             self._logprobs = logprobs
 
