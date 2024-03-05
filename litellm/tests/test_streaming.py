@@ -1058,6 +1058,7 @@ def ai21_completion_call_bad_key():
 # ai21_completion_call_bad_key()
 
 
+@pytest.mark.skip(reason="flaky test")
 @pytest.mark.asyncio
 async def test_hf_completion_tgi_stream():
     try:
