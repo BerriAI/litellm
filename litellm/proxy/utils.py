@@ -766,7 +766,7 @@ class PrismaClient:
                         )
                     response = await self.db.litellm_verificationtoken.find_unique(
                         where={"token": hashed_token},
-                        include={"litellm_budget_table": True},
+                        # include={"litellm_budget_table": True},
                     )
                     if response is not None:
                         # for prisma we need to cast the expires time to str
@@ -777,7 +777,7 @@ class PrismaClient:
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_verificationtoken.find_many(
                         where={"user_id": user_id},
-                        include={"litellm_budget_table": True},
+                        # include={"litellm_budget_table": True},
                     )
                     if response is not None and len(response) > 0:
                         for r in response:
@@ -786,7 +786,7 @@ class PrismaClient:
                 elif query_type == "find_all" and team_id is not None:
                     response = await self.db.litellm_verificationtoken.find_many(
                         where={"team_id": team_id},
-                        include={"litellm_budget_table": True},
+                        # include={"litellm_budget_table": True},
                     )
                     if response is not None and len(response) > 0:
                         for r in response:
@@ -831,7 +831,7 @@ class PrismaClient:
                     response = await self.db.litellm_verificationtoken.find_many(
                         order={"spend": "desc"},
                         where=where_filter,  # type: ignore
-                        include={"litellm_budget_table": True},
+                        # include={"litellm_budget_table": True},
                     )
                 if response is not None:
                     return response
@@ -1630,7 +1630,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "completion_tokens": usage.get("completion_tokens", 0),
         "request_tags": metadata.get("tags", []),
         "end_user": kwargs.get("user", ""),
-        "api_base": litellm_params.get("api_base", ""),
+        # "api_base": litellm_params.get("api_base", ""),
     }
 
     verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
