@@ -1646,7 +1646,6 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_titan_null_response():
     try:
         response = completion(
@@ -1672,7 +1671,6 @@ def test_completion_bedrock_titan_null_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_titan():
     try:
         response = completion(
@@ -1694,7 +1692,6 @@ def test_completion_bedrock_titan():
 # test_completion_bedrock_titan()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_claude():
     print("calling claude")
     try:
@@ -1716,7 +1713,6 @@ def test_completion_bedrock_claude():
 # test_completion_bedrock_claude()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_cohere():
     print("calling bedrock cohere")
     litellm.set_verbose = True

@@ -515,7 +515,6 @@ def sagemaker_test_completion():
 #  Bedrock
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def bedrock_test_completion():
     litellm.AmazonCohereConfig(max_tokens=10)
     # litellm.set_verbose=True
