@@ -1,7 +1,7 @@
 import json, copy, types
 import os
 from enum import Enum
-import time
+import time, uuid
 from typing import Callable, Optional, Any, Union, List
 import litellm
 from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse
@@ -118,12 +118,14 @@ class AmazonAnthropicClaude3Config:
         }
 
     def get_supported_openai_params(self):
-        return ["max_tokens"]
+        return ["max_tokens", "tools", "tool_choice", "stream"]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
+            if param == "tools":
+                optional_params["tools"] = value
         return optional_params
 
 
@@ -897,7 +899,37 @@ def completion(
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
                 outputText = response_body.get("content")[0].get("text", None)
+                if "<invoke>" in outputText:  # OUTPUT PARSE FUNCTION CALL
+                    function_name = extract_between_tags("tool_name", outputText)[0]
+                    function_arguments_str = extract_between_tags("invoke", outputText)[
+                        0
+                    ].strip()
+                    function_arguments_str = (
+                        f"<invoke>{function_arguments_str}</invoke>"
+                    )
+                    function_arguments = parse_xml_params(function_arguments_str)
+                    _message = litellm.Message(
+                        tool_calls=[
+                            {
+                                "id": f"call_{uuid.uuid4()}",
+                                "type": "function",
+                                "function": {
+                                    "name": function_name,
+                                    "arguments": json.dumps(function_arguments),
+                                },
+                            }
+                        ],
+                        content=None,
+                    )
+                    model_response.choices[0].message = _message  # type: ignore
                 model_response["finish_reason"] = response_body["stop_reason"]
+                _usage = litellm.Usage(
+                    prompt_tokens=response_body["usage"]["input_tokens"],
+                    completion_tokens=response_body["usage"]["output_tokens"],
+                    total_tokens=response_body["usage"]["input_tokens"]
+                    + response_body["usage"]["output_tokens"],
+                )
+                model_response.usage = _usage
             else:
                 outputText = response_body["completion"]
                 model_response["finish_reason"] = response_body["stop_reason"]
@@ -919,8 +951,17 @@ def completion(
             )
         else:
             try:
-                if len(outputText) > 0:
+                if (
+                    len(outputText) > 0
+                    and hasattr(model_response.choices[0], "message")
+                    and model_response.choices[0].message.tool_calls is None
+                ):
                     model_response["choices"][0]["message"]["content"] = outputText
+                elif (
+                    hasattr(model_response.choices[0], "message")
+                    and model_response.choices[0].message.tool_calls is not None
+                ):
+                    pass
                 else:
                     raise Exception()
             except:
@@ -930,26 +971,28 @@ def completion(
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = response_metadata.get(
-            "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
-        )
-        completion_tokens = response_metadata.get(
-            "x-amzn-bedrock-output-token-count",
-            len(
-                encoding.encode(
-                    model_response["choices"][0]["message"].get("content", "")
-                )
-            ),
-        )
+        if getattr(model_response.usage, "total_tokens", None) is None:
+            prompt_tokens = response_metadata.get(
+                "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
+            )
+            completion_tokens = response_metadata.get(
+                "x-amzn-bedrock-output-token-count",
+                len(
+                    encoding.encode(
+                        model_response["choices"][0]["message"].get("content", "")
+                    )
+                ),
+            )
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            model_response.usage = usage
 
         model_response["created"] = int(time.time())
         model_response["model"] = model
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        )
-        model_response.usage = usage
+
         model_response._hidden_params["region_name"] = client.meta.region_name
         print_verbose(f"model_response._hidden_params: {model_response._hidden_params}")
         return model_response

@@ -271,6 +271,50 @@ def test_bedrock_claude_3_tool_calling():
         pytest.fail(f"Error occurred: {e}")
 
 
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+@pytest.mark.skip(
+    reason="we already test claude-3, this is just another way to pass images"
+)
+def test_completion_claude_3_base64():
+    try:
+        litellm.set_verbose = True
+        litellm.num_retries = 3
+        image_path = "../proxy/cached_logo.jpg"
+        # Getting the base64 string
+        base64_image = encode_image(image_path)
+        resp = litellm.completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + base64_image
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        prompt_tokens = resp.usage.prompt_tokens
+        raise Exception("it worked!")
+    except Exception as e:
+        if "500 Internal error encountered.'" in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
+
+
 def test_provisioned_throughput():
     try:
         litellm.set_verbose = True
