@@ -634,8 +634,43 @@ class Huggingface(BaseLLM):
                         status_code=r.status_code,
                         message=str(text),
                     )
+                """
+                Check first chunk for error message. 
+                If error message, raise error. 
+                If not - add back to stream
+                """
+                # Async iterator over the lines in the response body
+                response_iterator = r.aiter_lines()
+
+                # Attempt to get the first line/chunk from the response
+                try:
+                    first_chunk = await response_iterator.__anext__()
+                except StopAsyncIteration:
+                    # Handle the case where there are no lines to read (empty response)
+                    first_chunk = ""
+
+                # Check the first chunk for an error message
+                if (
+                    "error" in first_chunk.lower()
+                ):  # Adjust this condition based on how error messages are structured
+                    raise HuggingfaceError(
+                        status_code=400,
+                        message=first_chunk,
+                    )
+
+                # Create a new async generator that begins with the first_chunk and includes the remaining items
+                async def custom_stream_with_first_chunk():
+                    yield first_chunk  # Yield back the first chunk
+                    async for (
+                        chunk
+                    ) in response_iterator:  # Continue yielding the rest of the chunks
+                        yield chunk
+
+                # Creating a new completion stream that starts with the first chunk
+                completion_stream = custom_stream_with_first_chunk()
+
                 streamwrapper = CustomStreamWrapper(
-                    completion_stream=r.aiter_lines(),
+                    completion_stream=completion_stream,
                     model=model,
                     custom_llm_provider="huggingface",
                     logging_obj=logging_obj,

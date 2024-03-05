@@ -570,9 +570,11 @@ from .utils import (
     _calculate_retry_after,
     _should_retry,
     get_secret,
+    get_mapped_model_params,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
@@ -591,9 +593,11 @@ from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
+    AmazonAnthropicClaude3Config,
     AmazonCohereConfig,
     AmazonLlamaConfig,
     AmazonStabilityConfig,
+    AmazonMistralConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError

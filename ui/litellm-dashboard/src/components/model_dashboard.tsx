@@ -11,7 +11,8 @@ import {
   Metric,
   Grid,
 } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall } from "./networking";
+import { BarChart } from "@tremor/react";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
@@ -30,6 +31,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   userID,
 }) => {
   const [modelData, setModelData] = useState<any>({ data: [] });
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
 
   useEffect(() => {
@@ -46,6 +48,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         );
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
+
+        const modelMetricsResponse = await modelMetricsCall(
+          accessToken,
+          userID,
+          userRole
+        );
+
+        console.log("Model metrics response:", modelMetricsResponse);
+        setModelMetrics(modelMetricsResponse);
 
         // if userRole is Admin, show the pending requests
         if (userRole === "Admin" && accessToken) {
@@ -75,8 +86,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   // loop through model data and edit each row
   for (let i = 0; i < modelData.data.length; i++) {
     let curr_model = modelData.data[i];
-    let litellm_model_name = curr_model?.litellm_params?.model;
-
+    let litellm_model_name = curr_model?.litellm_params?.mode
     let model_info = curr_model?.model_info;
 
     let defaultProvider = "openai";
@@ -109,6 +119,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
     modelData.data[i].max_tokens = max_tokens;
+    modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
 
     all_models_on_proxy.push(curr_model.model_name);
 
@@ -141,6 +152,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <TableCell>
                   <Title>Provider</Title>
                 </TableCell>
+                {
+                  userRole === "Admin" && (
+                    <TableCell>
+                      <Title>API Base</Title>
+                    </TableCell>
+                  )
+                }
+                
                 <TableCell>
                   <Title>Access</Title>
                 </TableCell>
@@ -162,6 +181,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     <Title>{model.model_name}</Title>
                   </TableCell>
                   <TableCell>{model.provider}</TableCell>
+                  {
+                    userRole === "Admin" && (
+                      <TableCell>{model.api_base}</TableCell>
+                    )
+                  }
 
                   <TableCell>
                     {model.user_access ? (
@@ -183,7 +207,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </TableBody>
           </Table>
         </Card>
-        {userRole === "Admin" &&
+        <Card>
+          <Title>Model Statistics (Number Requests, Latency)</Title>
+              <BarChart
+                data={modelMetrics}
+                index="model"
+                categories={["num_requests", "avg_latency_seconds"]}
+                colors={["blue", "red"]}
+                yAxisWidth={100}
+                tickGap={5}
+              />
+        </Card>
+        {/* {userRole === "Admin" &&
         pendingRequests &&
         pendingRequests.length > 0 ? (
           <Card>
@@ -229,7 +264,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </TableBody>
             </Table>
           </Card>
-        ) : null}
+        ) : null} */}
       </Grid>
     </div>
   );
