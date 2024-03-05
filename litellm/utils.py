@@ -772,10 +772,10 @@ class ImageResponse(OpenAIObject):
 
 
 ############################################################
-def print_verbose(print_statement):
+def print_verbose(print_statement, logger_only: bool = False):
     try:
         verbose_logger.debug(print_statement)
-        if litellm.set_verbose:
+        if litellm.set_verbose == True and logger_only == False:
             print(print_statement)  # noqa
     except:
         pass
@@ -1739,7 +1739,8 @@ class Logging:
                         )
                 if callable(callback):  # custom logger functions
                     print_verbose(
-                        f"Making async function logging call for {callback}, result={result} - {self.model_call_details}"
+                        f"Making async function logging call for {callback}, result={result} - {self.model_call_details}",
+                        logger_only=True,
                     )
                     if self.stream:
                         if (
