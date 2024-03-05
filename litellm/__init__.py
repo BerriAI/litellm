@@ -591,10 +591,11 @@ from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
+    AmazonAnthropicClaude3Config,
     AmazonCohereConfig,
     AmazonLlamaConfig,
     AmazonStabilityConfig,
-    AmazonMistralConfig
+    AmazonMistralConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
