@@ -202,7 +202,7 @@ print(response)
 </Tabs>
 
 
-## Save Model-specific params (API Base, API Keys, Temperature, Max Tokens, Seed, Organization, Headers etc.)
+## Save Model-specific params (API Base, Keys, Temperature, Max Tokens, Organization, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 [**All input params**](https://docs.litellm.ai/docs/completion/input#input-params-1)
@@ -241,6 +241,45 @@ model_list:
 
 ```shell
 $ litellm --config /path/to/config.yaml
+```
+
+
+## Load Balancing 
+
+Use this to call multiple instances of the same model and configure things like [routing strategy](../routing.md#advanced). 
+
+```yaml
+router_settings:
+  routing_strategy: "latency-based-routing" # routes to the fastest deployment in the group
+
+model_list:
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: gpt-3.5-turbo
+        api_key: <my-openai-key>
+  - model_name: gpt-3.5-turbo-16k
+    litellm_params:
+        model: gpt-3.5-turbo-16k
+        api_key: <my-openai-key>
+
+litellm_settings:
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
+  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
+  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
 
 
@@ -509,30 +548,6 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
       }
   ]
 }'
-```
-
-
-## Router Settings 
-
-Use this to configure things like routing strategy. 
-
-```yaml
-router_settings:
-  routing_strategy: "least-busy"
-
-model_list: # will route requests to the least busy ollama model
-  - model_name: ollama-models
-    litellm_params: 
-      model: "ollama/mistral"
-      api_base: "http://127.0.0.1:8001"
-  - model_name: ollama-models
-    litellm_params: 
-      model: "ollama/codellama"
-      api_base: "http://127.0.0.1:8002"
-  - model_name: ollama-models
-    litellm_params: 
-      model: "ollama/llama2"
-      api_base: "http://127.0.0.1:8003"
 ```
 
 
