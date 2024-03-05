@@ -478,7 +478,6 @@ async def test_async_chat_azure_stream():
 
 
 ## Test Bedrock + sync
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_chat_bedrock_stream():
     try:
         customHandler = CompletionCustomHandler()
@@ -519,7 +518,6 @@ def test_chat_bedrock_stream():
 
 
 ## Test Bedrock + Async
-@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_async_chat_bedrock_stream():
     try:
@@ -796,7 +794,6 @@ async def test_async_embedding_azure():
 
 
 ## Test Bedrock + Async
-@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_async_embedding_bedrock():
     try:

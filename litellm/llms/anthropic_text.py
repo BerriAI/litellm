@@ -2,17 +2,11 @@ import os, types
 import json
 from enum import Enum
 import requests
-import time, uuid
+import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage, map_finish_reason
+from litellm.utils import ModelResponse, Usage
 import litellm
-from .prompt_templates.factory import (
-    prompt_factory,
-    custom_prompt,
-    construct_tool_use_system_prompt,
-    extract_between_tags,
-    parse_xml_params,
-)
+from .prompt_templates.factory import prompt_factory, custom_prompt
 import httpx
 
 
@@ -26,7 +20,7 @@ class AnthropicError(Exception):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(
-            method="POST", url="https://api.anthropic.com/v1/messages"
+            method="POST", url="https://api.anthropic.com/v1/complete"
         )
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
@@ -34,30 +28,30 @@ class AnthropicError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class AnthropicConfig:
+class AnthropicTextConfig:
     """
     Reference: https://docs.anthropic.com/claude/reference/complete_post
 
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens: Optional[int] = litellm.max_tokens  # anthropic requires a default
+    max_tokens_to_sample: Optional[int] = (
+        litellm.max_tokens
+    )  # anthropic requires a default
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
     top_k: Optional[int] = None
     metadata: Optional[dict] = None
-    system: Optional[str] = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = 256,  # anthropic requires a default
+        max_tokens_to_sample: Optional[int] = 256,  # anthropic requires a default
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
         top_k: Optional[int] = None,
         metadata: Optional[dict] = None,
-        system: Optional[str] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -116,7 +110,6 @@ def completion(
     headers={},
 ):
     headers = validate_environment(api_key, headers)
-    _is_function_call = False
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
@@ -127,48 +120,27 @@ def completion(
             messages=messages,
         )
     else:
-        # Separate system prompt from rest of message
-        system_prompt_idx: Optional[int] = None
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                optional_params["system"] = message["content"]
-                system_prompt_idx = idx
-                break
-        if system_prompt_idx is not None:
-            messages.pop(system_prompt_idx)
-        # Format rest of message according to anthropic guidelines
-        messages = prompt_factory(
+        prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="anthropic"
         )
 
     ## Load Config
-    config = litellm.AnthropicConfig.get_config()
+    config = litellm.AnthropicTextConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
         ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    ## Handle Tool Calling
-    if "tools" in optional_params:
-        _is_function_call = True
-        tool_calling_system_prompt = construct_tool_use_system_prompt(
-            tools=optional_params["tools"]
-        )
-        optional_params["system"] = (
-            optional_params.get("system", "\n") + tool_calling_system_prompt
-        )  # add the anthropic tool calling prompt to the system prompt
-        optional_params.pop("tools")
-
     data = {
         "model": model,
-        "messages": messages,
+        "prompt": prompt,
         **optional_params,
     }
 
     ## LOGGING
     logging_obj.pre_call(
-        input=messages,
+        input=prompt,
         api_key=api_key,
         additional_args={
             "complete_input_dict": data,
@@ -201,7 +173,7 @@ def completion(
 
         ## LOGGING
         logging_obj.post_call(
-            input=messages,
+            input=prompt,
             api_key=api_key,
             original_response=response.text,
             additional_args={"complete_input_dict": data},
@@ -219,45 +191,20 @@ def completion(
                 message=str(completion_response["error"]),
                 status_code=response.status_code,
             )
-        elif len(completion_response["content"]) == 0:
-            raise AnthropicError(
-                message="No content in response",
-                status_code=response.status_code,
-            )
         else:
-            text_content = completion_response["content"][0].get("text", None)
-            ## TOOL CALLING - OUTPUT PARSE
-            if text_content is not None and "invoke" in text_content:
-                function_name = extract_between_tags("tool_name", text_content)[0]
-                function_arguments_str = extract_between_tags("invoke", text_content)[
-                    0
-                ].strip()
-                function_arguments_str = f"<invoke>{function_arguments_str}</invoke>"
-                function_arguments = parse_xml_params(function_arguments_str)
-                _message = litellm.Message(
-                    tool_calls=[
-                        {
-                            "id": f"call_{uuid.uuid4()}",
-                            "type": "function",
-                            "function": {
-                                "name": function_name,
-                                "arguments": json.dumps(function_arguments),
-                            },
-                        }
-                    ],
-                    content=None,
+            if len(completion_response["completion"]) > 0:
+                model_response["choices"][0]["message"]["content"] = (
+                    completion_response["completion"]
                 )
-                model_response.choices[0].message = _message  # type: ignore
-            else:
-                model_response.choices[0].message.content = text_content  # type: ignore
-            model_response.choices[0].finish_reason = map_finish_reason(
-                completion_response["stop_reason"]
-            )
+            model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE
-        prompt_tokens = completion_response["usage"]["input_tokens"]
-        completion_tokens = completion_response["usage"]["output_tokens"]
-        total_tokens = prompt_tokens + completion_tokens
+        prompt_tokens = len(
+            encoding.encode(prompt)
+        )  ##[TODO] use the anthropic tokenizer here
+        completion_tokens = len(
+            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+        )  ##[TODO] use the anthropic tokenizer here
 
         model_response["created"] = int(time.time())
         model_response["model"] = model
