@@ -4213,6 +4213,11 @@ def get_optional_params(
         if top_p is not None:
             optional_params["top_p"] = top_p
         if max_tokens is not None:
+            if (model == "claude-2") or (model == "claude-instant-1"):
+                # these models use antropic_text.py which only accepts max_tokens_to_sample
+                optional_params["max_tokens_to_sample"] = max_tokens
+            else:
+                optional_params["max_tokens"] = max_tokens
             optional_params["max_tokens"] = max_tokens
         if tools is not None:
             optional_params["tools"] = tools
