@@ -1738,10 +1738,10 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    print_verbose(
-                        f"Making async function logging call for {callback}, result={result} - {self.model_call_details}",
-                        logger_only=True,
-                    )
+                    # print_verbose(
+                    #     f"Making async function logging call for {callback}, result={result} - {self.model_call_details}",
+                    #     logger_only=True,
+                    # )
                     if self.stream:
                         if (
                             "async_complete_streaming_response"
