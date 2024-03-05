@@ -227,7 +227,7 @@ def completion(
         else:
             text_content = completion_response["content"][0].get("text", None)
             ## TOOL CALLING - OUTPUT PARSE
-            if _is_function_call == True:
+            if text_content is not None and "invoke" in text_content:
                 function_name = extract_between_tags("tool_name", text_content)[0]
                 function_arguments_str = extract_between_tags("invoke", text_content)[
                     0
