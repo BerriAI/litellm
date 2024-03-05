@@ -11,7 +11,8 @@ import {
   Metric,
   Grid,
 } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall } from "./networking";
+import { BarChart } from "@tremor/react";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
@@ -30,6 +31,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   userID,
 }) => {
   const [modelData, setModelData] = useState<any>({ data: [] });
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
 
   useEffect(() => {
@@ -46,6 +48,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         );
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
+
+        const modelMetricsResponse = await modelMetricsCall(
+          accessToken,
+          userID,
+          userRole
+        );
+
+        console.log("Model metrics response:", modelMetricsResponse);
+        setModelMetrics(modelMetricsResponse);
 
         // if userRole is Admin, show the pending requests
         if (userRole === "Admin" && accessToken) {
@@ -197,9 +208,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </Table>
         </Card>
         <Card>
-          <Title>Model Statistics</Title>
-
-          
+          <Title>Model Statistics (Number Requests, Latency)</Title>
+              <BarChart
+                data={modelMetrics}
+                index="model"
+                categories={["num_requests", "avg_latency_seconds"]}
+                colors={["blue", "red"]}
+                yAxisWidth={100}
+                tickGap={5}
+              />
         </Card>
         {/* {userRole === "Admin" &&
         pendingRequests &&
