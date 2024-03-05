@@ -959,6 +959,7 @@ def completion(
                     model_response["choices"][0]["message"]["content"] = outputText
                 elif (
                     hasattr(model_response.choices[0], "message")
+                    and hasattr(model_response.choices[0].message, "tool_calls")
                     and model_response.choices[0].message.tool_calls is not None
                 ):
                     pass
