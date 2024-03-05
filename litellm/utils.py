@@ -4513,20 +4513,24 @@ def get_optional_params(
             if stream:
                 optional_params["stream"] = stream
         elif "anthropic" in model:
-            supported_params = ["max_tokens", "temperature", "stop", "top_p", "stream"]
+            supported_params = get_mapped_model_params(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
             _check_valid_arg(supported_params=supported_params)
             # anthropic params on bedrock
             # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
-            if max_tokens is not None:
-                optional_params["max_tokens_to_sample"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["top_p"] = top_p
-            if stop is not None:
-                optional_params["stop_sequences"] = stop
-            if stream:
-                optional_params["stream"] = stream
+            if model.startswith("anthropic.claude-3"):
+                optional_params = (
+                    litellm.AmazonAnthropicClaude3Config.map_openai_params(
+                        non_default_params=non_default_params,
+                        optional_params=optional_params,
+                    )
+                )
+            else:
+                optional_params = litellm.AmazonAnthropicConfig.map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                )
         elif "amazon" in model:  # amazon titan llms
             supported_params = ["max_tokens", "temperature", "stop", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
@@ -4989,6 +4993,17 @@ def get_optional_params(
                 optional_params[k] = passed_params[k]
     print_verbose(f"Final returned optional params: {optional_params}")
     return optional_params
+
+
+def get_mapped_model_params(model: str, custom_llm_provider: str):
+    """
+    Returns the supported openai params for a given model + provider
+    """
+    if custom_llm_provider == "bedrock":
+        if model.startswith("anthropic.claude-3"):
+            return litellm.AmazonAnthropicClaude3Config().get_supported_openai_params()
+        else:
+            return litellm.AmazonAnthropicConfig().get_supported_openai_params()
 
 
 def get_llm_provider(

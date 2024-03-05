@@ -575,7 +575,6 @@ def test_azure_embedding_on_router():
 # test_azure_embedding_on_router()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_bedrock_on_router():
     litellm.set_verbose = True
     print("\n Testing bedrock on router\n")
