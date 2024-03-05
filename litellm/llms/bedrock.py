@@ -599,6 +599,9 @@ def completion(
 
         # aws_arn_arguments
         if aws_arn_arguments is not None:
+            import boto3
+
+            boto3.set_stream_logger(name="botocore")
             _set_env_vars_based_on_arn(aws_arn_arguments=aws_arn_arguments)
             verbose_logger.debug("Bedrock: Done setting env vars based on arn")
 
@@ -644,7 +647,7 @@ def completion(
                 f"Bedrock: Initializing client, region_name={region_name}, endpoint_url={endpoint_url}"
             )
             verbose_logger.debug(
-                f"Bedrock: using env vars, AWS_ACCESS_KEY_ID{os.environ.get('AWS_ACCESS_KEY_ID')}, AWS_SECRET_ACCESS_KEY{os.environ.get('AWS_SECRET_ACCESS_KEY')}, AWS_SESSION_TOKEN{os.environ.get('AWS_SESSION_TOKEN')}"
+                f"Bedrock: Initializing bedrock client for ARN, using env vars, AWS_ACCESS_KEY_ID{os.environ.get('AWS_ACCESS_KEY_ID')}, AWS_SECRET_ACCESS_KEY{os.environ.get('AWS_SECRET_ACCESS_KEY')}, AWS_SESSION_TOKEN{os.environ.get('AWS_SESSION_TOKEN')}"
             )
 
             client = boto3.client(
