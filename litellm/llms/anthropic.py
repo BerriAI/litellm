@@ -2,11 +2,17 @@ import os, types
 import json
 from enum import Enum
 import requests
-import time
+import time, uuid
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage
+from litellm.utils import ModelResponse, Usage, map_finish_reason
 import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from .prompt_templates.factory import (
+    prompt_factory,
+    custom_prompt,
+    construct_tool_use_system_prompt,
+    extract_between_tags,
+    parse_xml_params,
+)
 import httpx
 
 
@@ -41,6 +47,7 @@ class AnthropicConfig:
     top_p: Optional[int] = None
     top_k: Optional[int] = None
     metadata: Optional[dict] = None
+    system: Optional[str] = None
 
     def __init__(
         self,
@@ -50,6 +57,7 @@ class AnthropicConfig:
         top_p: Optional[int] = None,
         top_k: Optional[int] = None,
         metadata: Optional[dict] = None,
+        system: Optional[str] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -108,6 +116,7 @@ def completion(
     headers={},
 ):
     headers = validate_environment(api_key, headers)
+    _is_function_call = False
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
@@ -118,38 +127,19 @@ def completion(
             messages=messages,
         )
     else:
-        prompt = prompt_factory(
+        # Separate system prompt from rest of message
+        system_prompt_idx: Optional[int] = None
+        for idx, message in enumerate(messages):
+            if message["role"] == "system":
+                optional_params["system"] = message["content"]
+                system_prompt_idx = idx
+                break
+        if system_prompt_idx is not None:
+            messages.pop(system_prompt_idx)
+        # Format rest of message according to anthropic guidelines
+        messages = prompt_factory(
             model=model, messages=messages, custom_llm_provider="anthropic"
         )
-    """
-    format messages for anthropic
-    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
-    2. The first message always needs to be of role "user"
-    3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
-    4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
-    """
-    # 1. Anthropic only supports roles like "user" and "assistant"
-    for idx, message in enumerate(messages):
-        if message["role"] == "system":
-            message["role"] = "assistant"
-
-        # if this is the final assistant message, remove trailing whitespace
-        # TODO: only do this if it's the final assistant message
-        if message["role"] == "assistant":
-            message["content"] = message["content"].strip()
-
-    # 2. The first message always needs to be of role "user"
-    if len(messages) > 0:
-        if messages[0]["role"] != "user":
-            # find the index of the first user message
-            for i, message in enumerate(messages):
-                if message["role"] == "user":
-                    break
-
-            # remove the user message at existing position and add it to the front
-            messages.pop(i)
-            # move the first user message to the front
-            messages = [message] + messages
 
     ## Load Config
     config = litellm.AnthropicConfig.get_config()
@@ -159,6 +149,17 @@ def completion(
         ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
+    ## Handle Tool Calling
+    if "tools" in optional_params:
+        _is_function_call = True
+        tool_calling_system_prompt = construct_tool_use_system_prompt(
+            tools=optional_params["tools"]
+        )
+        optional_params["system"] = (
+            optional_params.get("system", "\n") + tool_calling_system_prompt
+        )  # add the anthropic tool calling prompt to the system prompt
+        optional_params.pop("tools")
+
     data = {
         "model": model,
         "messages": messages,
@@ -167,7 +168,7 @@ def completion(
 
     ## LOGGING
     logging_obj.pre_call(
-        input=prompt,
+        input=messages,
         api_key=api_key,
         additional_args={
             "complete_input_dict": data,
@@ -225,8 +226,33 @@ def completion(
             )
         else:
             text_content = completion_response["content"][0].get("text", None)
-            model_response.choices[0].message.content = text_content  # type: ignore
-            model_response.choices[0].finish_reason = completion_response["stop_reason"]
+            ## TOOL CALLING - OUTPUT PARSE
+            if _is_function_call == True:
+                function_name = extract_between_tags("tool_name", text_content)[0]
+                function_arguments_str = extract_between_tags("invoke", text_content)[
+                    0
+                ].strip()
+                function_arguments_str = f"<invoke>{function_arguments_str}</invoke>"
+                function_arguments = parse_xml_params(function_arguments_str)
+                _message = litellm.Message(
+                    tool_calls=[
+                        {
+                            "id": f"call_{uuid.uuid4()}",
+                            "type": "function",
+                            "function": {
+                                "name": function_name,
+                                "arguments": json.dumps(function_arguments),
+                            },
+                        }
+                    ],
+                    content=None,
+                )
+                model_response.choices[0].message = _message  # type: ignore
+            else:
+                model_response.choices[0].message.content = text_content  # type: ignore
+            model_response.choices[0].finish_reason = map_finish_reason(
+                completion_response["stop_reason"]
+            )
 
         ## CALCULATING USAGE
         prompt_tokens = completion_response["usage"]["input_tokens"]
