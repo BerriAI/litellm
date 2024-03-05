@@ -56,7 +56,7 @@ def test_completion_custom_provider_model_name():
 def test_completion_claude():
     litellm.set_verbose = True
     litellm.cache = None
-    litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
+    litellm.AnthropicTextConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
     messages = [
         {
             "role": "system",
@@ -67,9 +67,7 @@ def test_completion_claude():
     try:
         # test without max tokens
         response = completion(
-            model="claude-instant-1",
-            messages=messages,
-            request_timeout=10,
+            model="claude-instant-1", messages=messages, request_timeout=10
         )
         # Add any assertions, here to check response args
         print(response)
@@ -82,6 +80,126 @@ def test_completion_claude():
 
 
 # test_completion_claude()
+
+
+def test_completion_claude_3():
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "Hello, world"}]
+    try:
+        # test without max tokens
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+        )
+        # Add any assertions, here to check response args
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_claude_3_function_call():
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    try:
+        # test without max tokens
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        # Add any assertions, here to check response args
+        print(response)
+        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_claude_3_stream():
+    litellm.set_verbose = False
+    messages = [{"role": "user", "content": "Hello, world"}]
+    try:
+        # test without max tokens
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        # Add any assertions, here to check response args
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+@pytest.mark.skip(
+    reason="we already test claude-3, this is just another way to pass images"
+)
+def test_completion_claude_3_base64():
+    try:
+        litellm.set_verbose = True
+        litellm.num_retries = 3
+        image_path = "../proxy/cached_logo.jpg"
+        # Getting the base64 string
+        base64_image = encode_image(image_path)
+        resp = litellm.completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + base64_image
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+        print(f"\nResponse: {resp}")
+
+        prompt_tokens = resp.usage.prompt_tokens
+        raise Exception("it worked!")
+    except Exception as e:
+        if "500 Internal error encountered.'" in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 def test_completion_mistral_api():
@@ -163,19 +281,17 @@ def test_completion_mistral_api_modified_input():
 
 def test_completion_claude2_1():
     try:
+        litellm.set_verbose = True
         print("claude2.1 test request")
         messages = [
             {
                 "role": "system",
-                "content": "Your goal is generate a joke on the topic user gives",
+                "content": "Your goal is generate a joke on the topic user gives.",
             },
-            {"role": "assistant", "content": "Hi, how can i assist you today?"},
             {"role": "user", "content": "Generate a 3 liner joke for me"},
         ]
         # test without max tokens
-        response = completion(
-            model="claude-2.1", messages=messages, request_timeout=10, max_tokens=10
-        )
+        response = completion(model="claude-2.1", messages=messages)
         # Add any assertions here to check the response
         print(response)
         print(response.usage)
@@ -1530,7 +1646,6 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_titan_null_response():
     try:
         response = completion(
@@ -1556,7 +1671,6 @@ def test_completion_bedrock_titan_null_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_titan():
     try:
         response = completion(
@@ -1578,7 +1692,6 @@ def test_completion_bedrock_titan():
 # test_completion_bedrock_titan()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_claude():
     print("calling claude")
     try:
@@ -1600,7 +1713,6 @@ def test_completion_bedrock_claude():
 # test_completion_bedrock_claude()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_cohere():
     print("calling bedrock cohere")
     litellm.set_verbose = True
