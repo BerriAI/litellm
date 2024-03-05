@@ -64,7 +64,7 @@ class ProxyLogging:
         litellm.callbacks.append(self.max_parallel_request_limiter)
         litellm.callbacks.append(self.max_budget_limiter)
         litellm.callbacks.append(self.cache_control_check)
-        litellm.callbacks.append(self.response_taking_too_long_callback)
+        # litellm.callbacks.append(self.response_taking_too_long_callback)
         for callback in litellm.callbacks:
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)
@@ -362,7 +362,7 @@ class ProxyLogging:
                 else:
                     raise Exception("Missing SENTRY_DSN from environment")
 
-    async def failure_handler(self, original_exception):
+    async def failure_handler(self, original_exception, traceback_str=""):
         """
         Log failed db read/writes
 
@@ -373,6 +373,7 @@ class ProxyLogging:
             error_message = original_exception.detail
         else:
             error_message = str(original_exception)
+        error_message += traceback_str
         asyncio.create_task(
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
@@ -706,8 +707,13 @@ class PrismaClient:
                 )
             return response
         except Exception as e:
+            import traceback
+
+            tracback_str = traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=tracback_str
+                )
             )
             raise e
 
@@ -912,9 +918,10 @@ class PrismaClient:
                     return response
             elif table_name == "team":
                 if query_type == "find_unique":
-                    response = await self.db.litellm_teamtable.find_unique(
-                        where={"team_id": team_id}  # type: ignore
-                    )
+                    response = None
+                    # response = await self.db.litellm_teamtable.find_unique(
+                    #     where={"team_id": team_id}  # type: ignore
+                    # )
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_teamtable.find_many(
                         where={
@@ -971,8 +978,12 @@ class PrismaClient:
             import traceback
 
             traceback.print_exc()
+            # get tracback
+            traceback_string = traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=traceback_string
+                )
             )
             raise e
 
@@ -1093,8 +1104,12 @@ class PrismaClient:
 
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
+            import traceback
+
+            traceback_str = traceback.format_exc()
+            print_verbose(f"Traceback: {traceback_str}")
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(original_exception=e, traceback_str=traceback_str)  # type: ignore # noqa=traceback_str)
             )
             raise e
 
@@ -1277,8 +1292,12 @@ class PrismaClient:
                     "\033[91m" + f"DB User Table Batch update succeeded" + "\033[0m"
                 )
         except Exception as e:
+            import traceback
+
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=traceback.format_exc()
+                )
             )
             print_verbose("\033[91m" + f"DB write failed: {e}" + "\033[0m")
             raise e
@@ -1331,8 +1350,12 @@ class PrismaClient:
                     where={"team_id": {"in": team_id_list}}
                 )
         except Exception as e:
+            import traceback
+
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=traceback.format_exc()
+                )
             )
             raise e
 
