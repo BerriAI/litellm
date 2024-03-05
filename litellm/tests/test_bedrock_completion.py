@@ -224,6 +224,53 @@ def test_bedrock_claude_3():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_bedrock_claude_3_tool_calling():
+    try:
+        litellm.set_verbose = True
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        messages = [
+            {"role": "user", "content": "What's the weather like in Boston today?"}
+        ]
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(f"response: {response}")
+        # Add any assertions here to check the response
+        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_provisioned_throughput():
     try:
         litellm.set_verbose = True
