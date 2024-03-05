@@ -9,6 +9,10 @@ import warnings
 import importlib
 import warnings
 
+import logging
+
+logging.getLogger("prisma").setLevel(logging.DEBUG)
+
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
     traceback_info = f"{filename}:{lineno}: {category.__name__}: {message}\n"
@@ -1138,6 +1142,7 @@ async def update_database(
                         )
                         # set cooldown on alert
                         soft_budget_cooldown = True
+
                     # track cost per model, for the given key
                     spend_per_model = existing_spend_obj.model_spend or {}
                     current_model = kwargs.get("model")
@@ -1153,11 +1158,7 @@ async def update_database(
                     # Update the cost column for the given token
                     await prisma_client.update_data(
                         token=token,
-                        data={
-                            "spend": new_spend,
-                            "model_spend": spend_per_model,
-                            "soft_budget_cooldown": soft_budget_cooldown,
-                        },
+                        data={"spend": new_spend, "model_spend": spend_per_model},
                     )
 
                     valid_token = user_api_key_cache.get_cache(key=token)
@@ -1211,9 +1212,9 @@ async def update_database(
                 payload["spend"] = response_cost
                 if prisma_client is not None:
                     await prisma_client.insert_data(data=payload, table_name="spend")
+
                 elif custom_db_client is not None:
                     await custom_db_client.insert_data(payload, table_name="spend")
-
             except Exception as e:
                 verbose_proxy_logger.info(f"Update Spend Logs DB failed to execute")
 
