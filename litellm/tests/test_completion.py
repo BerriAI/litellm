@@ -56,7 +56,7 @@ def test_completion_custom_provider_model_name():
 def test_completion_claude():
     litellm.set_verbose = True
     litellm.cache = None
-    litellm.AnthropicTextConfig(max_tokens=200, metadata={"user_id": "1224"})
+    litellm.AnthropicConfig(max_tokens=200, metadata={"user_id": "1224"})
     messages = [
         {
             "role": "system",
