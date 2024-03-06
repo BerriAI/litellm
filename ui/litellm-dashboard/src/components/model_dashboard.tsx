@@ -208,13 +208,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </Table>
         </Card>
         <Card>
-          <Title>Model Statistics (Number Requests, Latency)</Title>
+          <Title>Model Statistics (Number Requests)</Title>
               <BarChart
                 data={modelMetrics}
                 index="model"
-                categories={["num_requests", "avg_latency_seconds"]}
-                colors={["blue", "red"]}
-                yAxisWidth={100}
+                categories={["num_requests"]}
+                colors={["blue"]}
+                yAxisWidth={400}
+                layout="vertical"
+                tickGap={5}
+              />
+        </Card>
+        <Card>
+          <Title>Model Statistics (Latency)</Title>
+              <BarChart
+                data={modelMetrics}
+                index="model"
+                categories={["avg_latency_seconds"]}
+                colors={["red"]}
+                yAxisWidth={400}
+                layout="vertical"
                 tickGap={5}
               />
         </Card>
