@@ -507,24 +507,16 @@ class PrismaClient:
 
         return hashed_token
 
-    def handle_circular_references(obj: Any):
-        try:
-            # Try to serialize the object using default serialization
-            return json.dumps(obj)
-        except Exception as e:
-            # If a TypeError is raised, return an error message JSON
-            error_message: dict = {
-                "error": "Error converting to JSON",
-                "error_message": str(e),
-            }
-            return json.dumps(error_message)
-
     def jsonify_object(self, data: dict) -> dict:
         db_data = copy.deepcopy(data)
 
         for k, v in db_data.items():
             if isinstance(v, dict):
-                db_data[k] = json.dumps(v)
+                try:
+                    db_data[k] = json.dumps(v)
+                except:
+                    # This avoids Prisma retrying this 5 times, and making 5 clients
+                    db_data[k] = "failed-to-serialize-json"
         return db_data
 
     @backoff.on_exception(
