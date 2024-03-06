@@ -227,13 +227,16 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
 class ChatCompletionMessageToolCall(OpenAIObject):
     def __init__(
         self,
-        function: Function,
+        function: Union[Dict, Function],
         id: Optional[str] = None,
         type: Optional[str] = None,
         **params,
     ):
         super(ChatCompletionMessageToolCall, self).__init__(**params)
-        self.function = function
+        if isinstance(function, Dict):
+            self.function = Function(**function)
+        else:
+            self.function = function
 
         if id is not None:
             self.id = id
