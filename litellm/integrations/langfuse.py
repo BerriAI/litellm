@@ -285,9 +285,6 @@ class LangFuseLogger:
                     if key in [
                         "headers",
                         "endpoint",
-                        "model_group",
-                        "deployment",
-                        "model_info",
                         "caching_groups",
                         "previous_models",
                     ]:
