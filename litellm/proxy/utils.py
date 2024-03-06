@@ -921,10 +921,9 @@ class PrismaClient:
                     return response
             elif table_name == "team":
                 if query_type == "find_unique":
-                    response = None
-                    # response = await self.db.litellm_teamtable.find_unique(
-                    #     where={"team_id": team_id}  # type: ignore
-                    # )
+                    response = await self.db.litellm_teamtable.find_unique(
+                        where={"team_id": team_id}  # type: ignore
+                    )
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_teamtable.find_many(
                         where={
