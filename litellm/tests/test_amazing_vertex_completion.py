@@ -451,6 +451,34 @@ async def test_gemini_pro_async_function_calling():
 
 # asyncio.run(gemini_pro_async_function_calling())
 
+
+def test_vertexai_embedding():
+    try:
+        load_vertex_ai_credentials()
+        # litellm.set_verbose=True
+        response = embedding(
+            model="textembedding-gecko@001",
+            input=["good morning from litellm", "this is another item"],
+        )
+        print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_vertexai_aembedding():
+    try:
+        load_vertex_ai_credentials()
+        # litellm.set_verbose=True
+        response = await litellm.aembedding(
+            model="textembedding-gecko@001",
+            input=["good morning from litellm", "this is another item"],
+        )
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # Extra gemini Vision tests for completion + stream, async, async + stream
 # if we run into issues with gemini, we will also add these to our ci/cd pipeline
 # def test_gemini_pro_vision_stream():

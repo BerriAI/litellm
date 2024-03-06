@@ -2617,6 +2617,7 @@ def embedding(
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
                 aembedding=aembedding,
+                print_verbose=print_verbose,
             )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(
