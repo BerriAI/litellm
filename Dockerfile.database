@@ -60,9 +60,9 @@ RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 RUN prisma generate
 RUN chmod +x entrypoint.sh
 
-EXPOSE 4000/tcp
+EXPOSE 8000/tcp
 
 # # Set your entrypoint and command
 
 ENTRYPOINT ["litellm"]
-CMD ["--port", "4000", "--run_gunicorn"]
+CMD ["--run_gunicorn"]

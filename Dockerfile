@@ -58,7 +58,7 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 
 RUN chmod +x entrypoint.sh
 
-EXPOSE 4000/tcp
+EXPOSE 8000/tcp
 
 ENTRYPOINT ["litellm"]
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--detailed_debug", "--run_gunicorn"]
+CMD ["--config", "./proxy_server_config.yaml", "--detailed_debug", "--run_gunicorn"]
