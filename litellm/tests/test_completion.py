@@ -82,6 +82,23 @@ def test_completion_claude():
 # test_completion_claude()
 
 
+def test_completion_claude_3_empty_response():
+    messages = [
+        {
+            "role": "system",
+            "content": "You are 2twNLGfqk4GMOn3ffp4p.",
+        },
+        {"role": "user", "content": "Hi gm!"},
+        {"role": "assistant", "content": "Good morning! How are you doing today?"},
+        {
+            "role": "user",
+            "content": "I was hoping we could chat a bit",
+        },
+    ]
+    response = litellm.completion(model="claude-3-opus-20240229", messages=messages)
+    print(response)
+
+
 def test_completion_claude_3():
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "Hello, world"}]

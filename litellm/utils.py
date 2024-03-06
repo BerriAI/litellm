@@ -225,9 +225,28 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
-    id: str
-    function: Function
-    type: str
+    def __init__(
+        self,
+        function: Union[Dict, Function],
+        id: Optional[str] = None,
+        type: Optional[str] = None,
+        **params,
+    ):
+        super(ChatCompletionMessageToolCall, self).__init__(**params)
+        if isinstance(function, Dict):
+            self.function = Function(**function)
+        else:
+            self.function = function
+
+        if id is not None:
+            self.id = id
+        else:
+            self.id = f"{uuid.uuid4()}"
+
+        if type is not None:
+            self.type = type
+        else:
+            self.type = "function"
 
 
 class Message(OpenAIObject):
@@ -772,10 +791,10 @@ class ImageResponse(OpenAIObject):
 
 
 ############################################################
-def print_verbose(print_statement):
+def print_verbose(print_statement, logger_only: bool = False):
     try:
         verbose_logger.debug(print_statement)
-        if litellm.set_verbose:
+        if litellm.set_verbose == True and logger_only == False:
             print(print_statement)  # noqa
     except:
         pass
@@ -1738,9 +1757,10 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    print_verbose(
-                        f"Making async function logging call for {callback}, result={result} - {self.model_call_details}"
-                    )
+                    # print_verbose(
+                    #     f"Making async function logging call for {callback}, result={result} - {self.model_call_details}",
+                    #     logger_only=True,
+                    # )
                     if self.stream:
                         if (
                             "async_complete_streaming_response"
@@ -6231,7 +6251,7 @@ def convert_to_model_response_object(
 
             return model_response_object
     except Exception as e:
-        raise Exception(f"Invalid response object {e}")
+        raise Exception(f"Invalid response object {traceback.format_exc()}")
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
