@@ -6658,7 +6658,7 @@ def exception_type(
                         message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
-                        response=httpx.Response(status_code=500, request=_request),
+                        request=_request,
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
