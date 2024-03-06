@@ -1669,6 +1669,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
                 "deployment",
                 "model_info",
                 "caching_groups",
+                "previous_models",
             ]:
                 continue
             else:
