@@ -1067,20 +1067,22 @@ async def update_database(
                     )
                     data_list.append(existing_spend_obj)
 
-                    # Update the cost column for the given user id
-                    if prisma_client is not None:
-                        await prisma_client.update_data(
-                            data_list=data_list,
-                            query_type="update_many",
-                            table_name="user",
-                        )
-                    elif custom_db_client is not None and user_id is not None:
+                    if custom_db_client is not None and user_id is not None:
                         new_spend = data_list[0].spend
                         await custom_db_client.update_data(
                             key=user_id, value={"spend": new_spend}, table_name="user"
                         )
+                # Update the cost column for the given user id
+                if prisma_client is not None:
+                    await prisma_client.update_data(
+                        data_list=data_list,
+                        query_type="update_many",
+                        table_name="user",
+                    )
             except Exception as e:
-                verbose_proxy_logger.info(f"Update User DB call failed to execute")
+                verbose_proxy_logger.info(
+                    f"Update User DB call failed to execute {str(e)}"
+                )
 
         ### UPDATE KEY SPEND ###
         async def _update_key_db():
@@ -1215,7 +1217,9 @@ async def update_database(
                     await custom_db_client.insert_data(payload, table_name="spend")
 
             except Exception as e:
-                verbose_proxy_logger.info(f"Update Spend Logs DB failed to execute")
+                verbose_proxy_logger.info(
+                    f"Update Spend Logs DB failed to execute - {str(e)}"
+                )
 
         ### UPDATE KEY SPEND ###
         async def _update_team_db():
@@ -1286,7 +1290,9 @@ async def update_database(
                         valid_token.spend = new_spend
                         user_api_key_cache.set_cache(key=token, value=valid_token)
             except Exception as e:
-                verbose_proxy_logger.info(f"Update Team DB failed to execute")
+                verbose_proxy_logger.info(
+                    f"Update Team DB failed to execute - {str(e)}"
+                )
 
         asyncio.create_task(_update_user_db())
         asyncio.create_task(_update_key_db())
