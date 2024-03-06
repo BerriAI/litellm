@@ -477,55 +477,62 @@ def init_bedrock_client(
     return client
 
 
-def _set_env_vars_based_on_arn(aws_arn_arguments):
-    import boto3, os, litellm
+def assume_role_with_web_identity(
+    landing_role_arn, landing_role_session_name, web_identity_token
+):
+    import boto3
+    import os
+    import json
+    from botocore.exceptions import ClientError
 
-    verbose_logger.debug(f"Bedrock: setting aws_arn_arguments {aws_arn_arguments}")
-    for k, v in aws_arn_arguments.items():
-        if isinstance(v, str) and v.startswith("os.environ/"):
-            aws_arn_arguments[k] = litellm.get_secret(v)
-        if isinstance(k, str) and k == "aws_web_identity_token":
-            value = aws_arn_arguments[k]
-            verbose_logger.debug(f"Loading AWS Web Identity Token from file: {value}")
-            if os.path.exists(value):
-                with open(value, "r") as file:
-                    token_content = file.read()
-                    aws_arn_arguments[k] = token_content
-            else:
-                verbose_logger.debug(
-                    f"DynamoDB Loading - {value} is not a valid file path"
-                )
+    verbose_logger.debug(f"in assume_role_with_web_identity")
+    client = boto3.client("sts")
+    response = client.assume_role_with_web_identity(
+        RoleArn=landing_role_arn,
+        RoleSessionName=landing_role_session_name,
+        WebIdentityToken=web_identity_token,
+    )
+    verbose_logger.debug(f"done with assume_role_with_web_identity")
+    return response["Credentials"]
 
-    if aws_arn_arguments["aws_role_name"] is None:
-        return
-    verbose_logger.debug(f"Bedrock: setting env vars based on arn={aws_arn_arguments}")
+
+def assume_role_to_connect_bedrock(
+    role_arn, role_session_name, region_name="us-east-1"
+):
+    import boto3
+    import os
+    import json
+    from botocore.exceptions import ClientError
+
+    verbose_logger.debug(f"in assume_role_to_connect_bedrock")
+    # Step 1: Assume Role
+
+    verbose_logger.debug(f"RoleArn: {role_arn}")
+    verbose_logger.debug(f"RoleSessionName: {role_session_name}")
 
     sts_client = boto3.client("sts")
-
-    # call 1
-    non_used_assumed_role = sts_client.assume_role_with_web_identity(
-        RoleArn=aws_arn_arguments["aws_role_name"],
-        RoleSessionName=aws_arn_arguments["aws_session_name"],
-        WebIdentityToken=aws_arn_arguments["aws_web_identity_token"],
+    assume_role_response = sts_client.assume_role(
+        RoleArn=role_arn, RoleSessionName=role_session_name
     )
 
-    # call 2
-    assumed_role = sts_client.assume_role(
-        RoleArn=aws_arn_arguments["assume_role_aws_role_name"],
-        RoleSessionName=aws_arn_arguments["assume_role_aws_session_name"],
+    verbose_logger.debug(f"done with making sts client")
+    verbose_logger.debug(f"creating boto3 client")
+
+    # Extract temporary credentials
+    credentials = assume_role_response["Credentials"]
+
+    endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+
+    bedrock_assumed_client = boto3.client(
+        service_name="bedrock-runtime",
+        region_name=region_name,
+        endpoint_url=endpoint_url,
+        aws_access_key_id=credentials["AccessKeyId"],
+        aws_secret_access_key=credentials["SecretAccessKey"],
+        aws_session_token=credentials["SessionToken"],
     )
 
-    aws_access_key_id = assumed_role["Credentials"]["AccessKeyId"]
-    aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
-    aws_session_token = assumed_role["Credentials"]["SessionToken"]
-
-    verbose_logger.debug(
-        f"Got STS assumed Role, AWS_ACCESS_KEY_ID={aws_access_key_id}, AWS_SECRET_ACCESS_KEY={aws_secret_access_key}, AWS_SESSION_TOKEN={aws_session_token}"
-    )
-    # set these in the env so aiodynamo can use them
-    os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-    os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-    os.environ["AWS_SESSION_TOKEN"] = aws_session_token
+    return bedrock_assumed_client
 
 
 def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
@@ -601,13 +608,6 @@ def completion(
         if aws_arn_arguments is not None:
             import boto3
 
-            boto3.set_stream_logger(name="botocore")
-            _set_env_vars_based_on_arn(aws_arn_arguments=aws_arn_arguments)
-            verbose_logger.debug("Bedrock: Done setting env vars based on arn")
-
-            # init boto3 client based on arn
-            import boto3
-
             ### SET REGION NAME
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
             standard_aws_region_name = get_secret("AWS_REGION", None)
@@ -625,36 +625,32 @@ def completion(
                     status_code=401,
                 )
 
-            ### SET ENDPOINT URL
-            env_aws_bedrock_runtime_endpoint = get_secret(
-                "AWS_BEDROCK_RUNTIME_ENDPOINT"
-            )
-            if aws_bedrock_runtime_endpoint:
-                endpoint_url = aws_bedrock_runtime_endpoint
-            elif env_aws_bedrock_runtime_endpoint:
-                endpoint_url = env_aws_bedrock_runtime_endpoint
-            else:
-                endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+            boto3.set_stream_logger(name="botocore")
+            # Example usage
+            landing_role_arn = aws_arn_arguments["landing_role_arn"]
+            landing_role_session_name = aws_arn_arguments["landing_role_session_name"]
+            aws_web_identity_token_file = aws_arn_arguments[
+                "aws_web_identity_token_file"
+            ]
 
-            # Init boto3 client
-            import boto3
-
-            boto3_config = boto3.session.Config(
-                connect_timeout=timeout, read_timeout=timeout
-            )
+            web_identity_token = open(
+                aws_web_identity_token_file, "r", encoding="utf-8"
+            ).read()
+            bedrock_role_arn = aws_arn_arguments["bedrock_role_arn"]
+            bedrock_role_session_name = aws_arn_arguments["bedrock_role_session_name"]
 
             verbose_logger.debug(
-                f"Bedrock: Initializing client, region_name={region_name}, endpoint_url={endpoint_url}"
+                f"Bedrock: aws_arn_arguments args passed\n landing_role_arn={landing_role_arn}\n landing_role_session_name={landing_role_session_name}\n bedrock_role_arn={bedrock_role_arn}\n bedrock_role_session_name={bedrock_role_session_name}"
             )
             verbose_logger.debug(
-                f"Bedrock: Initializing bedrock client for ARN, using env vars, AWS_ACCESS_KEY_ID{os.environ.get('AWS_ACCESS_KEY_ID')}, AWS_SECRET_ACCESS_KEY{os.environ.get('AWS_SECRET_ACCESS_KEY')}, AWS_SESSION_TOKEN{os.environ.get('AWS_SESSION_TOKEN')}"
+                f"Bedrock: aws_arn_arguments - web_identity_token_file={aws_web_identity_token_file}"
             )
 
-            client = boto3.client(
-                service_name="bedrock-runtime",
-                region_name=region_name,
-                endpoint_url=endpoint_url,
-                config=boto3_config,
+            web_identity_credentials = assume_role_with_web_identity(
+                landing_role_arn, landing_role_session_name, web_identity_token
+            )
+            client = assume_role_to_connect_bedrock(
+                bedrock_role_arn, bedrock_role_session_name, region_name
             )
 
         # only init client, if user did not pass one
