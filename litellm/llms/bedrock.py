@@ -376,7 +376,7 @@ class AmazonMistralConfig:
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     top_k: Optional[float] = None
-    stop: Optional[list[str]] = None
+    stop: Optional[List[str]] = None
 
     def __init__(
         self,
@@ -384,7 +384,7 @@ class AmazonMistralConfig:
         temperature: Optional[float] = None,
         top_p: Optional[int] = None,
         top_k: Optional[float] = None,
-        stop: Optional[list[str]] = None,
+        stop: Optional[List[str]] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
