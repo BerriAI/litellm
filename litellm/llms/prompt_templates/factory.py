@@ -2,7 +2,7 @@ from enum import Enum
 import requests, traceback
 import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, Environment, meta
-from typing import Optional, Any, List
+from typing import Optional, Any
 import imghdr, base64
 
 
@@ -481,6 +481,34 @@ def construct_tool_use_system_prompt(
     return tool_use_system_prompt
 
 
+def convert_url_to_base64(url):
+    import requests
+    import base64
+
+    response = requests.get(url)
+    if response.status_code == 200:
+        image_bytes = response.content
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+        img_type = url.split(".")[-1].lower()
+        if img_type == "jpg" or img_type == "jpeg":
+            img_type = "image/jpeg"
+        elif img_type == "png":
+            img_type = "image/png"
+        elif img_type == "gif":
+            img_type = "image/gif"
+        elif img_type == "webp":
+            img_type = "image/webp"
+        else:
+            raise Exception(
+                f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
+            )
+
+        return f"data:{img_type};base64,{base64_image}"
+    else:
+        raise Exception(f"Error: Unable to fetch image from URL. url={url}")
+
+
 def convert_to_anthropic_image_obj(openai_image_url: str):
     """
     Input:
@@ -493,17 +521,24 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
       "data": {base64_image},
     }
     """
-    # Extract the base64 image data
-    base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
+    try:
+        if openai_image_url.startswith("http"):
+            openai_image_url = convert_url_to_base64(url=openai_image_url)
+        # Extract the base64 image data
+        base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
 
-    # Infer image format from the URL
-    image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
+        # Infer image format from the URL
+        image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
 
-    return {
-        "type": "base64",
-        "media_type": f"image/{image_format}",
-        "data": base64_data,
-    }
+        return {
+            "type": "base64",
+            "media_type": f"image/{image_format}",
+            "data": base64_data,
+        }
+    except Exception as e:
+        raise Exception(
+            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] """
+        )
 
 
 def anthropic_messages_pt(messages: list):
@@ -586,7 +621,7 @@ def anthropic_messages_pt(messages: list):
     return new_messages
 
 
-def extract_between_tags(tag: str, string: str, strip: bool = False) -> List[str]:
+def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
     ext_list = re.findall(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
     if strip:
         ext_list = [e.strip() for e in ext_list]
