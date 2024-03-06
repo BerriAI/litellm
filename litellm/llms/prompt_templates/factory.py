@@ -47,7 +47,7 @@ def llama_2_chat_pt(messages):
             },
         },
         messages=messages,
-        bos_token="<s>",
+        #bos_token="<s>",
         eos_token="</s>",
     )
     return prompt
