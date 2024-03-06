@@ -362,7 +362,7 @@ class ProxyLogging:
                 else:
                     raise Exception("Missing SENTRY_DSN from environment")
 
-    async def failure_handler(self, original_exception):
+    async def failure_handler(self, original_exception, traceback_str=""):
         """
         Log failed db read/writes
 
@@ -373,6 +373,8 @@ class ProxyLogging:
             error_message = original_exception.detail
         else:
             error_message = str(original_exception)
+        if isinstance(traceback_str, str):
+            error_message += traceback_str[:1000]
         asyncio.create_task(
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
@@ -706,8 +708,15 @@ class PrismaClient:
                 )
             return response
         except Exception as e:
+            import traceback
+
+            error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {str(e)}"
+            print_verbose(error_msg)
+            error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=error_traceback
+                )
             )
             raise e
 
@@ -967,12 +976,15 @@ class PrismaClient:
                             response.expires = response.expires.isoformat()
                     return response
         except Exception as e:
-            print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             import traceback
 
-            traceback.print_exc()
+            error_msg = f"LiteLLM Prisma Client Exception get_data: {str(e)}"
+            print_verbose(error_msg)
+            error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=error_traceback
+                )
             )
             raise e
 
@@ -1092,9 +1104,15 @@ class PrismaClient:
                 return new_user_notification_row
 
         except Exception as e:
-            print_verbose(f"LiteLLM Prisma Client Exception: {e}")
+            import traceback
+
+            error_msg = f"LiteLLM Prisma Client Exception in insert_data: {str(e)}"
+            print_verbose(error_msg)
+            error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=error_traceback
+                )
             )
             raise e
 
@@ -1277,10 +1295,16 @@ class PrismaClient:
                     "\033[91m" + f"DB User Table Batch update succeeded" + "\033[0m"
                 )
         except Exception as e:
+            import traceback
+
+            error_msg = f"LiteLLM Prisma Client Exception - update_data: {str(e)}"
+            print_verbose(error_msg)
+            error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=error_traceback
+                )
             )
-            print_verbose("\033[91m" + f"DB write failed: {e}" + "\033[0m")
             raise e
 
     # Define a retrying strategy with exponential backoff
@@ -1331,8 +1355,15 @@ class PrismaClient:
                     where={"team_id": {"in": team_id_list}}
                 )
         except Exception as e:
+            import traceback
+
+            error_msg = f"LiteLLM Prisma Client Exception - delete_data: {str(e)}"
+            print_verbose(error_msg)
+            error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=error_traceback
+                )
             )
             raise e
 
@@ -1355,8 +1386,15 @@ class PrismaClient:
                 )
                 await self.db.connect()
         except Exception as e:
+            import traceback
+
+            error_msg = f"LiteLLM Prisma Client Exception connect(): {str(e)}"
+            print_verbose(error_msg)
+            error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=error_traceback
+                )
             )
             raise e
 
@@ -1372,8 +1410,15 @@ class PrismaClient:
         try:
             await self.db.disconnect()
         except Exception as e:
+            import traceback
+
+            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {str(e)}"
+            print_verbose(error_msg)
+            error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(original_exception=e)
+                self.proxy_logging_obj.failure_handler(
+                    original_exception=e, traceback_str=error_traceback
+                )
             )
             raise e
 
