@@ -225,9 +225,25 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
-    id: str
-    function: Function
-    type: str
+    def __init__(
+        self,
+        function: Function,
+        id: Optional[str] = None,
+        type: Optional[str] = None,
+        **params,
+    ):
+        super(ChatCompletionMessageToolCall, self).__init__(**params)
+        self.function = function
+
+        if id is not None:
+            self.id = id
+        else:
+            self.id = f"{uuid.uuid4()}"
+
+        if type is not None:
+            self.type = type
+        else:
+            self.type = "function"
 
 
 class Message(OpenAIObject):
@@ -6232,7 +6248,7 @@ def convert_to_model_response_object(
 
             return model_response_object
     except Exception as e:
-        raise Exception(f"Invalid response object {e}")
+        raise Exception(f"Invalid response object {traceback.format_exc()}")
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
