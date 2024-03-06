@@ -626,7 +626,21 @@ def completion(
                 )
 
             boto3.set_stream_logger(name="botocore")
-            # Example usage
+
+            # Now using AWS ARN ARGUMENTS
+            verbose_logger.debug(
+                f"Bedrock: aws_arn_arguments - aws_arn_arguments={aws_arn_arguments}"
+            )
+
+            # checking if any aws_arn_arguments start with os.environ/
+            for k, v in aws_arn_arguments.items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    aws_arn_arguments[k] = litellm.get_secret(v)
+
+            verbose_logger.debug(
+                f"Bedrock: aws_arn_arguments after reading 'os.environ/' prefix - aws_arn_arguments={aws_arn_arguments}"
+            )
+
             landing_role_arn = aws_arn_arguments["landing_role_arn"]
             landing_role_session_name = aws_arn_arguments["landing_role_session_name"]
             aws_web_identity_token_file = aws_arn_arguments[
@@ -655,6 +669,7 @@ def completion(
 
         # only init client, if user did not pass one
         if client is None:
+            verbose_logger.debug("Bedrock: Client is None, initializing new client")
             client = init_bedrock_client(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
