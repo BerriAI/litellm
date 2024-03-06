@@ -5,9 +5,10 @@ plugins: timeout-2.2.0, asyncio-0.23.2, anyio-3.7.1, xdist-3.3.1
 asyncio: mode=Mode.STRICT
 collected 1 item
 
-test_custom_callback_input.py .                                          [100%]
+test_completion.py .                                                     [100%]
 
 =============================== warnings summary ===============================
+../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:271
 ../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:271
 ../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:271
 ../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:271
@@ -19,50 +20,44 @@ test_custom_callback_input.py .                                          [100%]
   /opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:271: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
 
-../proxy/_types.py:99
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:99: PydanticDeprecatedSince20: `pydantic.config.Extra` is deprecated, use literal values instead (e.g. `extra='allow'`). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:102
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:102: PydanticDeprecatedSince20: `pydantic.config.Extra` is deprecated, use literal values instead (e.g. `extra='allow'`). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     extra = Extra.allow  # Allow extra fields
 
-../proxy/_types.py:102
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:102: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:105
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:105: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:131
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:131: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:134
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:134: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:177
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:177: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:180
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:180: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:232
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:232: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:235
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:235: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:244
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:244: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:247
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:247: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:279
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:279: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:282
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:282: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:305
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:305: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:308
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:308: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_fields.py:149
-  /opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_fields.py:149: UserWarning: Field "model_max_budget" has conflict with protected namespace "model_".
-  
-  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
-    warnings.warn(
-
-../proxy/_types.py:553
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:553: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:557
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:557: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:574
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:574: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+../proxy/_types.py:578
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:578: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
     @root_validator(pre=True)
 
 ../utils.py:36
@@ -115,4 +110,4 @@ test_custom_callback_input.py .                                          [100%]
     import imghdr, base64
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================= 1 passed, 43 warnings in 13.05s ========================
+======================== 1 passed, 43 warnings in 4.47s ========================
