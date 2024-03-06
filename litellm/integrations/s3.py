@@ -104,6 +104,23 @@ class S3Logger:
             usage = response_obj["usage"]
             id = response_obj.get("id", str(uuid.uuid4()))
 
+            # Clean Metadata before logging - never log raw metadata
+            # the raw metadata can contain circular references which leads to infinite recursion
+            # we clean out all extra litellm metadata params before logging
+            clean_metadata = {}
+            if isinstance(metadata, dict):
+                for key, value in metadata.items():
+                    # clean litellm metadata before logging
+                    if key in [
+                        "headers",
+                        "endpoint",
+                        "caching_groups",
+                        "previous_models",
+                    ]:
+                        continue
+                    else:
+                        clean_metadata[key] = value
+
             # Build the initial payload
             payload = {
                 "id": id,
@@ -117,7 +134,7 @@ class S3Logger:
                 "messages": messages,
                 "response": response_obj,
                 "usage": usage,
-                "metadata": metadata,
+                "metadata": clean_metadata,
             }
 
             # Ensure everything in the payload is converted to str

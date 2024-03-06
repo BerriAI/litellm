@@ -512,7 +512,11 @@ class PrismaClient:
 
         for k, v in db_data.items():
             if isinstance(v, dict):
-                db_data[k] = json.dumps(v)
+                try:
+                    db_data[k] = json.dumps(v)
+                except:
+                    # This avoids Prisma retrying this 5 times, and making 5 clients
+                    db_data[k] = "failed-to-serialize-json"
         return db_data
 
     @backoff.on_exception(
@@ -1641,10 +1645,28 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
         api_key = hash_token(api_key)
-    if "headers" in metadata and "authorization" in metadata["headers"]:
-        metadata["headers"].pop(
-            "authorization"
-        )  # do not store the original `sk-..` api key in the db
+
+    # clean up litellm metadata
+    if isinstance(metadata, dict):
+        clean_metadata = {}
+        verbose_proxy_logger.debug(
+            f"getting payload for SpendLogs, available keys in metadata: "
+            + str(list(metadata.keys()))
+        )
+        for key in metadata:
+            if key in [
+                "headers",
+                "endpoint",
+                "model_group",
+                "deployment",
+                "model_info",
+                "caching_groups",
+                "previous_models",
+            ]:
+                continue
+            else:
+                clean_metadata[key] = metadata[key]
+
     if litellm.cache is not None:
         cache_key = litellm.cache.get_cache_key(**kwargs)
     else:
@@ -1668,7 +1690,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "team_id": kwargs.get("litellm_params", {})
         .get("metadata", {})
         .get("user_api_key_team_id", ""),
-        "metadata": metadata,
+        "metadata": clean_metadata,
         "cache_key": cache_key,
         "spend": kwargs.get("response_cost", 0),
         "total_tokens": usage.get("total_tokens", 0),
