@@ -64,7 +64,7 @@ class ProxyLogging:
         litellm.callbacks.append(self.max_parallel_request_limiter)
         litellm.callbacks.append(self.max_budget_limiter)
         litellm.callbacks.append(self.cache_control_check)
-        # litellm.callbacks.append(self.response_taking_too_long_callback)
+        litellm.success_callback.append(self.response_taking_too_long_callback)
         for callback in litellm.callbacks:
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)

@@ -575,6 +575,7 @@ def anthropic_messages_pt(messages: list):
         if messages[i]["role"] == "assistant":
             last_assistant_message_idx = i
 
+    new_messages.append(messages[-1])
     if last_assistant_message_idx is not None:
         new_messages[last_assistant_message_idx]["content"] = new_messages[
             last_assistant_message_idx
