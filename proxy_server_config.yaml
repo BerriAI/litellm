@@ -38,6 +38,8 @@ litellm_settings:
   drop_params: True
   max_budget: 100 
   budget_duration: 30d
+  num_retries: 5
+  request_timeout: 600
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
   proxy_budget_rescheduler_min_time: 10
