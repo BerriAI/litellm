@@ -153,6 +153,90 @@ print(response)
 
 ## Advanced
 
+## Usage - Function Calling 
+
+```python
+from litellm import completion
+
+# set env
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+
+```
+
+
+## Usage - Vision 
+
+```python
+from litellm import completion
+
+# set env
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+image_path = "../proxy/cached_logo.jpg"
+# Getting the base64 string
+base64_image = encode_image(image_path)
+resp = litellm.completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Whats in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/jpeg;base64," + base64_image
+                    },
+                },
+            ],
+        }
+    ],
+)
+print(f"\nResponse: {resp}")
+```
+
 ### Usage - "Assistant Pre-fill"
 
 You can "put words in Claude's mouth" by including an `assistant` role message as the last item in the `messages` array.
