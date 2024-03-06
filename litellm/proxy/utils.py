@@ -710,7 +710,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {e}"
+            error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
@@ -978,7 +978,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception get_data: {e}"
+            error_msg = f"LiteLLM Prisma Client Exception get_data: {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
@@ -1106,7 +1106,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception in insert_data: {e}"
+            error_msg = f"LiteLLM Prisma Client Exception in insert_data: {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
@@ -1297,7 +1297,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception - update_data: {e}"
+            error_msg = f"LiteLLM Prisma Client Exception - update_data: {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
@@ -1357,7 +1357,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception - delete_data: {e}"
+            error_msg = f"LiteLLM Prisma Client Exception - delete_data: {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
@@ -1388,7 +1388,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception connect(): {e}"
+            error_msg = f"LiteLLM Prisma Client Exception connect(): {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
@@ -1412,7 +1412,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e}"
+            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             asyncio.create_task(
