@@ -33,6 +33,9 @@ class LiteLLMBase(BaseModel):
             # if using pydantic v1
             return self.__fields_set__
 
+    class Config:
+        protected_namespaces = ()
+
 
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(LiteLLMBase):
@@ -328,6 +331,7 @@ class TeamRequest(LiteLLMBase):
 
 class LiteLLM_BudgetTable(LiteLLMBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record"""
+
     soft_budget: Optional[float] = None
     max_budget: Optional[float] = None
     max_parallel_requests: Optional[int] = None
@@ -367,7 +371,7 @@ class OrganizationRequest(LiteLLMBase):
 class BudgetRequest(LiteLLMBase):
     budgets: List[str]
 
-      
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
