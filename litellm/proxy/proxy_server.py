@@ -3918,59 +3918,6 @@ async def view_spend_logs(
 -H "Authorization: Bearer sk-1234"
     ```
     """
-    if os.getenv("CLICKHOUSE_HOST") is not None:
-        # gettting spend logs from clickhouse
-        from litellm.proxy.enterprise.utils import view_spend_logs_from_clickhouse
-
-        daily_metrics = await view_daily_metrics(
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-        # get the top api keys across all daily_metrics
-        top_api_keys = {}  # type: ignore
-
-        # make this compatible with the admin UI
-        for response in daily_metrics.get("daily_spend", {}):
-            response["startTime"] = response["day"]
-            response["spend"] = response["daily_spend"]
-            response["models"] = response["spend_per_model"]
-            response["users"] = {"ishaan": 0.0}
-            spend_per_api_key = response["spend_per_api_key"]
-
-            # insert spend_per_api_key key, values in response
-            for key, value in spend_per_api_key.items():
-                response[key] = value
-                top_api_keys[key] = top_api_keys.get(key, 0.0) + value
-
-            del response["day"]
-            del response["daily_spend"]
-            del response["spend_per_model"]
-            del response["spend_per_api_key"]
-
-        # get top 5 api keys
-        top_api_keys = sorted(top_api_keys.items(), key=lambda x: x[1], reverse=True)  # type: ignore
-        top_api_keys = top_api_keys[:5]  # type: ignore
-        top_api_keys = dict(top_api_keys)  # type: ignore
-        """
-        set it like this 
-        {
-            "key" : key,
-            "spend:" : spend
-        }
-        """
-        # we need this to show on the Admin UI
-        response_keys = []
-        for key in top_api_keys.items():
-            response_keys.append(
-                {
-                    "key": key[0],
-                    "spend": key[1],
-                }
-            )
-        daily_metrics["top_api_keys"] = response_keys
-
-        return daily_metrics
     global prisma_client
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
@@ -4287,65 +4234,6 @@ async def global_predict_spend_logs(request: Request):
     data = await request.json()
     data = data.get("data")
     return _forecast_daily_cost(data)
-
-
-@router.get(
-    "/daily_metrics",
-    summary="Get daily spend metrics",
-    tags=["budget & spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def view_daily_metrics(
-    start_date: Optional[str] = fastapi.Query(
-        default=None,
-        description="Time from which to start viewing key spend",
-    ),
-    end_date: Optional[str] = fastapi.Query(
-        default=None,
-        description="Time till which to view key spend",
-    ),
-):
-    """
-    [BETA] This is a beta endpoint. It might change without notice.
-
-    Please give feedback - https://github.com/BerriAI/litellm/issues
-    """
-    try:
-        if os.getenv("CLICKHOUSE_HOST") is not None:
-            # gettting spend logs from clickhouse
-            from litellm.integrations import clickhouse
-
-            return clickhouse.build_daily_metrics()
-
-            # create a response object
-            """
-            {
-                "date": "2022-01-01",
-                "spend": 0.0,
-                "users": {},
-                "models": {},
-            }
-            """
-        else:
-            raise Exception(
-                "Clickhouse: Clickhouse host not set. Required for viewing /daily/metrics"
-            )
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"/spend/logs Error({str(e)})"),
-                type="internal_error",
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="/spend/logs Error" + str(e),
-            type="internal_error",
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
 
 
 #### USER MANAGEMENT ####
