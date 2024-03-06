@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # AWS Bedrock
 Anthropic, Amazon Titan, A121 LLMs are Supported on Bedrock
 
@@ -29,9 +32,191 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-  model="bedrock/anthropic.claude-instant-v1",
+  model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
+```
+
+## OpenAI Proxy Usage 
+
+Here's how to call Anthropic with the LiteLLM Proxy Server
+
+### 1. Save key in your environment
+
+```bash
+export AWS_ACCESS_KEY_ID=""
+export AWS_SECRET_ACCESS_KEY=""
+export AWS_REGION_NAME=""
+```
+
+### 2. Start the proxy 
+
+```bash
+$ litellm --model anthropic.claude-3-sonnet-20240229-v1:0
+
+# Server running on http://0.0.0.0:8000
+```
+
+### 3. Test it
+
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+## Usage - Function Calling 
+
+```python
+from litellm import completion
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+```
+
+
+## Usage - Vision 
+
+```python
+from litellm import completion
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+image_path = "../proxy/cached_logo.jpg"
+# Getting the base64 string
+base64_image = encode_image(image_path)
+resp = litellm.completion(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Whats in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/jpeg;base64," + base64_image
+                    },
+                },
+            ],
+        }
+    ],
+)
+print(f"\nResponse: {resp}")
 ```
 
 ## Usage - "Assistant Pre-fill"
@@ -288,6 +473,7 @@ Here's an example of using a bedrock model with LiteLLM
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
+| Anthropic Claude-V3      | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V2.1      | `completion(model='bedrock/anthropic.claude-v2:1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V2        | `completion(model='bedrock/anthropic.claude-v2', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-Instant V1 | `completion(model='bedrock/anthropic.claude-instant-v1', messages=messages)` | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
