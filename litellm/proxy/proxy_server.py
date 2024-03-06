@@ -1247,6 +1247,11 @@ async def update_database(
                     # Calculate the new cost by adding the existing cost and response_cost
                     new_spend = existing_spend + response_cost
 
+                    if existing_spend_obj is None:
+                        spend_per_model = {}
+                    else:
+                        spend_per_model = existing_spend_obj.model_spend or {}
+
                     # track cost per model, for the given team
                     spend_per_model = existing_spend_obj.model_spend or {}
                     current_model = kwargs.get("model")
