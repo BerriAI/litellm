@@ -6,6 +6,7 @@ import asyncio, time
 import aiohttp
 from openai import AsyncOpenAI
 import sys, os
+from typing import Optional
 
 sys.path.insert(
     0, os.path.abspath("../")
@@ -19,6 +20,7 @@ async def generate_key(
     budget=None,
     budget_duration=None,
     models=["azure-models", "gpt-4", "dall-e-3"],
+    max_parallel_requests: Optional[int] = None,
 ):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -28,6 +30,7 @@ async def generate_key(
         "duration": None,
         "max_budget": budget,
         "budget_duration": budget_duration,
+        "max_parallel_requests": max_parallel_requests,
     }
 
     print(f"data: {data}")
@@ -524,3 +527,29 @@ async def test_key_info_spend_values_sagemaker():
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
         assert rounded_key_info_spend > 0
         # assert rounded_response_cost == rounded_key_info_spend
+
+
+@pytest.mark.asyncio
+async def test_key_rate_limit():
+    """
+    Tests backoff/retry logic on parallel request error.
+    - Create key with max parallel requests 0
+    - run 2 requests -> both fail
+    - Create key with max parallel request 1
+    - run 2 requests
+    - both should succeed
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0, max_parallel_requests=0)
+        new_key = key_gen["key"]
+        try:
+            await chat_completion(session=session, key=new_key)
+            pytest.fail(f"Expected this call to fail")
+        except Exception as e:
+            pass
+        key_gen = await generate_key(session=session, i=0, max_parallel_requests=1)
+        new_key = key_gen["key"]
+        try:
+            await chat_completion(session=session, key=new_key)
+        except Exception as e:
+            pytest.fail(f"Expected this call to work - {str(e)}")
