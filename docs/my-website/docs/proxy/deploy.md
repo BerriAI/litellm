@@ -134,8 +134,8 @@ spec:
     app: litellm
   ports:
     - protocol: TCP
-      port: 4000
-      targetPort: 4000
+      port: 8000
+      targetPort: 8000
   type: NodePort
 ```
 
@@ -146,10 +146,10 @@ kubectl apply -f /path/to/service.yaml
 ### Step 3. Start server
 
 ```
-kubectl port-forward service/litellm-service 4000:4000
+kubectl port-forward service/litellm-service 8000:8000
 ```
 
-Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
+Your OpenAI proxy server is now running on `http://0.0.0.0:8000`.
 
 </TabItem>
 <TabItem value="helm-deploy" label="Helm">

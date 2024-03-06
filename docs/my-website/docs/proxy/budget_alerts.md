@@ -42,7 +42,7 @@ $ litellm --config /path/to/config.yaml
 
 
 ### 2. Create API Key on Proxy Admin UI
-The Admin UI is found on `your-litellm-proxy-endpoint/ui`, example `http://localhost:4000/ui/` 
+The Admin UI is found on `your-litellm-proxy-endpoint/ui`, example `http://localhost:8000/ui/` 
 
 - Set a key name 
 - Set a Soft Budget on when to get alerted 

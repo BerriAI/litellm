@@ -11,7 +11,7 @@ COPY config.yaml .
 RUN chmod +x entrypoint.sh
 
 # Expose the necessary port
-EXPOSE 4000/tcp
+EXPOSE 8000/tcp
 
 # Override the CMD instruction with your desired command and arguments
-CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug", "--run_gunicorn"]
+CMD ["--config", "config.yaml", "--detailed_debug", "--run_gunicorn"]

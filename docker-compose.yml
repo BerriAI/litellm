@@ -5,6 +5,6 @@ services:
     volumes:
       - ./proxy_server_config.yaml:/app/proxy_server_config.yaml # mount your litellm config.yaml
     ports:
-      - "4000:4000"
+      - "8000:8000"
     environment:
       - AZURE_API_KEY=sk-123

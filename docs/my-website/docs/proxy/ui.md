@@ -38,7 +38,7 @@ http://0.0.0.0:8000/ui # <proxy_base_url>/ui
 
 
 ### 3. Get Admin UI Link on Swagger 
-Your Proxy Swagger is available on the root of the Proxy: e.g.: `http://localhost:4000/`
+Your Proxy Swagger is available on the root of the Proxy: e.g.: `http://localhost:8000/`
 
 <Image img={require('../../img/ui_link.png')} />
 
@@ -107,7 +107,7 @@ MICROSOFT_TENANT="5a39737
 - Set Redirect URI on your App Registration on https://portal.azure.com/
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
-    http://localhost:4000/sso/callback
+    http://localhost:8000/sso/callback
     ```
 
 </TabItem>
@@ -242,5 +242,3 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 
 ```
 - Deploy LiteLLM Proxy Server
-
-

@@ -319,7 +319,7 @@ print(response)
 
 #### `/spend/tags` Request Format 
 ```shell
-curl -X GET "http://0.0.0.0:4000/spend/tags" \
+curl -X GET "http://0.0.0.0:8000/spend/tags" \
 -H "Authorization: Bearer sk-1234"
 ```
 

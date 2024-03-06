@@ -291,7 +291,7 @@ Request Params:
 
 All [key/generate params supported](#keygenerate) for creating a user
 ```shell
-curl 'http://0.0.0.0:4000/user/new' \
+curl 'http://0.0.0.0:8000/user/new' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -358,12 +358,12 @@ If you're trying to view all users, we recommend using pagination with the follo
 - `page=0` Optional(int) min = 0, default=0
 - `page_size=25` Optional(int) min = 1, default = 25
 ```shell
-curl -X GET "http://0.0.0.0:4000/user/info?view_all=true&page=0&page_size=25" -H "Authorization: Bearer sk-1234"
+curl -X GET "http://0.0.0.0:8000/user/info?view_all=true&page=0&page_size=25" -H "Authorization: Bearer sk-1234"
 ```
 
 #### View specific user_id
 ```shell
-curl -X GET "http://0.0.0.0:4000/user/info?user_id=228da235-eef0-4c30-bf53-5d6ac0d278c2" -H "Authorization: Bearer sk-1234"
+curl -X GET "http://0.0.0.0:8000/user/info?user_id=228da235-eef0-4c30-bf53-5d6ac0d278c2" -H "Authorization: Bearer sk-1234"
 ```
 
 ### Response
@@ -469,7 +469,7 @@ litellm_settings:
 
 #### Create key with team_id="litellm-dev"
 ```shell
-curl --location 'http://localhost:4000/key/generate' \
+curl --location 'http://localhost:8000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data-raw '{"team_id": "litellm-dev"}'
@@ -477,7 +477,7 @@ curl --location 'http://localhost:4000/key/generate' \
 
 #### Use Key to call invalid model - Fails 
 ```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
+curl --location 'http://0.0.0.0:8000/chat/completions' \
     --header 'Content-Type: application/json' \
     --header 'Authorization: Bearer sk-qo992IjKOC2CHKZGRoJIGA' \
     --data '{

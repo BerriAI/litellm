@@ -182,7 +182,7 @@ litellm_settings:
 
 2. Make a /chat/completions call, pass 'user' - First call Works 
 ```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
+curl --location 'http://0.0.0.0:8000/chat/completions' \
         --header 'Content-Type: application/json' \
         --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
         --data ' {
@@ -199,7 +199,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 3. Make a /chat/completions call, pass 'user' - Call Fails, since 'ishaan3' over budget
 ```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
+curl --location 'http://0.0.0.0:8000/chat/completions' \
         --header 'Content-Type: application/json' \
         --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
         --data ' {
