@@ -4357,25 +4357,21 @@ async def view_daily_metrics(
 )
 async def new_user(data: NewUserRequest):
     """
-    Use this to create a new user with a budget.
+    Use this to create a new user with a budget. This creates a new user and generates a new api key for the new user. The new api key is returned.
 
     Returns user id, budget + new key.
 
     Parameters:
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_email: Optional[str] - Specify a user email.
-    - user_role: Optional[str] - Specify a user role - "proxy_admin", "app_owner", "app_user"
+    - user_role: Optional[str] - Specify a user role - "admin", "app_owner", "app_user"
     - max_budget: Optional[float] - Specify max budget for a given user.
-    - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"). **(Default is set to 1 hour.)**
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
-    - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
-    - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
-    - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
-    - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-    - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
+    - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)
 
     Returns:
-    - key: (str) The generated api key
+    - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     - max_budget: (float|None) Max budget for given user.
