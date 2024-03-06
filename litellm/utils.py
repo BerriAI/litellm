@@ -6655,6 +6655,7 @@ def exception_type(
                         method="POST", url="https://api.openai.com/v1"
                     )
                     raise APIError(
+                        status_code=500,
                         message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
