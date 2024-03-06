@@ -1213,6 +1213,7 @@ async def update_database(
                     await prisma_client.insert_data(data=payload, table_name="spend")
                 elif custom_db_client is not None:
                     await custom_db_client.insert_data(payload, table_name="spend")
+
             except Exception as e:
                 verbose_proxy_logger.info(f"Update Spend Logs DB failed to execute")
 
