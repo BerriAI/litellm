@@ -2541,6 +2541,12 @@ async def completion(
         if user_api_base:
             data["api_base"] = user_api_base
 
+        ### MODEL ALIAS MAPPING ###
+        # check if model name in model alias map
+        # get the actual model name
+        if data["model"] in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[data["model"]]
+
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
@@ -2739,6 +2745,12 @@ async def chat_completion(
             data["max_tokens"] = user_max_tokens
         if user_api_base:
             data["api_base"] = user_api_base
+
+        ### MODEL ALIAS MAPPING ###
+        # check if model name in model alias map
+        # get the actual model name
+        if data["model"] in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[data["model"]]
 
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(
@@ -2948,6 +2960,12 @@ async def embeddings(
                     **data,
                 }  # add the team-specific configs to the completion call
 
+        ### MODEL ALIAS MAPPING ###
+        # check if model name in model alias map
+        # get the actual model name
+        if data["model"] in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[data["model"]]
+
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
             if llm_model_list is not None
@@ -3118,6 +3136,12 @@ async def image_generation(
                     **team_config,
                     **data,
                 }  # add the team-specific configs to the completion call
+
+        ### MODEL ALIAS MAPPING ###
+        # check if model name in model alias map
+        # get the actual model name
+        if data["model"] in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[data["model"]]
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
