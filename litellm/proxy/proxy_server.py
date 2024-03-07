@@ -831,7 +831,10 @@ async def user_api_key_auth(
                     raise Exception(
                         f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
                     )
-        return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
+        if valid_token_dict is not None:
+            return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
+        else:
+            raise Exception()
     except Exception as e:
         # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
         traceback.print_exc()

@@ -973,7 +973,7 @@ class PrismaClient:
                     t.rpm_limit AS team_rpm_limit,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
-                    INNER JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
+                    LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                     LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                     WHERE v.token = '{token}'
                     """
