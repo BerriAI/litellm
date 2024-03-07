@@ -146,9 +146,29 @@ jobs:
             } catch (error) {
               core.setFailed(error.message);
             }
+      - name: Fetch Release Notes
+        id: release-notes
+        uses: actions/github-script@v6
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          script: |
+            try {
+              const response = await github.rest.repos.getRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: process.env.RELEASE_ID,
+              });
+              return response.data.body;
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+        env:
+          RELEASE_ID: ${{ env.RELEASE_ID }}
       - name: Github Releases To Discord
         env:
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          REALEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_NOTES: ${{ steps.release-notes.outputs.result }}
         run: |
           curl -H "Content-Type: application/json" -X POST -d '{
             "content": "||@everyone||",
@@ -156,8 +176,8 @@ jobs:
             "avatar_url": "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png",
             "embeds": [
               {
-                "title": "Changelog",
-                "description": "This is the changelog for the latest release.",
+                "title": "Changelog for ${RELEASE_TAG}",
+                "description": "${RELEASE_NOTES}",
                 "color": 2105893
               }
             ]
