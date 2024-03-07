@@ -6655,10 +6655,11 @@ def exception_type(
                         method="POST", url="https://api.openai.com/v1"
                     )
                     raise APIError(
+                        status_code=500,
                         message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
-                        response=httpx.Response(status_code=500, request=_request),
+                        request=_request,
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
@@ -7104,7 +7105,10 @@ def exception_type(
                         llm_provider="palm",
                         response=original_exception.response,
                     )
-                if "504 Deadline expired before operation could complete." in error_str:
+                if (
+                    "504 Deadline expired before operation could complete." in error_str
+                    or "504 Deadline Exceeded" in error_str
+                ):
                     exception_mapping_worked = True
                     raise Timeout(
                         message=f"PalmException - {original_exception.message}",
