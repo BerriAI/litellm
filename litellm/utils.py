@@ -7127,7 +7127,6 @@ def exception_type(
                         message=f"PalmException - {original_exception.message}",
                         model=model,
                         llm_provider="palm",
-                        request=original_exception.request,
                     )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
