@@ -219,6 +219,7 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+@pytest.mark.skip(reason="issue getting wikipedia images in ci/cd")
 def test_completion_claude_3_function_plus_image():
     litellm.set_verbose = True
 
