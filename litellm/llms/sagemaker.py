@@ -6,6 +6,7 @@ import time
 from typing import Callable, Optional, Any
 import litellm
 from litellm.utils import ModelResponse, EmbeddingResponse, get_secret, Usage
+from litellm._logging import verbose_logger
 import sys
 from copy import deepcopy
 import httpx
@@ -23,6 +24,134 @@ class SagemakerError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+
+def assume_role_with_web_identity(
+    landing_role_arn, landing_role_session_name, web_identity_token
+):
+    import boto3
+    import os
+    import json
+    from botocore.exceptions import ClientError
+
+    verbose_logger.debug(f"in assume_role_with_web_identity")
+    client = boto3.client("sts")
+    response = client.assume_role_with_web_identity(
+        RoleArn=landing_role_arn,
+        RoleSessionName=landing_role_session_name,
+        WebIdentityToken=web_identity_token,
+    )
+    verbose_logger.debug(f"done with assume_role_with_web_identity")
+    return response["Credentials"]
+
+
+def assume_role_to_connect_sagemaker(
+    role_arn, role_session_name, region_name="us-east-1", session: Optional[Any] = None
+):
+    import boto3
+    import os
+    import json
+    from botocore.exceptions import ClientError
+
+    verbose_logger.debug(f"in assume_role_to_connect_sagemaker")
+    # Step 1: Assume Role
+
+    verbose_logger.debug(f"RoleArn: {role_arn}")
+    verbose_logger.debug(f"RoleSessionName: {role_session_name}")
+
+    sts_client = boto3.client("sts")
+    assume_role_response = sts_client.assume_role(
+        RoleArn=role_arn, RoleSessionName=role_session_name
+    )
+
+    verbose_logger.debug(f"done with making sts client")
+    verbose_logger.debug(f"creating boto3 client")
+
+    # Extract temporary credentials
+    credentials = assume_role_response["Credentials"]
+
+    if session is not None:
+        _client = session.client(
+            service_name="sagemaker-runtime",
+            region_name=region_name,
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
+        return _client
+
+    sagemaker_assumed_client = boto3.client(
+        service_name="sagemaker-runtime",
+        region_name=region_name,
+        aws_access_key_id=credentials["AccessKeyId"],
+        aws_secret_access_key=credentials["SecretAccessKey"],
+        aws_session_token=credentials["SessionToken"],
+    )
+
+    return sagemaker_assumed_client
+
+
+def get_boto3_client_using_cross_account_arn(
+    aws_arn_arguments: dict,
+    aws_region_name: str = "us-west-2",
+    session: Optional[Any] = None,
+):
+    import boto3
+
+    ### SET REGION NAME
+    litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+    standard_aws_region_name = get_secret("AWS_REGION", None)
+    region_name = None
+
+    if aws_region_name:
+        region_name = aws_region_name
+    elif litellm_aws_region_name:
+        region_name = litellm_aws_region_name
+    elif standard_aws_region_name:
+        region_name = standard_aws_region_name
+    else:
+        raise SagemakerError(
+            message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
+            status_code=401,
+        )
+
+    boto3.set_stream_logger(name="botocore")
+
+    # Now using AWS ARN ARGUMENTS
+    verbose_logger.debug(
+        f"Sagemaker: aws_arn_arguments - aws_arn_arguments={aws_arn_arguments}"
+    )
+
+    # checking if any aws_arn_arguments start with os.environ/
+    for k, v in aws_arn_arguments.items():
+        if isinstance(v, str) and v.startswith("os.environ/"):
+            aws_arn_arguments[k] = litellm.get_secret(v)
+
+    verbose_logger.debug(
+        f"Sagemaker: aws_arn_arguments after reading 'os.environ/' prefix - aws_arn_arguments={aws_arn_arguments}"
+    )
+
+    landing_role_arn = aws_arn_arguments["landing_role_arn"]
+    landing_role_session_name = aws_arn_arguments["landing_role_session_name"]
+    aws_web_identity_token_file = aws_arn_arguments["aws_web_identity_token_file"]
+
+    web_identity_token = open(aws_web_identity_token_file, "r", encoding="utf-8").read()
+    sagemaker_role_arn = aws_arn_arguments["sagemaker_role_arn"]
+    sagemaker_role_session_name = aws_arn_arguments["sagemaker_role_session_name"]
+
+    verbose_logger.debug(
+        f"Sagemaker: aws_arn_arguments args passed\n landing_role_arn={landing_role_arn}\n landing_role_session_name={landing_role_session_name}\n sagemaker_role_arn={sagemaker_role_arn}\n sagemaker_role_session_name={sagemaker_role_session_name}"
+    )
+    verbose_logger.debug(
+        f"Sagemaker: aws_arn_arguments - web_identity_token_file={aws_web_identity_token_file}"
+    )
+
+    web_identity_credentials = assume_role_with_web_identity(
+        landing_role_arn, landing_role_session_name, web_identity_token
+    )
+    client = assume_role_to_connect_sagemaker(
+        sagemaker_role_arn, sagemaker_role_session_name, region_name, session
+    )
 
 
 import io
@@ -166,6 +295,13 @@ def completion(
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
+    aws_arn_arguments = optional_params.pop("aws_arn_arguments", None)
+
+    # aws_arn_arguments
+    if aws_arn_arguments is not None:
+        client = get_boto3_client_using_cross_account_arn(
+            aws_arn_arguments=aws_arn_arguments, aws_region_name=aws_region_name
+        )
 
     if aws_access_key_id != None:
         # uses auth params passed to completion
@@ -372,7 +508,16 @@ async def async_streaming(
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
 
-    if aws_access_key_id != None:
+    aws_arn_arguments = optional_params.pop("aws_arn_arguments", None)
+
+    # aws_arn_arguments
+    if aws_arn_arguments is not None:
+        _client = get_boto3_client_using_cross_account_arn(
+            aws_arn_arguments=aws_arn_arguments,
+            aws_region_name=aws_region_name,
+            session=session,
+        )
+    elif aws_access_key_id != None:
         # uses auth params passed to completion
         # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
         _client = session.client(
@@ -431,7 +576,16 @@ async def async_completion(
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
 
-    if aws_access_key_id != None:
+    aws_arn_arguments = optional_params.pop("aws_arn_arguments", None)
+
+    # aws_arn_arguments
+    if aws_arn_arguments is not None:
+        _client = get_boto3_client_using_cross_account_arn(
+            aws_arn_arguments=aws_arn_arguments,
+            aws_region_name=aws_region_name,
+            session=session,
+        )
+    elif aws_access_key_id != None:
         # uses auth params passed to completion
         # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
         _client = session.client(
@@ -552,8 +706,14 @@ def embedding(
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
+    aws_arn_arguments = optional_params.pop("aws_arn_arguments", None)
 
-    if aws_access_key_id is not None:
+    # aws_arn_arguments
+    if aws_arn_arguments is not None:
+        client = get_boto3_client_using_cross_account_arn(
+            aws_arn_arguments=aws_arn_arguments, aws_region_name=aws_region_name
+        )
+    elif aws_access_key_id is not None:
         # uses auth params passed to completion
         # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
         client = boto3.client(
