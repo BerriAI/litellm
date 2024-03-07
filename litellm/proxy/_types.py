@@ -555,6 +555,10 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_max_budget: Optional[float] = None
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
+    user_max_budget: Optional[float] = None
+    user_current_spend: Optional[float] = None
+    proxy_max_budget: Optional[float] = None
+    proxy_current_spend: Optional[float] = None
 
 
 class UserAPIKeyAuth(

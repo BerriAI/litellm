@@ -5,7 +5,7 @@ import traceback
 
 
 litellm_client = AsyncOpenAI(
-    base_url="http://0.0.0.0:4000", api_key="sk-iNwH_oOtAQ6syi_2gkEOpQ"
+    base_url="http://0.0.0.0:4000", api_key="sk-yzf3f_CmT5J-NE3pky0Zsg"
 )
 
 
@@ -16,7 +16,6 @@ async def litellm_completion():
             model="azure-gpt-3.5",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
         )
-        print(response)
         return response
 
     except Exception as e:
@@ -27,9 +26,9 @@ async def litellm_completion():
 
 
 async def main():
-    for i in range(150):
+    for i in range(1):
         start = time.time()
-        n = 2000  # Number of concurrent tasks
+        n = 100  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)
@@ -43,7 +42,7 @@ async def main():
                     error_log.write(completion + "\n")
 
         print(n, time.time() - start, len(successful_completions))
-        time.sleep(10)
+        asyncio.sleep(1)
 
 
 if __name__ == "__main__":

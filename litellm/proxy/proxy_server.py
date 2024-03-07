@@ -478,10 +478,58 @@ async def user_api_key_auth(
                     f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
                 )
 
-            # Check 2. If user_id for this token is in budget
-            ## Check 2.1 If global proxy is in budget
-            ## Check 2.2 [OPTIONAL - checked only if litellm.max_user_budget is not None] If 'user' passed in /chat/completions is in budget
-            if valid_token.user_id is not None:
+            # Check 2. If token is in budget
+            ## Check if within global budget
+            if (
+                valid_token.proxy_current_spend is not None
+                and valid_token.proxy_max_budget is not None
+            ):
+                if valid_token.proxy_current_spend >= valid_token.proxy_max_budget:
+                    raise Exception(
+                        f"ExceededBudget: Global Proxy budget is exceeded. Current spend: {valid_token.proxy_current_spend}; Max Budget: {valid_token.proxy_max_budget}"
+                    )
+                ## ALERTING
+                _user = {
+                    "user_email": "admin",
+                    "user_id": litellm_proxy_admin_name,
+                    "max_budget": valid_token.proxy_max_budget,
+                    "spend": valid_token.proxy_current_spend,
+                }
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        user_max_budget=valid_token.proxy_max_budget,
+                        user_current_spend=valid_token.proxy_current_spend,
+                        type="user_and_proxy_budget",
+                        user_info=_user,
+                    )
+                )
+            ## Check if within user-specific budget
+            if (
+                valid_token.user_id is not None
+                and valid_token.user_max_budget is not None
+                and valid_token.user_current_spend is not None
+            ):
+                if valid_token.user_current_spend >= valid_token.user_max_budget:
+                    raise Exception(
+                        f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {valid_token.user_current_spend}; Max Budget: {valid_token.user_max_budget}"
+                    )
+
+                ## ALERTING
+                _user = {
+                    "user_email": valid_token.user_email,
+                    "user_id": valid_token.user_id,
+                    "max_budget": valid_token.user_max_budget,
+                    "spend": valid_token.user_current_spend,
+                }
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        user_max_budget=valid_token.user_max_budget,
+                        user_current_spend=valid_token.user_current_spend,
+                        type="user_and_proxy_budget",
+                        user_info=_user,
+                    )
+                )
+            elif valid_token.user_id is not None:
                 user_id_list = [valid_token.user_id, litellm_proxy_budget_name]
                 if (
                     litellm.max_user_budget is not None

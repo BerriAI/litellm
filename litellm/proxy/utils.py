@@ -13,7 +13,6 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm import ModelResponse, EmbeddingResponse, ImageResponse
-from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.db.base_client import CustomDB
@@ -46,7 +45,6 @@ class ProxyLogging:
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler()
-        self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
@@ -62,7 +60,6 @@ class ProxyLogging:
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
         litellm.callbacks.append(self.max_parallel_request_limiter)
-        litellm.callbacks.append(self.max_budget_limiter)
         litellm.callbacks.append(self.cache_control_check)
         litellm.success_callback.append(self.response_taking_too_long_callback)
         for callback in litellm.callbacks:
@@ -971,15 +968,21 @@ class PrismaClient:
                     t.max_budget AS team_max_budget, 
                     t.tpm_limit AS team_tpm_limit,
                     t.rpm_limit AS team_rpm_limit,
-                    m.aliases as team_model_aliases
+                    m.aliases as team_model_aliases,
+                    u.max_budget as user_max_budget, 
+                    u.spend as user_current_spend,
+                    u.user_email as user_email,
+                    proxy.max_budget as proxy_max_budget,
+                    proxy.spend as proxy_current_spend
                     FROM "LiteLLM_VerificationToken" AS v
                     LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                     LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
+                    LEFT JOIN "LiteLLM_UserTable" AS u ON v.user_id = u.user_id
+                    LEFT JOIN "LiteLLM_UserTable" AS proxy ON proxy.user_id = 'litellm-proxy-budget'
                     WHERE v.token = '{token}'
                     """
 
                     response = await self.db.query_first(query=sql_query)
-
                     if response is not None:
                         response = LiteLLM_VerificationTokenView(**response)
                         # for prisma we need to cast the expires time to str
