@@ -546,9 +546,8 @@ def anthropic_messages_pt(messages: list):
     format messages for anthropic
     1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
     2. The first message always needs to be of role "user"
-    3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
-    4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
-    5. System messages are a separate param to the Messages API (used for tool calling)
+    3. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
+    4. System messages are a separate param to the Messages API (used for tool calling)
     """
     ## Ensure final assistant message has no trailing whitespace
     last_assistant_message_idx: Optional[int] = None
@@ -557,7 +556,7 @@ def anthropic_messages_pt(messages: list):
     if len(messages) == 1:
         # check if the message is a user message
         if messages[0]["role"] == "assistant":
-            new_messages.append({"role": "user", "content": ""})
+            new_messages.append({"role": "user", "content": " "})
 
         # check if content is a list (vision)
         if isinstance(messages[0]["content"], list):  # vision input
@@ -580,9 +579,13 @@ def anthropic_messages_pt(messages: list):
 
         return new_messages
 
+    num_assistant_messages = 0  # all messages must have non-empty content except for the optional final assistant message
+
     for i in range(len(messages) - 1):  # type: ignore
         if i == 0 and messages[i]["role"] == "assistant":
-            new_messages.append({"role": "user", "content": ""})
+            new_messages.append(
+                {"role": "user", "content": "."}
+            )  # Anthropic: text content blocks must contain non-whitespace text
         if isinstance(messages[i]["content"], list):  # vision input
             new_content = []
             for m in messages[i]["content"]:
@@ -603,12 +606,13 @@ def anthropic_messages_pt(messages: list):
 
         if messages[i]["role"] == messages[i + 1]["role"]:
             if messages[i]["role"] == "user":
-                new_messages.append({"role": "assistant", "content": ""})
+                new_messages.append({"role": "assistant", "content": "."})
             else:
-                new_messages.append({"role": "user", "content": ""})
+                new_messages.append({"role": "user", "content": "."})
 
         if messages[i]["role"] == "assistant":
-            last_assistant_message_idx = i
+            last_assistant_message_idx = len(new_messages) - 1
+            num_assistant_messages += 1
 
     new_messages.append(messages[-1])
     if last_assistant_message_idx is not None:
