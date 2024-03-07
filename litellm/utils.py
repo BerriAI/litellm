@@ -4030,11 +4030,11 @@ def get_optional_params_embeddings(
                 keys = list(non_default_params.keys())
                 for k in keys:
                     non_default_params.pop(k, None)
-                return non_default_params
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-            )
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                )
 
     final_params = {**non_default_params, **kwargs}
     return final_params
