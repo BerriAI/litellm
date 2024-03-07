@@ -200,9 +200,8 @@ class LowestTPMLoggingHandler(CustomLogger):
             if item_tpm == 0:
                 deployment = _deployment
                 break
-            elif (
-                item_tpm + input_tokens > _deployment_tpm
-                or rpm_dict[item] + 1 > _deployment_rpm
+            elif item_tpm + input_tokens > _deployment_tpm or (
+                item in rpm_dict and rpm_dict[item] + 1 > _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             elif item_tpm < lowest_tpm:
