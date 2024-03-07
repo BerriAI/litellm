@@ -2139,6 +2139,8 @@ async def test_acompletion_gemini():
         response = await litellm.acompletion(model=model_name, messages=messages)
         # Add any assertions here to check the response
         print(f"response: {response}")
+    except litellm.Timeout as e:
+        pass
     except litellm.APIError as e:
         pass
     except Exception as e:
