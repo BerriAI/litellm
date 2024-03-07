@@ -4006,6 +4006,7 @@ def get_optional_params_embeddings(
         for k, v in passed_params.items()
         if (k in default_params and v != default_params[k])
     }
+
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     if custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
@@ -4018,6 +4019,18 @@ def get_optional_params_embeddings(
             raise UnsupportedParamsError(
                 status_code=500,
                 message=f"Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
+            )
+    if custom_llm_provider == "vertex_ai":
+        if len(non_default_params.keys()) > 0:
+            if litellm.drop_params is True:  # drop the unsupported non-default values
+                keys = list(non_default_params.keys())
+                for k in keys:
+                    non_default_params.pop(k, None)
+                final_params = {**non_default_params, **kwargs}
+                return final_params
+            raise UnsupportedParamsError(
+                status_code=500,
+                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
             )
 
     if (
