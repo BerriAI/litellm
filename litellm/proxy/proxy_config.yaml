@@ -9,6 +9,16 @@ model_list:
           "bedrock_role_arn": "arn:aws:iam::999999999:role/tiaa-xyz-dev-ue1-carn-eks234-crossaccount",
           "bedrock_role_session_name": "bedrock-crossaccount-session"
       }
+  - model_name: mistral
+    litellm_params:
+      model: sagemaker/jumpstart-dft-hf-llm-mistral-7b-instruct
+      aws_arn_arguments: {
+          "landing_role_arn": "arn:aws:iam::123456789012:role/landing-role",
+          "landing_role_session_name": "eks_landing_session",
+          "aws_web_identity_token_file": "proxy_server.py",
+          "sagemaker_role_arn": "arn:aws:iam::999999999:role/tiaa-xyz-dev-ue1-carn-eks234-crossaccount",
+          "sagemaker_role_session_name": "sagemaker-crossaccount-session"
+      }
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   success_callback: ['langfuse']
