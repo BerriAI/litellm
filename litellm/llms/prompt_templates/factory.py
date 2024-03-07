@@ -485,7 +485,12 @@ def convert_url_to_base64(url):
     import requests
     import base64
 
-    response = requests.get(url)
+    for _ in range(3):
+        try:
+            response = requests.get(url)
+            break
+        except:
+            pass
     if response.status_code == 200:
         image_bytes = response.content
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -536,6 +541,8 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
             "data": base64_data,
         }
     except Exception as e:
+        if "Error: Unable to fetch image from URL" in str(e):
+            raise e
         raise Exception(
             """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] """
         )
