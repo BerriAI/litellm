@@ -8,6 +8,7 @@ import hashlib, uuid
 import warnings
 import importlib
 import warnings
+import backoff
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -2302,6 +2303,11 @@ def parse_cache_control(cache_control):
     return cache_dict
 
 
+def on_backoff(details):
+    # The 'tries' key in the details dictionary contains the number of completed tries
+    verbose_proxy_logger.debug(f"Backing off... this was attempt #{details['tries']}")
+
+
 @router.on_event("startup")
 async def startup_event():
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name
@@ -2617,6 +2623,19 @@ async def completion(
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
 )  # azure compatible endpoint
+@backoff.on_exception(
+    backoff.expo,
+    Exception,  # base exception to catch for the backoff
+    max_tries=litellm.num_retries or 3,  # maximum number of retries
+    max_time=litellm.request_timeout or 60,  # maximum total time to retry for
+    on_backoff=on_backoff,  # specifying the function to call on backoff
+    giveup=lambda e: not (
+        isinstance(e, ProxyException)
+        and getattr(e, "message", None) is not None
+        and isinstance(e.message, str)
+        and "Max parallel request limit reached" in e.message
+    ),  # the result of the logical expression is on the second position
+)
 async def chat_completion(
     request: Request,
     fastapi_response: Response,

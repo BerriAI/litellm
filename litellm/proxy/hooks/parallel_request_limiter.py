@@ -71,7 +71,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     ):
         self.print_verbose(f"Inside Max Parallel Request Pre-Call Hook")
         api_key = user_api_key_dict.api_key
-        max_parallel_requests = user_api_key_dict.max_parallel_requests or sys.maxsize
+        max_parallel_requests = user_api_key_dict.max_parallel_requests
+        if max_parallel_requests is None:
+            max_parallel_requests = sys.maxsize
         tpm_limit = getattr(user_api_key_dict, "tpm_limit", sys.maxsize)
         if tpm_limit is None:
             tpm_limit = sys.maxsize
@@ -105,6 +107,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             and rpm_limit == sys.maxsize
         ):
             pass
+        elif max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
+            raise HTTPException(
+                status_code=429, detail="Max parallel request limit reached."
+            )
         elif current is None:
             new_val = {
                 "current_requests": 1,
