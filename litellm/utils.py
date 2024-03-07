@@ -1127,7 +1127,7 @@ class Logging:
             self.model_call_details["cache_hit"] = cache_hit
             ## if model in model cost map - log the response cost
             ## else set cost to None
-            verbose_logger.debug(f"Model={self.model}; result={result}")
+            verbose_logger.debug(f"Model={self.model};")
             if (
                 result is not None
                 and (
