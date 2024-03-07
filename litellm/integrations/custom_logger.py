@@ -2,9 +2,11 @@
 #    On success, logs events to Promptlayer
 import dotenv, os
 import requests
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
-from typing import Literal
+
+from typing import Literal, Union
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -54,12 +56,29 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal["completion", "embeddings"],
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         pass
 
     async def async_post_call_failure_hook(
         self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+    ):
+        pass
+
+    async def async_post_call_success_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+    ):
+        pass
+
+    async def async_moderation_hook(self, data: dict):
+        pass
+
+    async def async_post_call_streaming_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: str,
     ):
         pass
 
@@ -105,7 +124,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-            print_verbose(f"Custom Logger - final response object: {response_obj}")
         except:
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
@@ -123,7 +141,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-            print_verbose(f"Custom Logger - final response object: {response_obj}")
         except:
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")

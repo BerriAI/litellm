@@ -1,6 +1,13 @@
 # Slack Alerting
 
-Get alerts for failed db read/writes, hanging api calls, failed api calls. 
+Get alerts for:
+- hanging LLM api calls
+- failed LLM api calls
+- slow LLM api calls
+- budget Tracking per key/user:
+    - When a User/Key crosses their Budget 
+    - When a User/Key is 15% away from crossing their Budget
+- failed db read/writes
 
 ## Quick Start
 
@@ -26,12 +33,16 @@ general_settings:
     alerting: ["slack"]
     alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
 
-environment_variables:
-    SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/<>/<>/<>"
+```
+
+Set `SLACK_WEBHOOK_URL` in your proxy env
+
+```shell
+SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/<>/<>/<>"
 ```
 
 ### Step 3: Start proxy
 
 ```bash
-$ litellm /path/to/config.yaml
+$ litellm --config /path/to/config.yaml
 ```

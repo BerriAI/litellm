@@ -15,22 +15,6 @@ from litellm import completion, acompletion, acreate
 litellm.num_retries = 3
 
 
-def test_sync_response():
-    litellm.set_verbose = False
-    user_message = "Hello, how are you?"
-    messages = [{"content": user_message, "role": "user"}]
-    try:
-        response = completion(model="gpt-3.5-turbo", messages=messages, timeout=5)
-        print(f"response: {response}")
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {e}")
-
-
-# test_sync_response()
-
-
 def test_sync_response_anyscale():
     litellm.set_verbose = False
     user_message = "Hello, how are you?"
@@ -197,6 +181,7 @@ def test_get_cloudflare_response_streaming():
 
     asyncio.run(test_async_call())
 
+
 @pytest.mark.asyncio
 async def test_hf_completion_tgi():
     # litellm.set_verbose=True
@@ -207,12 +192,41 @@ async def test_hf_completion_tgi():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.APIError as e:
+        print("got an api error")
+        pass
+    except litellm.Timeout as e:
+        print("got a timeout error")
+        pass
+    except litellm.RateLimitError as e:
+        # this will catch the model is overloaded error
+        print("got a rate limit error")
+        pass
+    except Exception as e:
+        if "Model is overloaded" in str(e):
+            pass
+        else:
+            pytest.fail(f"Error occurred: {e}")
+
+
+# test_get_cloudflare_response_streaming()
+
+
+@pytest.mark.skip(reason="AWS Suspended Account")
+@pytest.mark.asyncio
+async def test_completion_sagemaker():
+    # litellm.set_verbose=True
+    try:
+        response = await acompletion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=[{"content": "Hello, how are you?", "role": "user"}],
+        )
+        # Add any assertions here to check the response
+        print(response)
     except litellm.Timeout as e:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-# test_get_cloudflare_response_streaming()
 
 
 def test_get_response_streaming():

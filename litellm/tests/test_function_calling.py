@@ -124,11 +124,12 @@ def test_parallel_function_call():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_parallel_function_call()
+# test_parallel_function_call()
 
 
 def test_parallel_function_call_stream():
     try:
+        litellm.set_verbose = True
         # Step 1: send the conversation and available functions to the model
         messages = [
             {
@@ -217,4 +218,4 @@ def test_parallel_function_call_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_parallel_function_call_stream()
+# test_parallel_function_call_stream()

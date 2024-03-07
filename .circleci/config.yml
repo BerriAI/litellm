@@ -31,6 +31,7 @@ jobs:
             pip install "google-generativeai>=0.3.2"
             pip install "google-cloud-aiplatform>=1.38.0"
             pip install "boto3>=1.28.57"
+            pip install "aioboto3>=12.3.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install numpydoc
@@ -38,8 +39,12 @@ jobs:
             pip install openai
             pip install prisma            
             pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
       - save_cache:
           paths:
             - ./venv
@@ -77,6 +82,107 @@ jobs:
             pwd
             ls
             python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+  build_and_test:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            pip install openai
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "google-generativeai>=0.3.2"
+            pip install "google-cloud-aiplatform>=1.38.0"
+            pip install "boto3>=1.28.57"
+            pip install "aioboto3>=12.3.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+            # Run pytest and generate JUnit XML report
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DOCKER_DB_URL \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
+              -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              --name my-app \
+              -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --num_workers 8 \
+              --detailed_debug \
+              --run_gunicorn \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run: 
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 1m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 
           no_output_timeout: 120m
 
       # Store test results
@@ -164,9 +270,16 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - build_and_test:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - publish_to_pypi:
           requires:
             - local_testing
+            - build_and_test
           filters:
             branches:
               only:

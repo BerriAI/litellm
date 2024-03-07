@@ -34,6 +34,7 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4-0125-preview    | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
 | gpt-4-1106-preview    | `response = completion(model="gpt-4-1106-preview", messages=messages)` |
 | gpt-3.5-turbo-1106    | `response = completion(model="gpt-3.5-turbo-1106", messages=messages)` |
 | gpt-3.5-turbo         | `response = completion(model="gpt-3.5-turbo", messages=messages)` |
@@ -92,6 +93,7 @@ response = completion(
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
 | gpt-3.5-turbo-instruct | `response = completion(model="gpt-3.5-turbo-instruct", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="gpt-3.5-turbo-instruct-091", messages=messages)` |
 | text-davinci-003    | `response = completion(model="text-davinci-003", messages=messages)` |
 | ada-001             | `response = completion(model="ada-001", messages=messages)` |
 | curie-001           | `response = completion(model="curie-001", messages=messages)` |
@@ -155,6 +157,19 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 ```
 
+### Setting `extra_headers` for completion calls
+```python
+import os 
+from litellm import completion
+
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+response = completion(
+    model = "gpt-3.5-turbo", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}],
+    extra_headers={"AI-Resource Group": "ishaan-resource"}
+)
+```
 
 ### Setting Organization-ID for completion calls
 This can be set in one of the following ways:
@@ -173,6 +188,31 @@ response = completion(
     messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
+
+### Set `ssl_verify=False`
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.client_session=httpx.Client(verify=False)`
+- For `litellm.acompletion` set `litellm.aclient_session=AsyncClient.Client(verify=False)`
+```python
+import litellm, httpx
+
+# for completion
+litellm.client_session = httpx.Client(verify=False)
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+
+# for acompletion
+litellm.aclient_session = httpx.AsyncClient(verify=False)
+response = litellm.acompletion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+```
+
 ### Using Helicone Proxy with LiteLLM
 ```python
 import os 

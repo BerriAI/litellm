@@ -3,9 +3,9 @@
 api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
 import os
-os.environ["AZURE_API_KEY"] = ""
-os.environ["AZURE_API_BASE"] = ""
-os.environ["AZURE_API_VERSION"] = ""
+os.environ["AZURE_API_KEY"] = "" # "my-azure-api-key"
+os.environ["AZURE_API_BASE"] = "" # "https://example-endpoint.openai.azure.com"
+os.environ["AZURE_API_VERSION"] = "" # "2023-05-15"
 
 # optional
 os.environ["AZURE_AD_TOKEN"] = ""
@@ -74,6 +74,8 @@ response = litellm.completion(
 | gpt-4-32k            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-4-32k-0314            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4-32k-0613            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-1106-preview            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-0125-preview            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-3.5-turbo    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-0301    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-0613    | `completion('azure/<your deployment name>', messages)` |
@@ -115,6 +117,64 @@ response = completion(
 )
 
 ```
+
+### Usage - with Azure Vision enhancements
+
+Note: **Azure requires the `base_url` to be set with `/extensions`** 
+
+Example 
+```python
+base_url=https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions
+# base_url="{azure_endpoint}/openai/deployments/{azure_deployment}/extensions"
+```
+
+**Usage**
+```python
+import os 
+from litellm import completion
+
+os.environ["AZURE_API_KEY"] = "your-api-key"
+
+# azure call
+response = completion(
+            model="azure/gpt-4-vision",
+            timeout=5,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://avatars.githubusercontent.com/u/29436595?v=4"
+                            },
+                        },
+                    ],
+                }
+            ],
+            base_url="https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions",
+            api_key=os.getenv("AZURE_VISION_API_KEY"),
+            enhancements={"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+            dataSources=[
+                {
+                    "type": "AzureComputerVision",
+                    "parameters": {
+                        "endpoint": "https://gpt-4-vision-enhancement.cognitiveservices.azure.com/",
+                        "key": os.environ["AZURE_VISION_ENHANCE_KEY"],
+                    },
+                }
+            ],
+)
+```
+
+## Azure Instruct Models
+
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| gpt-3.5-turbo-instruct | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+
 
 ## Advanced
 ### Azure API Load-Balancing

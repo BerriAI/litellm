@@ -1,0 +1,221 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "litellm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "litellm.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "litellm.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: db-ready
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "docker.io/bitnami/postgresql:16.1.0-debian-11-r20"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- if .Values.db.deployStandalone }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: password
+            - name: DATABASE_HOST
+              value: {{ .Release.Name }}-postgresql
+            - name: DATABASE_NAME
+              value: litellm
+            {{- else if .Values.db.useExisting }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.usernameKey }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.passwordKey }}
+            - name: DATABASE_HOST
+              value: {{ .Values.db.endpoint }}
+            - name: DATABASE_NAME
+              value: litellm
+            {{- end }}
+          command:
+            - sh
+            - -c
+            - |
+              # Maximum wait time will be (limit * 2) seconds.
+              limit=60
+              current=0
+              ret=1
+              while [ $current -lt $limit ] && [ $ret -ne 0 ]; do
+                echo "Waiting for database to be ready $current"
+                psql -U $(DATABASE_USERNAME) -h $(DATABASE_HOST) -l
+                ret=$?
+                current=$(( $current + 1 ))
+                sleep 2
+              done
+              if [ $ret -eq 0 ]; then
+                echo "Database is ready"
+              else
+                echo "Database failed to become ready before we gave up waiting."
+              fi
+          {{ if .Values.securityContext.readOnlyRootFilesystem }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{ end }}
+      containers:
+        - name: {{ include "litellm.name" . }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: {{ .Values.service.port | quote}}
+            {{- if .Values.db.deployStandalone }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: password
+            - name: DATABASE_HOST
+              value: {{ .Release.Name }}-postgresql
+            - name: DATABASE_NAME
+              value: litellm
+            {{- else if .Values.db.useExisting }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.usernameKey }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.passwordKey }}
+            - name: DATABASE_HOST
+              value: {{ .Values.db.endpoint }}
+            - name: DATABASE_NAME
+              value: {{ .Values.db.database }}
+            {{- end }}
+            - name: DATABASE_URL
+              value: "postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)"
+            - name: PROXY_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-masterkey
+                  key: masterkey
+          envFrom:
+          {{- range .Values.environmentSecrets }}
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          args:
+            - --config
+            - /etc/litellm/config.yaml
+            - --run_gunicorn
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+          # Give the container time to start up.  Up to 5 minutes (10 * 30 seconds)
+          startupProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: litellm-config
+              mountPath: /etc/litellm/
+          {{ if .Values.securityContext.readOnlyRootFilesystem }}
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /.cache
+            - name: npm
+              mountPath: /.npm
+          {{- end }}
+          {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{ if .Values.securityContext.readOnlyRootFilesystem }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 500Mi
+        - name: cache
+          emptyDir:
+            sizeLimit: 500Mi
+        - name: npm
+          emptyDir:
+            sizeLimit: 500Mi
+        {{- end }}
+        - name: litellm-config
+          configMap:
+            name: {{ include "litellm.fullname" . }}-config
+            items:
+              - key: "config.yaml"
+                path: "config.yaml"
+      {{- with .Values.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
