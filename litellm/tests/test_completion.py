@@ -1490,7 +1490,7 @@ def test_replicate_custom_prompt_dict():
 
 # test_replicate_custom_prompt_dict()
 
-# commenthing this out since we won't be always testing a custom replicate deployment
+# commenthing this out since we won't be always testing a custom, replicate deployment
 # def test_completion_replicate_deployments():
 #     print("TESTING REPLICATE")
 #     litellm.set_verbose=False
