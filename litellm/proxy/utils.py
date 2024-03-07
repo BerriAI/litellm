@@ -762,7 +762,7 @@ class PrismaClient:
         ] = None,  # pagination, number of rows to getch when find_all==True
     ):
         verbose_proxy_logger.debug(
-            f"PrismaClient: get_data: table_name: {table_name}, query_type: {query_type}, user_id: {user_id}, user_id_list: {user_id_list}, team_id: {team_id}, team_id_list: {team_id_list}, key_val: {key_val}"
+            f"PrismaClient: get_data: token={token}, table_name: {table_name}, query_type: {query_type}, user_id: {user_id}, user_id_list: {user_id_list}, team_id: {team_id}, team_id_list: {team_id_list}, key_val: {key_val}"
         )
         try:
             response: Any = None
