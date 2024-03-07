@@ -183,6 +183,10 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:8000`.
 </TabItem>
 </Tabs>
 
+## Best Practices for Deploying to Production
+### 1. Switch of debug logs in production 
+don't use [`--detailed-debug`, `--debug`](https://docs.litellm.ai/docs/proxy/debugging#detailed-debug) or `litellm.set_verbose=True`. We found using debug logs can add 5-10% latency per LLM API call
+
 ## Advanced Deployment Settings
 
 ### Customization of the server root path
