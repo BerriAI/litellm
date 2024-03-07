@@ -25,8 +25,8 @@ def client():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_bad_config.yaml"
     asyncio.run(initialize(config=config_fp))
-    app = FastAPI()
-    app.include_router(router)  # Include your router in the test app
+    from litellm.proxy.proxy_server import app
+
     return TestClient(app)
 
 
@@ -43,6 +43,10 @@ def test_chat_completion_exception(client):
         }
 
         response = client.post("/chat/completions", json=test_data)
+
+        json_response = response.json()
+        print("keys in json response", json_response.keys())
+        assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
@@ -69,6 +73,10 @@ def test_chat_completion_exception_azure(client):
 
         response = client.post("/chat/completions", json=test_data)
 
+        json_response = response.json()
+        print("keys in json response", json_response.keys())
+        assert json_response.keys() == {"error"}
+
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
         openai_exception = openai_client._make_status_error_from_response(
@@ -89,6 +97,10 @@ def test_embedding_auth_exception_azure(client):
 
         response = client.post("/embeddings", json=test_data)
         print("Response from proxy=", response)
+
+        json_response = response.json()
+        print("keys in json response", json_response.keys())
+        assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
@@ -117,13 +129,17 @@ def test_exception_openai_bad_model(client):
 
         response = client.post("/chat/completions", json=test_data)
 
+        json_response = response.json()
+        print("keys in json response", json_response.keys())
+        assert json_response.keys() == {"error"}
+
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )
         print("Type of exception=", type(openai_exception))
-        assert isinstance(openai_exception, openai.NotFoundError)
+        assert isinstance(openai_exception, openai.BadRequestError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -142,6 +158,9 @@ def test_chat_completion_exception_any_model(client):
         }
 
         response = client.post("/chat/completions", json=test_data)
+
+        json_response = response.json()
+        assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
@@ -163,6 +182,11 @@ def test_embedding_exception_any_model(client):
 
         response = client.post("/embeddings", json=test_data)
         print("Response from proxy=", response)
+        print(response.json())
+
+        json_response = response.json()
+        print("keys in json response", json_response.keys())
+        assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
@@ -171,6 +195,50 @@ def test_embedding_exception_any_model(client):
         )
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.BadRequestError)
+
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+
+# raise openai.BadRequestError
+def test_chat_completion_exception_azure_context_window(client):
+    try:
+        # Your test data
+        test_data = {
+            "model": "working-azure-gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hi" * 10000},
+            ],
+            "max_tokens": 10,
+        }
+        response = None
+
+        response = client.post("/chat/completions", json=test_data)
+        print("got response from server", response)
+
+        json_response = response.json()
+
+        print("keys in json response", json_response.keys())
+
+        assert json_response.keys() == {"error"}
+
+        assert json_response == {
+            "error": {
+                "message": "AzureException - Error code: 400 - {'error': {'message': \"This model's maximum context length is 4096 tokens. However, your messages resulted in 10007 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}",
+                "type": None,
+                "param": None,
+                "code": 400,
+            }
+        }
+
+        # make an openai client to call _make_status_error_from_response
+        openai_client = openai.OpenAI(api_key="anything")
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
+        print("exception from proxy", openai_exception)
+        assert isinstance(openai_exception, openai.BadRequestError)
+        print("passed exception is of type BadRequestError")
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")

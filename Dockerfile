@@ -20,6 +20,9 @@ RUN pip install --upgrade pip && \
 # Copy the current directory contents into the container at /app
 COPY . .
 
+# Build Admin UI
+RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+
 # Build the package
 RUN rm -rf dist/* && python -m build
 
@@ -31,6 +34,12 @@ RUN pip install dist/*.whl
 
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+
+# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
+RUN pip install redisvl==0.0.7 --no-deps
+
+# Build Admin UI
+RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE as runtime
@@ -51,8 +60,5 @@ RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
 
-# Set your entrypoint and command
-CMD [ \
-    "sh", "-c", \
-    "if [ -n \"$DATABASE_URL\" ]; then ./entrypoint.sh; else litellm --port 4000 --num_workers 8; fi" \
-]
+ENTRYPOINT ["litellm"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--detailed_debug", "--run_gunicorn"]

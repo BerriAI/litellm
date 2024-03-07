@@ -182,6 +182,7 @@ def test_chat_completion(client):
         print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
         assert metadata is not None
         assert "user_api_key" in metadata
+        assert "user_api_key_metadata" in metadata
         assert "headers" in metadata
         config_model_info = litellm_params.get("model_info")
         proxy_server_request_object = litellm_params.get("proxy_server_request")
@@ -273,7 +274,7 @@ def test_chat_completion_stream(client):
                 print("\n\n decode_data", data)
 
                 # Access the content of choices[0]['message']['content']
-                content = data["choices"][0]["delta"]["content"] or ""
+                content = data["choices"][0]["delta"].get("content", None) or ""
 
                 # Process the content as needed
                 print("Content:", content)

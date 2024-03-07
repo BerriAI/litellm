@@ -7,6 +7,10 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 
 ## Quick Start
 
+<Tabs>
+
+<TabItem value="basic" label="Basic">
+
 See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
@@ -17,6 +21,12 @@ docker pull ghcr.io/berriai/litellm:main-latest
 ```shell
 docker run ghcr.io/berriai/litellm:main-latest
 ```
+
+</TabItem>
+
+
+
+<TabItem value="cli" label="With CLI Args">
 
 ### Run with LiteLLM CLI args
 
@@ -32,6 +42,34 @@ Here's how you can run the docker image and start litellm on port 8002 with `num
 docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
 
+</TabItem>
+
+<TabItem value="base-image" label="use litellm as a base image">
+
+```shell
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Copy the configuration file into the container at /app
+COPY config.yaml .
+
+# Make sure your entrypoint.sh is executable
+RUN chmod +x entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# Override the CMD instruction with your desired command and arguments
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug", "--run_gunicorn"]
+```
+
+</TabItem>
+
+</Tabs>
+
 ## Deploy with Database
 
 We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
@@ -40,14 +78,14 @@ We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/cont
 <TabItem value="docker-deploy" label="Dockerfile">
 
 ```
-docker pull docker pull ghcr.io/berriai/litellm-database:main-v1.16.20
+docker pull docker pull ghcr.io/berriai/litellm-database:main-latest
 ```
 
 ```
 docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
-ghcr.io/berriai/litellm-database:main-v1.16.20
+ghcr.io/berriai/litellm-database:main-latest
 ```
 
 Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
@@ -74,7 +112,7 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
        spec:
          containers:
            - name: litellm-container
-             image: ghcr.io/berriai/litellm-database:main-v1.16.20
+             image: ghcr.io/berriai/litellm-database:main-latest
              env:
               - name: DATABASE_URL
                 value: postgresql://<user>:<password>@<host>:<port>/<dbname>
@@ -114,7 +152,65 @@ kubectl port-forward service/litellm-service 4000:4000
 Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
+<TabItem value="helm-deploy" label="Helm">
+
+### Step 1. Clone the repository
+
+```bash
+git clone https://github.com/BerriAI/litellm.git
+```
+
+### Step 2. Deploy with Helm
+
+```bash
+helm install \
+  --set masterkey=SuPeRsEcReT \
+  mydeploy \
+  deploy/charts/litellm
+```
+
+### Step 3. Expose the service to localhost
+
+```bash
+kubectl \
+  port-forward \
+  service/mydeploy-litellm \
+  8000:8000
+```
+
+Your OpenAI proxy server is now running on `http://127.0.0.1:8000`.
+
+</TabItem>
 </Tabs>
+
+## Advanced Deployment Settings
+
+### Customization of the server root path
+
+:::info
+
+In a Kubernetes deployment, it's possible to utilize a shared DNS to host multiple applications by modifying the virtual service
+
+:::
+
+Customize the root path to eliminate the need for employing multiple DNS configurations during deployment.
+
+👉 Set `SERVER_ROOT_PATH` in your .env and this will be set as your server root path
+
+
+### Setting SSL Certification 
+
+Use this, If you need to set ssl certificates for your on prem litellm proxy
+
+Pass `ssl_keyfile_path` (Path to the SSL keyfile) and `ssl_certfile_path` (Path to the SSL certfile) when starting litellm proxy 
+
+```shell
+docker run ghcr.io/berriai/litellm:main-latest \
+    --ssl_keyfile_path ssl_test/keyfile.key \
+    --ssl_certfile_path ssl_test/certfile.crt
+```
+
+Provide an ssl certificate when starting litellm proxy server 
 
 ## Platform-specific Guide
 
@@ -173,9 +269,7 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
 
 **Step 1**
 
-- (Recommended) Use the example file `docker-compose.example.yml` given in the project root. e.g. https://github.com/BerriAI/litellm/blob/main/docker-compose.example.yml
-
-- Rename the file `docker-compose.example.yml` to `docker-compose.yml`.
+- (Recommended) Use the example file `docker-compose.yml` given in the project root. e.g. https://github.com/BerriAI/litellm/blob/main/docker-compose.yml
 
 Here's an example `docker-compose.yml` file
 ```yaml

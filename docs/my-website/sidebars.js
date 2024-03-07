@@ -20,6 +20,63 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
+      label: "💥 OpenAI Proxy Server",
+      link: {
+        type: 'generated-index',
+        title: '💥 OpenAI Proxy Server',
+        description: `Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
+        slug: '/simple_proxy',
+      },
+      items: [
+        "proxy/quick_start", 
+        "proxy/configs",
+        {
+          type: 'link',
+          label: '📖 All Endpoints',
+          href: 'https://litellm-api.up.railway.app/',
+        },
+        "proxy/enterprise",
+        "proxy/user_keys",
+        "proxy/virtual_keys",
+        "proxy/users",
+        "proxy/ui",
+        "proxy/budget_alerts",
+        "proxy/model_management",
+        "proxy/health",
+        "proxy/debugging",
+        "proxy/pii_masking",
+        {
+          "type": "category",
+          "label": "🔥 Load Balancing",
+          "items": [
+            "proxy/load_balancing", 
+            "proxy/reliability",
+          ]
+        },
+        "proxy/caching",
+        {
+          "type": "category",
+          "label": "Logging, Alerting",
+          "items": [
+            "proxy/logging", 
+            "proxy/alerting",
+            "proxy/streaming_logging",
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Content Moderation",
+          "items": [
+            "proxy/call_hooks",
+            "proxy/rules",
+          ]
+        },
+        "proxy/deploy", 
+        "proxy/cli", 
+      ]
+    },
+    {
+      type: "category",
       label: "Completion()",
       link: {
         type: 'generated-index',
@@ -64,8 +121,7 @@ const sidebars = {
         "providers/openai", 
         "providers/openai_compatible",
         "providers/azure", 
-        "providers/huggingface", 
-        "providers/ollama", 
+        "providers/azure_ai", 
         "providers/vertex", 
         "providers/palm", 
         "providers/gemini", 
@@ -74,7 +130,10 @@ const sidebars = {
         "providers/aws_sagemaker",
         "providers/bedrock", 
         "providers/anyscale",
+        "providers/huggingface", 
+        "providers/ollama", 
         "providers/perplexity", 
+        "providers/groq", 
         "providers/vllm", 
         "providers/xinference", 
         "providers/cloudflare_workers", 
@@ -92,40 +151,12 @@ const sidebars = {
         "providers/petals",
       ]
     },
-    {
-      type: "category",
-      label: "💥 OpenAI Proxy Server",
-      link: {
-        type: 'generated-index',
-        title: '💥 OpenAI Proxy Server',
-        description: `Proxy Server to call 100+ LLMs in a unified interface, load balance deployments, track costs per user`,
-        slug: '/simple_proxy',
-      },
-      items: [
-        "proxy/quick_start", 
-        "proxy/configs",
-        "proxy/user_keys",
-        "proxy/load_balancing", 
-        "proxy/virtual_keys",
-        "proxy/ui",
-        "proxy/users",
-        "proxy/model_management",
-        "proxy/reliability",
-        "proxy/health",
-        "proxy/call_hooks",
-        "proxy/rules",
-        "proxy/caching",
-        "proxy/alerting",
-        "proxy/logging", 
-        "proxy/streaming_logging",
-        "proxy/deploy", 
-        "proxy/cli", 
-      ]
-    },
+    "proxy/custom_pricing",
     "routing",
     "rules",
     "set_keys",
     "budget_manager",
+    "contributing",
     "secret",
     "completion/token_usage",
     "load_test",
@@ -143,6 +174,7 @@ const sidebars = {
         "observability/langsmith_integration",
         "observability/slack_integration",
         "observability/traceloop_integration",
+        "observability/athina_integration",
         "observability/llmonitor_integration",
         "observability/helicone_integration",
         "observability/supabase_integration",

@@ -1,8 +1,9 @@
 from enum import Enum
 import requests, traceback
-import json
+import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, Environment, meta
 from typing import Optional, Any
+import imghdr, base64
 
 
 def default_pt(messages):
@@ -90,26 +91,54 @@ def ollama_pt(
         return {"prompt": prompt, "images": images}
     else:
         prompt = "".join(
-            m["content"]
-            if isinstance(m["content"], str) is str
-            else "".join(m["content"])
+            (
+                m["content"]
+                if isinstance(m["content"], str) is str
+                else "".join(m["content"])
+            )
             for m in messages
         )
     return prompt
 
 
 def mistral_instruct_pt(messages):
+    # Following the Mistral example's https://huggingface.co/docs/transformers/main/chat_templating
     prompt = custom_prompt(
         initial_prompt_value="<s>",
         role_dict={
-            "system": {"pre_message": "[INST]", "post_message": "[/INST]"},
-            "user": {"pre_message": "[INST]", "post_message": "[/INST]"},
-            "assistant": {"pre_message": "[INST]", "post_message": "[/INST]"},
+            "system": {
+                "pre_message": "[INST] \n",
+                "post_message": " [/INST]\n",
+            },
+            "user": {"pre_message": "[INST] ", "post_message": " [/INST]\n"},
+            "assistant": {"pre_message": " ", "post_message": "</s> "},
         },
-        final_prompt_value="</s>",
+        final_prompt_value="",
         messages=messages,
     )
     return prompt
+
+
+def mistral_api_pt(messages):
+    """
+    - handles scenario where content is list and not string
+    - content list is just text, and no images
+    - if image passed in, then just return as is (user-intended)
+
+    Motivation: mistral api doesn't support content as a list
+    """
+    new_messages = []
+    for m in messages:
+        texts = ""
+        if isinstance(m["content"], list):
+            for c in m["content"]:
+                if c["type"] == "image_url":
+                    return messages
+                elif c["type"] == "text" and isinstance(c["text"], str):
+                    texts += c["text"]
+        new_m = {"role": m["role"], "content": texts}
+        new_messages.append(new_m)
+    return new_messages
 
 
 # Falcon prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
@@ -362,7 +391,7 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
     return prompt
 
 
-###
+### ANTHROPIC ###
 
 
 def anthropic_pt(
@@ -372,6 +401,7 @@ def anthropic_pt(
     You can "put words in Claude's mouth" by ending with an assistant message.
     See: https://docs.anthropic.com/claude/docs/put-words-in-claudes-mouth
     """
+
     class AnthropicConstants(Enum):
         HUMAN_PROMPT = "\n\nHuman: "
         AI_PROMPT = "\n\nAssistant: "
@@ -394,32 +424,277 @@ def anthropic_pt(
         prompt += f"{AnthropicConstants.AI_PROMPT.value}"
     return prompt
 
-    
+
+def construct_format_parameters_prompt(parameters: dict):
+    parameter_str = "<parameter>\n"
+    for k, v in parameters.items():
+        parameter_str += f"<{k}>"
+        parameter_str += f"{v}"
+        parameter_str += f"</{k}>"
+    parameter_str += "\n</parameter>"
+    return parameter_str
+
+
+def construct_format_tool_for_claude_prompt(name, description, parameters):
+    constructed_prompt = (
+        "<tool_description>\n"
+        f"<tool_name>{name}</tool_name>\n"
+        "<description>\n"
+        f"{description}\n"
+        "</description>\n"
+        "<parameters>\n"
+        f"{construct_format_parameters_prompt(parameters)}\n"
+        "</parameters>\n"
+        "</tool_description>"
+    )
+    return constructed_prompt
+
+
+def construct_tool_use_system_prompt(
+    tools,
+):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
+    tool_str_list = []
+    for tool in tools:
+        tool_str = construct_format_tool_for_claude_prompt(
+            tool["function"]["name"],
+            tool["function"].get("description", ""),
+            tool["function"].get("parameters", {}),
+        )
+        tool_str_list.append(tool_str)
+    tool_use_system_prompt = (
+        "In this environment you have access to a set of tools you can use to answer the user's question.\n"
+        "\n"
+        "You may call them like this:\n"
+        "<function_calls>\n"
+        "<invoke>\n"
+        "<tool_name>$TOOL_NAME</tool_name>\n"
+        "<parameters>\n"
+        "<$PARAMETER_NAME>$PARAMETER_VALUE</$PARAMETER_NAME>\n"
+        "...\n"
+        "</parameters>\n"
+        "</invoke>\n"
+        "</function_calls>\n"
+        "\n"
+        "Here are the tools available:\n"
+        "<tools>\n" + "\n".join([tool_str for tool_str in tool_str_list]) + "\n</tools>"
+    )
+    return tool_use_system_prompt
+
+
+def convert_url_to_base64(url):
+    import requests
+    import base64
+
+    response = requests.get(url)
+    if response.status_code == 200:
+        image_bytes = response.content
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+        img_type = url.split(".")[-1].lower()
+        if img_type == "jpg" or img_type == "jpeg":
+            img_type = "image/jpeg"
+        elif img_type == "png":
+            img_type = "image/png"
+        elif img_type == "gif":
+            img_type = "image/gif"
+        elif img_type == "webp":
+            img_type = "image/webp"
+        else:
+            raise Exception(
+                f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
+            )
+
+        return f"data:{img_type};base64,{base64_image}"
+    else:
+        raise Exception(f"Error: Unable to fetch image from URL. url={url}")
+
+
+def convert_to_anthropic_image_obj(openai_image_url: str):
+    """
+    Input:
+    "image_url": "data:image/jpeg;base64,{base64_image}",
+
+    Return:
+    "source": {
+      "type": "base64",
+      "media_type": "image/jpeg",
+      "data": {base64_image},
+    }
+    """
+    try:
+        if openai_image_url.startswith("http"):
+            openai_image_url = convert_url_to_base64(url=openai_image_url)
+        # Extract the base64 image data
+        base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
+
+        # Infer image format from the URL
+        image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
+
+        return {
+            "type": "base64",
+            "media_type": f"image/{image_format}",
+            "data": base64_data,
+        }
+    except Exception as e:
+        raise Exception(
+            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] """
+        )
+
+
+def anthropic_messages_pt(messages: list):
+    """
+    format messages for anthropic
+    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
+    2. The first message always needs to be of role "user"
+    3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
+    4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
+    5. System messages are a separate param to the Messages API (used for tool calling)
+    """
+    ## Ensure final assistant message has no trailing whitespace
+    last_assistant_message_idx: Optional[int] = None
+    # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
+    new_messages = []
+    if len(messages) == 1:
+        # check if the message is a user message
+        if messages[0]["role"] == "assistant":
+            new_messages.append({"role": "user", "content": ""})
+
+        # check if content is a list (vision)
+        if isinstance(messages[0]["content"], list):  # vision input
+            new_content = []
+            for m in messages[0]["content"]:
+                if m.get("type", "") == "image_url":
+                    new_content.append(
+                        {
+                            "type": "image",
+                            "source": convert_to_anthropic_image_obj(
+                                m["image_url"]["url"]
+                            ),
+                        }
+                    )
+                elif m.get("type", "") == "text":
+                    new_content.append({"type": "text", "text": m["text"]})
+            new_messages.append({"role": messages[0]["role"], "content": new_content})  # type: ignore
+        else:
+            new_messages.append(messages[0])
+
+        return new_messages
+
+    for i in range(len(messages) - 1):  # type: ignore
+        if i == 0 and messages[i]["role"] == "assistant":
+            new_messages.append({"role": "user", "content": ""})
+        if isinstance(messages[i]["content"], list):  # vision input
+            new_content = []
+            for m in messages[i]["content"]:
+                if m.get("type", "") == "image_url":
+                    new_content.append(
+                        {
+                            "type": "image",
+                            "source": convert_to_anthropic_image_obj(
+                                m["image_url"]["url"]
+                            ),
+                        }
+                    )
+                elif m.get("type", "") == "text":
+                    new_content.append({"type": "text", "content": m["text"]})
+            new_messages.append({"role": messages[i]["role"], "content": new_content})  # type: ignore
+        else:
+            new_messages.append(messages[i])
+
+        if messages[i]["role"] == messages[i + 1]["role"]:
+            if messages[i]["role"] == "user":
+                new_messages.append({"role": "assistant", "content": ""})
+            else:
+                new_messages.append({"role": "user", "content": ""})
+
+        if messages[i]["role"] == "assistant":
+            last_assistant_message_idx = i
+
+    new_messages.append(messages[-1])
+    if last_assistant_message_idx is not None:
+        new_messages[last_assistant_message_idx]["content"] = new_messages[
+            last_assistant_message_idx
+        ][
+            "content"
+        ].strip()  # no trailing whitespace for final assistant message
+
+    return new_messages
+
+
+def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
+    ext_list = re.findall(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
+    if strip:
+        ext_list = [e.strip() for e in ext_list]
+    return ext_list
+
+
+def parse_xml_params(xml_content):
+    root = ET.fromstring(xml_content)
+    params = {}
+    for child in root.findall(".//parameters/*"):
+        params[child.tag] = child.text
+    return params
+
+
+###
+
+
+def amazon_titan_pt(
+    messages: list,
+):  # format - https://github.com/BerriAI/litellm/issues/1896
+    """
+    Amazon Titan uses 'User:' and 'Bot: in it's prompt template
+    """
+
+    class AmazonTitanConstants(Enum):
+        HUMAN_PROMPT = "\n\nUser: "  # Assuming this is similar to Anthropic prompt formatting, since amazon titan's prompt formatting is currently undocumented
+        AI_PROMPT = "\n\nBot: "
+
+    prompt = ""
+    for idx, message in enumerate(messages):
+        if message["role"] == "user":
+            prompt += f"{AmazonTitanConstants.HUMAN_PROMPT.value}{message['content']}"
+        elif message["role"] == "system":
+            prompt += f"{AmazonTitanConstants.HUMAN_PROMPT.value}<admin>{message['content']}</admin>"
+        else:
+            prompt += f"{AmazonTitanConstants.AI_PROMPT.value}{message['content']}"
+        if (
+            idx == 0 and message["role"] == "assistant"
+        ):  # ensure the prompt always starts with `\n\nHuman: `
+            prompt = f"{AmazonTitanConstants.HUMAN_PROMPT.value}" + prompt
+    if messages[-1]["role"] != "assistant":
+        prompt += f"{AmazonTitanConstants.AI_PROMPT.value}"
+    return prompt
+
+
 def _load_image_from_url(image_url):
     try:
         from PIL import Image
     except:
-        raise Exception("gemini image conversion failed please run `pip install Pillow`")
+        raise Exception(
+            "gemini image conversion failed please run `pip install Pillow`"
+        )
     from io import BytesIO
+
     try:
         # Send a GET request to the image URL
         response = requests.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
-        content_type = response.headers.get('content-type')
-        if not content_type or 'image' not in content_type:
-            raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
+        content_type = response.headers.get("content-type")
+        if not content_type or "image" not in content_type:
+            raise ValueError(
+                f"URL does not point to a valid image (content-type: {content_type})"
+            )
 
         # Load the image from the response content
         return Image.open(BytesIO(response.content))
-        
+
     except requests.RequestException as e:
-        print(f"Request failed: {e}")
-    except UnidentifiedImageError:
-        print("Cannot identify image file (it may not be a supported image format or might be corrupted).")
-    except ValueError as e:
-        print(e)
+        raise Exception(f"Request failed: {e}")
+    except Exception as e:
+        raise e
 
 
 def _gemini_vision_convert_messages(messages: list):
@@ -437,10 +712,11 @@ def _gemini_vision_convert_messages(messages: list):
     try:
         from PIL import Image
     except:
-        raise Exception("gemini image conversion failed please run `pip install Pillow`")
+        raise Exception(
+            "gemini image conversion failed please run `pip install Pillow`"
+        )
 
     try:
-
         # given messages for gpt-4 vision, convert them for gemini
         # https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/getting-started/intro_gemini_python.ipynb
         prompt = ""
@@ -589,10 +865,9 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if any(_ in model for _ in ["claude-2.1","claude-v2:1"]):
-            return claude_2_1_pt(messages=messages)
-        else:
+        if model == "claude-instant-1" or model == "claude-2":
             return anthropic_pt(messages=messages)
+        return anthropic_messages_pt(messages=messages)
     elif custom_llm_provider == "together_ai":
         prompt_format, chat_template = get_model_info(token=api_key, model=model)
         return format_prompt_togetherai(
@@ -603,6 +878,18 @@ def prompt_factory(
             return _gemini_vision_convert_messages(messages=messages)
         else:
             return gemini_text_image_pt(messages=messages)
+    elif custom_llm_provider == "mistral":
+        return mistral_api_pt(messages=messages)
+    elif custom_llm_provider == "bedrock":
+        if "amazon.titan-text" in model:
+            return amazon_titan_pt(messages=messages)
+        elif "anthropic." in model:
+            if any(_ in model for _ in ["claude-2.1", "claude-v2:1"]):
+                return claude_2_1_pt(messages=messages)
+            else:
+                return anthropic_pt(messages=messages)
+        elif "mistral." in model:
+            return mistral_instruct_pt(messages=messages)
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
@@ -635,6 +922,11 @@ def prompt_factory(
             "gryphe/mythologic-l2-13b",
         ]:
             return alpaca_pt(messages=messages)
+        elif model.strip() == "meta-llama/llamaguard-7b":
+            chat_template = "{% if messages|length % 2 == 0 %}{% set role = 'Agent' %}{% else %}{% set role = 'User' %}{% endif %}{{ \"[INST] Task: Check if there is unsafe content in '\" + role + \"' messages in conversations according our safety policy with the below categories.\n\n<BEGIN UNSAFE CONTENT CATEGORIES>\nO1: Violence and Hate. \nShould not\n- Help people plan or engage in violence.\n- Encourage people to engage in violence.\n- Express hateful, derogatory, or demeaning sentiments against people based on sensitive personal characteristics like their race, color, religion, national origin, sexual orientation, gender, gender identity, or disability.\n- Encourage discrimination against people based on those characteristics and should not use slurs or create insults based on those characteristics.\nCan\n- Provide information on violence and discrimination.\n- Discuss the topics of hate and violence, and can discuss historical events involving violence.\nO2: Sexual Content.\nShould not\n- Engage in sexually explicit (i.e., erotic) conversations and should not encourage people to engage in sexual activities.\nCan\n- Discuss topics related to sexuality and sexual education.\n- Provide general information regarding sexual activities.\n- Provide guidance on topics related to sexual health.\nO3: Criminal Planning.\nShould not\n- Help people plan or engage in criminal activities like theft, kidnapping, or financial crimes, especially when the person indicates that they may act on the information provided to them.\n- Encourage people to engage in criminal activities or condone criminal behavior.\nCan\n- Help people understand how crimes are committed, provided that the response is not so detailed that it could be used to provide a roadmap for future crimes.\n- Help people understand how systems work that are used to prevent crimes, provided those descriptions do not provide detailed information on how to defeat those systems.\nO4: Guns and Illegal Weapons.\nShould not\n- Assist in the planning or execution of firearm or illegal weapons crimes, especially when the person indicates that they may act on the information provided to them.\n- Encourage people to engage in firearm or illegal weapons crimes or condone such behavior.\nCan\n- Discuss firearms and the arguments for and against firearm ownership.\nO5: Regulated or Controlled Substances.\nShould not\n- Encourage or assist people in the trafficking, consumption, or use of regulated or controlled substances, including but not limited to illegal drugs, tobacco, alcohol, and cannabis.\n- Assist or encourage people to create such substances when it is illegal to do so.\nCan\n- Discuss the use of regulated or controlled substances, and can provide general information on those substances (ex: what their chemical composition is and what their effects are).\n- Provide information on how those substances are manufactured, provided that the information is not so detailed as to provide step-by-step instructions for their creation.\nO6: Self-Harm.\nShould not\n- Encourage people to harm themselves.\n- Romanticize or condone self-harm or suicide.\n- Provide information regarding the methods of suicide or self-harm.\n- Provide any information or advice, other than information regarding appropriate health resources, to people who express or imply that they wish to harm themselves.\nCan\n- Provide general information regarding self-harm and suicide (ex: statistics, the mental health challenges faced by those who take these actions).\nShould\n- Provide information regarding appropriate health resources to people who imply or express the desire to harm themselves.\n<END UNSAFE CONTENT CATEGORIES>\n\n<BEGIN CONVERSATION>\n\n\" }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% set content = message['content'] %}{% if message['role'] == 'user' %}{% set role = 'User' %}{% elif message['role'] == 'assistant' %}{% set role = 'Agent' %}{% endif %}{{ role + ': ' + content.strip() + '\n\n' }}{% endfor %}{{ \"<END CONVERSATION>\n\nProvide your safety assessment for \" + role + \" in the above conversation:\n- First line must read 'safe' or 'unsafe'.\n- If unsafe, a second line must include a comma-separated list of violated categories. [/INST]\" }}"
+            return hf_chat_template(
+                model=model, messages=messages, chat_template=chat_template
+            )
         else:
             return hf_chat_template(original_model_name, messages)
     except Exception as e:

@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use with Langchain, OpenAI SDK, Curl
+# Use with Langchain, OpenAI SDK, LlamaIndex, Curl
 
 :::info
 
@@ -51,6 +51,42 @@ response = client.chat.completions.create(
 print(response)
 ```
 </TabItem>
+<TabItem value="LlamaIndex" label="LlamaIndex">
+
+```python
+import os, dotenv
+
+from llama_index.llms import AzureOpenAI
+from llama_index.embeddings import AzureOpenAIEmbedding
+from llama_index import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
+
+llm = AzureOpenAI(
+    engine="azure-gpt-3.5",               # model_name on litellm proxy
+    temperature=0.0,
+    azure_endpoint="http://0.0.0.0:4000", # litellm proxy endpoint
+    api_key="sk-1234",                    # litellm proxy API Key
+    api_version="2023-07-01-preview",
+)
+
+embed_model = AzureOpenAIEmbedding(
+    deployment_name="azure-embedding-model",
+    azure_endpoint="http://0.0.0.0:4000",
+    api_key="sk-1234",
+    api_version="2023-07-01-preview",
+)
+
+
+documents = SimpleDirectoryReader("llama_index_data").load_data()
+service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model)
+index = VectorStoreIndex.from_documents(documents, service_context=service_context)
+
+query_engine = index.as_query_engine()
+response = query_engine.query("What did the author do growing up?")
+print(response)
+
+```
+</TabItem>
+
 <TabItem value="Curl" label="Curl Request">
 
 Pass `metadata` as part of the request body
@@ -161,7 +197,7 @@ from openai import OpenAI
 # set api_key to send to proxy server
 client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:8000")
 
-response = openai.embeddings.create(
+response = client.embeddings.create(
     input=["hello from litellm"],
     model="text-embedding-ada-002"
 )
@@ -243,6 +279,84 @@ print(query_result[:5])
   }
 }
 
+```
+
+## `/moderations`
+
+
+### Request Format
+Input, Output and Exceptions are mapped to the OpenAI format for all supported models
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+from openai import OpenAI
+
+# set base_url to your proxy server
+# set api_key to send to proxy server
+client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:8000")
+
+response = client.moderations.create(
+    input="hello from litellm",
+    model="text-moderation-stable"
+)
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/moderations' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+```
+</TabItem>
+</Tabs>
+
+
+### Response Format
+
+```json
+{
+  "id": "modr-8sFEN22QCziALOfWTa77TodNLgHwA",
+  "model": "text-moderation-007",
+  "results": [
+    {
+      "categories": {
+        "harassment": false,
+        "harassment/threatening": false,
+        "hate": false,
+        "hate/threatening": false,
+        "self-harm": false,
+        "self-harm/instructions": false,
+        "self-harm/intent": false,
+        "sexual": false,
+        "sexual/minors": false,
+        "violence": false,
+        "violence/graphic": false
+      },
+      "category_scores": {
+        "harassment": 0.000019947197870351374,
+        "harassment/threatening": 5.5971017900446896e-6,
+        "hate": 0.000028560316422954202,
+        "hate/threatening": 2.2631787999216613e-8,
+        "self-harm": 2.9121162015144364e-7,
+        "self-harm/instructions": 9.314219084899378e-8,
+        "self-harm/intent": 8.093739012338119e-8,
+        "sexual": 0.00004414955765241757,
+        "sexual/minors": 0.0000156943697220413,
+        "violence": 0.00022354527027346194,
+        "violence/graphic": 8.804164281173144e-6
+      },
+      "flagged": false
+    }
+  ]
+}
 ```
 
 
