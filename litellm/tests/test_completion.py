@@ -1453,9 +1453,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
+    model_name = "replicate/meta/llama-2-7b-chat"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0",
+        model="replicate/meta/llama-2-7b-chat",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
