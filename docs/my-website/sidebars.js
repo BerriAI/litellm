@@ -39,6 +39,7 @@ const sidebars = {
         "proxy/user_keys",
         "proxy/virtual_keys",
         "proxy/users",
+        "proxy/team_based_routing",
         "proxy/ui",
         "proxy/budget_alerts",
         "proxy/model_management",
