@@ -42,6 +42,17 @@ model LiteLLM_OrganizationTable {
     teams LiteLLM_TeamTable[] 
 }
 
+// Model info for teams, just has model aliases for now.
+model LiteLLM_ModelTable {
+  id Int @id @default(autoincrement())
+  model_aliases Json? @map("aliases")
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+  team LiteLLM_TeamTable?
+}
+
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
 		team_id    String @id @default(uuid())
@@ -63,7 +74,9 @@ model LiteLLM_TeamTable {
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    model_id Int? @unique
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
 }
 
 // Track spend, rate limit, budget Users
