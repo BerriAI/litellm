@@ -965,12 +965,21 @@ class PrismaClient:
                         )
 
                     sql_query = f"""
-                    SELECT *
-                    FROM "LiteLLM_VerificationTokenView"
-                    WHERE token = '{token}'
+                    SELECT 
+                    v.*,
+                    t.spend AS team_spend, 
+                    t.max_budget AS team_max_budget, 
+                    t.tpm_limit AS team_tpm_limit,
+                    t.rpm_limit AS team_rpm_limit,
+                    m.aliases as team_model_aliases
+                    FROM "LiteLLM_VerificationToken" AS v
+                    INNER JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
+                    LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
+                    WHERE v.token = '{token}'
                     """
 
                     response = await self.db.query_first(query=sql_query)
+
                     if response is not None:
                         response = LiteLLM_VerificationTokenView(**response)
                         # for prisma we need to cast the expires time to str
