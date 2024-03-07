@@ -21,8 +21,10 @@ from openai import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    PermissionDeniedError,
 )
 import httpx
+from typing import Optional
 
 
 class AuthenticationError(AuthenticationError):  # type: ignore
@@ -49,11 +51,19 @@ class NotFoundError(NotFoundError):  # type: ignore
 
 
 class BadRequestError(BadRequestError):  # type: ignore
-    def __init__(self, message, model, llm_provider, response: httpx.Response):
+    def __init__(
+        self, message, model, llm_provider, response: Optional[httpx.Response] = None
+    ):
         self.status_code = 400
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        response = response or httpx.Response(
+            status_code=self.status_code,
+            request=httpx.Request(
+                method="GET", url="https://litellm.ai"
+            ),  # mock request object
+        )
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -79,6 +89,17 @@ class Timeout(APITimeoutError):  # type: ignore
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(
             request=request
+        )  # Call the base class constructor with the parameters it needs
+
+
+class PermissionDeniedError(PermissionDeniedError):  # type:ignore
+    def __init__(self, message, llm_provider, model, response: httpx.Response):
+        self.status_code = 403
+        self.message = message
+        self.llm_provider = llm_provider
+        self.model = model
+        super().__init__(
+            self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
 
 

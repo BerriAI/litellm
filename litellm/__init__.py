@@ -1,32 +1,38 @@
 ### INIT VARIABLES ###
-import threading, requests
+import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
-from litellm._logging import set_verbose
+from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
 from litellm.proxy._types import KeyManagementSystem
 import httpx
+import dotenv
 
+dotenv.load_dotenv()
+#############################################
+if set_verbose == True:
+    _turn_on_debug()
+#############################################
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
-_async_input_callback: List[
-    Callable
-] = []  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[
-    Union[str, Callable]
-] = []  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[
-    Callable
-] = []  # internal variable - async custom callbacks are routed here.
+_async_input_callback: List[Callable] = (
+    []
+)  # internal variable - async custom callbacks are routed here.
+_async_success_callback: List[Union[str, Callable]] = (
+    []
+)  # internal variable - async custom callbacks are routed here.
+_async_failure_callback: List[Callable] = (
+    []
+)  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
-email: Optional[
-    str
-] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-token: Optional[
-    str
-] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+email: Optional[str] = (
+    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+)
+token: Optional[str] = (
+    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+)
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
@@ -49,15 +55,34 @@ baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
+### GUARDRAILS ###
+llamaguard_model_name: Optional[str] = None
+presidio_ad_hoc_recognizers: Optional[str] = None
+google_moderation_confidence_threshold: Optional[float] = None
+llamaguard_unsafe_content_categories: Optional[str] = None
+blocked_user_list: Optional[Union[str, List]] = None
+banned_keywords_list: Optional[Union[str, List]] = None
+##################
 logging: bool = True
-caching: bool = False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-cache: Optional[
-    Cache
-] = None  # cache object <- use this - https://docs.litellm.ai/docs/caching
+caching: bool = (
+    False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+)
+caching_with_models: bool = (
+    False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+)
+cache: Optional[Cache] = (
+    None  # cache object <- use this - https://docs.litellm.ai/docs/caching
+)
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
+budget_duration: Optional[str] = (
+    None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+)
+default_soft_budget: float = (
+    50.0  # by default all litellm proxy keys have a soft budget of 50.0
+)
+_openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
     "functions",
     "function_call",
@@ -128,32 +153,58 @@ _litellm_completion_params = [
 ]
 _current_cost = 0  # private variable, used if max budget is set
 error_logs: Dict = {}
-add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
+add_function_to_prompt: bool = (
+    False  # if function calling not supported by api, append function call details to system prompt
+)
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
-model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+model_cost_map_url: str = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+)
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
+s3_callback_params: Optional[Dict] = None
+generic_logger_headers: Optional[Dict] = None
+default_key_generate_params: Optional[Dict] = None
+upperbound_key_generate_params: Optional[Dict] = None
+default_user_params: Optional[Dict] = None
+default_team_settings: Optional[List] = None
+max_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0
-num_retries_per_request: Optional[
-    int
-] = None  # for the request overall (incl. fallbacks + model retries)
+num_retries_per_request: Optional[int] = (
+    None  # for the request overall (incl. fallbacks + model retries)
+)
 ####### SECRET MANAGERS #####################
-secret_manager_client: Optional[
-    Any
-] = None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
+secret_manager_client: Optional[Any] = (
+    None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
+)
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional[KeyManagementSystem] = None
+#### PII MASKING ####
+output_parse_pii: bool = False
 #############################################
 
 
 def get_model_cost_map(url: str):
+    if (
+        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
+        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
+    ):
+        import importlib.resources
+        import json
+
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window_backup.json"
+        ) as f:
+            content = json.load(f)
+            return content
+
     try:
         with requests.get(
             url, timeout=5
@@ -209,6 +260,7 @@ vertex_chat_models: List = []
 vertex_code_chat_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
+vertex_embedding_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
@@ -238,6 +290,8 @@ for key, value in model_cost.items():
         vertex_chat_models.append(key)
     elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
         vertex_code_chat_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-embedding-models":
+        vertex_embedding_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -257,15 +311,19 @@ openai_compatible_endpoints: List = [
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
+    "api.groq.com/openai/v1",
+    "api.together.xyz/v1",
 ]
 
 # this is maintained for Exception Mapping
 openai_compatible_providers: List = [
     "anyscale",
     "mistral",
+    "groq",
     "deepinfra",
     "perplexity",
     "xinference",
+    "together_ai",
 ]
 
 
@@ -409,6 +467,7 @@ provider_list: List = [
     "perplexity",
     "anyscale",
     "mistral",
+    "groq",
     "maritalk",
     "voyage",
     "cloudflare",
@@ -474,7 +533,10 @@ bedrock_embedding_models: List = [
 ]
 
 all_embedding_models = (
-    open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+    open_ai_embedding_models
+    + cohere_embedding_models
+    + bedrock_embedding_models
+    + vertex_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -490,6 +552,8 @@ from .utils import (
     token_counter,
     cost_per_token,
     completion_cost,
+    supports_function_calling,
+    supports_parallel_function_calling,
     get_litellm_params,
     Logging,
     acreate,
@@ -506,9 +570,11 @@ from .utils import (
     _calculate_retry_after,
     _should_retry,
     get_secret,
+    get_mapped_model_params,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
@@ -527,11 +593,14 @@ from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
+    AmazonAnthropicClaude3Config,
     AmazonCohereConfig,
     AmazonLlamaConfig,
+    AmazonStabilityConfig,
+    AmazonMistralConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
-from .llms.azure import AzureOpenAIConfig
+from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (

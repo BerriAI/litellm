@@ -331,6 +331,13 @@ async def test_router_completion_streaming():
         )
         final_response = await router.acompletion(model=model, messages=messages)
         print(f"min deployment id: {picked_deployment}")
+        tpm_key = f"{model}:tpm:{current_minute}"
+        rpm_key = f"{model}:rpm:{current_minute}"
+
+        tpm_dict = router.cache.get_cache(key=tpm_key)
+        print(f"tpm_dict: {tpm_dict}")
+        rpm_dict = router.cache.get_cache(key=rpm_key)
+        print(f"rpm_dict: {rpm_dict}")
         print(f"model id: {final_response._hidden_params['model_id']}")
         assert (
             final_response._hidden_params["model_id"]

@@ -28,6 +28,8 @@ import litellm
 import os
 
 os.environ["LANGSMITH_API_KEY"] = ""
+os.environ["LANGSMITH_PROJECT"] = "" # defaults to litellm-completion
+os.environ["LANGSMITH_DEFAULT_RUN_NAME"] = "" # defaults to LLMRun
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
 

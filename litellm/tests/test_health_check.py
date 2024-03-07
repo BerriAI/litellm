@@ -20,8 +20,7 @@ async def test_azure_health_check():
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
             "api_version": os.getenv("AZURE_API_VERSION"),
-        },
-        mode="completion",
+        }
     )
     print(f"response: {response}")
 
@@ -88,6 +87,7 @@ async def test_azure_img_gen_health_check():
 # asyncio.run(test_azure_img_gen_health_check())
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_sagemaker_embedding_health_check():
     response = await litellm.ahealth_check(

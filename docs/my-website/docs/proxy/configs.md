@@ -22,18 +22,22 @@ Set a model alias for your deployments.
 
 In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
 
-In the config below requests with:
+In the config below:
+- `model_name`: the name to pass TO litellm from the external client  
+- `litellm_params.model`: the model string passed to the litellm.completion() function
+
+E.g.: 
 - `model=vllm-models` will route to `openai/facebook/opt-125m`. 
 - `model=gpt-3.5-turbo` will load balance between `azure/gpt-turbo-small-eu` and `azure/gpt-turbo-small-ca`
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo # user-facing model alias
+  - model_name: gpt-3.5-turbo ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
-      model: azure/gpt-turbo-small-eu
+      model: azure/gpt-turbo-small-eu ### MODEL NAME sent to `litellm.completion()` ###
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
-      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+      rpm: 6      # [OPTIONAL] Rate limit for this deployment: in requests per minute (rpm)
   - model_name: bedrock-claude-v1 
     litellm_params:
       model: bedrock/anthropic.claude-instant-v1
@@ -43,6 +47,11 @@ model_list:
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_CA"
       rpm: 6
+  - model_name: anthropic-claude
+    litellm_params: 
+      model="bedrock/anthropic.claude-instant-v1"
+      ### [OPTIONAL] SET AWS REGION ###
+      aws_region_name="us-east-1"
   - model_name: vllm-models
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
@@ -58,6 +67,11 @@ litellm_settings: # module level litellm settings - https://github.com/BerriAI/l
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
 ```
+:::info
+
+For more provider-specific info, [go here](../providers/)
+
+:::
 
 #### Step 2: Start Proxy with config
 
@@ -188,7 +202,7 @@ print(response)
 </Tabs>
 
 
-## Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
+## Save Model-specific params (API Base, Keys, Temperature, Max Tokens, Organization, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 [**All input params**](https://docs.litellm.ai/docs/completion/input#input-params-1)
@@ -202,19 +216,25 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       azure_ad_token: eyJ0eXAiOiJ
+      seed: 12
+      max_tokens: 20
   - model_name: gpt-4-team2
     litellm_params:
       model: azure/gpt-4
       api_key: sk-123
       api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      temperature: 0.2
+  - model_name: openai-gpt-3.5
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      extra_headers: {"AI-Resource Group": "ishaan-resource"}
+      api_key: sk-123
+      organization: org-ikDc4ex8NB
+      temperature: 0.2
   - model_name: mistral-7b
     litellm_params:
       model: ollama/mistral
       api_base: your_ollama_api_base
-      headers: {
-        "HTTP-Referer": "litellm.ai",  
-        "X-Title": "LiteLLM Server"
-      }
 ```
 
 **Step 2**: Start server with config
@@ -222,6 +242,67 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+
+
+## Load Balancing 
+
+Use this to call multiple instances of the same model and configure things like [routing strategy](../routing.md#advanced). 
+
+```yaml
+router_settings:
+  routing_strategy: "latency-based-routing" # routes to the fastest deployment in the group
+
+model_list:
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: gpt-3.5-turbo
+        api_key: <my-openai-key>
+  - model_name: gpt-3.5-turbo-16k
+    litellm_params:
+        model: gpt-3.5-turbo-16k
+        api_key: <my-openai-key>
+
+litellm_settings:
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
+  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
+  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+```
+
+
+## Set Azure `base_model` for cost tracking
+
+**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
+
+**Solution** ✅ :  Set `base_model` on your config so litellm uses the correct model for calculating azure cost
+
+Example config with `base_model`
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      base_model: azure/gpt-4-1106-preview
+```
+
+You can view your cost once you set up [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys) or [custom_callbacks](https://docs.litellm.ai/docs/proxy/logging)
 
 ## Load API Keys
 
@@ -315,6 +396,26 @@ See supported Embedding Providers & Models [here](https://docs.litellm.ai/docs/e
 #### Create Config.yaml
 
 <Tabs>
+<TabItem value="bedrock" label="Bedrock Completion/Chat">
+
+```yaml
+model_list:
+  - model_name: bedrock-cohere
+    litellm_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-west-2"
+  - model_name: bedrock-cohere
+    litellm_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-east-2"
+  - model_name: bedrock-cohere
+    litellm_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-east-1"
+
+```
+
+</TabItem>
 
 <TabItem value="sagemaker" label="Sagemaker, Bedrock Embeddings">
 
@@ -427,56 +528,88 @@ model_list:
 </Tabs>
 
 #### Start Proxy
+
 ```shell
 litellm --config config.yaml
 ```
 
 #### Make Request
-Sends Request to `deployed-codebert-base`
+Sends Request to `bedrock-cohere`
 
 ```shell
-curl --location 'http://0.0.0.0:8000/embeddings' \
+curl --location 'http://0.0.0.0:8000/chat/completions' \
   --header 'Content-Type: application/json' \
   --data ' {
-  "model": "deployed-codebert-base",
-  "input": ["write a litellm poem"]
-  }'
+  "model": "bedrock-cohere",
+  "messages": [
+      {
+      "role": "user",
+      "content": "gm"
+      }
+  ]
+}'
 ```
 
 
-## Router Settings 
-
-Use this to configure things like routing strategy. 
+## Configure DB Pool Limits + Connection Timeouts 
 
 ```yaml
-router_settings:
-  routing_strategy: "least-busy"
-
-model_list: # will route requests to the least busy ollama model
-  - model_name: ollama-models
-    litellm_params: 
-      model: "ollama/mistral"
-      api_base: "http://127.0.0.1:8001"
-  - model_name: ollama-models
-    litellm_params: 
-      model: "ollama/codellama"
-      api_base: "http://127.0.0.1:8002"
-  - model_name: ollama-models
-    litellm_params: 
-      model: "ollama/llama2"
-      api_base: "http://127.0.0.1:8003"
+general_settings: 
+  database_connection_pool_limit: 100 # sets connection pool for prisma client to postgres db at 100
+  database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
 ```
 
-## Max Parallel Requests
+## All settings 
 
-To rate limit a user based on the number of parallel requests, e.g.: 
-if user's parallel requests > x, send a 429 error
-if user's parallel requests <= x, let them use the API freely.
-
-set the max parallel request limit on the config.yaml (note: this expects the user to be passing in an api key).
-
-```yaml
-general_settings:
-  max_parallel_requests: 100 # max parallel requests for a user = 100
+```python
+{
+  "environment_variables": {},
+  "model_list": [
+    {
+      "model_name": "string",
+      "litellm_params": {},
+      "model_info": {
+        "id": "string",
+        "mode": "embedding",
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "max_tokens": 2048,
+        "base_model": "gpt-4-1106-preview",
+        "additionalProp1": {}
+      }
+    }
+  ],
+  "litellm_settings": {}, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
+  "general_settings": {
+    "completion_model": "string",
+    "key_management_system": "google_kms", # either google_kms or azure_kms
+    "master_key": "string",
+    "database_url": "string",
+    "database_connection_pool_limit": 0, # default 100
+    "database_connection_timeout": 0, # default 60s
+    "database_type": "dynamo_db",
+    "database_args": {
+      "billing_mode": "PROVISIONED_THROUGHPUT",
+      "read_capacity_units": 0,
+      "write_capacity_units": 0,
+      "ssl_verify": true,
+      "region_name": "string",
+      "user_table_name": "LiteLLM_UserTable",
+      "key_table_name": "LiteLLM_VerificationToken",
+      "config_table_name": "LiteLLM_Config",
+      "spend_table_name": "LiteLLM_SpendLogs"
+    },
+    "otel": true,
+    "custom_auth": "string",
+    "max_parallel_requests": 0,
+    "infer_model_from_keys": true,
+    "background_health_checks": true,
+    "health_check_interval": 300,
+    "alerting": [
+      "string"
+    ],
+    "alerting_threshold": 0
+  }
+}
 ```
 

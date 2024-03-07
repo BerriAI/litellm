@@ -3,14 +3,24 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Logging - Custom Callbacks, Langfuse, OpenTelemetry, Sentry
+# 🔎 Logging - Custom Callbacks, Langfuse, ClickHouse, s3 Bucket, Sentry, OpenTelemetry, Athina
 
-Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB
+Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
+
+- [Async Custom Callbacks](#custom-callback-class-async)
+- [Async Custom Callback APIs](#custom-callback-apis-async)
+- [Logging to ClickHouse](#logging-proxy-inputoutput---clickhouse)
+- [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
+- [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
+- [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
+- [Logging to Sentry](#logging-proxy-inputoutput---sentry)
+- [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
+- [Logging to Athina](#logging-proxy-inputoutput-athina)
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
 
-### Step 1 - Create your custom `litellm` callback class
+#### Step 1 - Create your custom `litellm` callback class
 We use `litellm.integrations.custom_logger` for this, **more details about litellm custom callbacks [here](https://docs.litellm.ai/docs/observability/custom_callback)**
 
 Define your custom callback class in a python file.
@@ -112,7 +122,7 @@ proxy_handler_instance = MyCustomHandler()
 # need to set litellm.callbacks = [proxy_handler_instance] # on the proxy
 ```
 
-### Step 2 - Pass your custom callback class in `config.yaml`
+#### Step 2 - Pass your custom callback class in `config.yaml`
 We pass the custom callback class defined in **Step1** to the config.yaml. 
 Set `callbacks` to `python_filename.logger_instance_name`
 
@@ -134,7 +144,7 @@ litellm_settings:
 
 ```
 
-### Step 3 - Start proxy + test request
+#### Step 3 - Start proxy + test request
 ```shell
 litellm --config proxy_config.yaml
 ```
@@ -167,7 +177,7 @@ On Success
     Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
 ```
 
-### Logging Proxy Request Object, Header, Url
+#### Logging Proxy Request Object, Header, Url
 
 Here's how you can access the `url`, `headers`, `request body` sent to the proxy for each request
 
@@ -211,7 +221,7 @@ class MyCustomHandler(CustomLogger):
 
 ```
 
-### Logging `model_info` set in config.yaml 
+#### Logging `model_info` set in config.yaml 
 
 Here is how to log the `model_info` set in your proxy `config.yaml`. Information on setting `model_info` on [config.yaml](https://docs.litellm.ai/docs/proxy/configs)
 
@@ -289,6 +299,106 @@ ModelResponse(
 }
 ```
 
+
+## Custom Callback APIs [Async]
+
+:::info
+
+This is an Enterprise only feature [Get Started with Enterprise here](https://github.com/BerriAI/litellm/tree/main/enterprise)
+
+:::
+
+Use this if you:
+- Want to use custom callbacks written in a non Python programming language
+- Want your callbacks to run on a different microservice
+
+#### Step 1. Create your generic logging API endpoint
+Set up a generic API endpoint that can receive data in JSON format. The data will be included within a "data" field. 
+
+Your server should support the following Request format:
+
+```shell
+curl --location https://your-domain.com/log-event \
+     --request POST \
+     --header "Content-Type: application/json" \
+     --data '{
+       "data": {
+         "id": "chatcmpl-8sgE89cEQ4q9biRtxMvDfQU1O82PT",
+         "call_type": "acompletion",
+         "cache_hit": "None",
+         "startTime": "2024-02-15 16:18:44.336280",
+         "endTime": "2024-02-15 16:18:45.045539",
+         "model": "gpt-3.5-turbo",
+         "user": "ishaan-2",
+         "modelParameters": "{'temperature': 0.7, 'max_tokens': 10, 'user': 'ishaan-2', 'extra_body': {}}",
+         "messages": "[{'role': 'user', 'content': 'This is a test'}]",
+         "response": "ModelResponse(id='chatcmpl-8sgE89cEQ4q9biRtxMvDfQU1O82PT', choices=[Choices(finish_reason='length', index=0, message=Message(content='Great! How can I assist you with this test', role='assistant'))], created=1708042724, model='gpt-3.5-turbo-0613', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=10, prompt_tokens=11, total_tokens=21))",
+         "usage": "Usage(completion_tokens=10, prompt_tokens=11, total_tokens=21)",
+         "metadata": "{}",
+         "cost": "3.65e-05"
+       }
+     }'
+```
+
+Reference FastAPI Python Server
+
+Here's a reference FastAPI Server that is compatible with LiteLLM Proxy:
+
+```python
+# this is an example endpoint to receive data from litellm
+from fastapi import FastAPI, HTTPException, Request
+
+app = FastAPI()
+
+
+@app.post("/log-event")
+async def log_event(request: Request):
+    try:
+        print("Received /log-event request")
+        # Assuming the incoming request has JSON data
+        data = await request.json()
+        print("Received request data:")
+        print(data)
+
+        # Your additional logic can go here
+        # For now, just printing the received data
+
+        return {"message": "Request received successfully"}
+    except Exception as e:
+        print(f"Error processing request: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
+```
+
+
+#### Step 2. Set your `GENERIC_LOGGER_ENDPOINT` to the endpoint + route we should send callback logs to
+
+```shell
+os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:8000/log-event"
+```
+
+#### Step 3. Create a `config.yaml` file and set `litellm_settings`: `success_callback` = ["generic"]
+
+Example litellm proxy config.yaml
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["generic"]
+```
+
+Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
 ## Logging Proxy Input/Output - Langfuse
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
@@ -429,30 +539,76 @@ print(response)
 </Tabs>
 
 
-## OpenTelemetry - Traceloop
+## Logging Proxy Input/Output - Clickhouse
+We will use the `--config` to set `litellm.success_callback = ["clickhouse"]` this will log all successfull LLM calls to ClickHouse DB
 
-Traceloop allows you to log LLM Input/Output in the OpenTelemetry format
-
-We will use the `--config` to set `litellm.success_callback = ["traceloop"]` this will log all successfull LLM calls to traceloop
-
-**Step 1** Install traceloop-sdk and set Traceloop API key
-
-```shell
-pip install traceloop-sdk -U
+### [Optional] - Docker Compose - LiteLLM Proxy + Self Hosted Clickhouse DB
+Use this docker compose yaml to start LiteLLM Proxy + Clickhouse DB
+```yaml
+version: "3.9"
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    volumes:
+      - ./proxy_server_config.yaml:/app/proxy_server_config.yaml # mount your litellm config.yaml
+    ports:
+      - "4000:4000"
+    environment:
+      - AZURE_API_KEY=sk-123
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    environment:
+      - CLICKHOUSE_DB=litellm-test
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_PASSWORD=admin
+    ports:
+      - "8123:8123"
 ```
 
-Traceloop outputs standard OpenTelemetry data that can be connected to your observability stack. Send standard OpenTelemetry from LiteLLM Proxy to [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop), [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace), [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
-, [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic), [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb), [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana), [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk), [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
-
-**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
 ```yaml
 model_list:
  - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["traceloop"]
+  success_callback: ["clickhouse"]
 ```
+
+**Step 2**: Set Required env variables for clickhouse
+
+<Tabs>
+<TabItem value="self" label="Self Hosted Clickhouse">
+
+Env Variables for self hosted click house 
+```shell
+CLICKHOUSE_HOST = "localhost"
+CLICKHOUSE_PORT = "8123"
+CLICKHOUSE_USERNAME = "admin"
+CLICKHOUSE_PASSWORD = "admin"
+```
+
+</TabItem>
+
+
+
+<TabItem value="cloud" label="Clickhouse.cloud">
+
+Env Variables for cloud click house
+
+```shell
+CLICKHOUSE_HOST = "hjs1z7j37j.us-east1.gcp.clickhouse.cloud"
+CLICKHOUSE_PORT = "8443"
+CLICKHOUSE_USERNAME = "default"
+CLICKHOUSE_PASSWORD = "M~PimRs~c3Z6b"
+```
+
+</TabItem>
+</Tabs>
+
+
+
 
 **Step 3**: Start the proxy, make a test request
 
@@ -463,10 +619,54 @@ litellm --config config.yaml --debug
 
 Test Request
 ```
+litellm --test
+```
+
+
+## Logging Proxy Input/Output - s3 Buckets
+
+We will use the `--config` to set 
+- `litellm.success_callback = ["s3"]` 
+
+This will log all successfull LLM calls to s3 Bucket
+
+**Step 1** Set AWS Credentials in .env
+
+```shell
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
+AWS_REGION_NAME = ""
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["s3"]
+  s3_callback_params:
+    s3_bucket_name: logs-bucket-litellm   # AWS Bucket Name for S3
+    s3_region_name: us-west-2              # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```shell
 curl --location 'http://0.0.0.0:8000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "Azure OpenAI GPT-4 East",
     "messages": [
         {
         "role": "user",
@@ -476,126 +676,35 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }'
 ```
 
+Your logs should be available on the specified s3 Bucket
 
+## Team-based Logging 
 
-<!-- ### Step 1 Start OpenTelemetry Collecter Docker Container
-This container sends logs to your selected destination 
-
-#### Install OpenTelemetry Collecter Docker Image
-```shell
-docker pull otel/opentelemetry-collector:0.90.0
-docker run -p 127.0.0.1:4317:4317 -p 127.0.0.1:55679:55679 otel/opentelemetry-collector:0.90.0
-```
-
-#### Set Destination paths on OpenTelemetry Collecter
-
-Here's the OpenTelemetry yaml config to use with Elastic Search
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
-  
-processors:
-  batch:
-    timeout: 1s
-    send_batch_size: 1024
-
-exporters:
-  logging:
-    loglevel: debug
-  otlphttp/elastic:
-    endpoint: "<your elastic endpoint>"
-    headers: 
-      Authorization: "Bearer <elastic api key>"
-
-service:
-  pipelines:
-    metrics:
-      receivers: [otlp]
-      exporters: [logging, otlphttp/elastic]
-    traces:
-      receivers: [otlp]
-      exporters: [logging, otlphttp/elastic]
-    logs: 
-      receivers: [otlp]
-      exporters: [logging,otlphttp/elastic]
-```
-
-#### Start the OpenTelemetry container with config
-Run the following command to start your docker container. We pass `otel_config.yaml` from the previous step
-
-```shell
-docker run -p 4317:4317 \
-    -v $(pwd)/otel_config.yaml:/etc/otel-collector-config.yaml \
-    otel/opentelemetry-collector:latest \
-    --config=/etc/otel-collector-config.yaml
-```
-
-### Step 2 Configure LiteLLM proxy to log on OpenTelemetry
-
-#### Pip install opentelemetry
-```shell
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp -U
-```
-
-#### Set (OpenTelemetry) `otel=True` on the proxy `config.yaml`
-**Example config.yaml**
+Set success callbacks (e.g. langfuse), for a specific team-id. 
 
 ```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/gpt-turbo-small-eu
-      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
-      api_key: 
-      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-
-general_settings: 
-  otel: True      # set OpenTelemetry=True, on litellm Proxy
-
+litellm_settings:
+  default_team_settings: 
+    - team_id: my-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_2
+    - team_id: ishaans-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_3
+      langfuse_secret: os.environ/LANGFUSE_SECRET_3
 ```
 
-#### Set OTEL collector endpoint
-LiteLLM will read the `OTEL_ENDPOINT` environment variable to send data to your OTEL collector 
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
 
-```python
-os.environ['OTEL_ENDPOINT'] # defauls to 127.0.0.1:4317 if not provided
+```bash
+curl -X POST 'http://0.0.0.0:8000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-D '{"team_id": "ishaans-secret-project"}'
 ```
 
-#### Start LiteLLM Proxy
-```shell
-litellm -config config.yaml
-```
-
-#### Run a test request to Proxy
-```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
-    --header 'Authorization: Bearer sk-1244' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "request from LiteLLM testing"
-        }
-    ]
-    }'
-```
-
-
-#### Test & View Logs on OpenTelemetry Collecter
-On successfull logging you should be able to see this log on your `OpenTelemetry Collecter` Docker Container
-```shell
-Events:
-
-```
-
-### View Log on Elastic Search
-Here's the log view on Elastic Search. You can see the request `input`, `output` and `headers`
-
-<Image img={require('../../img/elastic_otel.png')} /> -->
+All requests made with these keys will log data to their team-specific logging.
 
 ## Logging Proxy Input/Output - DynamoDB
 
@@ -758,4 +867,95 @@ litellm --config config.yaml --debug
 Test Request
 ```
 litellm --test
+```
+
+## Logging Proxy Input/Output Traceloop (OpenTelemetry)
+
+Traceloop allows you to log LLM Input/Output in the OpenTelemetry format
+
+We will use the `--config` to set `litellm.success_callback = ["traceloop"]` this will log all successfull LLM calls to traceloop
+
+**Step 1** Install traceloop-sdk and set Traceloop API key
+
+```shell
+pip install traceloop-sdk -U
+```
+
+Traceloop outputs standard OpenTelemetry data that can be connected to your observability stack. Send standard OpenTelemetry from LiteLLM Proxy to [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop), [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace), [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
+, [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic), [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb), [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana), [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk), [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["traceloop"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+## Logging Proxy Input/Output Athina
+
+[Athina](https://athina.ai/) allows you to log LLM Input/Output for monitoring, analytics, and observability.
+
+We will use the `--config` to set `litellm.success_callback = ["athina"]` this will log all successfull LLM calls to athina
+
+**Step 1** Set Athina API key
+
+```shell
+ATHINA_API_KEY = "your-athina-api-key"
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["athina"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "which llm are you"
+        }
+    ]
+    }'
 ```
