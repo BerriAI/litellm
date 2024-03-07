@@ -572,6 +572,7 @@ class S3Cache(BaseCache):
         self.bucket_name = s3_bucket_name
         self.key_prefix = s3_path.rstrip("/") + "/" if s3_path else ""
         # Create an S3 client with custom endpoint URL
+
         self.s3_client = boto3.client(
             "s3",
             region_name=s3_region_name,
@@ -776,6 +777,7 @@ class Cache:
         s3_aws_secret_access_key: Optional[str] = None,
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
+        s3_path: Optional[str] = None,
         redis_semantic_cache_use_async=False,
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
         **kwargs,
@@ -825,6 +827,7 @@ class Cache:
                 s3_aws_secret_access_key=s3_aws_secret_access_key,
                 s3_aws_session_token=s3_aws_session_token,
                 s3_config=s3_config,
+                s3_path=s3_path,
                 **kwargs,
             )
         if "cache" not in litellm.input_callback:

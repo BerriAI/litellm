@@ -698,7 +698,6 @@ def test_s3_cache_acompletion_stream_azure():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="AWS Suspended Account")
 async def test_s3_cache_acompletion_azure():
     import asyncio
     import logging
@@ -717,7 +716,9 @@ async def test_s3_cache_acompletion_azure():
             }
         ]
         litellm.cache = Cache(
-            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+            type="s3",
+            s3_bucket_name="litellm-my-test-bucket-2",
+            s3_region_name="us-east-1",
         )
         print("s3 Cache: test for caching, streaming + completion")
 
