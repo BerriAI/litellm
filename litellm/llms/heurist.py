@@ -85,6 +85,8 @@ def completion(
         time.time()
     )
     temperature = optional_params.get("temperature", 0.75)
+    if ("mistral" in model or "mixtral" in model) and temperature < 0.01:
+        temperature = 0.01
     max_tokens = optional_params.get("max_tokens", 500)
     if "stream" in optional_params and optional_params["stream"] == True:
         return handle_stream(submit_job(api_base, get_random_job_id(), prompt, model, user_api_key, temperature, max_tokens, use_stream=True))
