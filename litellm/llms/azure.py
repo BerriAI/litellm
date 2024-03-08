@@ -416,7 +416,6 @@ class AzureChatCompletion(BaseLLM):
             azure_client = AzureOpenAI(**azure_client_params)
         else:
             azure_client = client
-            azure_client = client
             if api_version is not None and isinstance(azure_client._custom_query, dict):
                 # set api_version to version passed by user
                 azure_client._custom_query.setdefault("api-version", api_version)
