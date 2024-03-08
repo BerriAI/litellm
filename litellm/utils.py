@@ -4147,8 +4147,9 @@ def get_optional_params(
             and custom_llm_provider != "mistral"
             and custom_llm_provider != "anthropic"
             and custom_llm_provider != "bedrock"
+            and custom_llm_provider != "ollama_chat"
         ):
-            if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+            if custom_llm_provider == "ollama":
                 # ollama actually supports json output
                 optional_params["format"] = "json"
                 litellm.add_function_to_prompt = (
@@ -4174,7 +4175,7 @@ def get_optional_params(
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
-                    message=f"Function calling is not supported by {custom_llm_provider}. To add it to the prompt, set `litellm.add_function_to_prompt = True`.",
+                    message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
 
     def _check_valid_arg(supported_params):
@@ -4687,28 +4688,13 @@ def get_optional_params(
         if stop is not None:
             optional_params["stop"] = stop
     elif custom_llm_provider == "ollama_chat":
-        supported_params = [
-            "max_tokens",
-            "stream",
-            "top_p",
-            "temperature",
-            "frequency_penalty",
-            "stop",
-        ]
+        supported_params = litellm.OllamaChatConfig().get_supported_openai_params()
+
         _check_valid_arg(supported_params=supported_params)
 
-        if max_tokens is not None:
-            optional_params["num_predict"] = max_tokens
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if frequency_penalty is not None:
-            optional_params["repeat_penalty"] = frequency_penalty
-        if stop is not None:
-            optional_params["stop"] = stop
+        optional_params = litellm.OllamaChatConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
     elif custom_llm_provider == "nlp_cloud":
         supported_params = [
             "max_tokens",
