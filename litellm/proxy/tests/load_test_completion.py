@@ -4,9 +4,7 @@ import uuid
 import traceback
 
 
-litellm_client = AsyncOpenAI(
-    base_url="http://0.0.0.0:4000", api_key="sk-iNwH_oOtAQ6syi_2gkEOpQ"
-)
+litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234")
 
 
 async def litellm_completion():
@@ -29,7 +27,7 @@ async def litellm_completion():
 async def main():
     for i in range(150):
         start = time.time()
-        n = 2000  # Number of concurrent tasks
+        n = 20  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)
