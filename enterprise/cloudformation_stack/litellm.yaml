@@ -30,13 +30,13 @@ Resources:
       PolicyType: TargetTrackingScaling
       TargetTrackingConfiguration:
         PredefinedMetricSpecification:
-          PredefinedMetricType: ASGCPUUtilization
+          PredefinedMetricType: ASGAverageCPUUtilization
         TargetValue: 60.0
 
   LiteLLMDB:
     Type: AWS::RDS::DBInstance
     Properties:
-      AllocatedStorage: 5
+      AllocatedStorage: 20
       Engine: postgres
       MasterUsername: litellmAdmin
       MasterUserPassword: litellmPassword
