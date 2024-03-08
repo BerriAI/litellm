@@ -8,7 +8,11 @@ import sys, os, dotenv
 from typing import Optional
 from dotenv import load_dotenv
 
-audio_file = open("./gettysburg.wav", "rb")
+pwd = os.getcwd()
+print(pwd)
+
+file_path = os.path.join(pwd, "gettysburg.wav")
+audio_file = open(file_path, "rb")
 
 load_dotenv()
 
