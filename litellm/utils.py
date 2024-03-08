@@ -8602,6 +8602,9 @@ class CustomStreamWrapper:
             # cohere mapping
             elif "text" in chunk_data:
                 text = chunk_data["text"]  # bedrock.cohere
+            # mistral mapping
+            elif "outputs" in chunk_data:
+                text = chunk_data['outputs'][0]['text']
             # cohere mapping for finish reason
             elif "finish_reason" in chunk_data:
                 finish_reason = chunk_data["finish_reason"]
