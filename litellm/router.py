@@ -634,6 +634,28 @@ class Router:
             raise e
 
     async def atranscription(self, file: BinaryIO, model: str, **kwargs):
+        """
+        Example Usage:
+
+        ```
+        from litellm import Router
+        client = Router(model_list = [
+            {
+                "model_name": "whisper",
+                "litellm_params": {
+                    "model": "whisper-1",
+                },
+            },
+        ])
+
+        audio_file = open("speech.mp3", "rb")
+        transcript = await client.atranscription(
+        model="whisper",
+        file=audio_file
+        )
+
+        ```
+        """
         try:
             kwargs["model"] = model
             kwargs["file"] = file
