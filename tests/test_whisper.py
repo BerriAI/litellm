@@ -19,8 +19,55 @@ import litellm
 
 
 def test_transcription():
-    transcript = litellm.transcription(model="whisper-1", file=audio_file)
+    transcript = litellm.transcription(
+        model="whisper-1",
+        file=audio_file,
+    )
     print(f"transcript: {transcript}")
 
 
-test_transcription()
+# test_transcription()
+
+
+def test_transcription_azure():
+    transcript = litellm.transcription(
+        model="azure/azure-whisper",
+        file=audio_file,
+        api_base=os.getenv("AZURE_EUROPE_API_BASE"),
+        api_key=os.getenv("AZURE_EUROPE_API_KEY"),
+        api_version=os.getenv("2024-02-15-preview"),
+    )
+
+    assert transcript.text is not None
+    assert isinstance(transcript.text, str)
+
+
+# test_transcription_azure()
+
+
+@pytest.mark.asyncio
+async def test_transcription_async_azure():
+    transcript = await litellm.atranscription(
+        model="azure/azure-whisper",
+        file=audio_file,
+        api_base=os.getenv("AZURE_EUROPE_API_BASE"),
+        api_key=os.getenv("AZURE_EUROPE_API_KEY"),
+        api_version=os.getenv("2024-02-15-preview"),
+    )
+
+    assert transcript.text is not None
+    assert isinstance(transcript.text, str)
+
+
+# asyncio.run(test_transcription_async_azure())
+
+
+@pytest.mark.asyncio
+async def test_transcription_async_openai():
+    transcript = await litellm.atranscription(
+        model="whisper-1",
+        file=audio_file,
+    )
+
+    assert transcript.text is not None
+    assert isinstance(transcript.text, str)
