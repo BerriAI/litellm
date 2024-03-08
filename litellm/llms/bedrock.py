@@ -523,6 +523,10 @@ def assume_role_to_connect_bedrock(
 
     endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
 
+    verbose_logger.debug(
+        f"initializing bedrock client with service name bedrock-runtime, region {region_name}, endpoint_url {endpoint_url}, aws_access_key_id {credentials['AccessKeyId']}, aws_secret_access_key {credentials['SecretAccessKey']}, aws_session_token {credentials['SessionToken']}"
+    )
+
     bedrock_assumed_client = boto3.client(
         service_name="bedrock-runtime",
         region_name=region_name,
@@ -1006,6 +1010,68 @@ def embedding(
     aws_bedrock_runtime_endpoint = optional_params.pop(
         "aws_bedrock_runtime_endpoint", None
     )
+    aws_arn_arguments = optional_params.pop("aws_arn_arguments", None)
+
+    # aws_arn_arguments
+    if aws_arn_arguments is not None:
+        import boto3
+
+        ### SET REGION NAME
+        litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+        standard_aws_region_name = get_secret("AWS_REGION", None)
+        region_name = None
+
+        if aws_region_name:
+            region_name = aws_region_name
+        elif litellm_aws_region_name:
+            region_name = litellm_aws_region_name
+        elif standard_aws_region_name:
+            region_name = standard_aws_region_name
+        else:
+            raise BedrockError(
+                message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
+                status_code=401,
+            )
+
+        boto3.set_stream_logger(name="botocore")
+
+        # Now using AWS ARN ARGUMENTS
+        verbose_logger.debug(
+            f"Bedrock: aws_arn_arguments - aws_arn_arguments={aws_arn_arguments}"
+        )
+
+        # checking if any aws_arn_arguments start with os.environ/
+        for k, v in aws_arn_arguments.items():
+            if isinstance(v, str) and v.startswith("os.environ/"):
+                aws_arn_arguments[k] = litellm.get_secret(v)
+
+        verbose_logger.debug(
+            f"Bedrock: aws_arn_arguments after reading 'os.environ/' prefix - aws_arn_arguments={aws_arn_arguments}"
+        )
+
+        landing_role_arn = aws_arn_arguments["landing_role_arn"]
+        landing_role_session_name = aws_arn_arguments["landing_role_session_name"]
+        aws_web_identity_token_file = aws_arn_arguments["aws_web_identity_token_file"]
+
+        web_identity_token = open(
+            aws_web_identity_token_file, "r", encoding="utf-8"
+        ).read()
+        bedrock_role_arn = aws_arn_arguments["bedrock_role_arn"]
+        bedrock_role_session_name = aws_arn_arguments["bedrock_role_session_name"]
+
+        verbose_logger.debug(
+            f"Bedrock: aws_arn_arguments args passed\n landing_role_arn={landing_role_arn}\n landing_role_session_name={landing_role_session_name}\n bedrock_role_arn={bedrock_role_arn}\n bedrock_role_session_name={bedrock_role_session_name}"
+        )
+        verbose_logger.debug(
+            f"Bedrock: aws_arn_arguments - web_identity_token_file={aws_web_identity_token_file}"
+        )
+
+        web_identity_credentials = assume_role_with_web_identity(
+            landing_role_arn, landing_role_session_name, web_identity_token
+        )
+        client = assume_role_to_connect_bedrock(
+            bedrock_role_arn, bedrock_role_session_name, region_name
+        )
 
     # use passed in BedrockRuntime.Client if provided, otherwise create a new one
     client = init_bedrock_client(
