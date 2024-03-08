@@ -49,9 +49,9 @@ model_list:
       rpm: 6
   - model_name: anthropic-claude
     litellm_params: 
-      model="bedrock/anthropic.claude-instant-v1"
+      model: bedrock/anthropic.claude-instant-v1
       ### [OPTIONAL] SET AWS REGION ###
-      aws_region_name="us-east-1"
+      aws_region_name: us-east-1
   - model_name: vllm-models
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
