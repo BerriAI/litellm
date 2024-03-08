@@ -3313,6 +3313,7 @@ def image_generation(
 ##### Transcription #######################
 
 
+@client
 async def atranscription(*args, **kwargs):
     """
     Calls openai + azure whisper endpoints.
