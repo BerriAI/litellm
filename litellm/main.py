@@ -8,7 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
-from typing import Any, Literal, Union
+from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
@@ -3043,7 +3043,6 @@ def moderation(
     return response
 
 
-##### Moderation #######################
 @client
 async def amoderation(input: str, model: str, api_key: Optional[str] = None, **kwargs):
     # only supports open ai for now
@@ -3308,6 +3307,75 @@ def image_generation(
             original_exception=e,
             completion_kwargs=locals(),
         )
+
+
+##### Transcription #######################
+
+
+async def atranscription(*args, **kwargs):
+    """
+    Calls openai + azure whisper endpoints.
+
+    Allows router to load balance between them
+    """
+    pass
+
+
+@client
+def transcription(
+    model: str,
+    file: BinaryIO,
+    ## OPTIONAL OPENAI PARAMS ##
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    response_format: Optional[
+        Literal["json", "text", "srt", "verbose_json", "vtt"]
+    ] = None,
+    temperature: Optional[int] = None,  # openai defaults this to 0
+    ## LITELLM PARAMS ##
+    user: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    litellm_logging_obj=None,
+    custom_llm_provider=None,
+    **kwargs,
+):
+    """
+    Calls openai + azure whisper endpoints.
+
+    Allows router to load balance between them
+    """
+    atranscriptions = kwargs.get("atranscriptions", False)
+    litellm_call_id = kwargs.get("litellm_call_id", None)
+    logger_fn = kwargs.get("logger_fn", None)
+    proxy_server_request = kwargs.get("proxy_server_request", None)
+    model_info = kwargs.get("model_info", None)
+    metadata = kwargs.get("metadata", {})
+
+    model_response = litellm.utils.TranscriptionResponse()
+
+    # model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
+    custom_llm_provider = "openai"
+
+    optional_params = {
+        "language": language,
+        "prompt": prompt,
+        "response_format": response_format,
+        "temperature": None,  # openai defaults this to 0
+    }
+    if custom_llm_provider == "openai":
+        return openai_chat_completions.audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            model_response=model_response,
+            atranscriptions=atranscriptions,
+            timeout=timeout,
+            logging_obj=litellm_logging_obj,
+        )
+    return
 
 
 ##### Health Endpoints #######################
