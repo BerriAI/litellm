@@ -3066,13 +3066,13 @@ async def embeddings(
     "/v1/images/generations",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
-    tags=["image generation"],
+    tags=["images"],
 )
 @router.post(
     "/images/generations",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
-    tags=["image generation"],
+    tags=["images"],
 )
 async def image_generation(
     request: Request,
@@ -3217,13 +3217,13 @@ async def image_generation(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
-    tags=["image generation"],
+    tags=["audio"],
 )
 @router.post(
     "/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
-    tags=["image generation"],
+    tags=["audio"],
 )
 async def audio_transcriptions(
     request: Request,
