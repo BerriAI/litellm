@@ -5,6 +5,12 @@ LiteLLM supports all models from [Ollama](https://github.com/jmorganca/ollama)
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
+:::info 
+
+We recommend using [ollama_chat](#using-ollama-apichat) for better responses.
+
+:::
+
 ## Pre-requisites
 Ensure you have your ollama server running
 
