@@ -7,8 +7,9 @@ from litellm.utils import (
     Message,
     CustomStreamWrapper,
     convert_to_model_response_object,
+    TranscriptionResponse,
 )
-from typing import Callable, Optional
+from typing import Callable, Optional, BinaryIO
 from litellm import OpenAIConfig
 import litellm, json
 import httpx
@@ -756,6 +757,114 @@ class AzureChatCompletion(BaseLLM):
                 raise AzureOpenAIError(status_code=e.status_code, message=str(e))
             else:
                 raise AzureOpenAIError(status_code=500, message=str(e))
+
+    def audio_transcriptions(
+        self,
+        model: str,
+        audio_file: BinaryIO,
+        optional_params: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        client=None,
+        azure_ad_token: Optional[str] = None,
+        max_retries=None,
+        logging_obj=None,
+        atranscriptions: bool = False,
+    ):
+        data = {"model": model, "file": audio_file, **optional_params}
+
+        # init AzureOpenAI Client
+        azure_client_params = {
+            "api_version": api_version,
+            "azure_endpoint": api_base,
+            "azure_deployment": model,
+            "max_retries": max_retries,
+            "timeout": timeout,
+        }
+        azure_client_params = select_azure_base_url_or_endpoint(
+            azure_client_params=azure_client_params
+        )
+        if api_key is not None:
+            azure_client_params["api_key"] = api_key
+        elif azure_ad_token is not None:
+            azure_client_params["azure_ad_token"] = azure_ad_token
+
+        if atranscriptions == True:
+            return self.async_audio_transcriptions(
+                audio_file=audio_file,
+                data=data,
+                model_response=model_response,
+                timeout=timeout,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                azure_client_params=azure_client_params,
+                max_retries=max_retries,
+                logging_obj=logging_obj,
+            )
+        if client is None:
+            azure_client = AzureOpenAI(http_client=litellm.client_session, **azure_client_params)  # type: ignore
+        else:
+            azure_client = client
+        response = azure_client.audio.transcriptions.create(
+            **data, timeout=timeout  # type: ignore
+        )
+        stringified_response = response.model_dump()
+        ## LOGGING
+        logging_obj.post_call(
+            input=audio_file.name,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=stringified_response,
+        )
+        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="audio_transcription")  # type: ignore
+        return final_response
+
+    async def async_audio_transcriptions(
+        self,
+        audio_file: BinaryIO,
+        data: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        client=None,
+        azure_client_params=None,
+        max_retries=None,
+        logging_obj=None,
+    ):
+        response = None
+        try:
+            if client is None:
+                async_azure_client = AsyncAzureOpenAI(
+                    **azure_client_params,
+                    http_client=litellm.aclient_session,
+                )
+            else:
+                async_azure_client = client
+            response = await async_azure_client.audio.transcriptions.create(
+                **data, timeout=timeout
+            )  # type: ignore
+            stringified_response = response.model_dump()
+            ## LOGGING
+            logging_obj.post_call(
+                input=audio_file.name,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=stringified_response,
+            )
+            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+        except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=input,
+                api_key=api_key,
+                original_response=str(e),
+            )
+            raise e
 
     async def ahealth_check(
         self,
