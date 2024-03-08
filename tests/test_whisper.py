@@ -8,7 +8,8 @@ import sys, os, dotenv
 from typing import Optional
 from dotenv import load_dotenv
 
-pwd = os.getcwd()
+# Get the current directory of the file being run
+pwd = os.path.dirname(os.path.realpath(__file__))
 print(pwd)
 
 file_path = os.path.join(pwd, "gettysburg.wav")
