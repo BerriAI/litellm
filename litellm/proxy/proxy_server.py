@@ -9,6 +9,9 @@ import warnings
 import importlib
 import warnings
 import backoff
+from argon2 import PasswordHasher
+
+ph = PasswordHasher()
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -255,6 +258,7 @@ litellm_proxy_admin_name = "default_user_id"
 ui_access_mode: Literal["admin", "all"] = "all"
 proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
+litellm_master_key_hash = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -313,6 +317,16 @@ async def user_api_key_auth(
             else:
                 return UserAPIKeyAuth()
 
+        ### CHECK IF ADMIN ###
+        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
+        is_master_key_valid = ph.verify(api_key, litellm_master_key_hash)
+        if is_master_key_valid:
+            return UserAPIKeyAuth(
+                api_key=master_key,
+                user_role="proxy_admin",
+                user_id=litellm_proxy_admin_name,
+            )
+
         route: str = request.url.path
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) == True:
@@ -334,31 +348,22 @@ async def user_api_key_auth(
             Unprotected endpoints
             """
             return UserAPIKeyAuth()
+        elif route.startswith("/config/"):
+            raise Exception(f"Only admin can modify config")
 
         if api_key is None:  # only require api key if master key is set
             raise Exception(f"No api key passed in.")
 
-        if secrets.compare_digest(api_key, ""):
+        if api_key == "":
             # missing 'Bearer ' prefix
             raise Exception(
                 f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
             )
 
-        ### CHECK IF ADMIN ###
-        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
-        is_master_key_valid = secrets.compare_digest(api_key, master_key)
-        if is_master_key_valid:
-            return UserAPIKeyAuth(
-                api_key=master_key,
-                user_role="proxy_admin",
-                user_id=litellm_proxy_admin_name,
-            )
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
             assert api_key.startswith("sk-")  # prevent token hashes from being used
-        if route.startswith("/config/") and not is_master_key_valid:
-            raise Exception(f"Only admin can modify config")
 
         if (
             prisma_client is None and custom_db_client is None
@@ -1492,7 +1497,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1757,6 +1762,8 @@ class ProxyConfig:
             )
             if master_key and master_key.startswith("os.environ/"):
                 master_key = litellm.get_secret(master_key)
+
+            litellm_master_key_hash = ph.hash(master_key)
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
@@ -2830,6 +2837,7 @@ async def chat_completion(
         response = await proxy_logging_obj.post_call_success_hook(
             user_api_key_dict=user_api_key_dict, response=response
         )
+
         return response
     except Exception as e:
         traceback.print_exc()
