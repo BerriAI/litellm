@@ -465,6 +465,9 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
             )
+            if self.set_verbose == True and self.debug_level == "DEBUG":
+                # debug how often this deployment picked
+                self._print_deployment_metrics(deployment=deployment, response=response)
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -2143,31 +2146,62 @@ class Router:
         )
         return deployment
 
-    def _print_deployment_metrics(self, deployment):
-        litellm_params = deployment["litellm_params"]
-        api_base = litellm_params.get("api_base", "")
-        model = litellm_params.get("model", "")
+    def _print_deployment_metrics(self, deployment, response=None):
+        try:
+            litellm_params = deployment["litellm_params"]
+            api_base = litellm_params.get("api_base", "")
+            model = litellm_params.get("model", "")
 
-        model_id = deployment.get("model_info", {}).get("id", None)
+            model_id = deployment.get("model_info", {}).get("id", None)
+            if response is None:
 
-        # update self.deployment_stats
-        if model_id is not None:
-            if model_id in self.deployment_stats:
-                # only update num_requests
-                self.deployment_stats[model_id]["num_requests"] += 1
+                # update self.deployment_stats
+                if model_id is not None:
+                    if model_id in self.deployment_stats:
+                        # only update num_requests
+                        self.deployment_stats[model_id]["num_requests"] += 1
+                    else:
+                        self.deployment_stats[model_id] = {
+                            "api_base": api_base,
+                            "model": model,
+                            "num_requests": 1,
+                        }
             else:
-                self.deployment_stats[model_id] = {
-                    "api_base": api_base,
-                    "model": model,
-                    "num_requests": 1,
-                }
-        from pprint import pformat
+                # check response_ms and update num_successes
+                response_ms = response.get("_response_ms", 0)
+                if model_id is not None:
+                    if model_id in self.deployment_stats:
+                        # check if avg_latency exists
+                        if "avg_latency" in self.deployment_stats[model_id]:
+                            # update avg_latency
+                            self.deployment_stats[model_id]["avg_latency"] = (
+                                self.deployment_stats[model_id]["avg_latency"]
+                                + response_ms
+                            ) / self.deployment_stats[model_id]["num_successes"]
+                        else:
+                            self.deployment_stats[model_id]["avg_latency"] = response_ms
 
-        # Assuming self.deployment_stats is your dictionary
-        formatted_stats = pformat(self.deployment_stats)
+                        # check if num_successes exists
+                        if "num_successes" in self.deployment_stats[model_id]:
+                            self.deployment_stats[model_id]["num_successes"] += 1
+                        else:
+                            self.deployment_stats[model_id]["num_successes"] = 1
+                    else:
+                        self.deployment_stats[model_id] = {
+                            "api_base": api_base,
+                            "model": model,
+                            "num_successes": 1,
+                            "avg_latency": response_ms,
+                        }
+            from pprint import pformat
 
-        # Assuming verbose_router_logger is your logger
-        verbose_router_logger.info("self.deployment_stats: \n%s", formatted_stats)
+            # Assuming self.deployment_stats is your dictionary
+            formatted_stats = pformat(self.deployment_stats)
+
+            # Assuming verbose_router_logger is your logger
+            verbose_router_logger.info("self.deployment_stats: \n%s", formatted_stats)
+        except Exception as e:
+            verbose_router_logger.error(f"Error in _print_deployment_metrics: {str(e)}")
 
     def flush_cache(self):
         litellm.cache = None
