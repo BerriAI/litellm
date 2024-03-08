@@ -2670,6 +2670,11 @@ async def chat_completion(
         except:
             data = json.loads(body_str)
 
+        # Azure OpenAI only: check if user passed api-version
+        query_params = dict(request.query_params)
+        if "api-version" in query_params:
+            data["api_version"] = query_params["api-version"]
+
         # Include original request and headers in the data
         data["proxy_server_request"] = {
             "url": str(request.url),
