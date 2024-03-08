@@ -108,7 +108,7 @@
     },
     "gpt-3.5-turbo": {
         "max_tokens": 4097,
-        "max_input_tokens": 4097,
+        "max_input_tokens": 16385,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
