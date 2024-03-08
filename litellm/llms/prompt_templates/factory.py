@@ -556,6 +556,7 @@ def anthropic_messages_pt(messages: list):
     3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
     4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
     5. System messages are a separate param to the Messages API (used for tool calling)
+    6. Ensure we only accept role, content. (message.name is not supported)
     """
     ## Ensure final assistant message has no trailing whitespace
     last_assistant_message_idx: Optional[int] = None
@@ -583,7 +584,9 @@ def anthropic_messages_pt(messages: list):
                     new_content.append({"type": "text", "text": m["text"]})
             new_messages.append({"role": messages[0]["role"], "content": new_content})  # type: ignore
         else:
-            new_messages.append(messages[0])
+            new_messages.append(
+                {"role": messages[0]["role"], "content": messages[0]["content"]}
+            )
 
         return new_messages
 
@@ -606,7 +609,9 @@ def anthropic_messages_pt(messages: list):
                     new_content.append({"type": "text", "content": m["text"]})
             new_messages.append({"role": messages[i]["role"], "content": new_content})  # type: ignore
         else:
-            new_messages.append(messages[i])
+            new_messages.append(
+                {"role": messages[i]["role"], "content": messages[i]["content"]}
+            )
 
         if messages[i]["role"] == messages[i + 1]["role"]:
             if messages[i]["role"] == "user":
@@ -897,6 +902,10 @@ def prompt_factory(
                 return anthropic_pt(messages=messages)
         elif "mistral." in model:
             return mistral_instruct_pt(messages=messages)
+    elif custom_llm_provider == "perplexity":
+        for message in messages:
+            message.pop("name", None)
+        return messages
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)

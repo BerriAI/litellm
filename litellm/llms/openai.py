@@ -237,14 +237,22 @@ class OpenAIChatCompletion(BaseLLM):
                     status_code=422, message=f"Timeout needs to be a float"
                 )
 
-            if custom_llm_provider == "mistral":
-                # check if message content passed in as list, and not string
-                messages = prompt_factory(
-                    model=model,
-                    messages=messages,
-                    custom_llm_provider=custom_llm_provider,
-                )
-
+            if custom_llm_provider != "openai":
+                # process all OpenAI compatible provider logic here
+                if custom_llm_provider == "mistral":
+                    # check if message content passed in as list, and not string
+                    messages = prompt_factory(
+                        model=model,
+                        messages=messages,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                if custom_llm_provider == "perplexity" and messages is not None:
+                    # check if messages.name is passed + supported, if not supported remove
+                    messages = prompt_factory(
+                        model=model,
+                        messages=messages,
+                        custom_llm_provider=custom_llm_provider,
+                    )
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
