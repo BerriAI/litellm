@@ -1,8 +1,17 @@
 ---
 Resources:
-  MyEC2Instance:
+  LiteLLMServer:
     Type: "AWS::EC2::Instance"
     Properties:
       AvailabilityZone: "us-east-1a"
       ImageId: "ami-0f403e3180720dd7e"  # Replace with your desired AMI ID
       InstanceType: "t2.micro"
+  LiteLLMDB:
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      AllocatedStorage: 5
+      Engine: "postgres"
+      MasterUsername: "litellmAdmin"  # Replace with your desired master username
+      MasterUserPassword: "litellmPassword"  # Replace with your desired secure password
+      DBInstanceClass: "db.t3.micro"
+      AvailabilityZone: "us-east-1a"
