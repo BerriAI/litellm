@@ -218,8 +218,49 @@ Provide an ssl certificate when starting litellm proxy server
 
 ## Platform-specific Guide
 
-
 <Tabs>
+
+<TabItem value="aws-stack" label="AWS Cloud Formation Stack">
+
+### AWS Cloud Formation Stack
+LiteLLM AWS Cloudformation Stack - **Get the best LiteLLM AutoScaling Policy and Provision the DB for LiteLLM Proxy**
+
+This will provision:
+- LiteLLMServer - EC2 Instance
+- LiteLLMServerAutoScalingGroup
+- LiteLLMServerScalingPolicy (autoscaling policy)
+- LiteLLMDB - RDS::DBInstance
+
+#### Using AWS Cloud Formation Stack
+**LiteLLM Cloudformation stack is located [here - litellm.yaml](https://github.com/BerriAI/litellm/blob/main/enterprise/cloudformation_stack/litellm.yaml)**
+
+#### 1. Create the CloudFormation Stack:
+In the AWS Management Console, navigate to the CloudFormation service, and click on "Create Stack."
+
+On the "Create Stack" page, select "Upload a template file" and choose the litellm.yaml file 
+
+Now monitor the stack was created successfully. 
+
+#### 2. Get the Database URL:
+Once the stack is created, get the DatabaseURL of the Database resource, copy this value 
+
+#### 3. Connect to the EC2 Instance and deploy litellm on the EC2 container
+From the EC2 console, connect to the instance created by the stack (e.g., using SSH).
+
+Run the following command, replacing <database_url> with the value you copied in step 2
+
+```shell
+docker run --name litellm-proxy \
+   -e DATABASE_URL=<database_url> \
+   -p 4000:4000 \
+   ghcr.io/berriai/litellm-database:main-latest
+```
+
+#### 4. Access the Application:
+
+Once the container is running, you can access the application by going to `http://<ec2-public-ip>:4000` in your browser.
+
+</TabItem>
 <TabItem value="google-cloud-run" label="Google Cloud Run">
 
 ### Deploy on Google Cloud Run
