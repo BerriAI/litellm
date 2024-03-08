@@ -693,6 +693,9 @@ class PrismaClient:
         """
         Generic implementation of get data
         """
+        verbose_proxy_logger.debug(
+            f"PrismaClient: get_generic_data: {key}, table_name: {table_name}"
+        )
         try:
             if table_name == "users":
                 response = await self.db.litellm_usertable.find_first(
@@ -758,6 +761,9 @@ class PrismaClient:
             int
         ] = None,  # pagination, number of rows to getch when find_all==True
     ):
+        verbose_proxy_logger.debug(
+            f"PrismaClient: get_data: token={token}, table_name: {table_name}, query_type: {query_type}, user_id: {user_id}, user_id_list: {user_id_list}, team_id: {team_id}, team_id_list: {team_id_list}, key_val: {key_val}"
+        )
         try:
             response: Any = None
             if (token is not None and table_name is None) or (
@@ -991,9 +997,11 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception get_data: {str(e)}"
+            prisma_query_info = f"LiteLLM Prisma Client Exception: get_data: token={token}, table_name: {table_name}, query_type: {query_type}, user_id: {user_id}, user_id_list: {user_id_list}, team_id: {team_id}, team_id_list: {team_id_list}, key_val: {key_val}"
+            error_msg = prisma_query_info + str(e)
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
+            verbose_proxy_logger.debug(error_traceback)
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e, traceback_str=error_traceback
@@ -1020,6 +1028,7 @@ class PrismaClient:
         Add a key to the database. If it already exists, do nothing.
         """
         try:
+            verbose_proxy_logger.debug(f"PrismaClient: insert_data: {data}")
             if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
@@ -1152,6 +1161,9 @@ class PrismaClient:
         """
         Update existing data
         """
+        verbose_proxy_logger.debug(
+            f"PrismaClient: update_data, table_name: {table_name}"
+        )
         try:
             db_data = self.jsonify_object(data=data)
             if update_key_values is not None:
