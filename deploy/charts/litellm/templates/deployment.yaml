@@ -150,8 +150,8 @@ spec:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "redis.secretName" . }}
-                  key: {{include "redis.secretPasswordKey" . }}
+                  name: {{ include "redis.secretName" .Subcharts.redis }}
+                  key: {{include "redis.secretPasswordKey" .Subcharts.redis }}
             {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
