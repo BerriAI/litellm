@@ -319,7 +319,9 @@ async def user_api_key_auth(
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
-        is_master_key_valid = ph.verify(api_key, litellm_master_key_hash)
+
+        is_master_key_valid = ph.verify(litellm_master_key_hash, api_key)
+
         if is_master_key_valid:
             return UserAPIKeyAuth(
                 api_key=master_key,
@@ -1762,7 +1764,6 @@ class ProxyConfig:
             )
             if master_key and master_key.startswith("os.environ/"):
                 master_key = litellm.get_secret(master_key)
-
             litellm_master_key_hash = ph.hash(master_key)
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
@@ -6871,42 +6872,45 @@ async def health_endpoint(
     else, the health checks will be run on models when /health is called.
     """
     global health_check_results, use_background_health_checks, user_model
-
-    if llm_model_list is None:
-        # if no router set, check if user set a model using litellm --model ollama/llama2
-        if user_model is not None:
-            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                model_list=[], cli_model=user_model
+    try:
+        if llm_model_list is None:
+            # if no router set, check if user set a model using litellm --model ollama/llama2
+            if user_model is not None:
+                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                    model_list=[], cli_model=user_model
+                )
+                return {
+                    "healthy_endpoints": healthy_endpoints,
+                    "unhealthy_endpoints": unhealthy_endpoints,
+                    "healthy_count": len(healthy_endpoints),
+                    "unhealthy_count": len(unhealthy_endpoints),
+                }
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "Model list not initialized"},
             )
+
+        ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
+        if len(user_api_key_dict.models) > 0:
+            allowed_model_names = user_api_key_dict.models
+        else:
+            allowed_model_names = []  #
+        if use_background_health_checks:
+            return health_check_results
+        else:
+            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                llm_model_list, model
+            )
+
             return {
                 "healthy_endpoints": healthy_endpoints,
                 "unhealthy_endpoints": unhealthy_endpoints,
                 "healthy_count": len(healthy_endpoints),
                 "unhealthy_count": len(unhealthy_endpoints),
             }
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "Model list not initialized"},
-        )
-
-    ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
-    if len(user_api_key_dict.models) > 0:
-        allowed_model_names = user_api_key_dict.models
-    else:
-        allowed_model_names = []  #
-    if use_background_health_checks:
-        return health_check_results
-    else:
-        healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            llm_model_list, model
-        )
-
-        return {
-            "healthy_endpoints": healthy_endpoints,
-            "unhealthy_endpoints": unhealthy_endpoints,
-            "healthy_count": len(healthy_endpoints),
-            "unhealthy_count": len(unhealthy_endpoints),
-        }
+    except Exception as e:
+        traceback.print_exc()
+        raise e
 
 
 @router.get(
