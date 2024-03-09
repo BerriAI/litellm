@@ -861,7 +861,8 @@ class AzureChatCompletion(BaseLLM):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="audio_transcription")  # type: ignore
+        hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
+        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(
@@ -921,7 +922,8 @@ class AzureChatCompletion(BaseLLM):
                 },
                 original_response=stringified_response,
             )
-            response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="audio_transcription")  # type: ignore
+            hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
+            response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
             return response
         except Exception as e:
             ## LOGGING
