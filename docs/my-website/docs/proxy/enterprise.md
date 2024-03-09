@@ -58,7 +58,7 @@ callbacks: ["llamaguard_moderations"]
 Set the LLM Guard API Base in your environment 
 
 ```env
-LLM_GUARD_API_BASE = "http://0.0.0.0:8000"
+LLM_GUARD_API_BASE = "http://0.0.0.0:4000"
 ```
 
 Add `llmguard_moderations` as a callback 
@@ -143,7 +143,7 @@ When `no-log=True`, the request will **not be logged on any callbacks** and ther
 import openai
 client = openai.OpenAI(
     api_key="anything",            # proxy api-key
-    base_url="http://0.0.0.0:8000" # litellm proxy 
+    base_url="http://0.0.0.0:4000" # litellm proxy 
 )
 
 response = client.chat.completions.create(
@@ -175,7 +175,7 @@ litellm_settings:
 ### How to test
 
 ```bash 
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -202,7 +202,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 **Block all calls for a user id**
 
 ```
-curl -X POST "http://0.0.0.0:8000/user/block" \
+curl -X POST "http://0.0.0.0:4000/user/block" \
 -H "Authorization: Bearer sk-1234" \ 
 -D '{
 "user_ids": [<user_id>, ...] 
@@ -212,7 +212,7 @@ curl -X POST "http://0.0.0.0:8000/user/block" \
 **Unblock calls for a user id**
 
 ```
-curl -X POST "http://0.0.0.0:8000/user/unblock" \
+curl -X POST "http://0.0.0.0:4000/user/unblock" \
 -H "Authorization: Bearer sk-1234" \ 
 -D '{
 "user_ids": [<user_id>, ...] 
@@ -230,7 +230,7 @@ litellm_settings:
 ### Test this 
 
 ```bash
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -263,7 +263,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -291,7 +291,7 @@ print(response)
 Pass `metadata` as part of the request body
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -317,7 +317,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",
+    openai_api_base="http://0.0.0.0:4000",
     model = "gpt-3.5-turbo",
     temperature=0.1,
     extra_body={
