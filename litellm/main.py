@@ -3385,7 +3385,7 @@ def transcription(
 
     Allows router to load balance between them
     """
-    atranscriptions = kwargs.get("atranscriptions", False)
+    atranscription = kwargs.get("atranscription", False)
     litellm_call_id = kwargs.get("litellm_call_id", None)
     logger_fn = kwargs.get("logger_fn", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -3421,12 +3421,13 @@ def transcription(
             or litellm.azure_key
             or get_secret("AZURE_API_KEY")
         )
+
         response = azure_chat_completions.audio_transcriptions(
             model=model,
             audio_file=file,
             optional_params=optional_params,
             model_response=model_response,
-            atranscriptions=atranscriptions,
+            atranscription=atranscription,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
@@ -3440,7 +3441,7 @@ def transcription(
             audio_file=file,
             optional_params=optional_params,
             model_response=model_response,
-            atranscriptions=atranscriptions,
+            atranscription=atranscription,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
         )

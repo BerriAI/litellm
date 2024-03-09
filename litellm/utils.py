@@ -2309,7 +2309,7 @@ def client(original_function):
                 or call_type == CallTypes.transcription.value
             ):
                 _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
-                messages = _file_name.name
+                messages = "audio_file"
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
             logging_obj = Logging(
                 model=model,
@@ -2606,6 +2606,8 @@ def client(original_function):
             elif "aembedding" in kwargs and kwargs["aembedding"] == True:
                 return result
             elif "aimg_generation" in kwargs and kwargs["aimg_generation"] == True:
+                return result
+            elif "atranscription" in kwargs and kwargs["atranscription"] == True:
                 return result
 
             ### POST-CALL RULES ###
@@ -7834,7 +7836,9 @@ def exception_type(
                             message=f"AzureException - {original_exception.message}",
                             llm_provider="azure",
                             model=model,
-                            request=original_exception.request,
+                            request=httpx.Request(
+                                method="POST", url="https://openai.com/"
+                            ),
                         )
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
@@ -7842,7 +7846,11 @@ def exception_type(
                         __cause__=original_exception.__cause__,
                         llm_provider="azure",
                         model=model,
-                        request=original_exception.request,
+                        request=getattr(
+                            original_exception,
+                            "request",
+                            httpx.Request(method="POST", url="https://openai.com/"),
+                        ),
                     )
         if (
             "BadRequestError.__init__() missing 1 required positional argument: 'param'"
