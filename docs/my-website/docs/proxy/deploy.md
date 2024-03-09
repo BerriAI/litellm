@@ -28,7 +28,7 @@ docker run ghcr.io/berriai/litellm:main-latest
 
 <TabItem value="cli" label="With CLI Args">
 
-### Run with LiteLLM CLI args
+#### Run with LiteLLM CLI args
 
 See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli): 
 
@@ -129,12 +129,25 @@ spec:
             name: litellm-config-file
 ```
 
-> [!TIP]
-> To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-latest`.
+:::info
+To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-latest`.
+:::
 
 </TabItem>
 
 </Tabs>
+
+**That's it ! That's the quick start to deploy litellm**
+
+## Options to deploy LiteLLM 
+
+| Docs | When to Use |
+| --- | --- |
+| [Quick Start](#quick-start) | call 100+ LLMs + Load Balancing |
+| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend |
+| [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
+| [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
+
 
 ## Deploy with Database
 
@@ -159,7 +172,7 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 </TabItem>
 <TabItem value="kubernetes-deploy" label="Kubernetes">
 
-### Step 1. Create deployment.yaml
+#### Step 1. Create deployment.yaml
 
 ```yaml
    apiVersion: apps/v1
@@ -188,7 +201,7 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 kubectl apply -f /path/to/deployment.yaml
 ```
 
-### Step 2. Create service.yaml 
+#### Step 2. Create service.yaml 
 
 ```yaml
 apiVersion: v1
@@ -209,7 +222,7 @@ spec:
 kubectl apply -f /path/to/service.yaml
 ```
 
-### Step 3. Start server
+#### Step 3. Start server
 
 ```
 kubectl port-forward service/litellm-service 4000:4000
@@ -220,13 +233,13 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 </TabItem>
 <TabItem value="helm-deploy" label="Helm">
 
-### Step 1. Clone the repository
+#### Step 1. Clone the repository
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-### Step 2. Deploy with Helm
+#### Step 2. Deploy with Helm
 
 ```bash
 helm install \
@@ -235,7 +248,7 @@ helm install \
   deploy/charts/litellm
 ```
 
-### Step 3. Expose the service to localhost
+#### Step 3. Expose the service to localhost
 
 ```bash
 kubectl \
@@ -248,6 +261,73 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:8000`.
 
 </TabItem>
 </Tabs>
+
+## LiteLLM container + Redis
+Use Redis when you need litellm to load balance across multiple litellm containers
+
+The only change required is setting Redis on your `config.yaml`
+LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances, pass `redis_host`, `redis_password` and `redis_port` to enable this. (LiteLLM will use Redis to track rpm/tpm usage )
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-endpoint>
+      api_key: <your-azure-api-key>
+      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+      rpm: 6
+router_settings:
+  redis_host: <your redis host>
+  redis_password: <your redis password>
+  redis_port: 1992
+```
+
+Start docker container with config
+
+```shell
+docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
+```
+
+## LiteLLM Database container + PostgresDB + Redis
+
+The only change required is setting Redis on your `config.yaml`
+LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances, pass `redis_host`, `redis_password` and `redis_port` to enable this. (LiteLLM will use Redis to track rpm/tpm usage )
+
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-endpoint>
+      api_key: <your-azure-api-key>
+      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+      rpm: 6
+router_settings:
+  redis_host: <your redis host>
+  redis_password: <your redis password>
+  redis_port: 1992
+```
+
+Start `litellm-database`docker container with config
+
+```shell
+docker run --name litellm-proxy \
+-e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+-p 4000:4000 \
+ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+```
 
 ## Best Practices for Deploying to Production
 ### 1. Switch of debug logs in production 
