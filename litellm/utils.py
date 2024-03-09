@@ -2985,12 +2985,15 @@ def client(original_function):
             print_verbose(
                 f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
             )
-            asyncio.create_task(
-                logging_obj.async_success_handler(result, start_time, end_time)
-            )
-            threading.Thread(
-                target=logging_obj.success_handler, args=(result, start_time, end_time)
-            ).start()
+            # check if user does not want this to be logged
+            if kwargs.get("no-log", False) == False:
+                asyncio.create_task(
+                    logging_obj.async_success_handler(result, start_time, end_time)
+                )
+                threading.Thread(
+                    target=logging_obj.success_handler,
+                    args=(result, start_time, end_time),
+                ).start()
 
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
