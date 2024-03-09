@@ -6,7 +6,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import time
 import litellm
-from litellm import get_max_tokens, model_cost, open_ai_chat_completion_models
+from litellm import (
+    get_max_tokens,
+    model_cost,
+    open_ai_chat_completion_models,
+    TranscriptionResponse,
+)
 import pytest
 
 
@@ -238,3 +243,57 @@ def test_cost_bedrock_pricing_actual_calls():
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
     assert cost > 0
+
+
+def test_whisper_openai():
+    litellm.set_verbose = True
+    transcription = TranscriptionResponse(
+        text="Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."
+    )
+    transcription._hidden_params = {
+        "model": "whisper-1",
+        "custom_llm_provider": "openai",
+        "optional_params": {},
+        "model_id": None,
+    }
+    _total_time_in_seconds = 3
+
+    transcription._response_ms = _total_time_in_seconds * 1000
+    cost = litellm.completion_cost(model="whisper-1", completion_response=transcription)
+
+    print(f"cost: {cost}")
+    print(f"whisper dict: {litellm.model_cost['whisper-1']}")
+    expected_cost = round(
+        litellm.model_cost["whisper-1"]["output_cost_per_second"]
+        * _total_time_in_seconds,
+        5,
+    )
+    assert cost == expected_cost
+
+
+def test_whisper_azure():
+    litellm.set_verbose = True
+    transcription = TranscriptionResponse(
+        text="Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."
+    )
+    transcription._hidden_params = {
+        "model": "whisper-1",
+        "custom_llm_provider": "azure",
+        "optional_params": {},
+        "model_id": None,
+    }
+    _total_time_in_seconds = 3
+
+    transcription._response_ms = _total_time_in_seconds * 1000
+    cost = litellm.completion_cost(
+        model="azure/azure-whisper", completion_response=transcription
+    )
+
+    print(f"cost: {cost}")
+    print(f"whisper dict: {litellm.model_cost['whisper-1']}")
+    expected_cost = round(
+        litellm.model_cost["whisper-1"]["output_cost_per_second"]
+        * _total_time_in_seconds,
+        5,
+    )
+    assert cost == expected_cost
