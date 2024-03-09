@@ -35,6 +35,7 @@ def test_transcription():
 
 
 def test_transcription_azure():
+    litellm.set_verbose = True
     transcript = litellm.transcription(
         model="azure/azure-whisper",
         file=audio_file,
@@ -45,6 +46,8 @@ def test_transcription_azure():
 
     assert transcript.text is not None
     assert isinstance(transcript.text, str)
+
+    raise Exception("it worked")
 
 
 # test_transcription_azure()
