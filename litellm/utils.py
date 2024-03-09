@@ -1281,8 +1281,13 @@ class Logging:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
                     if litellm_params.get("no-log", False) == True:
-                        print_verbose("no-log request, skipping logging")
-                        continue
+                        # proxy cost tracking cal backs should run
+                        if not (
+                            isinstance(callback, CustomLogger)
+                            and "_PROXY_" in callback.__class__.__name__
+                        ):
+                            print_verbose("no-log request, skipping logging")
+                            continue
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
                         print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
@@ -1711,6 +1716,16 @@ class Logging:
             callbacks = litellm._async_success_callback
         verbose_logger.debug(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
+            # check if callback can run for this request
+            litellm_params = self.model_call_details.get("litellm_params", {})
+            if litellm_params.get("no-log", False) == True:
+                # proxy cost tracking cal backs should run
+                if not (
+                    isinstance(callback, CustomLogger)
+                    and "_PROXY_" in callback.__class__.__name__
+                ):
+                    print_verbose("no-log request, skipping logging")
+                    continue
             try:
                 if kwargs.get("no-log", False) == True:
                     print_verbose("no-log request, skipping logging")
