@@ -787,10 +787,10 @@ class OpenAIChatCompletion(BaseLLM):
         client=None,
         max_retries=None,
         logging_obj=None,
-        atranscriptions: bool = False,
+        atranscription: bool = False,
     ):
         data = {"model": model, "file": audio_file, **optional_params}
-        if atranscriptions == True:
+        if atranscription == True:
             return self.async_audio_transcriptions(
                 audio_file=audio_file,
                 data=data,

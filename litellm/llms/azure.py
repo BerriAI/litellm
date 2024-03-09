@@ -794,9 +794,8 @@ class AzureChatCompletion(BaseLLM):
         api_version: Optional[str] = None,
         client=None,
         azure_ad_token: Optional[str] = None,
-        max_retries=None,
         logging_obj=None,
-        atranscriptions: bool = False,
+        atranscription: bool = False,
     ):
         data = {"model": model, "file": audio_file, **optional_params}
 
@@ -805,9 +804,11 @@ class AzureChatCompletion(BaseLLM):
             "api_version": api_version,
             "azure_endpoint": api_base,
             "azure_deployment": model,
-            "max_retries": max_retries,
             "timeout": timeout,
         }
+
+        max_retries = optional_params.pop("max_retries", None)
+
         azure_client_params = select_azure_base_url_or_endpoint(
             azure_client_params=azure_client_params
         )
@@ -816,7 +817,10 @@ class AzureChatCompletion(BaseLLM):
         elif azure_ad_token is not None:
             azure_client_params["azure_ad_token"] = azure_ad_token
 
-        if atranscriptions == True:
+        if max_retries is not None:
+            azure_client_params["max_retries"] = max_retries
+
+        if atranscription == True:
             return self.async_audio_transcriptions(
                 audio_file=audio_file,
                 data=data,
@@ -900,15 +904,25 @@ class AzureChatCompletion(BaseLLM):
             response = await async_azure_client.audio.transcriptions.create(
                 **data, timeout=timeout
             )  # type: ignore
+
             stringified_response = response.model_dump()
+
             ## LOGGING
             logging_obj.post_call(
                 input=audio_file.name,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={
+                    "headers": {
+                        "Authorization": f"Bearer {async_azure_client.api_key}"
+                    },
+                    "api_base": async_azure_client._base_url._uri_reference,
+                    "atranscription": True,
+                    "complete_input_dict": data,
+                },
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+            response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="audio_transcription")  # type: ignore
+            return response
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
