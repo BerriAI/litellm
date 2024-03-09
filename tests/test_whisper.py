@@ -36,13 +36,12 @@ def test_transcription():
 
 def test_transcription_azure():
     litellm.set_verbose = True
-    print(f"AZURE EUROPE API BASE: {os.getenv('AZURE_EUROPE_API_BASE', None)}")
     transcript = litellm.transcription(
         model="azure/azure-whisper",
         file=audio_file,
-        api_base=os.getenv("AZURE_EUROPE_API_BASE"),
+        api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
         api_key=os.getenv("AZURE_EUROPE_API_KEY"),
-        api_version=os.getenv("2024-02-15-preview"),
+        api_version="2024-02-15-preview",
     )
 
     assert transcript.text is not None
@@ -57,9 +56,9 @@ async def test_transcription_async_azure():
     transcript = await litellm.atranscription(
         model="azure/azure-whisper",
         file=audio_file,
-        api_base=os.getenv("AZURE_EUROPE_API_BASE"),
+        api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
         api_key=os.getenv("AZURE_EUROPE_API_KEY"),
-        api_version=os.getenv("2024-02-15-preview"),
+        api_version="2024-02-15-preview",
     )
 
     assert transcript.text is not None
