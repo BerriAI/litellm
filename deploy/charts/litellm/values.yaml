@@ -174,4 +174,4 @@ postgresql:
 # with cache: true to use existing redis instance
 redis:
   enabled: false
-  architecture: replication
+  architecture: standalone
