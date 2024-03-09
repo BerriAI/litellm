@@ -101,12 +101,13 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Moderation(), Image Generation()",
+      label: "Embedding(), Moderation(), Image Generation(), Audio Transcriptions()",
       items: [
         "embedding/supported_embedding", 
         "embedding/async_embedding",
         "embedding/moderation",
-        "image_generation"
+        "image_generation",
+        "audio_transcription"
       ],
     },
     {
