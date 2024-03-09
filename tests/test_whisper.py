@@ -98,7 +98,7 @@ async def test_transcription_on_router():
                     "model": "azure/azure-whisper",
                     "api_base": os.getenv("AZURE_EUROPE_API_BASE"),
                     "api_key": os.getenv("AZURE_EUROPE_API_KEY"),
-                    "api_version": os.getenv("2024-02-15-preview"),
+                    "api_version": "2024-02-15-preview",
                 },
             },
         ]
