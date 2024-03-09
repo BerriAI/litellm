@@ -68,6 +68,70 @@ CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug", "--run_gun
 
 </TabItem>
 
+<TabItem value="kubernetes" label="Kubernetes">
+
+Deploying a config file based litellm instance, just requires a simple deployment that loads
+the config.yaml file via a config map.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config-file
+data:
+  config.yaml: |
+      model_list: 
+        - model_name: gpt-3.5-turbo # user-facing model alias
+          litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
+            model: azure/<your-deployment-name>
+            api_base: <your-azure-api-endpoint>
+            api_key: <your-azure-api-key>
+        - model_name: gpt-3.5-turbo
+          litellm_params:
+            model: azure/gpt-turbo-small-ca
+            api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+            api_key: <your-azure-api-key>
+        - model_name: vllm-model
+          litellm_params:
+            model: openai/<your-model-name>
+            api_base: <your-api-base> # e.g. http://0.0.0.0:3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-deployment
+  labels:
+    app: litellm
+spec:
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      containers:
+      - name: litellm
+        image: ghcr.io/berriai/litellm:main-latest # it is recommended to fix a version generally
+        ports:
+        - containerPort: 4000
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/proxy_server_config.yaml
+          subPath: config.yaml
+        envFrom:
+        - secretRef:
+            name: litellm-secrets
+      volumes:
+        - name: config-volume
+          configMap:
+            name: litellm-config-file
+
+```
+
+</TabItem>
+
 </Tabs>
 
 ## Deploy with Database
