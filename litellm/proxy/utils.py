@@ -761,6 +761,7 @@ class PrismaClient:
             int
         ] = None,  # pagination, number of rows to getch when find_all==True
     ):
+        args_passed_in = locals()
         verbose_proxy_logger.debug(
             f"PrismaClient: get_data: token={token}, table_name: {table_name}, query_type: {query_type}, user_id: {user_id}, user_id_list: {user_id_list}, team_id: {team_id}, team_id_list: {team_id_list}, key_val: {key_val}"
         )
@@ -794,6 +795,12 @@ class PrismaClient:
                             response.expires, datetime
                         ):
                             response.expires = response.expires.isoformat()
+                    else:
+                        # Token does not exist.
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=f"Authentication Error: invalid user key - user key does not exist in db. User Key={token}",
+                        )
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_verificationtoken.find_many(
                         where={"user_id": user_id},
@@ -997,7 +1004,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            prisma_query_info = f"LiteLLM Prisma Client Exception: get_data: token={token}, table_name: {table_name}, query_type: {query_type}, user_id: {user_id}, user_id_list: {user_id_list}, team_id: {team_id}, team_id_list: {team_id_list}, key_val: {key_val}"
+            prisma_query_info = f"LiteLLM Prisma Client Exception: Error with `get_data`. Args passed in: {args_passed_in}"
             error_msg = prisma_query_info + str(e)
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
