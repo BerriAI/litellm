@@ -9,6 +9,7 @@ import sys, os, dotenv
 from typing import Optional
 from dotenv import load_dotenv
 
+# Get the current directory of the file being run
 pwd = os.path.dirname(os.path.realpath(__file__))
 print(pwd)
 
@@ -37,12 +38,13 @@ def test_transcription():
 
 
 def test_transcription_azure():
+    litellm.set_verbose = True
     transcript = litellm.transcription(
         model="azure/azure-whisper",
         file=audio_file,
-        api_base=os.getenv("AZURE_EUROPE_API_BASE"),
+        api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
         api_key=os.getenv("AZURE_EUROPE_API_KEY"),
-        api_version=os.getenv("2024-02-15-preview"),
+        api_version="2024-02-15-preview",
     )
 
     assert transcript.text is not None
@@ -57,9 +59,9 @@ async def test_transcription_async_azure():
     transcript = await litellm.atranscription(
         model="azure/azure-whisper",
         file=audio_file,
-        api_base=os.getenv("AZURE_EUROPE_API_BASE"),
+        api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
         api_key=os.getenv("AZURE_EUROPE_API_KEY"),
-        api_version=os.getenv("2024-02-15-preview"),
+        api_version="2024-02-15-preview",
     )
 
     assert transcript.text is not None
@@ -96,7 +98,7 @@ async def test_transcription_on_router():
                 "model_name": "whisper",
                 "litellm_params": {
                     "model": "azure/azure-whisper",
-                    "api_base": os.getenv("AZURE_EUROPE_API_BASE"),
+                    "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com/",
                     "api_key": os.getenv("AZURE_EUROPE_API_KEY"),
                     "api_version": "2024-02-15-preview",
                 },

@@ -1677,9 +1677,9 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.success_callback.append(callback)
-                    verbose_proxy_logger.debug(
+                    print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
-                    )
+                    )  # noqa
                 elif key == "failure_callback":
                     litellm.failure_callback = []
 
@@ -2671,6 +2671,11 @@ async def chat_completion(
             data = ast.literal_eval(body_str)
         except:
             data = json.loads(body_str)
+
+        # Azure OpenAI only: check if user passed api-version
+        query_params = dict(request.query_params)
+        if "api-version" in query_params:
+            data["api_version"] = query_params["api-version"]
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {

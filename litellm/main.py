@@ -488,6 +488,8 @@ def completion(
     ### ASYNC CALLS ###
     acompletion = kwargs.get("acompletion", False)
     client = kwargs.get("client", None)
+    ### Admin Controls ###
+    no_log = kwargs.get("no-log", False)
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -564,6 +566,7 @@ def completion(
         "caching_groups",
         "ttl",
         "cache",
+        "no-log",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -727,6 +730,7 @@ def completion(
             model_info=model_info,
             proxy_server_request=proxy_server_request,
             preset_cache_key=preset_cache_key,
+            no_log=no_log,
         )
         logging.update_environment_variables(
             model=model,
@@ -2418,6 +2422,7 @@ def embedding(
         "caching_groups",
         "ttl",
         "cache",
+        "no-log",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {

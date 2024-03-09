@@ -15,6 +15,7 @@ import litellm, json
 import httpx
 from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTransport
 from openai import AzureOpenAI, AsyncAzureOpenAI
+import uuid
 
 
 class AzureOpenAIError(Exception):
@@ -271,6 +272,14 @@ class AzureChatCompletion(BaseLLM):
                     azure_client = AzureOpenAI(**azure_client_params)
                 else:
                     azure_client = client
+                    if api_version is not None and isinstance(
+                        azure_client._custom_query, dict
+                    ):
+                        # set api_version to version passed by user
+                        azure_client._custom_query.setdefault(
+                            "api-version", api_version
+                        )
+
                 response = azure_client.chat.completions.create(**data, timeout=timeout)  # type: ignore
                 stringified_response = response.model_dump()
                 ## LOGGING
@@ -334,10 +343,17 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 azure_client_params["azure_ad_token"] = azure_ad_token
+
+            # setting Azure client
             if client is None:
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
             else:
                 azure_client = client
+                if api_version is not None and isinstance(
+                    azure_client._custom_query, dict
+                ):
+                    # set api_version to version passed by user
+                    azure_client._custom_query.setdefault("api-version", api_version)
             ## LOGGING
             logging_obj.pre_call(
                 input=data["messages"],
@@ -402,6 +418,9 @@ class AzureChatCompletion(BaseLLM):
             azure_client = AzureOpenAI(**azure_client_params)
         else:
             azure_client = client
+            if api_version is not None and isinstance(azure_client._custom_query, dict):
+                # set api_version to version passed by user
+                azure_client._custom_query.setdefault("api-version", api_version)
         ## LOGGING
         logging_obj.pre_call(
             input=data["messages"],
@@ -455,6 +474,11 @@ class AzureChatCompletion(BaseLLM):
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
             else:
                 azure_client = client
+                if api_version is not None and isinstance(
+                    azure_client._custom_query, dict
+                ):
+                    # set api_version to version passed by user
+                    azure_client._custom_query.setdefault("api-version", api_version)
             ## LOGGING
             logging_obj.pre_call(
                 input=data["messages"],
@@ -813,6 +837,19 @@ class AzureChatCompletion(BaseLLM):
             azure_client = AzureOpenAI(http_client=litellm.client_session, **azure_client_params)  # type: ignore
         else:
             azure_client = client
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=f"audio_file_{uuid.uuid4()}",
+            api_key=azure_client.api_key,
+            additional_args={
+                "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
+                "api_base": azure_client._base_url._uri_reference,
+                "atranscription": True,
+                "complete_input_dict": data,
+            },
+        )
+
         response = azure_client.audio.transcriptions.create(
             **data, timeout=timeout  # type: ignore
         )
@@ -849,6 +886,20 @@ class AzureChatCompletion(BaseLLM):
                 )
             else:
                 async_azure_client = client
+
+            ## LOGGING
+            logging_obj.pre_call(
+                input=f"audio_file_{uuid.uuid4()}",
+                api_key=async_azure_client.api_key,
+                additional_args={
+                    "headers": {
+                        "Authorization": f"Bearer {async_azure_client.api_key}"
+                    },
+                    "api_base": async_azure_client._base_url._uri_reference,
+                    "atranscription": True,
+                    "complete_input_dict": data,
+                },
+            )
 
             response = await async_azure_client.audio.transcriptions.create(
                 **data, timeout=timeout
