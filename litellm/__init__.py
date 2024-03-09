@@ -570,7 +570,7 @@ from .utils import (
     _calculate_retry_after,
     _should_retry,
     get_secret,
-    get_mapped_model_params,
+    get_supported_openai_params,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
