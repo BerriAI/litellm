@@ -166,3 +166,9 @@ postgresql:
     # existingSecret: ""
     # secretKeys:
     #   userPasswordKey: password
+
+# requires cache: true in config file
+# either enable this or pass a secret for REDIS_HOST, REDIS_PORT, REDIS_PASSWORD or REDIS_URL
+# with cache: true to use existing redis instance
+redis:
+  enabled: false
