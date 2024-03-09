@@ -131,6 +131,9 @@ spec:
 
 </TabItem>
 
+> [!TIP]
+> To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-latest`.
+
 </Tabs>
 
 ## Deploy with Database
