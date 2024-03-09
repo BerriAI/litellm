@@ -48,8 +48,6 @@ def test_transcription_azure():
     assert transcript.text is not None
     assert isinstance(transcript.text, str)
 
-    raise Exception("it worked")
-
 
 # test_transcription_azure()
 
