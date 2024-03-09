@@ -35,7 +35,7 @@ general_settings:
 ```bash
 litellm --config /path/to/config.yaml 
 
-# RUNNING on http://0.0.0.0:8000
+# RUNNING on http://0.0.0.0:4000
 ```
 
 ### Test 
@@ -44,7 +44,7 @@ litellm --config /path/to/config.yaml
 <TabItem value="curl" label="Curl">
 
 ```bash
-curl --location 'http://0.0.0.0:8000/embeddings' \
+curl --location 'http://0.0.0.0:4000/embeddings' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{"input": ["Academia.edu uses"], "model": "textembedding-gecko", "encoding_format": "base64"}'
@@ -57,7 +57,7 @@ curl --location 'http://0.0.0.0:8000/embeddings' \
 from openai import OpenAI
 client = OpenAI(
   api_key="sk-1234",
-  base_url="http://0.0.0.0:8000"
+  base_url="http://0.0.0.0:4000"
 )
 
 client.embeddings.create(
@@ -72,7 +72,7 @@ client.embeddings.create(
 ```python
 from langchain_openai import OpenAIEmbeddings
 
-embeddings = OpenAIEmbeddings(model="textembedding-gecko", openai_api_base="http://0.0.0.0:8000", openai_api_key="sk-1234")
+embeddings = OpenAIEmbeddings(model="textembedding-gecko", openai_api_base="http://0.0.0.0:4000", openai_api_key="sk-1234")
 
 text = "This is a test document."
 
@@ -200,7 +200,7 @@ Use this for calling `/embedding` endpoints on OpenAI Compatible Servers, exampl
 from litellm import embedding
 response = embedding(
   model = "openai/<your-llm-name>",     # add `openai/` prefix to model so litellm knows to route to OpenAI
-  api_base="http://0.0.0.0:8000/"       # set API Base of your Custom OpenAI Endpoint
+  api_base="http://0.0.0.0:4000/"       # set API Base of your Custom OpenAI Endpoint
   input=["good morning from litellm"]
 )
 ```

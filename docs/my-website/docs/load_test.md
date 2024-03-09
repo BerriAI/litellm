@@ -90,7 +90,7 @@ import time, asyncio, litellm
 #### LITELLM PROXY #### 
 litellm_client = AsyncOpenAI(
     api_key="sk-1234", # [CHANGE THIS]
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 #### AZURE OPENAI CLIENT #### 

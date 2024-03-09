@@ -183,7 +183,7 @@ On the docker container run the `test.py` file using `python3 test.py`
 ```python
 import openai
 
-api_base = f"http://0.0.0.0:8000" # base url for server
+api_base = f"http://0.0.0.0:4000" # base url for server
 
 openai.api_base = api_base
 openai.api_key = "temp-key"
