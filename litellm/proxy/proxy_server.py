@@ -1675,9 +1675,9 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.success_callback.append(callback)
-                    verbose_proxy_logger.debug(
+                    print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
-                    )
+                    )  # noqa
                 elif key == "failure_callback":
                     litellm.failure_callback = []
 
