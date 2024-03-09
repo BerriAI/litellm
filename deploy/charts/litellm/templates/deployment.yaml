@@ -144,9 +144,9 @@ spec:
                   key: masterkey
             {{- if .Values.redis.enabled }}
             - name: REDIS_HOST
-              value: {{ template "litellm.redis.serviceName" . }}
+              value: {{ include "litellm.redis.serviceName" . }}
             - name: REDIS_PORT
-              value: {{ if .Values.redis.sentinel.enabled }}{{ .Values.redis.sentinel.service.ports.sentinel }}{{ else }}{{ .Values.redis.master.service.ports.redis}}{{ end }}
+              value: {{ include "litellm.redis.port" . | quote }}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
