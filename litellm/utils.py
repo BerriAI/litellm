@@ -1279,6 +1279,15 @@ class Logging:
 
             for callback in callbacks:
                 try:
+                    litellm_params = self.model_call_details.get("litellm_params", {})
+                    if litellm_params.get("no-log", False) == True:
+                        # proxy cost tracking cal backs should run
+                        if not (
+                            isinstance(callback, CustomLogger)
+                            and "_PROXY_" in callback.__class__.__name__
+                        ):
+                            print_verbose("no-log request, skipping logging")
+                            continue
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
                         print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
@@ -1707,7 +1716,20 @@ class Logging:
             callbacks = litellm._async_success_callback
         verbose_logger.debug(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
+            # check if callback can run for this request
+            litellm_params = self.model_call_details.get("litellm_params", {})
+            if litellm_params.get("no-log", False) == True:
+                # proxy cost tracking cal backs should run
+                if not (
+                    isinstance(callback, CustomLogger)
+                    and "_PROXY_" in callback.__class__.__name__
+                ):
+                    print_verbose("no-log request, skipping logging")
+                    continue
             try:
+                if kwargs.get("no-log", False) == True:
+                    print_verbose("no-log request, skipping logging")
+                    continue
                 if callback == "cache" and litellm.cache is not None:
                     # set_cache once complete streaming response is built
                     print_verbose("async success_callback: reaches cache for logging!")
@@ -2985,11 +3007,13 @@ def client(original_function):
             print_verbose(
                 f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
             )
+            # check if user does not want this to be logged
             asyncio.create_task(
                 logging_obj.async_success_handler(result, start_time, end_time)
             )
             threading.Thread(
-                target=logging_obj.success_handler, args=(result, start_time, end_time)
+                target=logging_obj.success_handler,
+                args=(result, start_time, end_time),
             ).start()
 
             # RETURN RESULT
@@ -3892,6 +3916,7 @@ def get_litellm_params(
     proxy_server_request=None,
     acompletion=None,
     preset_cache_key=None,
+    no_log=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -3908,6 +3933,7 @@ def get_litellm_params(
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
+        "no-log": no_log,
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
     }
 
