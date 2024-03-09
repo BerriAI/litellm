@@ -981,6 +981,7 @@ class Logging:
                 curl_command = self.model_call_details
 
             # only print verbose if verbose logger is not set
+
             if verbose_logger.level == 0:
                 # this means verbose logger was not switched on - user is in litellm.set_verbose=True
                 print_verbose(f"\033[92m{curl_command}\033[0m\n")
@@ -1312,6 +1313,15 @@ class Logging:
 
             for callback in callbacks:
                 try:
+                    litellm_params = self.model_call_details.get("litellm_params", {})
+                    if litellm_params.get("no-log", False) == True:
+                        # proxy cost tracking cal backs should run
+                        if not (
+                            isinstance(callback, CustomLogger)
+                            and "_PROXY_" in callback.__class__.__name__
+                        ):
+                            print_verbose("no-log request, skipping logging")
+                            continue
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
                         print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
@@ -1740,7 +1750,20 @@ class Logging:
             callbacks = litellm._async_success_callback
         verbose_logger.debug(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
+            # check if callback can run for this request
+            litellm_params = self.model_call_details.get("litellm_params", {})
+            if litellm_params.get("no-log", False) == True:
+                # proxy cost tracking cal backs should run
+                if not (
+                    isinstance(callback, CustomLogger)
+                    and "_PROXY_" in callback.__class__.__name__
+                ):
+                    print_verbose("no-log request, skipping logging")
+                    continue
             try:
+                if kwargs.get("no-log", False) == True:
+                    print_verbose("no-log request, skipping logging")
+                    continue
                 if callback == "cache" and litellm.cache is not None:
                     # set_cache once complete streaming response is built
                     print_verbose("async success_callback: reaches cache for logging!")
@@ -3026,11 +3049,13 @@ def client(original_function):
             print_verbose(
                 f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
             )
+            # check if user does not want this to be logged
             asyncio.create_task(
                 logging_obj.async_success_handler(result, start_time, end_time)
             )
             threading.Thread(
-                target=logging_obj.success_handler, args=(result, start_time, end_time)
+                target=logging_obj.success_handler,
+                args=(result, start_time, end_time),
             ).start()
 
             # RETURN RESULT
@@ -3933,6 +3958,7 @@ def get_litellm_params(
     proxy_server_request=None,
     acompletion=None,
     preset_cache_key=None,
+    no_log=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -3949,6 +3975,7 @@ def get_litellm_params(
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
+        "no-log": no_log,
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
     }
 
@@ -4269,15 +4296,9 @@ def get_optional_params(
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
-        supported_params = [
-            "stream",
-            "stop",
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "tools",
-            "tool_choice",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         # handle anthropic params
         if stream:
@@ -4301,17 +4322,9 @@ def get_optional_params(
             optional_params["tools"] = tools
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
-        supported_params = [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "logit_bias",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "n",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         if stream:
@@ -4334,14 +4347,9 @@ def get_optional_params(
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "maritalk":
         ## check if unsupported param passed in
-        supported_params = [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "presence_penalty",
-            "stop",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         if stream:
@@ -4360,14 +4368,9 @@ def get_optional_params(
             optional_params["stopping_tokens"] = stop
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in
-        supported_params = [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "seed",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if stream:
@@ -4388,7 +4391,9 @@ def get_optional_params(
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "huggingface":
         ## check if unsupported param passed in
-        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
         if temperature is not None:
@@ -4427,16 +4432,9 @@ def get_optional_params(
             )  # since we handle translating echo, we should not send it to TGI request
     elif custom_llm_provider == "together_ai":
         ## check if unsupported param passed in
-        supported_params = [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "frequency_penalty",
-            "tools",
-            "tool_choice",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if stream:
@@ -4457,16 +4455,9 @@ def get_optional_params(
             optional_params["tool_choice"] = tool_choice
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in
-        supported_params = [
-            "stream",
-            "n",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "frequency_penalty",
-            "presence_penalty",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if stream:
@@ -4489,7 +4480,9 @@ def get_optional_params(
         custom_llm_provider == "palm" or custom_llm_provider == "gemini"
     ):  # https://developers.generativeai.google/tutorials/curl_quickstart
         ## check if unsupported param passed in
-        supported_params = ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if temperature is not None:
@@ -4518,14 +4511,9 @@ def get_optional_params(
     ):
         print_verbose(f"(start) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK")
         ## check if unsupported param passed in
-        supported_params = [
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "stream",
-            "tools",
-            "tool_choice",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if temperature is not None:
@@ -4555,7 +4543,9 @@ def get_optional_params(
         )
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
-        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
         if temperature is not None:
@@ -4582,8 +4572,10 @@ def get_optional_params(
                 max_tokens = 1
             optional_params["max_new_tokens"] = max_tokens
     elif custom_llm_provider == "bedrock":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         if "ai21" in model:
-            supported_params = ["max_tokens", "temperature", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
             # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
             # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
@@ -4596,9 +4588,6 @@ def get_optional_params(
             if stream:
                 optional_params["stream"] = stream
         elif "anthropic" in model:
-            supported_params = get_mapped_model_params(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
             _check_valid_arg(supported_params=supported_params)
             # anthropic params on bedrock
             # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
@@ -4615,7 +4604,6 @@ def get_optional_params(
                     optional_params=optional_params,
                 )
         elif "amazon" in model:  # amazon titan llms
-            supported_params = ["max_tokens", "temperature", "stop", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
             if max_tokens is not None:
@@ -4632,7 +4620,6 @@ def get_optional_params(
             if stream:
                 optional_params["stream"] = stream
         elif "meta" in model:  # amazon / meta llms
-            supported_params = ["max_tokens", "temperature", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
             if max_tokens is not None:
@@ -4644,7 +4631,6 @@ def get_optional_params(
             if stream:
                 optional_params["stream"] = stream
         elif "cohere" in model:  # cohere models on bedrock
-            supported_params = ["stream", "temperature", "max_tokens"]
             _check_valid_arg(supported_params=supported_params)
             # handle cohere params
             if stream:
@@ -4654,7 +4640,6 @@ def get_optional_params(
             if max_tokens is not None:
                 optional_params["max_tokens"] = max_tokens
         elif "mistral" in model:
-            supported_params = ["max_tokens", "temperature", "stop", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
             # mistral params on bedrock
             # \"max_tokens\":400,\"temperature\":0.7,\"top_p\":0.7,\"stop\":[\"\\\\n\\\\nHuman:\"]}"
@@ -4698,7 +4683,9 @@ def get_optional_params(
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "cloudflare":
         # https://developers.cloudflare.com/workers-ai/models/text-generation/#input
-        supported_params = ["max_tokens", "stream"]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if max_tokens is not None:
@@ -4706,14 +4693,9 @@ def get_optional_params(
         if stream is not None:
             optional_params["stream"] = stream
     elif custom_llm_provider == "ollama":
-        supported_params = [
-            "max_tokens",
-            "stream",
-            "top_p",
-            "temperature",
-            "frequency_penalty",
-            "stop",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if max_tokens is not None:
@@ -4737,16 +4719,9 @@ def get_optional_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
     elif custom_llm_provider == "nlp_cloud":
-        supported_params = [
-            "max_tokens",
-            "stream",
-            "temperature",
-            "top_p",
-            "presence_penalty",
-            "frequency_penalty",
-            "n",
-            "stop",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if max_tokens is not None:
@@ -4766,7 +4741,9 @@ def get_optional_params(
         if stop is not None:
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "petals":
-        supported_params = ["max_tokens", "temperature", "top_p", "stream"]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         # max_new_tokens=1,temperature=0.9, top_p=0.6
         if max_tokens is not None:
@@ -4778,18 +4755,9 @@ def get_optional_params(
         if stream:
             optional_params["stream"] = stream
     elif custom_llm_provider == "deepinfra":
-        supported_params = [
-            "temperature",
-            "top_p",
-            "n",
-            "stream",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         if temperature is not None:
             if (
@@ -4816,14 +4784,9 @@ def get_optional_params(
         if user:
             optional_params["user"] = user
     elif custom_llm_provider == "perplexity":
-        supported_params = [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         if temperature is not None:
             if (
@@ -4842,15 +4805,9 @@ def get_optional_params(
         if frequency_penalty:
             optional_params["frequency_penalty"] = frequency_penalty
     elif custom_llm_provider == "anyscale":
-        supported_params = [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "stop",
-            "frequency_penalty",
-            "presence_penalty",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         if model in [
             "mistralai/Mistral-7B-Instruct-v0.1",
             "mistralai/Mixtral-8x7B-Instruct-v0.1",
@@ -4878,14 +4835,9 @@ def get_optional_params(
         if max_tokens:
             optional_params["max_tokens"] = max_tokens
     elif custom_llm_provider == "mistral":
-        supported_params = [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "tools",
-            "tool_choice",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
         if temperature is not None:
             optional_params["temperature"] = temperature
@@ -4912,25 +4864,9 @@ def get_optional_params(
             extra_body  # openai client supports `extra_body` param
         )
     elif custom_llm_provider == "openrouter":
-        supported_params = [
-            "functions",
-            "function_call",
-            "temperature",
-            "top_p",
-            "n",
-            "stream",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "max_retries",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         _check_valid_arg(supported_params=supported_params)
 
         if functions is not None:
@@ -4984,28 +4920,9 @@ def get_optional_params(
         )
     else:  # assume passing in params for openai/azure openai
         print_verbose(f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZURE")
-        supported_params = [
-            "functions",
-            "function_call",
-            "temperature",
-            "top_p",
-            "n",
-            "stream",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "max_retries",
-            "logprobs",
-            "top_logprobs",
-            "extra_headers",
-        ]
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider="openai"
+        )
         _check_valid_arg(supported_params=supported_params)
         if functions is not None:
             optional_params["functions"] = functions
@@ -5063,15 +4980,228 @@ def get_optional_params(
     return optional_params
 
 
-def get_mapped_model_params(model: str, custom_llm_provider: str):
+def get_supported_openai_params(model: str, custom_llm_provider: str):
     """
     Returns the supported openai params for a given model + provider
+
+    Example:
+    ```
+    get_supported_openai_params(model="anthropic.claude-3", custom_llm_provider="bedrock")
+    ```
     """
     if custom_llm_provider == "bedrock":
         if model.startswith("anthropic.claude-3"):
             return litellm.AmazonAnthropicClaude3Config().get_supported_openai_params()
-        else:
+        elif model.startswith("anthropic"):
             return litellm.AmazonAnthropicConfig().get_supported_openai_params()
+        elif model.startswith("ai21"):
+            return ["max_tokens", "temperature", "top_p", "stream"]
+        elif model.startswith("amazon"):
+            return ["max_tokens", "temperature", "stop", "top_p", "stream"]
+        elif model.startswith("meta"):
+            return ["max_tokens", "temperature", "top_p", "stream"]
+        elif model.startswith("cohere"):
+            return ["stream", "temperature", "max_tokens"]
+        elif model.startswith("mistral"):
+            return ["max_tokens", "temperature", "stop", "top_p", "stream"]
+    elif custom_llm_provider == "ollama_chat":
+        return litellm.OllamaChatConfig().get_supported_openai_params()
+    elif custom_llm_provider == "anthropic":
+        return [
+            "stream",
+            "stop",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+        ]
+    elif custom_llm_provider == "cohere":
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "logit_bias",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+            "n",
+        ]
+    elif custom_llm_provider == "maritalk":
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "presence_penalty",
+            "stop",
+        ]
+    elif custom_llm_provider == "openai" or custom_llm_provider == "azure":
+        return [
+            "functions",
+            "function_call",
+            "temperature",
+            "top_p",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "response_format",
+            "seed",
+            "tools",
+            "tool_choice",
+            "max_retries",
+            "logprobs",
+            "top_logprobs",
+            "extra_headers",
+        ]
+    elif custom_llm_provider == "openrouter":
+        return [
+            "functions",
+            "function_call",
+            "temperature",
+            "top_p",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "response_format",
+            "seed",
+            "tools",
+            "tool_choice",
+            "max_retries",
+        ]
+    elif custom_llm_provider == "mistral":
+        return [
+            "temperature",
+            "top_p",
+            "stream",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+        ]
+    elif custom_llm_provider == "replicate":
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stop",
+            "seed",
+        ]
+    elif custom_llm_provider == "huggingface":
+        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+    elif custom_llm_provider == "together_ai":
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "tools",
+            "tool_choice",
+        ]
+    elif custom_llm_provider == "ai21":
+        return [
+            "stream",
+            "n",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+        ]
+    elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
+        return ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
+    elif custom_llm_provider == "vertex_ai":
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+        ]
+    elif custom_llm_provider == "sagemaker":
+        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+    elif custom_llm_provider == "aleph_alpha":
+        return [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "presence_penalty",
+            "frequency_penalty",
+            "n",
+            "stop",
+        ]
+    elif custom_llm_provider == "cloudflare":
+        return ["max_tokens", "stream"]
+    elif custom_llm_provider == "ollama":
+        return [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "frequency_penalty",
+            "stop",
+        ]
+    elif custom_llm_provider == "nlp_cloud":
+        return [
+            "max_tokens",
+            "stream",
+            "temperature",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "n",
+            "stop",
+        ]
+    elif custom_llm_provider == "petals":
+        return ["max_tokens", "temperature", "top_p", "stream"]
+    elif custom_llm_provider == "deepinfra":
+        return [
+            "temperature",
+            "top_p",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+        ]
+    elif custom_llm_provider == "perplexity":
+        return [
+            "temperature",
+            "top_p",
+            "stream",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+        ]
+    elif custom_llm_provider == "anyscale":
+        return [
+            "temperature",
+            "top_p",
+            "stream",
+            "max_tokens",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+        ]
 
 
 def get_llm_provider(
