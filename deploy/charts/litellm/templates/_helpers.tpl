@@ -60,3 +60,11 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Get redis service name
+*/}}
+{{- define "litellm.redis.serviceName" -}}
+{{- printf "%s-headless" (default "redis" .Values.redis.nameOverride | trunc 63 | trimSuffix "-") -}}
+{{- end -}}
+
