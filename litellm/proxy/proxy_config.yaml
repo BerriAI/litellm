@@ -5,12 +5,9 @@ model_list:
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
-  - model_name: azure-gpt-3.5
-    litellm_params:
-      model: gpt-3.5-turbo
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      access_groups: ["public"]
+litellm_settings:
+  set_verbose: True
+  success_callback: ["langfuse"]
 router_settings:
   set_verbose: True
   debug_level: "DEBUG"
