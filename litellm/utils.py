@@ -4581,7 +4581,7 @@ def get_optional_params(
             if stream:
                 optional_params["stream"] = stream
         elif "anthropic" in model:
-            supported_params = get_mapped_model_params(
+            supported_params = get_supported_openai_params(
                 model=model, custom_llm_provider=custom_llm_provider
             )
             _check_valid_arg(supported_params=supported_params)
@@ -5048,7 +5048,7 @@ def get_optional_params(
     return optional_params
 
 
-def get_mapped_model_params(model: str, custom_llm_provider: str):
+def get_supported_openai_params(model: str, custom_llm_provider: str):
     """
     Returns the supported openai params for a given model + provider
     """
@@ -5057,6 +5057,18 @@ def get_mapped_model_params(model: str, custom_llm_provider: str):
             return litellm.AmazonAnthropicClaude3Config().get_supported_openai_params()
         else:
             return litellm.AmazonAnthropicConfig().get_supported_openai_params()
+    elif custom_llm_provider == "ollama_chat":
+        return litellm.OllamaChatConfig().get_supported_openai_params()
+    elif custom_llm_provider == "anthropic":
+        return [
+            "stream",
+            "stop",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+        ]
 
 
 def get_llm_provider(
