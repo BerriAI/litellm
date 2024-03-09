@@ -36,6 +36,7 @@ def test_transcription():
 
 def test_transcription_azure():
     litellm.set_verbose = True
+    print(f"AZURE EUROPE API BASE: {os.getenv('AZURE_EUROPE_API_BASE', None)}")
     transcript = litellm.transcription(
         model="azure/azure-whisper",
         file=audio_file,
