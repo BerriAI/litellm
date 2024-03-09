@@ -141,12 +141,13 @@ To avoid issues with predictability, difficulties in rollback, and inconsistent 
 
 ## Options to deploy LiteLLM 
 
-| Method | When to Use | Docs |
-| --- | --- | --- |
-| LiteLLM - Quick Start | call 100+ LLMs + Load Balancing  | [Quick Start](#quick-start) |
-| LiteLLM Database container + PostgresDB  | + use Virtual Keys + Track Spend  | [Deploy with Database](#deploy-with-database) |
-| LiteLLM container + Redis | + load balance across multiple litellm containers | [LiteLLM container + Redis](#litellm-container--redis) |
-| LiteLLM Database container + PostgresDB + Redis | + use Virtual Keys + Track Spend + load balance across multiple litellm containers | [LiteLLM container + Redis](#litellm-container--redis) |
+| Docs | When to Use |
+| --- | --- |
+| [Quick Start](#quick-start) | call 100+ LLMs + Load Balancing |
+| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend |
+| [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
+| [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
+
 
 ## Deploy with Database
 
@@ -291,6 +292,41 @@ Start docker container with config
 
 ```shell
 docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
+```
+
+## LiteLLM Database container + PostgresDB + Redis
+
+The only change required is setting Redis on your `config.yaml`
+LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances, pass `redis_host`, `redis_password` and `redis_port` to enable this. (LiteLLM will use Redis to track rpm/tpm usage )
+
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-endpoint>
+      api_key: <your-azure-api-key>
+      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+      rpm: 6
+router_settings:
+  redis_host: <your redis host>
+  redis_password: <your redis password>
+  redis_port: 1992
+```
+
+Start `litellm-database`docker container with config
+
+```shell
+docker run --name litellm-proxy \
+-e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+-p 4000:4000 \
+ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 ```
 
 ## Best Practices for Deploying to Production
