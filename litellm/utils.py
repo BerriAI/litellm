@@ -1279,6 +1279,10 @@ class Logging:
 
             for callback in callbacks:
                 try:
+                    litellm_params = self.model_call_details.get("litellm_params", {})
+                    if litellm_params.get("no-log", False) == True:
+                        print_verbose("no-log request, skipping logging")
+                        continue
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
                         print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
@@ -1708,6 +1712,9 @@ class Logging:
         verbose_logger.debug(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             try:
+                if kwargs.get("no-log", False) == True:
+                    print_verbose("no-log request, skipping logging")
+                    continue
                 if callback == "cache" and litellm.cache is not None:
                     # set_cache once complete streaming response is built
                     print_verbose("async success_callback: reaches cache for logging!")
@@ -2986,14 +2993,13 @@ def client(original_function):
                 f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
             )
             # check if user does not want this to be logged
-            if kwargs.get("no-log", False) == False:
-                asyncio.create_task(
-                    logging_obj.async_success_handler(result, start_time, end_time)
-                )
-                threading.Thread(
-                    target=logging_obj.success_handler,
-                    args=(result, start_time, end_time),
-                ).start()
+            asyncio.create_task(
+                logging_obj.async_success_handler(result, start_time, end_time)
+            )
+            threading.Thread(
+                target=logging_obj.success_handler,
+                args=(result, start_time, end_time),
+            ).start()
 
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
@@ -3895,6 +3901,7 @@ def get_litellm_params(
     proxy_server_request=None,
     acompletion=None,
     preset_cache_key=None,
+    no_log=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -3911,6 +3918,7 @@ def get_litellm_params(
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
+        "no-log": no_log,
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
     }
 
