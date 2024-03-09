@@ -70,8 +70,9 @@ CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug", "--run_gun
 
 <TabItem value="kubernetes" label="Kubernetes">
 
-Deploying a config file based litellm instance, just requires a simple deployment that loads
-the config.yaml file via a config map.
+Deploying a config file based litellm instance just requires a simple deployment that loads
+the config.yaml file via a config map. Also it would be a good practice to use the env var
+declaration for api keys, and attach the env vars with the api key values as an opaque secret.
 
 ```yaml
 apiVersion: v1
@@ -81,20 +82,19 @@ metadata:
 data:
   config.yaml: |
       model_list: 
-        - model_name: gpt-3.5-turbo # user-facing model alias
-          litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
-            model: azure/<your-deployment-name>
-            api_base: <your-azure-api-endpoint>
-            api_key: <your-azure-api-key>
         - model_name: gpt-3.5-turbo
           litellm_params:
             model: azure/gpt-turbo-small-ca
             api_base: https://my-endpoint-canada-berri992.openai.azure.com/
-            api_key: <your-azure-api-key>
-        - model_name: vllm-model
-          litellm_params:
-            model: openai/<your-model-name>
-            api_base: <your-api-base> # e.g. http://0.0.0.0:3000
+            api_key: os.environ/CA_AZURE_OPENAI_API_KEY
+---
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+  name: litellm-secrets
+data:
+  CA_AZURE_OPENAI_API_KEY: bWVvd19pbV9hX2NhdA== # your api key in base64
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -127,7 +127,6 @@ spec:
         - name: config-volume
           configMap:
             name: litellm-config-file
-
 ```
 
 </TabItem>
