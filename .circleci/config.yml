@@ -182,7 +182,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_whisper.py -x --junitxml=test-results/junit.xml --durations=5 
+            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 
           no_output_timeout: 120m
 
       # Store test results
