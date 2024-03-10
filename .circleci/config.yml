@@ -1,15 +1,13 @@
 version: 2.1
 jobs:
   installing_litellm_on_python:
-      local_testing:
     docker:
       - image: circleci/python:3.8
     working_directory: ~/project
 
     steps:
       - checkout
-
-       - run:
+      - run:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
@@ -20,7 +18,7 @@ jobs:
             pip install click
             pip install jinja2
             pip install tokenizers
-            pip install openai         
+            pip install openai
       - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
       - run:
