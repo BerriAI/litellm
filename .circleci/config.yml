@@ -1,5 +1,94 @@
 version: 2.1
 jobs:
+  local_testing:
+    docker:
+      - image: circleci/python:3.9
+    working_directory: ~/project
+
+    steps:
+      - checkout
+
+      - run:
+          name: Check if litellm dir was updated or if pyproject.toml was modified
+          command: |
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
+              echo "litellm updated"
+            else
+              echo "No changes to litellm or pyproject.toml. Skipping tests."
+              circleci step halt
+            fi
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "google-generativeai>=0.3.2"
+            pip install "google-cloud-aiplatform>=1.38.0"
+            pip install "boto3>=1.28.57"
+            pip install "aioboto3>=12.3.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.0.69
+            pip install openai
+            pip install prisma            
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install python-multipart
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./entrypoint.sh
+          command: |
+            set +e
+            chmod +x entrypoint.sh
+            ./entrypoint.sh
+            set -e
+      - run:
+          name: Black Formatting
+          command: |
+            cd litellm
+            python -m pip install black
+            python -m black .
+            cd ..
+      - run:
+          name: Linting Testing
+          command: |
+            cd litellm
+            python -m pip install types-requests types-setuptools types-redis
+            if ! python -m mypy . --ignore-missing-imports; then
+              echo "mypy detected errors"
+              exit 1
+            fi
+            cd ..
+  
+
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
@@ -202,6 +291,12 @@ workflows:
   version: 2
   build_and_test:
     jobs:
+      - local_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - build_and_test:
           filters:
             branches:
