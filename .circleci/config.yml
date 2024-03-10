@@ -311,6 +311,7 @@ workflows:
                 - /litellm_.*/
       - publish_to_pypi:
           requires:
+            - local_testing
             - build_and_test
           filters:
             branches:
