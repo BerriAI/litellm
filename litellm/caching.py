@@ -897,12 +897,8 @@ class Cache:
             "encoding_format",
         ]  # embedding kwargs = model, input, user, encoding_format. Model, user are checked in completion_kwargs
         transcription_only_kwargs = [
-            "model",
             "file",
             "language",
-            "prompt",
-            "response_format",
-            "temperature",
         ]
         # combined_kwargs - NEEDS to be ordered across get_cache_key(). Do not use a set()
         combined_kwargs = (
