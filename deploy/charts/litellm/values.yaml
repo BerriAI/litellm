@@ -55,7 +55,7 @@ environmentSecrets: []
 
 service:
   type: ClusterIP
-  port: 8000
+  port: 4000
 
 ingress:
   enabled: false

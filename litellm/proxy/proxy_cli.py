@@ -61,7 +61,7 @@ def is_port_in_use(port):
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
 )
-@click.option("--port", default=8000, help="Port to bind the server to.", envvar="PORT")
+@click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
     default=default_num_workers,
@@ -273,7 +273,7 @@ def run_server(
                 ],
             }
 
-            response = requests.post("http://0.0.0.0:8000/queue/request", json=data)
+            response = requests.post("http://0.0.0.0:4000/queue/request", json=data)
 
             response = response.json()
 
@@ -507,7 +507,7 @@ def run_server(
                 print(
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
                 )
-        if port == 8000 and is_port_in_use(port):
+        if port == 4000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
 
         from litellm.proxy.proxy_server import app
