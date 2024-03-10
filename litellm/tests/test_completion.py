@@ -69,7 +69,7 @@ def test_completion_claude():
         response = completion(
             model="claude-instant-1", messages=messages, request_timeout=10
         )
-        # Add any assertions, here to check response args
+        # Add any assertions here to check response args
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
