@@ -246,7 +246,7 @@ class Router:
             "122999-2828282-277:
             {
                 "model": "gpt-3",
-                "api_base": "http://localhost:8000",
+                "api_base": "http://localhost:4000",
                 "num_requests": 20,
                 "avg_latency": 0.001,
                 "num_failures": 0,

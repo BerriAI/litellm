@@ -63,7 +63,7 @@ litellm_settings:
 $ litellm /path/to/config.yaml
 ```
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --data ' {
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -162,7 +162,7 @@ litellm_settings:
 $ litellm /path/to/config.yaml
 ```
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --data ' {
     "model": "gpt-3.5-turbo",
     "messages": [

@@ -24,7 +24,7 @@ Retrieve detailed information about each model listed in the `/models` endpoint,
   <TabItem value="curl">
 
 ```bash
-curl -X GET "http://0.0.0.0:8000/model/info" \
+curl -X GET "http://0.0.0.0:4000/model/info" \
      -H "accept: application/json" \
 ```
   </TabItem>
@@ -42,7 +42,7 @@ Add a new model to the list in the `config.yaml` by providing the model paramete
   <TabItem value="curl">
 
 ```bash
-curl -X POST "http://0.0.0.0:8000/model/new" \
+curl -X POST "http://0.0.0.0:4000/model/new" \
      -H "accept: application/json" \
      -H "Content-Type: application/json" \
      -d '{ "model_name": "azure-gpt-turbo", "litellm_params": {"model": "azure/gpt-3.5-turbo", "api_key": "os.environ/AZURE_API_KEY", "api_base": "my-azure-api-base"} }'

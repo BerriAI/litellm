@@ -13,7 +13,7 @@ Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`m
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
-**Complete List:** Check the Swagger UI docs on `<your-proxy-url>/#/config.yaml` (e.g. http://0.0.0.0:8000/#/config.yaml), for everything you can pass in the config.yaml.
+**Complete List:** Check the Swagger UI docs on `<your-proxy-url>/#/config.yaml` (e.g. http://0.0.0.0:4000/#/config.yaml), for everything you can pass in the config.yaml.
 
 
 ## Quick Start 
@@ -55,7 +55,7 @@ model_list:
   - model_name: vllm-models
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:8000
+      api_base: http://0.0.0.0:4000
       rpm: 1440
     model_info: 
       version: 2
@@ -91,7 +91,7 @@ Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml.
 If multiple with `model_name=gpt-3.5-turbo` does [Load Balancing](https://docs.litellm.ai/docs/proxy/load_balancing)
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -111,7 +111,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 Sends this request to model where `model_name=bedrock-claude-v1` on config.yaml
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "bedrock-claude-v1",
@@ -131,7 +131,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
@@ -179,7 +179,7 @@ messages = [
 
 # Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",  # set openai base to the proxy
+    openai_api_base="http://0.0.0.0:4000",  # set openai base to the proxy
     model = "gpt-3.5-turbo",                
     temperature=0.1
 )
@@ -189,7 +189,7 @@ print(response)
 
 # Sends request to model where `model_name=bedrock-claude-v1` on config.yaml. 
 claude_chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000", # set openai base to the proxy
+    openai_api_base="http://0.0.0.0:4000", # set openai base to the proxy
     model = "bedrock-claude-v1",                   
     temperature=0.1
 )
@@ -560,7 +560,7 @@ litellm --config config.yaml
 Sends Request to `bedrock-cohere`
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
   --header 'Content-Type: application/json' \
   --data ' {
   "model": "bedrock-cohere",

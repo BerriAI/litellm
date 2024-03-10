@@ -254,10 +254,10 @@ helm install \
 kubectl \
   port-forward \
   service/mydeploy-litellm \
-  8000:8000
+  4000:4000
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:8000`.
+Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 
 </TabItem>
 </Tabs>
@@ -473,11 +473,11 @@ services:
           target: runtime
     image: ghcr.io/berriai/litellm:main-latest
     ports:
-      - "8000:8000" # Map the container port to the host, change the host port if necessary
+      - "4000:4000" # Map the container port to the host, change the host port if necessary
     volumes:
       - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
     # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
-    command: [ "--config", "/app/config.yaml", "--port", "8000", "--num_workers", "8" ]
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
 
 # ...rest of your docker-compose config if any
 ```
@@ -495,4 +495,4 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 > Use `-d` flag to run the container in detached mode (background) e.g. `docker compose up -d`
 
 
-Your LiteLLM container should be running now on the defined port e.g. `8000`.
+Your LiteLLM container should be running now on the defined port e.g. `4000`.
