@@ -5,20 +5,7 @@ import traceback
 from large_text import text
 from dotenv import load_dotenv
 
-load_dotenv()
-litellm_client = AsyncOpenAI(
-    base_url="http://0.0.0.0:4000",
-    api_key="sk-VEbqnb28-zDsFzQWTmiCsw",
-    # base_url="http://0.0.0.0:4000",
-    # api_key="sk-1234",
-)
-
-# litellm_client = AsyncAzureOpenAI(
-#     azure_endpoint="https://openai-gpt-4-test-v-1.openai.azure.com",
-#     api_key="d6f82361954b450188295b448e2091ca",
-#     api_version="2023-07-01-preview",
-# )
-
+litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234")
 
 async def litellm_completion():
     # Your existing code for litellm_completion goes here
@@ -44,7 +31,7 @@ async def litellm_completion():
 async def main():
     for i in range(6):
         start = time.time()
-        n = 100  # Number of concurrent tasks
+        n = 20  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)

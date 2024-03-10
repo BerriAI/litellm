@@ -123,6 +123,8 @@ from fastapi import (
     Header,
     Response,
     Form,
+    UploadFile,
+    File,
 )
 from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
@@ -1684,9 +1686,9 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.success_callback.append(callback)
-                    verbose_proxy_logger.debug(
+                    print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
-                    )
+                    )  # noqa
                 elif key == "failure_callback":
                     litellm.failure_callback = []
 
@@ -2682,6 +2684,11 @@ async def chat_completion(
         except:
             data = json.loads(body_str)
 
+        # Azure OpenAI only: check if user passed api-version
+        query_params = dict(request.query_params)
+        if "api-version" in query_params:
+            data["api_version"] = query_params["api-version"]
+
         # Include original request and headers in the data
         data["proxy_server_request"] = {
             "url": str(request.url),
@@ -3079,13 +3086,13 @@ async def embeddings(
     "/v1/images/generations",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
-    tags=["image generation"],
+    tags=["images"],
 )
 @router.post(
     "/images/generations",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
-    tags=["image generation"],
+    tags=["images"],
 )
 async def image_generation(
     request: Request,
@@ -3211,6 +3218,168 @@ async def image_generation(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        else:
+            error_traceback = traceback.format_exc()
+            error_msg = f"{str(e)}\n\n{error_traceback}"
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+
+
+@router.post(
+    "/v1/audio/transcriptions",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["audio"],
+)
+@router.post(
+    "/audio/transcriptions",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["audio"],
+)
+async def audio_transcriptions(
+    request: Request,
+    file: UploadFile = File(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Same params as:
+
+    https://platform.openai.com/docs/api-reference/audio/createTranscription?lang=curl
+    """
+    global proxy_logging_obj
+    try:
+        # Use orjson to parse JSON data, orjson speeds up requests significantly
+        form_data = await request.form()
+        data: Dict = {key: value for key, value in form_data.items() if key != "file"}
+
+        # Include original request and headers in the data
+        data["proxy_server_request"] = {  # type: ignore
+            "url": str(request.url),
+            "method": request.method,
+            "headers": dict(request.headers),
+            "body": copy.copy(data),  # use copy instead of deepcopy
+        }
+
+        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
+            data["user"] = user_api_key_dict.user_id
+
+        data["model"] = (
+            general_settings.get("moderation_model", None)  # server default
+            or user_model  # model name passed via cli args
+            or data["model"]  # default passed in http request
+        )
+        if user_model:
+            data["model"] = user_model
+
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        _headers = dict(request.headers)
+        _headers.pop(
+            "authorization", None
+        )  # do not store the original `sk-..` api key in the db
+        data["metadata"]["headers"] = _headers
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
+        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
+        data["metadata"]["endpoint"] = str(request.url)
+
+        ### TEAM-SPECIFIC PARAMS ###
+        if user_api_key_dict.team_id is not None:
+            team_config = await proxy_config.load_team_config(
+                team_id=user_api_key_dict.team_id
+            )
+            if len(team_config) == 0:
+                pass
+            else:
+                team_id = team_config.pop("team_id", None)
+                data["metadata"]["team_id"] = team_id
+                data = {
+                    **team_config,
+                    **data,
+                }  # add the team-specific configs to the completion call
+
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+
+        assert (
+            file.filename is not None
+        )  # make sure filename passed in (needed for type)
+
+        with open(file.filename, "wb+") as f:
+            f.write(await file.read())
+            try:
+                data["file"] = open(file.filename, "rb")
+                ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+                data = await proxy_logging_obj.pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    call_type="moderation",
+                )
+
+                ## ROUTE TO CORRECT ENDPOINT ##
+                # skip router if user passed their key
+                if "api_key" in data:
+                    response = await litellm.atranscription(**data)
+                elif (
+                    llm_router is not None and data["model"] in router_model_names
+                ):  # model in router model list
+                    response = await llm_router.atranscription(**data)
+
+                elif (
+                    llm_router is not None
+                    and data["model"] in llm_router.deployment_names
+                ):  # model in router deployments, calling a specific deployment on the router
+                    response = await llm_router.atranscription(
+                        **data, specific_deployment=True
+                    )
+                elif (
+                    llm_router is not None
+                    and llm_router.model_group_alias is not None
+                    and data["model"] in llm_router.model_group_alias
+                ):  # model set in model_group_alias
+                    response = await llm_router.atranscription(
+                        **data
+                    )  # ensure this goes the llm_router, router will do the correct alias mapping
+                elif user_model is not None:  # `litellm --model <your-model-name>`
+                    response = await litellm.atranscription(**data)
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={"error": "Invalid model name passed in"},
+                    )
+
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+            finally:
+                os.remove(file.filename)  # Delete the saved file
+
+        ### ALERTING ###
+        data["litellm_status"] = "success"  # used for alerting
+        return response
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e
+        )
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e.detail)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
