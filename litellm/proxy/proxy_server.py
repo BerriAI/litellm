@@ -3295,6 +3295,7 @@ async def audio_transcriptions(
             user_api_key_dict, "team_id", None
         )
         data["metadata"]["endpoint"] = str(request.url)
+        data["metadata"]["file_name"] = file.filename
 
         ### TEAM-SPECIFIC PARAMS ###
         if user_api_key_dict.team_id is not None:
@@ -3329,7 +3330,7 @@ async def audio_transcriptions(
                 data = await proxy_logging_obj.pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
-                    call_type="moderation",
+                    call_type="audio_transcription",
                 )
 
                 ## ROUTE TO CORRECT ENDPOINT ##

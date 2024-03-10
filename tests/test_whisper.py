@@ -31,7 +31,8 @@ def test_transcription():
         model="whisper-1",
         file=audio_file,
     )
-    print(f"transcript: {transcript}")
+    print(f"transcript: {transcript.model_dump()}")
+    print(f"transcript: {transcript._hidden_params}")
 
 
 # test_transcription()
@@ -47,6 +48,7 @@ def test_transcription_azure():
         api_version="2024-02-15-preview",
     )
 
+    print(f"transcript: {transcript}")
     assert transcript.text is not None
     assert isinstance(transcript.text, str)
 

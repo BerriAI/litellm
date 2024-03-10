@@ -753,6 +753,7 @@ class OpenAIChatCompletion(BaseLLM):
             # return response
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
+
             exception_mapping_worked = True
             ## LOGGING
             logging_obj.post_call(
@@ -824,7 +825,8 @@ class OpenAIChatCompletion(BaseLLM):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="audio_transcription")  # type: ignore
+        hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(
@@ -862,7 +864,8 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="audio_transcription")  # type: ignore
+            hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
