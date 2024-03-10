@@ -48,7 +48,8 @@ proxy = [
     "apscheduler",
     "fastapi-sso",
     "PyJWT",
-    "python-multipart"
+    "python-multipart",
+    "argon2-cffi"
 ]
 
 extra_proxy = [
