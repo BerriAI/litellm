@@ -48,6 +48,7 @@ class InMemoryCache(BaseCache):
         self.ttl_dict = {}
 
     def set_cache(self, key, value, **kwargs):
+        print_verbose("InMemoryCache: set_cache")
         self.cache_dict[key] = value
         if "ttl" in kwargs:
             self.ttl_dict[key] = time.time() + kwargs["ttl"]
