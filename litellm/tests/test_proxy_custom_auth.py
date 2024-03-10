@@ -55,7 +55,7 @@ def test_custom_auth(client):
         }
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
-
+        print(f"token: {token}")
         headers = {"Authorization": f"Bearer {token}"}
         response = client.post("/chat/completions", json=test_data, headers=headers)
         pytest.fail("LiteLLM Proxy test failed. This request should have been rejected")
