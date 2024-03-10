@@ -1,7 +1,7 @@
 import os, types
 import json
 from enum import Enum
-import requests
+import requests, copy
 import time, uuid
 from typing import Callable, Optional
 from litellm.utils import ModelResponse, Usage, map_finish_reason
@@ -117,6 +117,7 @@ def completion(
 ):
     headers = validate_environment(api_key, headers)
     _is_function_call = False
+    messages = copy.deepcopy(messages)
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
