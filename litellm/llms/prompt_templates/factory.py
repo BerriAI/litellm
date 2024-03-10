@@ -4,6 +4,7 @@ import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, Environment, meta
 from typing import Optional, Any
 import imghdr, base64
+from typing import List
 
 
 def default_pt(messages):
@@ -633,7 +634,7 @@ def anthropic_messages_pt(messages: list):
     return new_messages
 
 
-def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
+def extract_between_tags(tag: str, string: str, strip: bool = False) -> List[str]:
     ext_list = re.findall(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL)
     if strip:
         ext_list = [e.strip() for e in ext_list]
