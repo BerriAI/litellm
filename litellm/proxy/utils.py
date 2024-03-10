@@ -96,7 +96,11 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
         call_type: Literal[
-            "completion", "embeddings", "image_generation", "moderation"
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
         ],
     ):
         """
