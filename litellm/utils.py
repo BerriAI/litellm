@@ -1168,6 +1168,7 @@ class Logging:
                     isinstance(result, ModelResponse)
                     or isinstance(result, EmbeddingResponse)
                     or isinstance(result, ImageResponse)
+                    or isinstance(result, TranscriptionResponse)
                 )
                 and self.stream != True
             ):  # handle streaming separately
@@ -1203,9 +1204,6 @@ class Logging:
                                     model=base_model,
                                 )
                             )
-                    verbose_logger.debug(
-                        f"Model={self.model}; cost={self.model_call_details['response_cost']}"
-                    )
                 except litellm.NotFoundError as e:
                     verbose_logger.debug(
                         f"Model={self.model} not found in completion cost map."
@@ -1236,7 +1234,7 @@ class Logging:
     def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        verbose_logger.debug(f"Logging Details LiteLLM-Success Call: {cache_hit}")
+        print_verbose(f"Logging Details LiteLLM-Success Call: {cache_hit}")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -1245,7 +1243,7 @@ class Logging:
         )
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
-            verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
+            print_verbose(f"success callbacks: {litellm.success_callback}")
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
             if self.stream and isinstance(result, ModelResponse):
@@ -1268,7 +1266,7 @@ class Logging:
                     self.sync_streaming_chunks.append(result)
 
             if complete_streaming_response is not None:
-                verbose_logger.debug(
+                print_verbose(
                     f"Logging Details LiteLLM-Success Call streaming complete"
                 )
                 self.model_call_details["complete_streaming_response"] = (
@@ -1615,6 +1613,14 @@ class Logging:
                             "aembedding", False
                         )
                         == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        == False
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
@@ -1645,6 +1651,14 @@ class Logging:
                         == False
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aembedding", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
                         )
                         == False
                     ):  # custom logger functions
@@ -1681,6 +1695,7 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
+        print_verbose(f"Logging Details LiteLLM-Async Success Call: {cache_hit}")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
@@ -2473,6 +2488,7 @@ def client(original_function):
                 and kwargs.get("aembedding", False) != True
                 and kwargs.get("acompletion", False) != True
                 and kwargs.get("aimg_generation", False) != True
+                and kwargs.get("atranscription", False) != True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
@@ -2875,6 +2891,19 @@ def client(original_function):
                                 model_response_object=EmbeddingResponse(),
                                 response_type="embedding",
                             )
+                        elif call_type == CallTypes.atranscription.value and isinstance(
+                            cached_result, dict
+                        ):
+                            hidden_params = {
+                                "model": "whisper-1",
+                                "custom_llm_provider": custom_llm_provider,
+                            }
+                            cached_result = convert_to_model_response_object(
+                                response_object=cached_result,
+                                model_response_object=TranscriptionResponse(),
+                                response_type="audio_transcription",
+                                hidden_params=hidden_params,
+                            )
                         if kwargs.get("stream", False) == False:
                             # LOG SUCCESS
                             asyncio.create_task(
@@ -3001,6 +3030,20 @@ def client(original_function):
                 else:
                     return result
 
+            # ADD HIDDEN PARAMS - additional call metadata
+            if hasattr(result, "_hidden_params"):
+                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
+                    "id", None
+                )
+            if (
+                isinstance(result, ModelResponse)
+                or isinstance(result, EmbeddingResponse)
+                or isinstance(result, TranscriptionResponse)
+            ):
+                result._response_ms = (
+                    end_time - start_time
+                ).total_seconds() * 1000  # return response latency in ms like openai
+
             ### POST-CALL RULES ###
             post_call_processing(original_response=result, model=model)
 
@@ -3013,8 +3056,10 @@ def client(original_function):
                 )
                 and (kwargs.get("cache", {}).get("no-store", False) != True)
             ):
-                if isinstance(result, litellm.ModelResponse) or isinstance(
-                    result, litellm.EmbeddingResponse
+                if (
+                    isinstance(result, litellm.ModelResponse)
+                    or isinstance(result, litellm.EmbeddingResponse)
+                    or isinstance(result, TranscriptionResponse)
                 ):
                     if (
                         isinstance(result, EmbeddingResponse)
@@ -3058,18 +3103,7 @@ def client(original_function):
                 args=(result, start_time, end_time),
             ).start()
 
-            # RETURN RESULT
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-            if isinstance(result, ModelResponse) or isinstance(
-                result, EmbeddingResponse
-            ):
-                result._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
-
+            # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
                 and final_embedding_cached_response is not None
@@ -3576,6 +3610,20 @@ def cost_per_token(
                 model_cost_ref[model]["output_cost_per_token"] * completion_tokens
             )
         elif (
+            model_cost_ref[model].get("output_cost_per_second", None) is not None
+            and response_time_ms is not None
+        ):
+            print_verbose(
+                f"For model={model} - output_cost_per_second: {model_cost_ref[model].get('output_cost_per_second')}; response time: {response_time_ms}"
+            )
+            ## COST PER SECOND ##
+            prompt_tokens_cost_usd_dollar = 0
+            completion_tokens_cost_usd_dollar = (
+                model_cost_ref[model]["output_cost_per_second"]
+                * response_time_ms
+                / 1000
+            )
+        elif (
             model_cost_ref[model].get("input_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
@@ -3659,6 +3707,8 @@ def completion_cost(
         "text_completion",
         "image_generation",
         "aimage_generation",
+        "transcription",
+        "atranscription",
     ] = "completion",
     ### REGION ###
     custom_llm_provider=None,
@@ -3694,7 +3744,6 @@ def completion_cost(
         - If an error occurs during execution, the function returns 0.0 without blocking the user's execution path.
     """
     try:
-
         if (
             (call_type == "aimage_generation" or call_type == "image_generation")
             and model is not None
@@ -3717,10 +3766,15 @@ def completion_cost(
             verbose_logger.debug(
                 f"completion_response response ms: {completion_response.get('_response_ms')} "
             )
-            model = (
-                model or completion_response["model"]
+            model = model or completion_response.get(
+                "model", None
             )  # check if user passed an override for model, if it's none check completion_response['model']
             if hasattr(completion_response, "_hidden_params"):
+                if (
+                    completion_response._hidden_params.get("model", None) is not None
+                    and len(completion_response._hidden_params["model"]) > 0
+                ):
+                    model = completion_response._hidden_params.get("model", model)
                 custom_llm_provider = completion_response._hidden_params.get(
                     "custom_llm_provider", ""
                 )
@@ -3801,6 +3855,7 @@ def completion_cost(
         # see https://replicate.com/pricing
         elif model in litellm.replicate_models or "replicate" in model:
             return get_replicate_completion_pricing(completion_response, total_time)
+
         (
             prompt_tokens_cost_usd_dollar,
             completion_tokens_cost_usd_dollar,
@@ -6314,6 +6369,7 @@ def convert_to_model_response_object(
     stream=False,
     start_time=None,
     end_time=None,
+    hidden_params: Optional[dict] = None,
 ):
     try:
         if response_type == "completion" and (
@@ -6373,6 +6429,9 @@ def convert_to_model_response_object(
                     end_time - start_time
                 ).total_seconds() * 1000
 
+            if hidden_params is not None:
+                model_response_object._hidden_params = hidden_params
+
             return model_response_object
         elif response_type == "embedding" and (
             model_response_object is None
@@ -6402,6 +6461,9 @@ def convert_to_model_response_object(
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
 
+            if hidden_params is not None:
+                model_response_object._hidden_params = hidden_params
+
             return model_response_object
         elif response_type == "image_generation" and (
             model_response_object is None
@@ -6419,6 +6481,9 @@ def convert_to_model_response_object(
             if "data" in response_object:
                 model_response_object.data = response_object["data"]
 
+            if hidden_params is not None:
+                model_response_object._hidden_params = hidden_params
+
             return model_response_object
         elif response_type == "audio_transcription" and (
             model_response_object is None
@@ -6432,6 +6497,9 @@ def convert_to_model_response_object(
 
             if "text" in response_object:
                 model_response_object.text = response_object["text"]
+
+            if hidden_params is not None:
+                model_response_object._hidden_params = hidden_params
             return model_response_object
     except Exception as e:
         raise Exception(f"Invalid response object {traceback.format_exc()}")
