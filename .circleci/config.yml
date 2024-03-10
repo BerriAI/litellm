@@ -217,6 +217,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - installing_litellm_on_python:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - publish_to_pypi:
           requires:
             - local_testing
