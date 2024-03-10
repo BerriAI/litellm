@@ -96,7 +96,7 @@ Turn off PII masking for a given key.
 Do this by setting `permissions: {"pii": false}`, when generating a key. 
 
 ```shell 
-curl --location 'http://0.0.0.0:8000/key/generate' \
+curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{
@@ -119,7 +119,7 @@ The proxy support 2 request-level PII controls:
 Set `allow_pii_controls` to true for a given key. This will allow the user to set request-level PII controls.
 
 ```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
+curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer my-master-key' \
 --header 'Content-Type: application/json' \
 --data '{
@@ -136,7 +136,7 @@ from openai import OpenAI
 client = OpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
-        base_url="http://0.0.0.0:8000"
+        base_url="http://0.0.0.0:4000"
 )
 
 chat_completion = client.chat.completions.create(

@@ -28,7 +28,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `imagePullSecrets`                                         | Registry credentials for the LiteLLM and initContainer images.                                                                                                                        | `[]`  |
 | `serviceAccount.create`                                    | Whether or not to create a Kubernetes Service Account for this deployment.  The default is `false` because LiteLLM has no need to access the Kubernetes API.                          | `false`  |
 | `service.type`                                             | Kubernetes Service type (e.g. `LoadBalancer`, `ClusterIP`, etc.)                                                                                                                      | `ClusterIP`  |
-| `service.port`                                             | TCP port that the Kubernetes Service will listen on.  Also the TCP port within the Pod that the proxy will listen on.                                                                 | `8000`  |
+| `service.port`                                             | TCP port that the Kubernetes Service will listen on.  Also the TCP port within the Pod that the proxy will listen on.                                                                 | `4000`  |
 | `ingress.*`                                                | See [values.yaml](./values.yaml) for example settings                                                                                                                                 | N/A  |
 | `proxy_config.*`                                           | See [values.yaml](./values.yaml) for default settings.  See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples.                            | N/A  |
 
@@ -76,7 +76,7 @@ When browsing to the URL published per the settings in `ingress.*`, you will
 be prompted for **Admin Configuration**.  The **Proxy Endpoint** is the internal
 (from the `litellm` pod's perspective) URL published by the `<RELEASE>-litellm`
 Kubernetes Service.  If the deployment uses the default settings for this
-service, the **Proxy Endpoint** should be set to `http://<RELEASE>-litellm:8000`.
+service, the **Proxy Endpoint** should be set to `http://<RELEASE>-litellm:4000`.
 
 The **Proxy Key** is the value specified for `masterkey` or, if a `masterkey`
 was not provided to the helm command line, the `masterkey` is a randomly

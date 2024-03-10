@@ -63,7 +63,7 @@ export ANTHROPIC_API_KEY="your-api-key"
 ```bash
 $ litellm --model claude-3-opus-20240229
 
-# Server running on http://0.0.0.0:8000
+# Server running on http://0.0.0.0:4000
 ```
 
 ### 3. Test it
@@ -73,7 +73,7 @@ $ litellm --model claude-3-opus-20240229
 <TabItem value="Curl" label="Curl Request">
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -93,7 +93,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -120,7 +120,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
+    openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
     model = "gpt-3.5-turbo",
     temperature=0.1
 )
