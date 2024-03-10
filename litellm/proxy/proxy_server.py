@@ -1766,7 +1766,9 @@ class ProxyConfig:
             )
             if master_key and master_key.startswith("os.environ/"):
                 master_key = litellm.get_secret(master_key)
-            litellm_master_key_hash = ph.hash(master_key)
+
+            if master_key is not None and isinstance(master_key, str):
+                litellm_master_key_hash = ph.hash(master_key)
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
