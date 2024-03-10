@@ -10,6 +10,8 @@ sys.path.insert(
 def test_using_litellm():
     try:
         import litellm
+
+        print("litellm imported successfully")
     except Exception as e:
         pytest.fail(
             f"Error occurred: {e}. Installing litellm on python3.8 failed please retry"

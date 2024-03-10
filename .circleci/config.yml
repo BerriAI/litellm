@@ -13,11 +13,14 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
-            python -m pip install -r .circleci/requirements.txt
-            pip install openai
-            pip install prisma            
-            pip install "httpx==0.24.1"
-
+            pip install python-dotenv
+            pip install pytest
+            pip install tiktoken
+            pip install aiohttp
+            pip install click
+            pip install jinja2
+            pip install tokenizers
+            pip install openai         
       - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
       - run:
