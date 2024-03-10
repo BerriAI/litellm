@@ -1243,7 +1243,7 @@ class Logging:
         )
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
-            verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
+            print_verbose(f"success callbacks: {litellm.success_callback}")
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
             if self.stream and isinstance(result, ModelResponse):
@@ -1266,7 +1266,7 @@ class Logging:
                     self.sync_streaming_chunks.append(result)
 
             if complete_streaming_response is not None:
-                verbose_logger.debug(
+                print_verbose(
                     f"Logging Details LiteLLM-Success Call streaming complete"
                 )
                 self.model_call_details["complete_streaming_response"] = (
@@ -1613,6 +1613,14 @@ class Logging:
                             "aembedding", False
                         )
                         == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        == False
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
@@ -1643,6 +1651,14 @@ class Logging:
                         == False
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aembedding", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
                         )
                         == False
                     ):  # custom logger functions
@@ -3728,7 +3744,6 @@ def completion_cost(
         - If an error occurs during execution, the function returns 0.0 without blocking the user's execution path.
     """
     try:
-
         if (
             (call_type == "aimage_generation" or call_type == "image_generation")
             and model is not None
@@ -3737,7 +3752,6 @@ def completion_cost(
             and custom_llm_provider == "azure"
         ):
             model = "dall-e-2"  # for dall-e-2, azure expects an empty model name
-
         # Handle Inputs to completion_cost
         prompt_tokens = 0
         completion_tokens = 0
@@ -3756,7 +3770,7 @@ def completion_cost(
                 "model", None
             )  # check if user passed an override for model, if it's none check completion_response['model']
             if hasattr(completion_response, "_hidden_params"):
-                model = completion_response._hidden_params.get("model", model)
+                model = model or completion_response._hidden_params.get("model", None)
                 custom_llm_provider = completion_response._hidden_params.get(
                     "custom_llm_provider", ""
                 )
