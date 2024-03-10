@@ -3770,7 +3770,11 @@ def completion_cost(
                 "model", None
             )  # check if user passed an override for model, if it's none check completion_response['model']
             if hasattr(completion_response, "_hidden_params"):
-                model = model or completion_response._hidden_params.get("model", None)
+                if (
+                    completion_response._hidden_params.get("model", None) is not None
+                    and len(completion_response._hidden_params["model"]) > 0
+                ):
+                    model = completion_response._hidden_params.get("model", model)
                 custom_llm_provider = completion_response._hidden_params.get(
                     "custom_llm_provider", ""
                 )
