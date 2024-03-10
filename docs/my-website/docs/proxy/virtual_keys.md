@@ -59,7 +59,7 @@ litellm --config /path/to/config.yaml
 **Step 3: Generate temporary keys**
 
 ```shell 
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai"}}'
@@ -70,7 +70,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -105,7 +105,7 @@ Request Params:
 ```python
 {
     "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
-    "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+    "expires": "2023-11-19T01:38:25.834000+00:00" # datetime object
     "key_name": "sk-...7sFA" # abbreviated key string, ONLY stored in db if `allow_user_auth: true` set - [see](./ui.md)
     ...
 }
@@ -147,7 +147,7 @@ model_list:
 **Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
 
 ```bash
-curl -X POST "https://0.0.0.0:8000/key/generate" \
+curl -X POST "https://0.0.0.0:4000/key/generate" \
 -H "Authorization: Bearer <your-master-key>" \
 -H "Content-Type: application/json" \
 -d '{
@@ -182,7 +182,7 @@ model_list:
 **Step 2. Create key with access group**
 
 ```bash
-curl --location 'http://localhost:8000/key/generate' \
+curl --location 'http://localhost:4000/key/generate' \
 -H 'Authorization: Bearer <your-master-key>' \
 -H 'Content-Type: application/json' \
 -d '{"models": ["beta-models"], # 👈 Model Access Group
@@ -194,7 +194,7 @@ curl --location 'http://localhost:8000/key/generate' \
 
 ### Request
 ```shell
-curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+curl -X GET "http://0.0.0.0:4000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
 -H "Authorization: Bearer sk-1234"
 ```
 
@@ -228,7 +228,7 @@ Request Params:
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/update' \
+curl 'http://0.0.0.0:4000/key/update' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -266,7 +266,7 @@ Request Params:
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/delete' \
+curl 'http://0.0.0.0:4000/key/delete' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -500,7 +500,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Set `max_budget` in (USD $) param in the `key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
 
 ```shell
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -517,7 +517,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
 Example Request to `/chat/completions` when key has crossed budget
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
   --header 'Content-Type: application/json' \
   --header 'Authorization: Bearer sk-ULl_IKCVFy2EZRzQB16RUA' \
   --data ' {
@@ -545,10 +545,10 @@ Expected Response from `/chat/completions` when key has crossed budget
 
 LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
 
-This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
+This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:4000/`). Here's an example request. 
 
 ```shell 
-curl --location 'http://localhost:8000/user/new' \
+curl --location 'http://localhost:4000/user/new' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
@@ -571,7 +571,7 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 You can get spend for a key by using the `/key/info` endpoint. 
 
 ```bash
-curl 'http://0.0.0.0:8000/key/info?key=<user-key>' \
+curl 'http://0.0.0.0:4000/key/info?key=<user-key>' \
      -X GET \
      -H 'Authorization: Bearer <your-master-key>'
 ```
@@ -771,7 +771,7 @@ general_settings:
 #### Step 3. Generate Key
 
 ```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
+curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'

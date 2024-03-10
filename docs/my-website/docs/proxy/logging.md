@@ -150,7 +150,7 @@ litellm --config proxy_config.yaml
 ```
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --data ' {
     "model": "gpt-3.5-turbo",
@@ -174,7 +174,7 @@ On Success
     Usage: {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21},
     Cost: 3.65e-05,
     Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
-    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
+    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:4000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
 ```
 
 #### Logging Proxy Request Object, Header, Url
@@ -374,7 +374,7 @@ async def log_event(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=4000)
 
 
 ```
@@ -383,7 +383,7 @@ if __name__ == "__main__":
 #### Step 2. Set your `GENERIC_LOGGER_ENDPOINT` to the endpoint + route we should send callback logs to
 
 ```shell
-os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:8000/log-event"
+os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:4000/log-event"
 ```
 
 #### Step 3. Create a `config.yaml` file and set `litellm_settings`: `success_callback` = ["generic"]
@@ -445,7 +445,7 @@ Expected output on Langfuse
 Pass `metadata` as part of the request body
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -472,7 +472,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -509,7 +509,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",
+    openai_api_base="http://0.0.0.0:4000",
     model = "gpt-3.5-turbo",
     temperature=0.1,
     extra_body={
@@ -663,7 +663,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "Azure OpenAI GPT-4 East",
@@ -698,7 +698,7 @@ litellm_settings:
 Now, when you [generate keys](./virtual_keys.md) for this team-id 
 
 ```bash
-curl -X POST 'http://0.0.0.0:8000/key/generate' \
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
 -D '{"team_id": "ishaans-secret-project"}'
@@ -742,7 +742,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "Azure OpenAI GPT-4 East",
@@ -903,7 +903,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "gpt-3.5-turbo",
@@ -947,7 +947,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "gpt-3.5-turbo",

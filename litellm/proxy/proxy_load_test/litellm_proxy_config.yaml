@@ -1,0 +1,6 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: http://0.0.0.0:8090
