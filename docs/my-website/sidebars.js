@@ -42,10 +42,6 @@ const sidebars = {
         "proxy/team_based_routing",
         "proxy/ui",
         "proxy/budget_alerts",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
-        "proxy/pii_masking",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
@@ -54,6 +50,10 @@ const sidebars = {
             "proxy/reliability",
           ]
         },
+        "proxy/model_management",
+        "proxy/health",
+        "proxy/debugging",
+        "proxy/pii_masking",
         "proxy/caching",
         {
           "type": "category",
@@ -101,12 +101,13 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Moderation(), Image Generation()",
+      label: "Embedding(), Moderation(), Image Generation(), Audio Transcriptions()",
       items: [
         "embedding/supported_embedding", 
         "embedding/async_embedding",
         "embedding/moderation",
-        "image_generation"
+        "image_generation",
+        "audio_transcription"
       ],
     },
     {

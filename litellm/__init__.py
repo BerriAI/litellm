@@ -570,7 +570,7 @@ from .utils import (
     _calculate_retry_after,
     _should_retry,
     get_secret,
-    get_mapped_model_params,
+    get_supported_openai_params,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -588,6 +588,7 @@ from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
+from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock import (
     AmazonTitanConfig,

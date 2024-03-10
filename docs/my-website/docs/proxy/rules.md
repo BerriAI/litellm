@@ -30,7 +30,7 @@ $ litellm /path/to/config.yaml
 ```
 
 ```bash
-curl --location 'http://0.0.0.0:8000/v1/chat/completions' \
+curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Bearer sk-1234' \
 --data '{

@@ -511,7 +511,7 @@ def test_completion_mistral_api_stream():
 
 
 def test_completion_deep_infra_stream():
-    # deep infra currently includes role in the 2nd chunk
+    # deep infra,currently includes role in the 2nd chunk
     # waiting for them to make a fix on this
     litellm.set_verbose = True
     try:
@@ -725,6 +725,31 @@ def test_completion_claude_stream_bad_key():
 #         pass
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
+
+
+def test_bedrock_claude_3_streaming():
+    try:
+        litellm.set_verbose = True
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.skip(reason="Replicate changed exceptions")

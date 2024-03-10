@@ -142,6 +142,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "litellm.fullname" . }}-masterkey
                   key: masterkey
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_HOST
+              value: {{ include "litellm.redis.serviceName" . }}
+            - name: REDIS_PORT
+              value: {{ include "litellm.redis.port" . | quote }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "redis.secretName" .Subcharts.redis }}
+                  key: {{include "redis.secretPasswordKey" .Subcharts.redis }}
+            {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
             - secretRef:
