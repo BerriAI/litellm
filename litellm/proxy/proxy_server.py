@@ -317,18 +317,6 @@ async def user_api_key_auth(
             else:
                 return UserAPIKeyAuth()
 
-        ### CHECK IF ADMIN ###
-        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
-
-        is_master_key_valid = ph.verify(litellm_master_key_hash, api_key)
-
-        if is_master_key_valid:
-            return UserAPIKeyAuth(
-                api_key=master_key,
-                user_role="proxy_admin",
-                user_id=litellm_proxy_admin_name,
-            )
-
         route: str = request.url.path
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) == True:
@@ -360,6 +348,20 @@ async def user_api_key_auth(
             # missing 'Bearer ' prefix
             raise Exception(
                 f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
+            )
+
+        ### CHECK IF ADMIN ###
+        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
+        try:
+            is_master_key_valid = ph.verify(litellm_master_key_hash, api_key)
+        except Exception as e:
+            is_master_key_valid = False
+
+        if is_master_key_valid:
+            return UserAPIKeyAuth(
+                api_key=master_key,
+                user_role="proxy_admin",
+                user_id=litellm_proxy_admin_name,
             )
 
         if isinstance(
