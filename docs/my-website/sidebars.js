@@ -39,17 +39,18 @@ const sidebars = {
         "proxy/user_keys",
         "proxy/virtual_keys",
         "proxy/users",
+        "proxy/team_based_routing",
         "proxy/ui",
-        "proxy/metrics",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
-        "proxy/pii_masking",
+        "proxy/budget_alerts",
         {
           type: "category",
           label: "🔥 Load Balancing",
           items: ["proxy/load_balancing", "proxy/reliability"],
         },
+        "proxy/model_management",
+        "proxy/health",
+        "proxy/debugging",
+        "proxy/pii_masking",
         "proxy/caching",
         {
           type: "category",
@@ -90,12 +91,13 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Moderation(), Image Generation()",
+      label: "Embedding(), Moderation(), Image Generation(), Audio Transcriptions()",
       items: [
         "embedding/supported_embedding",
         "embedding/async_embedding",
         "embedding/moderation",
         "image_generation",
+        "audio_transcription"
       ],
     },
     {

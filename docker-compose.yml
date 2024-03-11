@@ -8,13 +8,3 @@ services:
       - "4000:4000"
     environment:
       - AZURE_API_KEY=sk-123
-
-  clickhouse:
-    image: clickhouse/clickhouse-server
-    environment:
-      - CLICKHOUSE_DB=litellm-test
-      - CLICKHOUSE_USER=admin
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-      - CLICKHOUSE_PASSWORD=admin
-    ports:
-      - "8123:8123"

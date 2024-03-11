@@ -1047,6 +1047,7 @@ def embedding(
     vertex_project=None,
     vertex_location=None,
     aembedding=False,
+    print_verbose=None,
 ):
     # logic for parsing in - calling - parsing out model embedding calls
     try:
@@ -1062,7 +1063,13 @@ def embedding(
 
     ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
     try:
+        print_verbose(
+            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
+        )
         creds, _ = google.auth.default(quota_project_id=vertex_project)
+        print_verbose(
+            f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
+        )
         vertexai.init(
             project=vertex_project, location=vertex_location, credentials=creds
         )

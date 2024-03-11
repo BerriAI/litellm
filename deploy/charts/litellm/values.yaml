@@ -55,7 +55,7 @@ environmentSecrets: []
 
 service:
   type: ClusterIP
-  port: 8000
+  port: 4000
 
 ingress:
   enabled: false
@@ -87,6 +87,8 @@ proxy_config:
         api_key: eXaMpLeOnLy
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
+#  litellm_settings:
+#    cache: true
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
@@ -166,3 +168,10 @@ postgresql:
     # existingSecret: ""
     # secretKeys:
     #   userPasswordKey: password
+
+# requires cache: true in config file
+# either enable this or pass a secret for REDIS_HOST, REDIS_PORT, REDIS_PASSWORD or REDIS_URL
+# with cache: true to use existing redis instance
+redis:
+  enabled: false
+  architecture: standalone

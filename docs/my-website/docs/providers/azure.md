@@ -3,9 +3,9 @@
 api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
 import os
-os.environ["AZURE_API_KEY"] = ""
-os.environ["AZURE_API_BASE"] = ""
-os.environ["AZURE_API_VERSION"] = ""
+os.environ["AZURE_API_KEY"] = "" # "my-azure-api-key"
+os.environ["AZURE_API_BASE"] = "" # "https://example-endpoint.openai.azure.com"
+os.environ["AZURE_API_VERSION"] = "" # "2023-05-15"
 
 # optional
 os.environ["AZURE_AD_TOKEN"] = ""
@@ -167,6 +167,13 @@ response = completion(
             ],
 )
 ```
+
+## Azure Instruct Models
+
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| gpt-3.5-turbo-instruct | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="azure/<your deployment name>", messages=messages)` |
 
 
 ## Advanced

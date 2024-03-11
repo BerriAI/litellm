@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Embedding Models
 
 ## Quick Start
@@ -7,8 +10,81 @@ import os
 os.environ['OPENAI_API_KEY'] = ""
 response = embedding(model='text-embedding-ada-002', input=["good morning from litellm"])
 ```
+## Proxy Usage 
 
-### Input Params for `litellm.embedding()`
+**NOTE**
+For `vertex_ai`,
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="absolute/path/to/service_account.json"
+```
+
+### Add model to config 
+
+```yaml
+model_list:
+- model_name: textembedding-gecko
+  litellm_params:
+    model: vertex_ai/textembedding-gecko
+
+general_settings:
+  master_key: sk-1234
+```
+
+### Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml 
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+### Test 
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl --location 'http://0.0.0.0:4000/embeddings' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"input": ["Academia.edu uses"], "model": "textembedding-gecko", "encoding_format": "base64"}'
+```
+
+</TabItem>
+<TabItem value="openai" label="OpenAI (python)">
+
+```python
+from openai import OpenAI
+client = OpenAI(
+  api_key="sk-1234",
+  base_url="http://0.0.0.0:4000"
+)
+
+client.embeddings.create(
+  model="textembedding-gecko",
+  input="The food was delicious and the waiter...",
+  encoding_format="float"
+)
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain Embeddings">
+
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(model="textembedding-gecko", openai_api_base="http://0.0.0.0:4000", openai_api_key="sk-1234")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"VERTEX AI EMBEDDINGS")
+print(query_result[:5])
+```
+</TabItem>
+</Tabs>
+
+## Input Params for `litellm.embedding()`
 ### Required Fields
 
 - `model`: *string* - ID of the model to use. `model='text-embedding-ada-002'`
@@ -124,7 +200,7 @@ Use this for calling `/embedding` endpoints on OpenAI Compatible Servers, exampl
 from litellm import embedding
 response = embedding(
   model = "openai/<your-llm-name>",     # add `openai/` prefix to model so litellm knows to route to OpenAI
-  api_base="http://0.0.0.0:8000/"       # set API Base of your Custom OpenAI Endpoint
+  api_base="http://0.0.0.0:4000/"       # set API Base of your Custom OpenAI Endpoint
   input=["good morning from litellm"]
 )
 ```
@@ -234,6 +310,35 @@ print(response)
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
 
+
+## Vertex AI Embedding Models
+
+### Usage - Embedding
+```python
+import litellm
+from litellm import embedding
+litellm.vertex_project = "hardy-device-38811" # Your Project ID
+litellm.vertex_location = "us-central1"  # proj location
+
+
+os.environ['VOYAGE_API_KEY'] = ""
+response = embedding(
+    model="vertex_ai/textembedding-gecko",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+## Supported Models
+All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| textembedding-gecko | `embedding(model="vertex_ai/textembedding-gecko", input)` | 
+| textembedding-gecko-multilingual | `embedding(model="vertex_ai/textembedding-gecko-multilingual", input)` | 
+| textembedding-gecko-multilingual@001 | `embedding(model="vertex_ai/textembedding-gecko-multilingual@001", input)` | 
+| textembedding-gecko@001 | `embedding(model="vertex_ai/textembedding-gecko@001", input)` | 
+| textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
 
 ## Voyage AI Embedding Models
 

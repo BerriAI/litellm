@@ -575,7 +575,6 @@ def test_azure_embedding_on_router():
 # test_azure_embedding_on_router()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_bedrock_on_router():
     litellm.set_verbose = True
     print("\n Testing bedrock on router\n")
@@ -933,7 +932,7 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": "claude-instant-1",
+                "model": "claude-instant-1.2",
                 "api_key": anthropic_api_key,
             },
         }

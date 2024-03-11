@@ -15,7 +15,7 @@ import os
 response = litellm.completion(
     model="openai/mistral,               # add `openai/` prefix to model so litellm knows to route to OpenAI
     api_key="sk-1234",                  # api key to your openai compatible endpoint
-    api_base="http://0.0.0.0:8000",     # set API Base of your Custom OpenAI Endpoint
+    api_base="http://0.0.0.0:4000",     # set API Base of your Custom OpenAI Endpoint
     messages=[
                 {
                     "role": "user",
@@ -35,7 +35,7 @@ import os
 response = litellm.embedding(
     model="openai/GPT-J",               # add `openai/` prefix to model so litellm knows to route to OpenAI
     api_key="sk-1234",                  # api key to your openai compatible endpoint
-    api_base="http://0.0.0.0:8000",     # set API Base of your Custom OpenAI Endpoint
+    api_base="http://0.0.0.0:4000",     # set API Base of your Custom OpenAI Endpoint
     input=["good morning from litellm"]
 )
 print(response)

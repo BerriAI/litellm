@@ -12,7 +12,14 @@ https://github.com/BerriAI/litellm
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 - Track spend & set budgets per project [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
-## Basic usage
+## How to use LiteLLM
+You can use litellm through either:
+1. [OpenAI proxy Server](#openai-proxy) - Server to call 100+ LLMs, load balance, cost tracking across projects
+2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
+
+## LiteLLM Python SDK
+
+### Basic usage 
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -146,9 +153,9 @@ response = completion(
 
 </Tabs>
 
-## Streaming
+### Streaming
+Set `stream=True` in the `completion` args. 
 
-Set `stream=True` in the `completion` args.
 <Tabs>
 <TabItem value="openai" label="OpenAI">
 
@@ -280,7 +287,7 @@ response = completion(
 
 </Tabs>
 
-## Exception handling
+### Exception handling 
 
 LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
 
@@ -296,8 +303,7 @@ except OpenAIError as e:
     print(e)
 ```
 
-## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-
+### Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
 
 ```python
@@ -317,8 +323,7 @@ litellm.success_callback = ["lunary", "langfuse"] # log input/output to lunary, 
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
-## Track Costs, Usage, Latency for streaming
-
+### Track Costs, Usage, Latency for streaming
 Use a callback function for this - more info on custom callbacks: https://docs.litellm.ai/docs/observability/custom_callback
 
 ```python
@@ -377,14 +382,14 @@ pip install 'litellm[proxy]'
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 #### Step 2: Make ChatCompletions Request to Proxy
 
 ```python
 import openai # openai v1.0.0+
-client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
     {
