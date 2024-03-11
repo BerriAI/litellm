@@ -722,6 +722,7 @@ def test_delete_key(prisma_client):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
     try:
 
         async def test():
