@@ -1506,13 +1506,18 @@ class Router:
             ) in (
                 kwargs.items()
             ):  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k != "metadata":
+                if k not in ["metadata", "messages", "original_function"]:
                     previous_model[k] = v
                 elif k == "metadata" and isinstance(v, dict):
                     previous_model["metadata"] = {}  # type: ignore
                     for metadata_k, metadata_v in kwargs["metadata"].items():
                         if metadata_k != "previous_models":
                             previous_model[k][metadata_k] = metadata_v  # type: ignore
+
+            # check current size of self.previous_models, if it's larger than 3, remove the first element
+            if len(self.previous_models) > 3:
+                self.previous_models.pop(0)
+
             self.previous_models.append(previous_model)
             kwargs["metadata"]["previous_models"] = self.previous_models
             return kwargs
