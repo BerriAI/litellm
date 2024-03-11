@@ -5143,6 +5143,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "max_tokens",
             "tools",
             "tool_choice",
+            "response_format",
         ]
     elif custom_llm_provider == "replicate":
         return [
