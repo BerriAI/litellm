@@ -294,11 +294,17 @@ class Router:
         """
         returns a copy of the deployment with the api key masked
         """
-        _deployment_copy = copy.deepcopy(deployment)
-        litellm_params: dict = _deployment_copy["litellm_params"]
-        if "api_key" in litellm_params:
-            litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
-        return _deployment_copy
+        try:
+            _deployment_copy = copy.deepcopy(deployment)
+            litellm_params: dict = _deployment_copy["litellm_params"]
+            if "api_key" in litellm_params:
+                litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
+            return _deployment_copy
+        except Exception as e:
+            verbose_router_logger.debug(
+                f"Error occurred while printing deployment - {str(e)}"
+            )
+            raise e
 
     ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
 
@@ -310,6 +316,7 @@ class Router:
         response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}]
         """
         try:
+            verbose_router_logger.debug(f"router.completion(model={model},..)")
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
