@@ -79,6 +79,9 @@ max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
+default_soft_budget: float = (
+    50.0  # by default all litellm proxy keys have a soft budget of 50.0
+)
 _openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
     "functions",
@@ -567,9 +570,11 @@ from .utils import (
     _calculate_retry_after,
     _should_retry,
     get_secret,
+    get_supported_openai_params,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
@@ -583,14 +588,17 @@ from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
+from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
+    AmazonAnthropicClaude3Config,
     AmazonCohereConfig,
     AmazonLlamaConfig,
     AmazonStabilityConfig,
+    AmazonMistralConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError

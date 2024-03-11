@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.28.7"
+version = "1.31.0"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -48,7 +48,8 @@ proxy = [
     "apscheduler",
     "fastapi-sso",
     "PyJWT",
-    "python-multipart"
+    "python-multipart",
+    "argon2-cffi"
 ]
 
 extra_proxy = [
@@ -74,7 +75,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.28.7"
+version = "1.31.0"
 version_files = [
     "pyproject.toml:^version"
 ]

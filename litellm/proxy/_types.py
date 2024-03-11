@@ -33,6 +33,9 @@ class LiteLLMBase(BaseModel):
             # if using pydantic v1
             return self.__fields_set__
 
+    class Config:
+        protected_namespaces = ()
+
 
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(LiteLLMBase):
@@ -151,6 +154,7 @@ class GenerateRequestBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
+    soft_budget: Optional[float] = None
 
 
 class GenerateKeyRequest(GenerateRequestBase):
@@ -208,6 +212,12 @@ class KeyRequest(LiteLLMBase):
     keys: List[str]
 
 
+class LiteLLM_ModelTable(LiteLLMBase):
+    model_aliases: Optional[str] = None  # json dump the dict
+    created_by: str
+    updated_by: str
+
+
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -247,9 +257,10 @@ class Member(LiteLLMBase):
         return values
 
 
-class NewTeamRequest(LiteLLMBase):
+class TeamBase(LiteLLMBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
+    organization_id: Optional[str] = None
     admins: list = []
     members: list = []
     members_with_roles: List[Member] = []
@@ -258,6 +269,14 @@ class NewTeamRequest(LiteLLMBase):
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
     models: list = []
+
+
+class NewTeamRequest(TeamBase):
+    model_aliases: Optional[dict] = None
+
+
+class GlobalEndUsersSpend(LiteLLMBase):
+    api_key: Optional[str] = None
 
 
 class TeamMemberAddRequest(LiteLLMBase):
@@ -290,11 +309,12 @@ class DeleteTeamRequest(LiteLLMBase):
     team_ids: List[str]  # required
 
 
-class LiteLLM_TeamTable(NewTeamRequest):
+class LiteLLM_TeamTable(TeamBase):
     spend: Optional[float] = None
     max_parallel_requests: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    model_id: Optional[int] = None
 
     @root_validator(pre=True)
     def set_model_info(cls, values):
@@ -304,6 +324,7 @@ class LiteLLM_TeamTable(NewTeamRequest):
             "config",
             "permissions",
             "model_max_budget",
+            "model_aliases",
         ]
         for field in dict_fields:
             value = values.get(field)
@@ -318,6 +339,49 @@ class LiteLLM_TeamTable(NewTeamRequest):
 
 class TeamRequest(LiteLLMBase):
     teams: List[str]
+
+
+class LiteLLM_BudgetTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_BudgetTable record"""
+
+    soft_budget: Optional[float] = None
+    max_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    model_max_budget: Optional[dict] = None
+    budget_duration: Optional[str] = None
+
+
+class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_alias: str
+    models: List = []
+    budget_id: Optional[str] = None
+
+
+class LiteLLM_OrganizationTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
+    created_by: str
+    updated_by: str
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class OrganizationRequest(LiteLLMBase):
+    organizations: List[str]
+
+
+class BudgetRequest(LiteLLMBase):
+    budgets: List[str]
 
 
 class KeyManagementSystem(enum.Enum):
@@ -489,6 +553,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
+    team_model_aliases: Optional[Dict] = None
 
 
 class UserAPIKeyAuth(
@@ -538,6 +604,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
     api_key: str
     model: Optional[str] = ""
+    api_base: Optional[str] = ""
     call_type: str
     spend: Optional[float] = 0.0
     total_tokens: Optional[int] = 0

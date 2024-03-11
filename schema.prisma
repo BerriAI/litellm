@@ -7,10 +7,57 @@ generator client {
   provider = "prisma-client-py"
 }
 
+// Budget / Rate Limits for an org
+model LiteLLM_BudgetTable {
+  budget_id String @id @default(uuid())
+  max_budget Float?
+  soft_budget Float?
+  max_parallel_requests Int?
+  tpm_limit     BigInt?
+  rpm_limit     BigInt?
+  model_max_budget Json?
+  budget_duration String? 
+  budget_reset_at DateTime?
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+  organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
+  keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
+}
+
+model LiteLLM_OrganizationTable {
+		organization_id String @id @default(uuid())
+    organization_alias  String
+    budget_id String
+    metadata  Json  @default("{}")
+    models     String[]
+    spend      Float    @default(0.0)
+    model_spend      Json @default("{}")
+    created_at    DateTime               @default(now()) @map("created_at")
+    created_by String
+    updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+    updated_by String
+    litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+    teams LiteLLM_TeamTable[] 
+}
+
+// Model info for teams, just has model aliases for now.
+model LiteLLM_ModelTable {
+  id Int @id @default(autoincrement())
+  model_aliases Json? @map("aliases")
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+  team LiteLLM_TeamTable?
+}
+
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
-		team_id    String @unique
+		team_id    String @id @default(uuid())
     team_alias  String? 
+    organization_id String?
     admins String[]
     members String[]
     members_with_roles Json @default("{}")
@@ -27,11 +74,14 @@ model LiteLLM_TeamTable {
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    model_id Int? @unique
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
 }
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
-		user_id    String @unique
+		user_id    String @id
     team_id    String?
     teams    String[] @default([])
     user_role  String?
@@ -51,9 +101,10 @@ model LiteLLM_UserTable {
 
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
-    token      String   @unique
+    token      String   @id
     key_name   String?
     key_alias   String?
+    soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
     spend      Float    @default(0.0)
     expires    DateTime?
     models     String[]
@@ -72,6 +123,8 @@ model LiteLLM_VerificationToken {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    budget_id String?
+    litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
 }
 
 // store proxy config.yaml
@@ -82,7 +135,7 @@ model LiteLLM_Config {
 
 // View spend, model, api_key per request
 model LiteLLM_SpendLogs {
-  request_id          String @unique
+  request_id          String @id
   call_type           String
   api_key             String  @default ("")
   spend               Float    @default(0.0)
@@ -92,6 +145,7 @@ model LiteLLM_SpendLogs {
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
   model               String   @default("")
+  api_base            String   @default("")
   user                String   @default("")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
@@ -103,7 +157,7 @@ model LiteLLM_SpendLogs {
 
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
-  request_id          String @unique
+  request_id          String @id
   user_id             String 
   models              String[]
   justification       String

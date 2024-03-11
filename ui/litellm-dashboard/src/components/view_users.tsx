@@ -10,30 +10,38 @@ import {
   TableCell,
   TableBody,
   Tab,
+  Text,
   TabGroup,
   TabList,
   TabPanels,
   Metric,
   Grid,
   TabPanel,
+  Select,
+  SelectItem,
 } from "@tremor/react";
 import { userInfoCall, adminTopEndUsersCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
+import Paragraph from "antd/es/skeleton/Paragraph";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
   token: string | null;
+  keys: any[] | null;
   userRole: string | null;
   userID: string | null;
+  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,
   token,
+  keys,
   userRole,
   userID,
+  setKeys,
 }) => {
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
@@ -66,7 +74,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
     const fetchEndUserSpend = async () => {
       try {
-        const topEndUsers = await adminTopEndUsersCall(accessToken);
+        const topEndUsers = await adminTopEndUsersCall(accessToken, null);
         console.log("user data response:", topEndUsers);
         setEndUsers(topEndUsers);
       } catch (error) {
@@ -89,6 +97,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   if (!accessToken || !token || !userRole || !userID) {
     return <div>Loading...</div>;
   }
+
+  const onKeyClick = async (keyToken: String) => {
+    try {
+      const topEndUsers = await adminTopEndUsersCall(accessToken, keyToken);
+      console.log("user data response:", topEndUsers);
+      setEndUsers(topEndUsers);
+    } catch (error) {
+      console.error("There was an error fetching the model data", error);
+    }
+  };
 
   function renderPagination() {
     if (!userData) return null;
@@ -166,6 +184,31 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 </Table>
               </TabPanel>
               <TabPanel>
+                <div className="flex items-center">
+                  <div className="flex-1"></div>
+                  <div className="flex-1 flex justify-between items-center">
+                    <Text className="w-1/4 mr-2 text-right">Key</Text>
+                    <Select defaultValue="1" className="w-3/4">
+                      {keys?.map((key: any, index: number) => {
+                        if (
+                          key &&
+                          key["key_name"] !== null &&
+                          key["key_name"].length > 0
+                        ) {
+                          return (
+                            <SelectItem
+                              key={index}
+                              value={String(index)}
+                              onClick={() => onKeyClick(key["token"])}
+                            >
+                              {key["key_name"]}
+                            </SelectItem>
+                          );
+                        }
+                      })}
+                    </Select>
+                  </div>
+                </div>
                 <Table>
                   <TableHead>
                     <TableRow>
