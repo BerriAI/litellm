@@ -737,8 +737,19 @@ def test_delete_key(prisma_client):
 
             delete_key_request = KeyRequest(keys=[generated_key])
 
+            bearer_token = "Bearer sk-1234"
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/key/delete")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print(f"result: {result}")
+            result.user_role = "proxy_admin"
             # delete the key
-            result_delete_key = await delete_key_fn(data=delete_key_request)
+            result_delete_key = await delete_key_fn(
+                data=delete_key_request, user_api_key_dict=result
+            )
             print("result from delete key", result_delete_key)
             assert result_delete_key == {"deleted_keys": [generated_key]}
 
