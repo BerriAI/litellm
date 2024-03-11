@@ -12,10 +12,10 @@ The proxy exposes:
 #### Request
 Make a GET Request to `/health` on the proxy
 ```shell
-curl --location 'http://0.0.0.0:8000/health' -H "Authorization: Bearer sk-1234"
+curl --location 'http://0.0.0.0:4000/health' -H "Authorization: Bearer sk-1234"
 ```
 
-You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
+You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:4000/health` for you
 ```
 litellm --health
 ```
@@ -60,7 +60,7 @@ $ litellm /path/to/config.yaml
 
 3. Query health endpoint: 
 ```
-curl --location 'http://0.0.0.0:8000/health'
+curl --location 'http://0.0.0.0:4000/health'
 ```
 
 ### Embedding Models 
@@ -119,7 +119,7 @@ Unprotected endpoint for checking if proxy is ready to accept requests
 Example Request: 
 
 ```bash 
-curl --location 'http://0.0.0.0:8000/health/readiness'
+curl --location 'http://0.0.0.0:4000/health/readiness'
 ```
 
 Example Response:  
@@ -153,7 +153,7 @@ Example Request:
 
 ```
 curl -X 'GET' \
-  'http://0.0.0.0:8000/health/liveliness' \
+  'http://0.0.0.0:4000/health/liveliness' \
   -H 'accept: application/json'
 ```
 

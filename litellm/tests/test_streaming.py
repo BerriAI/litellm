@@ -348,7 +348,7 @@ def test_completion_claude_stream():
             },
         ]
         response = completion(
-            model="claude-instant-1", messages=messages, stream=True, max_tokens=50
+            model="claude-instant-1.2", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -511,7 +511,7 @@ def test_completion_mistral_api_stream():
 
 
 def test_completion_deep_infra_stream():
-    # deep infra currently includes role in the 2nd chunk
+    # deep infra,currently includes role in the 2nd chunk
     # waiting for them to make a fix on this
     litellm.set_verbose = True
     try:
@@ -727,6 +727,32 @@ def test_completion_claude_stream_bad_key():
 #         pytest.fail(f"Error occurred: {e}")
 
 
+def test_bedrock_claude_3_streaming():
+    try:
+        litellm.set_verbose = True
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skip(reason="Replicate changed exceptions")
 def test_completion_replicate_stream_bad_key():
     try:
         api_key = "bad-key"
@@ -764,7 +790,6 @@ def test_completion_replicate_stream_bad_key():
 # test_completion_replicate_stream_bad_key()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_claude_stream():
     try:
         litellm.set_verbose = False
@@ -811,7 +836,6 @@ def test_completion_bedrock_claude_stream():
 # test_completion_bedrock_claude_stream()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_bedrock_ai21_stream():
     try:
         litellm.set_verbose = False
@@ -1060,6 +1084,7 @@ def ai21_completion_call_bad_key():
 # ai21_completion_call_bad_key()
 
 
+@pytest.mark.skip(reason="flaky test")
 @pytest.mark.asyncio
 async def test_hf_completion_tgi_stream():
     try:

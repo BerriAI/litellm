@@ -45,7 +45,7 @@ $ litellm --config /path/to/config.yaml
 ### Step 3: Use proxy - Call a model group [Load Balancing]
 Curl Command
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -65,7 +65,7 @@ If you want to call a specific model defined in the `config.yaml`, you can call 
 In this example it will call `azure/gpt-turbo-small-ca`. Defined in the config on Step 1
 
 ```bash
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "azure/gpt-turbo-small-ca",

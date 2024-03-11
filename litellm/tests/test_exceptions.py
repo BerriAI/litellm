@@ -70,7 +70,7 @@ models = ["command-nightly"]
 @pytest.mark.parametrize("model", models)
 def test_context_window_with_fallbacks(model):
     ctx_window_fallback_dict = {
-        "command-nightly": "claude-2",
+        "command-nightly": "claude-2.1",
         "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k",
         "azure/chatgpt-v-2": "gpt-3.5-turbo-16k",
     }

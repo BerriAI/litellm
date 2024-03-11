@@ -1,20 +1,24 @@
-import time, asyncio
-from openai import AsyncOpenAI
+import time, asyncio, os
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 import uuid
 import traceback
+from large_text import text
+from dotenv import load_dotenv
 
-
-litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:8000", api_key="any")
-
+litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234")
 
 async def litellm_completion():
     # Your existing code for litellm_completion goes here
     try:
         response = await litellm_client.chat.completions.create(
-            model="azure-gpt-3.5",
-            messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
+            model="fake_openai",
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"{text}. Who was alexander the great? {uuid.uuid4()}",
+                }
+            ],
         )
-        print(response)
         return response
 
     except Exception as e:
@@ -25,9 +29,9 @@ async def litellm_completion():
 
 
 async def main():
-    for i in range(150):
+    for i in range(6):
         start = time.time()
-        n = 150  # Number of concurrent tasks
+        n = 20  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)
@@ -41,7 +45,6 @@ async def main():
                     error_log.write(completion + "\n")
 
         print(n, time.time() - start, len(successful_completions))
-        time.sleep(10)
 
 
 if __name__ == "__main__":

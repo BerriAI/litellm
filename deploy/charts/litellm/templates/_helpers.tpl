@@ -60,3 +60,25 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Get redis service name
+*/}}
+{{- define "litellm.redis.serviceName" -}}
+{{- if and (eq .Values.redis.architecture "standalone") .Values.redis.sentinel.enabled -}}
+{{- printf "%s-%s" .Release.Name (default "redis" .Values.redis.nameOverride | trunc 63 | trimSuffix "-") -}}
+{{- else -}}
+{{- printf "%s-%s-master" .Release.Name (default "redis" .Values.redis.nameOverride | trunc 63 | trimSuffix "-") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Get redis service port
+*/}}
+{{- define "litellm.redis.port" -}}
+{{- if .Values.redis.sentinel.enabled -}}
+{{ .Values.redis.sentinel.service.ports.sentinel }}
+{{- else -}}
+{{ .Values.redis.master.service.ports.redis }}
+{{- end -}}
+{{- end -}}
