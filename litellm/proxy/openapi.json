@@ -2,13 +2,13 @@
   "openapi": "3.0.0",
   "info": {
     "version": "1.0.0",
-    "title": "Frontend API",
-    "description": "Frontend LLM API"
+    "title": "LiteLLM API",
+    "description": "API for LiteLLM"
   },
   "paths": {
    "/chat/completions": {
   "post": {
-    "summary": "Create chat completion for LLM APIs",
+    "summary": "Create chat completion for 100+ LLM APIs",
     "requestBody": {
       "required": true,
       "content": {
