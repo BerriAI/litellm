@@ -3776,6 +3776,9 @@ async def delete_key_fn(
 
         ## only allow user to delete keys they own
         user_id = user_api_key_dict.user_id
+        verbose_proxy_logger.debug(
+            f"user_api_key_dict.user_role: {user_api_key_dict.user_role}"
+        )
         if (
             user_api_key_dict.user_role is not None
             and user_api_key_dict.user_role == "proxy_admin"
