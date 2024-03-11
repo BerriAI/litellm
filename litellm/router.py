@@ -210,9 +210,6 @@ class Router:
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
-        self.model_exception_map: dict = (
-            {}
-        )  # dict to store model: list exceptions. self.exceptions = {"gpt-3.5": ["API KEY Error", "Rate Limit Error", "good morning error"]}
         self.total_calls: defaultdict = defaultdict(
             int
         )  # dict to store total calls made to each model
@@ -1487,17 +1484,6 @@ class Router:
                 self._set_cooldown_deployments(
                     deployment_id
                 )  # setting deployment_id in cooldown deployments
-            if metadata:
-                deployment = metadata.get("deployment", None)
-                deployment_exceptions = self.model_exception_map.get(deployment, [])
-                deployment_exceptions.append(exception_str)
-                self.model_exception_map[deployment] = deployment_exceptions
-                verbose_router_logger.debug("\nEXCEPTION FOR DEPLOYMENTS\n")
-                verbose_router_logger.debug(self.model_exception_map)
-                for model in self.model_exception_map:
-                    verbose_router_logger.debug(
-                        f"Model {model} had {len(self.model_exception_map[model])} exception"
-                    )
             if custom_llm_provider:
                 model_name = f"{custom_llm_provider}/{model_name}"
 
