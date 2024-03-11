@@ -1379,9 +1379,11 @@ class PrismaClient:
                     }
                 else:
                     filter_query = {"token": {"in": hashed_tokens}}
+
                 deleted_tokens = await self.db.litellm_verificationtoken.delete_many(
                     where=filter_query  # type: ignore
                 )
+                verbose_proxy_logger.debug(f"deleted_tokens: {deleted_tokens}")
                 return {"deleted_keys": deleted_tokens}
             elif (
                 table_name == "team"
