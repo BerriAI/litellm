@@ -91,6 +91,25 @@ class InMemoryCache(BaseCache):
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
 
+class CanonicalCache(BaseCache):
+    def __init__(self, bucket_name: str, api_key: str, **kwargs):
+        self.bucket_name = bucket_name
+        self.api_key = api_key
+
+    def set_cache(self, key, value, **kwargs):
+        raise NotImplementedError
+
+    async def async_set_cache(self, key, value, **kwargs):
+        raise NotImplementedError
+
+    def get_cache(self, key, **kwargs):
+        raise NotImplementedError
+
+    async def async_get_cache(self, key, **kwargs):
+        raise NotImplementedError
+
+    async def disconnect(self):
+        raise NotImplementedError
 
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
