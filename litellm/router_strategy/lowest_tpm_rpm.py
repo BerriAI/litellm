@@ -148,6 +148,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             input_tokens = token_counter(messages=messages, text=input)
         except:
             input_tokens = 0
+        verbose_router_logger.debug(f"input_tokens={input_tokens}")
         # -----------------------
         # Find lowest used model
         # ----------------------
@@ -209,4 +210,5 @@ class LowestTPMLoggingHandler(CustomLogger):
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 deployment = _deployment
+        verbose_router_logger.info(f"returning picked lowest tpm/rpm deployment.")
         return deployment
