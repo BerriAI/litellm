@@ -85,7 +85,7 @@ async def router_acompletion():
 async def main():
     for i in range(1):
         start = time.time()
-        n = 15  # Number of concurrent tasks
+        n = 20  # Number of concurrent tasks
         tasks = [router_acompletion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)
@@ -101,6 +101,10 @@ async def main():
         print(n, time.time() - start, len(successful_completions))
     print()
     print(vars(router))
+    prev_models = router.previous_models
+
+    print("vars in prev_models")
+    print(prev_models[0].keys())
 
 
 if __name__ == "__main__":
