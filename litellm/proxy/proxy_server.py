@@ -9,9 +9,6 @@ import warnings
 import importlib
 import warnings
 import backoff
-from argon2 import PasswordHasher
-
-ph = PasswordHasher()
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -38,6 +35,7 @@ try:
     import orjson
     import logging
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from argon2 import PasswordHasher
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -237,6 +235,7 @@ user_headers = None
 user_config_file_path = f"config_{int(time.time())}.yaml"
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
+ph = PasswordHasher()
 #### GLOBAL VARIABLES ####
 llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
