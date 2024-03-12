@@ -7411,7 +7411,9 @@ def exception_type(
                         model=model,
                         response=original_exception.response,
                     )
-            elif custom_llm_provider == "cohere":  # Cohere
+            elif (
+                custom_llm_provider == "cohere" or custom_llm_provider == "cohere_chat"
+            ):  # Cohere
                 if (
                     "invalid api token" in error_str
                     or "No API key provided." in error_str
@@ -8544,6 +8546,29 @@ class CustomStreamWrapper:
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
+    def handle_cohere_chat_chunk(self, chunk):
+        chunk = chunk.decode("utf-8")
+        data_json = json.loads(chunk)
+        print_verbose(f"chunk: {chunk}")
+        try:
+            text = ""
+            is_finished = False
+            finish_reason = ""
+            if "text" in data_json:
+                text = data_json["text"]
+            elif "is_finished" in data_json and data_json["is_finished"] == True:
+                is_finished = data_json["is_finished"]
+                finish_reason = data_json["finish_reason"]
+            else:
+                return
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+        except:
+            raise ValueError(f"Unable to parse response. Original response: {chunk}")
+
     def handle_azure_chunk(self, chunk):
         is_finished = False
         finish_reason = ""
@@ -9068,6 +9093,15 @@ class CustomStreamWrapper:
                         self.sent_last_chunk = True
             elif self.custom_llm_provider == "cohere":
                 response_obj = self.handle_cohere_chunk(chunk)
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    model_response.choices[0].finish_reason = response_obj[
+                        "finish_reason"
+                    ]
+            elif self.custom_llm_provider == "cohere_chat":
+                response_obj = self.handle_cohere_chat_chunk(chunk)
+                if response_obj is None:
+                    return
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     model_response.choices[0].finish_reason = response_obj[
