@@ -9373,7 +9373,9 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
-                    print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
+                    print_verbose(
+                        f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
+                    )
                     response: Optional[ModelResponse] = self.chunk_creator(chunk=chunk)
                     print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
