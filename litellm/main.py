@@ -64,6 +64,7 @@ from .llms import (
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
+from .llms.azure_text import AzureTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -96,6 +97,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 azure_chat_completions = AzureChatCompletion()
+azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
 ####### COMPLETION ENDPOINTS ################
 
@@ -254,6 +256,7 @@ async def acompletion(
         if (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
+            or custom_llm_provider == "azure_text"
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
@@ -781,6 +784,71 @@ def completion(
 
             ## COMPLETION CALL
             response = azure_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                api_type=api_type,
+                azure_ad_token=azure_ad_token,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                logging_obj=logging,
+                acompletion=acompletion,
+                timeout=timeout,
+                client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
+            )
+
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={
+                        "headers": headers,
+                        "api_version": api_version,
+                        "api_base": api_base,
+                    },
+                )
+        elif custom_llm_provider == "azure_text":
+            # azure configs
+            api_type = get_secret("AZURE_API_TYPE") or "azure"
+
+            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+
+            api_version = (
+                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )
+
+            azure_ad_token = optional_params.get("extra_body", {}).pop(
+                "azure_ad_token", None
+            ) or get_secret("AZURE_AD_TOKEN")
+
+            headers = headers or litellm.headers
+
+            ## LOAD CONFIG - if set
+            config = litellm.AzureOpenAIConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in optional_params
+                ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            ## COMPLETION CALL
+            response = azure_text_completions.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
