@@ -807,6 +807,20 @@ def gemini_text_image_pt(messages: list):
     return content
 
 
+def azure_text_pt(messages: list):
+    prompt = ""
+    for message in messages:
+        if isinstance(message["content"], str):
+            prompt += message["content"]
+        elif isinstance(message["content"], list):
+            # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
+            for element in message["content"]:
+                if isinstance(element, dict):
+                    if element["type"] == "text":
+                        prompt += element["text"]
+    return prompt
+
+
 # Function call template
 def function_call_prompt(messages: list, functions: list):
     function_prompt = (
@@ -907,6 +921,8 @@ def prompt_factory(
         for message in messages:
             message.pop("name", None)
         return messages
+    elif custom_llm_provider == "azure_text":
+        return azure_text_pt(messages=messages)
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
