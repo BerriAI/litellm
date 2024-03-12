@@ -444,6 +444,7 @@ provider_list: List = [
     "custom_openai",
     "text-completion-openai",
     "cohere",
+    "cohere_chat",
     "anthropic",
     "replicate",
     "huggingface",
