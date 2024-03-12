@@ -4689,7 +4689,9 @@ async def user_info(
                     if team.team_id not in team_id_list:
                         team_list.append(team)
                         team_id_list.append(team.team_id)
-        elif user_api_key_dict.user_id is not None:
+        elif (
+            user_api_key_dict.user_id is not None and user_id is None
+        ):  # the key querying the endpoint is the one asking for it's teams
             caller_user_info = await prisma_client.get_data(
                 user_id=user_api_key_dict.user_id
             )
