@@ -147,6 +147,7 @@ def get_ollama_response(
 
     stream = optional_params.pop("stream", False)
     format = optional_params.pop("format", None)
+    images = optional_params.pop("images", None)
     data = {
         "model": model,
         "prompt": prompt,
@@ -155,6 +156,8 @@ def get_ollama_response(
     }
     if format is not None:
         data["format"] = format
+    if images is not None:
+        data["images"] = images
 
     ## LOGGING
     logging_obj.pre_call(

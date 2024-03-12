@@ -39,11 +39,9 @@ const sidebars = {
         "proxy/user_keys",
         "proxy/virtual_keys",
         "proxy/users",
+        "proxy/team_based_routing",
         "proxy/ui",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
-        "proxy/pii_masking",
+        "proxy/budget_alerts",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
@@ -52,6 +50,10 @@ const sidebars = {
             "proxy/reliability",
           ]
         },
+        "proxy/model_management",
+        "proxy/health",
+        "proxy/debugging",
+        "proxy/pii_masking",
         "proxy/caching",
         {
           "type": "category",
@@ -99,12 +101,13 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Moderation(), Image Generation()",
+      label: "Embedding(), Moderation(), Image Generation(), Audio Transcriptions()",
       items: [
         "embedding/supported_embedding", 
         "embedding/async_embedding",
         "embedding/moderation",
-        "image_generation"
+        "image_generation",
+        "audio_transcription"
       ],
     },
     {
@@ -120,8 +123,7 @@ const sidebars = {
         "providers/openai", 
         "providers/openai_compatible",
         "providers/azure", 
-        "providers/huggingface", 
-        "providers/ollama", 
+        "providers/azure_ai", 
         "providers/vertex", 
         "providers/palm", 
         "providers/gemini", 
@@ -130,7 +132,10 @@ const sidebars = {
         "providers/aws_sagemaker",
         "providers/bedrock", 
         "providers/anyscale",
+        "providers/huggingface", 
+        "providers/ollama", 
         "providers/perplexity", 
+        "providers/groq", 
         "providers/vllm", 
         "providers/xinference", 
         "providers/cloudflare_workers", 
@@ -153,6 +158,7 @@ const sidebars = {
     "rules",
     "set_keys",
     "budget_manager",
+    "contributing",
     "secret",
     "completion/token_usage",
     "load_test",
@@ -170,6 +176,7 @@ const sidebars = {
         "observability/langsmith_integration",
         "observability/slack_integration",
         "observability/traceloop_integration",
+        "observability/athina_integration",
         "observability/llmonitor_integration",
         "observability/helicone_integration",
         "observability/supabase_integration",

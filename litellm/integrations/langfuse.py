@@ -235,6 +235,9 @@ class LangFuseLogger:
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
             supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
             supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
+            supports_completion_start_time = Version(
+                langfuse.version.__version__
+            ) >= Version("2.7.3")
 
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
@@ -262,8 +265,14 @@ class LangFuseLogger:
 
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
-            if supports_tags:
+
+            # Clean Metadata before logging - never log raw metadata
+            # the raw metadata can contain circular references which leads to infinite recursion
+            # we clean out all extra litellm metadata params before logging
+            clean_metadata = {}
+            if isinstance(metadata, dict):
                 for key, value in metadata.items():
+                    # generate langfuse tags
                     if key in [
                         "user_api_key",
                         "user_api_key_user_id",
@@ -271,6 +280,19 @@ class LangFuseLogger:
                         "semantic-similarity",
                     ]:
                         tags.append(f"{key}:{value}")
+
+                    # clean litellm metadata before logging
+                    if key in [
+                        "headers",
+                        "endpoint",
+                        "caching_groups",
+                        "previous_models",
+                    ]:
+                        continue
+                    else:
+                        clean_metadata[key] = value
+
+            if supports_tags:
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
@@ -298,7 +320,7 @@ class LangFuseLogger:
                 "input": input,
                 "output": output,
                 "usage": usage,
-                "metadata": metadata,
+                "metadata": clean_metadata,
                 "level": level,
             }
 
@@ -307,6 +329,11 @@ class LangFuseLogger:
 
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["statusMessage"] = output
+
+            if supports_completion_start_time:
+                generation_params["completion_start_time"] = kwargs.get(
+                    "completion_start_time", None
+                )
 
             trace.generation(**generation_params)
         except Exception as e:

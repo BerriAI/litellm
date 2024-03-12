@@ -60,6 +60,8 @@ llamaguard_model_name: Optional[str] = None
 presidio_ad_hoc_recognizers: Optional[str] = None
 google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
+blocked_user_list: Optional[Union[str, List]] = None
+banned_keywords_list: Optional[Union[str, List]] = None
 ##################
 logging: bool = True
 caching: bool = (
@@ -76,6 +78,9 @@ model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+)
+default_soft_budget: float = (
+    50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )
 _openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
@@ -163,6 +168,7 @@ s3_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
 upperbound_key_generate_params: Optional[Dict] = None
+default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 #### RELIABILITY ####
@@ -305,6 +311,7 @@ openai_compatible_endpoints: List = [
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
+    "api.groq.com/openai/v1",
     "api.together.xyz/v1",
 ]
 
@@ -312,6 +319,7 @@ openai_compatible_endpoints: List = [
 openai_compatible_providers: List = [
     "anyscale",
     "mistral",
+    "groq",
     "deepinfra",
     "perplexity",
     "xinference",
@@ -459,6 +467,7 @@ provider_list: List = [
     "perplexity",
     "anyscale",
     "mistral",
+    "groq",
     "maritalk",
     "voyage",
     "cloudflare",
@@ -543,6 +552,8 @@ from .utils import (
     token_counter,
     cost_per_token,
     completion_cost,
+    supports_function_calling,
+    supports_parallel_function_calling,
     get_litellm_params,
     Logging,
     acreate,
@@ -559,9 +570,11 @@ from .utils import (
     _calculate_retry_after,
     _should_retry,
     get_secret,
+    get_supported_openai_params,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
@@ -575,14 +588,17 @@ from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
+from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
+    AmazonAnthropicClaude3Config,
     AmazonCohereConfig,
     AmazonLlamaConfig,
     AmazonStabilityConfig,
+    AmazonMistralConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError

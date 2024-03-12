@@ -10,7 +10,7 @@
 import litellm
 import time, logging, asyncio
 import json, traceback, ast, hashlib
-from typing import Optional, Literal, List, Union, Any
+from typing import Optional, Literal, List, Union, Any, BinaryIO
 from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
 
@@ -48,6 +48,7 @@ class InMemoryCache(BaseCache):
         self.ttl_dict = {}
 
     def set_cache(self, key, value, **kwargs):
+        print_verbose("InMemoryCache: set_cache")
         self.cache_dict[key] = value
         if "ttl" in kwargs:
             self.ttl_dict[key] = time.time() + kwargs["ttl"]
@@ -572,6 +573,7 @@ class S3Cache(BaseCache):
         self.bucket_name = s3_bucket_name
         self.key_prefix = s3_path.rstrip("/") + "/" if s3_path else ""
         # Create an S3 client with custom endpoint URL
+
         self.s3_client = boto3.client(
             "s3",
             region_name=s3_region_name,
@@ -763,8 +765,24 @@ class Cache:
         password: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
         supported_call_types: Optional[
-            List[Literal["completion", "acompletion", "embedding", "aembedding"]]
-        ] = ["completion", "acompletion", "embedding", "aembedding"],
+            List[
+                Literal[
+                    "completion",
+                    "acompletion",
+                    "embedding",
+                    "aembedding",
+                    "atranscription",
+                    "transcription",
+                ]
+            ]
+        ] = [
+            "completion",
+            "acompletion",
+            "embedding",
+            "aembedding",
+            "atranscription",
+            "transcription",
+        ],
         # s3 Bucket, boto3 configuration
         s3_bucket_name: Optional[str] = None,
         s3_region_name: Optional[str] = None,
@@ -776,6 +794,7 @@ class Cache:
         s3_aws_secret_access_key: Optional[str] = None,
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
+        s3_path: Optional[str] = None,
         redis_semantic_cache_use_async=False,
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
         **kwargs,
@@ -825,6 +844,7 @@ class Cache:
                 s3_aws_secret_access_key=s3_aws_secret_access_key,
                 s3_aws_session_token=s3_aws_session_token,
                 s3_config=s3_config,
+                s3_path=s3_path,
                 **kwargs,
             )
         if "cache" not in litellm.input_callback:
@@ -877,9 +897,14 @@ class Cache:
             "input",
             "encoding_format",
         ]  # embedding kwargs = model, input, user, encoding_format. Model, user are checked in completion_kwargs
-
+        transcription_only_kwargs = [
+            "file",
+            "language",
+        ]
         # combined_kwargs - NEEDS to be ordered across get_cache_key(). Do not use a set()
-        combined_kwargs = completion_kwargs + embedding_only_kwargs
+        combined_kwargs = (
+            completion_kwargs + embedding_only_kwargs + transcription_only_kwargs
+        )
         for param in combined_kwargs:
             # ignore litellm params here
             if param in kwargs:
@@ -911,6 +936,17 @@ class Cache:
                     param_value = (
                         caching_group or model_group or kwargs[param]
                     )  # use caching_group, if set then model_group if it exists, else use kwargs["model"]
+                elif param == "file":
+                    metadata_file_name = kwargs.get("metadata", {}).get(
+                        "file_name", None
+                    )
+                    litellm_params_file_name = kwargs.get("litellm_params", {}).get(
+                        "file_name", None
+                    )
+                    if metadata_file_name is not None:
+                        param_value = metadata_file_name
+                    elif litellm_params_file_name is not None:
+                        param_value = litellm_params_file_name
                 else:
                     if kwargs[param] is None:
                         continue  # ignore None params
@@ -1140,8 +1176,24 @@ def enable_cache(
     port: Optional[str] = None,
     password: Optional[str] = None,
     supported_call_types: Optional[
-        List[Literal["completion", "acompletion", "embedding", "aembedding"]]
-    ] = ["completion", "acompletion", "embedding", "aembedding"],
+        List[
+            Literal[
+                "completion",
+                "acompletion",
+                "embedding",
+                "aembedding",
+                "atranscription",
+                "transcription",
+            ]
+        ]
+    ] = [
+        "completion",
+        "acompletion",
+        "embedding",
+        "aembedding",
+        "atranscription",
+        "transcription",
+    ],
     **kwargs,
 ):
     """
@@ -1189,8 +1241,24 @@ def update_cache(
     port: Optional[str] = None,
     password: Optional[str] = None,
     supported_call_types: Optional[
-        List[Literal["completion", "acompletion", "embedding", "aembedding"]]
-    ] = ["completion", "acompletion", "embedding", "aembedding"],
+        List[
+            Literal[
+                "completion",
+                "acompletion",
+                "embedding",
+                "aembedding",
+                "atranscription",
+                "transcription",
+            ]
+        ]
+    ] = [
+        "completion",
+        "acompletion",
+        "embedding",
+        "aembedding",
+        "atranscription",
+        "transcription",
+    ],
     **kwargs,
 ):
     """

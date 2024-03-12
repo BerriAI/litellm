@@ -21,7 +21,7 @@ Run the following command to start the litellm proxy
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 ### Test
@@ -250,7 +250,7 @@ litellm --config your_config.yaml
 <TabItem value="Curl" label="Curl Request">
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -270,7 +270,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -297,7 +297,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
+    openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
     model = "gpt-3.5-turbo",
     temperature=0.1
 )
@@ -321,7 +321,7 @@ print(response)
 ```python
 from langchain.embeddings import OpenAIEmbeddings
 
-embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:4000", openai_api_key="temp-key")
 
 
 text = "This is a test document."
@@ -331,7 +331,7 @@ query_result = embeddings.embed_query(text)
 print(f"SAGEMAKER EMBEDDINGS")
 print(query_result[:5])
 
-embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:4000", openai_api_key="temp-key")
 
 text = "This is a test document."
 
@@ -340,7 +340,7 @@ query_result = embeddings.embed_query(text)
 print(f"BEDROCK EMBEDDINGS")
 print(query_result[:5])
 
-embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:4000", openai_api_key="temp-key")
 
 text = "This is a test document."
 
@@ -407,11 +407,11 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main
     ports:
-      - "8000:8000" # Map the container port to the host, change the host port if necessary
+      - "4000:4000" # Map the container port to the host, change the host port if necessary
     volumes:
       - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
     # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
-    command: [ "--config", "/app/config.yaml", "--port", "8000", "--num_workers", "8" ]
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
 
 # ...rest of your docker-compose config if any
 ```
@@ -429,7 +429,7 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 > Use `-d` flag to run the container in detached mode (background) e.g. `docker compose up -d`
 
 
-Your LiteLLM container should be running now on the defined port e.g. `8000`.
+Your LiteLLM container should be running now on the defined port e.g. `4000`.
 
 
 ## Using with OpenAI compatible projects
@@ -442,7 +442,7 @@ Set `base_url` to the LiteLLM Proxy server
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -463,7 +463,7 @@ print(response)
 ```shell
 litellm --model gpt-3.5-turbo
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 #### 1. Clone the repo
@@ -474,9 +474,9 @@ git clone https://github.com/danny-avila/LibreChat.git
 
 
 #### 2. Modify Librechat's `docker-compose.yml`
-LiteLLM Proxy is running on port `8000`, set `8000` as the proxy below
+LiteLLM Proxy is running on port `4000`, set `4000` as the proxy below
 ```yaml
-OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
+OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
 ```
 
 #### 3. Save fake OpenAI key in Librechat's `.env` 
@@ -502,7 +502,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
       api_key="IGNORED",
       model="fake-model-name",
       context_length=2048, # customize if needed for your model
-      api_base="http://localhost:8000" # your proxy server url
+      api_base="http://localhost:4000" # your proxy server url
   ),
 ```
 
@@ -514,7 +514,7 @@ Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-
 ```shell
 $ pip install aider 
 
-$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
+$ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
 ```
 </TabItem>
 <TabItem value="autogen" label="AutoGen">
@@ -528,7 +528,7 @@ from autogen import AssistantAgent, UserProxyAgent, oai
 config_list=[
     {
         "model": "my-fake-model",
-        "api_base": "http://localhost:8000",  #litellm compatible endpoint
+        "api_base": "http://localhost:4000",  #litellm compatible endpoint
         "api_type": "open_ai",
         "api_key": "NULL", # just a placeholder
     }
@@ -566,7 +566,7 @@ import guidance
 
 # set api_base to your proxy
 # set api_key to anything
-gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:8000", api_key="anything")
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:4000", api_key="anything")
 
 experts = guidance('''
 {{#system~}}

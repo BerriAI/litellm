@@ -43,7 +43,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
     // Set the key to delete and open the confirmation modal
     setKeyToDelete(token);
-    localStorage.removeItem("userData" + userID)
+    localStorage.removeItem("userData" + userID);
     setIsDeleteModalOpen(true);
   };
 
@@ -79,7 +79,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   console.log("RERENDER TRIGGERED");
   return (
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
-      <Title>API Keys</Title>
       <Table className="mt-5">
         <TableHead>
           <TableRow>
@@ -87,6 +86,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Key Budget (USD)</TableHeaderCell>
+            <TableHeaderCell>Spend Report</TableHeaderCell>
             <TableHeaderCell>Team ID</TableHeaderCell>
             <TableHeaderCell>Metadata</TableHeaderCell>
             <TableHeaderCell>Models</TableHeaderCell>
@@ -124,6 +124,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   )}
                 </TableCell>
                 <TableCell>
+                  <ViewKeySpendReport
+                    token={item.token}
+                    accessToken={accessToken}
+                    keySpend={item.spend}
+                    keyBudget={item.max_budget}
+                    keyName={item.key_name}
+                  />
+                </TableCell>
+                <TableCell>
                   <Text>{item.team_id}</Text>
                 </TableCell>
                 <TableCell>
@@ -151,15 +160,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     onClick={() => handleDelete(item.token)}
                     icon={TrashIcon}
                     size="sm"
-                  />
-                </TableCell>
-                <TableCell>
-                  <ViewKeySpendReport
-                    token={item.token}
-                    accessToken={accessToken}
-                    keySpend={item.spend}
-                    keyBudget={item.max_budget}
-                    keyName={item.key_name}
                   />
                 </TableCell>
               </TableRow>

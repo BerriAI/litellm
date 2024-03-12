@@ -16,9 +16,18 @@ from importlib import resources
 import shutil
 
 telemetry = None
+default_num_workers = 1
+try:
+    default_num_workers = os.cpu_count() or 1
+    if default_num_workers is not None and default_num_workers > 0:
+        default_num_workers -= 1
+except:
+    pass
 
 
 def append_query_params(url, params):
+    print(f"url: {url}")
+    print(f"params: {params}")
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
     parsed_query.update(params)
@@ -52,10 +61,10 @@ def is_port_in_use(port):
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
 )
-@click.option("--port", default=8000, help="Port to bind the server to.", envvar="PORT")
+@click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
-    default=1,
+    default=default_num_workers,
     help="Number of gunicorn workers to spin up",
     envvar="NUM_WORKERS",
 )
@@ -264,7 +273,7 @@ def run_server(
                 ],
             }
 
-            response = requests.post("http://0.0.0.0:8000/queue/request", json=data)
+            response = requests.post("http://0.0.0.0:4000/queue/request", json=data)
 
             response = response.json()
 
@@ -498,7 +507,7 @@ def run_server(
                 print(
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
                 )
-        if port == 8000 and is_port_in_use(port):
+        if port == 4000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
 
         from litellm.proxy.proxy_server import app

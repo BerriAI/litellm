@@ -118,3 +118,18 @@ def test_azure_gpt_optional_params_gpt_vision_with_extra_body():
 
 
 # test_azure_gpt_optional_params_gpt_vision_with_extra_body()
+
+
+def test_openai_extra_headers():
+    optional_params = litellm.utils.get_optional_params(
+        user="John",
+        custom_llm_provider="openai",
+        max_tokens=10,
+        temperature=0.2,
+        extra_headers={"AI-Resource Group": "ishaan-resource"},
+    )
+
+    print(optional_params)
+    assert optional_params["max_tokens"] == 10
+    assert optional_params["temperature"] == 0.2
+    assert optional_params["extra_headers"] == {"AI-Resource Group": "ishaan-resource"}

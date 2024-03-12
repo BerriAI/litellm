@@ -22,7 +22,7 @@ $ pip install 'litellm[proxy]'
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 ### Test
@@ -39,7 +39,7 @@ This will now automatically route any requests for gpt-3.5-turbo to bigcode star
 <TabItem value="Curl" label="Curl Request">
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -59,7 +59,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -246,7 +246,7 @@ Set `base_url` to the LiteLLM Proxy server
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -267,7 +267,7 @@ print(response)
 ```shell
 litellm --model gpt-3.5-turbo
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 #### 1. Clone the repo
@@ -278,9 +278,9 @@ git clone https://github.com/danny-avila/LibreChat.git
 
 
 #### 2. Modify Librechat's `docker-compose.yml`
-LiteLLM Proxy is running on port `8000`, set `8000` as the proxy below
+LiteLLM Proxy is running on port `4000`, set `4000` as the proxy below
 ```yaml
-OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
+OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
 ```
 
 #### 3. Save fake OpenAI key in Librechat's `.env` 
@@ -306,7 +306,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
       api_key="IGNORED",
       model="fake-model-name",
       context_length=2048, # customize if needed for your model
-      api_base="http://localhost:8000" # your proxy server url
+      api_base="http://localhost:4000" # your proxy server url
   ),
 ```
 
@@ -318,7 +318,7 @@ Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-
 ```shell
 $ pip install aider 
 
-$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
+$ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
 ```
 </TabItem>
 <TabItem value="autogen" label="AutoGen">
@@ -332,7 +332,7 @@ from autogen import AssistantAgent, UserProxyAgent, oai
 config_list=[
     {
         "model": "my-fake-model",
-        "api_base": "http://localhost:8000",  #litellm compatible endpoint
+        "api_base": "http://localhost:4000",  #litellm compatible endpoint
         "api_type": "open_ai",
         "api_key": "NULL", # just a placeholder
     }
@@ -370,7 +370,7 @@ import guidance
 
 # set api_base to your proxy
 # set api_key to anything
-gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:8000", api_key="anything")
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:4000", api_key="anything")
 
 experts = guidance('''
 {{#system~}}
@@ -479,7 +479,7 @@ $ litellm --config /path/to/config.yaml
 #### Step 3: Use proxy
 Curl Command
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "zephyr-alpha",
@@ -529,7 +529,7 @@ $ litellm --config /path/to/config.yaml
 #### Step 3: Use proxy
 Curl Command
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
@@ -586,7 +586,7 @@ litellm_settings:
 **Set dynamically**
 
 ```bash
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "zephyr-beta",
@@ -615,7 +615,7 @@ model_list:
   - model_name: custom_embedding_model
     litellm_params:
       model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:8000/
+      api_base: http://0.0.0.0:4000/
   - model_name: custom_embedding_model
     litellm_params:
       model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
@@ -665,7 +665,7 @@ litellm --config /path/to/config.yaml
 **Step 3: Generate temporary keys**
 
 ```shell 
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --h 'Authorization: Bearer sk-1234' \
 --d '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
 ```
@@ -719,7 +719,7 @@ model_list:
 **Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
 
 ```bash
-curl -X POST "https://0.0.0.0:8000/key/generate" \
+curl -X POST "https://0.0.0.0:4000/key/generate" \
 -H "Authorization: Bearer sk-1234" \
 -H "Content-Type: application/json" \
 -d '{
@@ -737,7 +737,7 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 You can get spend for a key by using the `/key/info` endpoint. 
 
 ```bash
-curl 'http://0.0.0.0:8000/key/info?key=<user-key>' \
+curl 'http://0.0.0.0:4000/key/info?key=<user-key>' \
      -X GET \
      -H 'Authorization: Bearer <your-master-key>'
 ```
@@ -787,10 +787,6 @@ model_list:
     litellm_params:
       model: ollama/mistral
       api_base: your_ollama_api_base
-      headers: {
-        "HTTP-Referer": "litellm.ai",  
-        "X-Title": "LiteLLM Server"
-      }
 ```
 
 **Step 2**: Start server with config
@@ -872,7 +868,7 @@ $ litellm --config /path/to/config.yaml
 #### Using Caching 
 Send the same request twice:
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
+curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -880,7 +876,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
      "temperature": 0.7
    }'
 
-curl http://0.0.0.0:8000/v1/chat/completions \
+curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -893,7 +889,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 Caching can be switched on/off per `/chat/completions` request
 - Caching **on** for completion - pass `caching=True`:
   ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
+  curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -904,7 +900,7 @@ Caching can be switched on/off per `/chat/completions` request
   ```
 - Caching **off** for completion - pass `caching=False`:
   ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
+  curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -967,10 +963,10 @@ https://api.openai.com/v1/chat/completions \
 Use this to health check all LLMs defined in your config.yaml
 #### Request
 ```shell
-curl --location 'http://0.0.0.0:8000/health'
+curl --location 'http://0.0.0.0:4000/health'
 ```
 
-You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
+You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:4000/health` for you
 ```
 litellm --health
 ```
@@ -1091,7 +1087,7 @@ litellm -config config.yaml
 
 #### Run a test request to Proxy
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1244' \
     --data ' {
     "model": "gpt-3.5-turbo",
@@ -1217,7 +1213,7 @@ LiteLLM proxy adds **0.00325 seconds** latency as compared to using the Raw Open
      ```
 
 #### --port
-   - **Default:** `8000`
+   - **Default:** `4000`
    - The port to bind the server to.
    - **Usage:** 
      ```shell

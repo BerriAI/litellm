@@ -145,7 +145,7 @@ $ litellm --config /path/to/config.yaml
 
 Send the same request twice:
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
+curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -153,7 +153,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
      "temperature": 0.7
    }'
 
-curl http://0.0.0.0:8000/v1/chat/completions \
+curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -166,14 +166,14 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 
 Send the same request twice:
 ```shell
-curl --location 'http://0.0.0.0:8000/embeddings' \
+curl --location 'http://0.0.0.0:4000/embeddings' \
   --header 'Content-Type: application/json' \
   --data ' {
   "model": "text-embedding-ada-002",
   "input": ["write a litellm poem"]
   }'
 
-curl --location 'http://0.0.0.0:8000/embeddings' \
+curl --location 'http://0.0.0.0:4000/embeddings' \
   --header 'Content-Type: application/json' \
   --data ' {
   "model": "text-embedding-ada-002",
@@ -227,7 +227,7 @@ from openai import OpenAI
 client = OpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:8000"
+		base_url="http://0.0.0.0:4000"
 )
 
 chat_completion = client.chat.completions.create(
@@ -255,7 +255,7 @@ from openai import OpenAI
 client = OpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:8000"
+		base_url="http://0.0.0.0:4000"
 )
 
 chat_completion = client.chat.completions.create(
@@ -281,7 +281,7 @@ from openai import OpenAI
 client = OpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:8000"
+		base_url="http://0.0.0.0:4000"
 )
 
 chat_completion = client.chat.completions.create(
