@@ -64,16 +64,14 @@ def test_chat_completion_cohere_tool_calling():
     try:
         litellm.set_verbose = True
         messages = [
-            {"role": "system", "content": "You're a good bot"},
             {
                 "role": "user",
-                "content": "Hey",
+                "content": "What is the weather like in Boston?",
             },
         ]
         response = completion(
             model="cohere_chat/command-r",
             messages=messages,
-            max_tokens=10,
             tools=[
                 {
                     "type": "function",
