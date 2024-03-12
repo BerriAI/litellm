@@ -417,7 +417,10 @@ async def user_api_key_auth(
 
             # Check 1. If token can call model
             _model_alias_map = {}
-            if valid_token.team_model_aliases is not None:
+            if (
+                hasattr(valid_token, "team_model_aliases")
+                and valid_token.team_model_aliases is not None
+            ):
                 _model_alias_map = {
                     **valid_token.aliases,
                     **valid_token.team_model_aliases,
