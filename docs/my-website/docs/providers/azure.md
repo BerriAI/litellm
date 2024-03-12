@@ -118,7 +118,7 @@ response = completion(
 
 ```
 
-### Usage - with Azure Vision enhancements
+#### Usage - with Azure Vision enhancements
 
 Note: **Azure requires the `base_url` to be set with `/extensions`** 
 
@@ -170,11 +170,29 @@ response = completion(
 
 ## Azure Instruct Models
 
+Use `model="azure_text/<your-deployment>"`
+
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
-| gpt-3.5-turbo-instruct | `response = completion(model="azure/<your deployment name>", messages=messages)` |
-| gpt-3.5-turbo-instruct-0914 | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| gpt-3.5-turbo-instruct | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
 
+
+```python
+import litellm
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+response = litellm.completion(
+    model="azure_text/<your-deployment-name",
+    messages=[{"role": "user", "content": "What is the weather like in Boston?"}]
+)
+
+print(response)
+```
 
 ## Advanced
 ### Azure API Load-Balancing
