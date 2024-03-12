@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Caching - In-Memory, Redis, s3,  Redis Semantic Cache
+# Caching - In-Memory, Redis, s3, Redis Semantic Cache, Canonical Neural Cache
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching.py)
 
@@ -11,14 +11,14 @@ Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](ht
 
 :::
 
-## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic Cache
-
+## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic Cache, Canonical Neural Cache
 
 <Tabs>
 
 <TabItem value="redis" label="redis-cache">
 
 Install redis
+
 ```shell
 pip install redis
 ```
@@ -34,11 +34,11 @@ litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -47,10 +47,10 @@ response2 = completion(
 
 </TabItem>
 
-
 <TabItem value="s3" label="s3-cache">
 
 Install boto3
+
 ```shell
 pip install boto3
 ```
@@ -72,11 +72,11 @@ litellm.cache = Cache(type="s3", s3_bucket_name="cache-bucket-litellm", s3_regio
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -85,10 +85,10 @@ response2 = completion(
 
 </TabItem>
 
-
 <TabItem value="redis-sem" label="redis-semantic cache">
 
 Install redis
+
 ```shell
 pip install redisvl==0.0.7
 ```
@@ -144,8 +144,6 @@ assert response1.id == response2.id
 
 </TabItem>
 
-
-
 <TabItem value="in-mem" label="in memory cache">
 
 ### Quick Start
@@ -158,12 +156,12 @@ litellm.cache = Cache()
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
     caching=True
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}],
     caching=True
 )
@@ -174,15 +172,57 @@ response2 = completion(
 
 </TabItem>
 
+<TabItem value="canonical" label="canonical cache">
+Learn more about the Canonical Cache [here](https://canonical.chat)
+
+```python
+import os
+import litellm
+from litellm import completion
+from litellm.caching import Cache, canonical_cache_key
+## set API keys
+openaikey = os.environ["OPENAI_API_KEY"]
+apikey = os.environ["CANONICAL_CACHE_API_KEY"]
+
+# The canonical cache only supports completions
+litellm.cache = Cache(type="canonical",
+                      apikey=apikey,
+                      supported_call_types=["completion", "acompletion"])
+
+# The Canonical cache uses a custom cache key function, set it here
+litellm.cache.get_cache_key = canonical_cache_key
+
+messages = [
+    { "role": "system", "content": "Be a helpful assistant."},
+    { "role": "assistant", "content": "How can I help you today?" },
+    { "role": "user",  "content": "Hello, how are you?"}
+]
+response = completion(model="gpt-3.5-turbo", messages=messages, stream=False)
+print(response)
+
+# this subtle change to the user's prompt should result in a cache hit
+messages = [
+    { "role": "system", "content": "Be a helpful assistant."},
+    { "role": "assistant", "content": "How can I help you today?" },
+    { "role": "user",  "content": "Hello, how are you today?"} # notice the change here
+]
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=messages, stream=False)
+print(response)
+```
+
+</TabItem>
 
 </Tabs>
 
 ## Cache Context Manager - Enable, Disable, Update Cache
-Use the context manager for easily enabling, disabling & updating the litellm cache 
+
+Use the context manager for easily enabling, disabling & updating the litellm cache
 
 ### Enabling Cache
 
 Quick Start Enable
+
 ```python
 litellm.enable_cache()
 ```
@@ -204,7 +244,8 @@ litellm.enable_cache(
 
 ### Disabling Cache
 
-Switch caching off 
+Switch caching off
+
 ```python
 litellm.disable_cache()
 ```
@@ -227,7 +268,9 @@ litellm.update_cache(
 ```
 
 ## Custom Cache Keys:
+
 Define function to return cache key
+
 ```python
 # this function takes in *args, **kwargs and returns the key you want to use for caching
 def custom_get_cache_key(*args, **kwargs):
@@ -239,6 +282,7 @@ def custom_get_cache_key(*args, **kwargs):
 ```
 
 Set your function as litellm.cache.get_cache_key
+
 ```python
 from litellm.caching import Cache
 
@@ -246,26 +290,31 @@ cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDI
 
 cache.get_cache_key = custom_get_cache_key # set get_cache_key function for your cache
 
-litellm.cache = cache # set litellm.cache to your cache 
+litellm.cache = cache # set litellm.cache to your cache
 
 ```
-## How to write custom add/get cache functions 
-### 1. Init Cache 
+
+## How to write custom add/get cache functions
+
+### 1. Init Cache
+
 ```python
 from litellm.caching import Cache
 cache = Cache()
-``` 
+```
 
-### 2. Define custom add/get cache functions 
+### 2. Define custom add/get cache functions
+
 ```python
 def add_cache(self, result, *args, **kwargs):
   your logic
-  
+
 def get_cache(self, *args, **kwargs):
   your logic
 ```
 
-### 3. Point cache add/get functions to your add/get functions 
+### 3. Point cache add/get functions to your add/get functions
+
 ```python
 cache.add_cache = add_cache
 cache.get_cache = get_cache
@@ -280,7 +329,7 @@ def __init__(
     supported_call_types: Optional[
         List[Literal["completion", "acompletion", "embedding", "aembedding"]]
     ] = ["completion", "acompletion", "embedding", "aembedding"], # A list of litellm call types to cache for. Defaults to caching for all litellm call types.
-    
+
     # redis cache params
     host: Optional[str] = None,
     port: Optional[str] = None,
@@ -303,44 +352,44 @@ def __init__(
 ):
 ```
 
-## Logging 
+## Logging
 
-Cache hits are logged in success events as `kwarg["cache_hit"]`. 
+Cache hits are logged in success events as `kwarg["cache_hit"]`.
 
-Here's an example of accessing it: 
+Here's an example of accessing it:
 
-  ```python
-  import litellm
+```python
+import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm import completion, acompletion, Cache
 
 # create custom callback for success_events
 class MyCustomHandler(CustomLogger):
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time): 
-        print(f"On Success")
-        print(f"Value of Cache hit: {kwargs['cache_hit']"})
+  async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+      print(f"On Success")
+      print(f"Value of Cache hit: {kwargs['cache_hit']"})
 
 async def test_async_completion_azure_caching():
-    # set custom callback
-    customHandler_caching = MyCustomHandler()
-    litellm.callbacks = [customHandler_caching]
+  # set custom callback
+  customHandler_caching = MyCustomHandler()
+  litellm.callbacks = [customHandler_caching]
 
-    # init cache 
-    litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
-    unique_time = time.time()
-    response1 = await litellm.acompletion(model="azure/chatgpt-v-2",
-                            messages=[{
-                                "role": "user",
-                                "content": f"Hi 👋 - i'm async azure {unique_time}"
-                            }],
-                            caching=True)
-    await asyncio.sleep(1)
-    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
-    response2 = await litellm.acompletion(model="azure/chatgpt-v-2",
-                            messages=[{
-                                "role": "user",
-                                "content": f"Hi 👋 - i'm async azure {unique_time}"
-                            }],
-                            caching=True)
-    await asyncio.sleep(1) # success callbacks are done in parallel
-  ```
+  # init cache
+  litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+  unique_time = time.time()
+  response1 = await litellm.acompletion(model="azure/chatgpt-v-2",
+                          messages=[{
+                              "role": "user",
+                              "content": f"Hi 👋 - i'm async azure {unique_time}"
+                          }],
+                          caching=True)
+  await asyncio.sleep(1)
+  print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
+  response2 = await litellm.acompletion(model="azure/chatgpt-v-2",
+                          messages=[{
+                              "role": "user",
+                              "content": f"Hi 👋 - i'm async azure {unique_time}"
+                          }],
+                          caching=True)
+  await asyncio.sleep(1) # success callbacks are done in parallel
+```
