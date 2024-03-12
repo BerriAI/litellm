@@ -173,6 +173,7 @@ litellm_settings:
   cache: True # set cache responses to True
   cache_params:
     type: "canonical"
+    supported_call_types: ["acompletion", "completion"] # defaults to all litellm call types
 ```
 
 #### Step 2: Add the Canonical API key to .env
