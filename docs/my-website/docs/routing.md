@@ -29,7 +29,7 @@ If you want a server to load balance across different LLM APIs, use our [OpenAI 
 from litellm import Router
 
 model_list = [{ # list of model deployments 
-	"model_name": "gpt-3.5-turbo", # model alias 
+	"model_name": "gpt-3.5-turbo", # model alias -> loadbalance between models with same `model_name`
 	"litellm_params": { # params for litellm completion/embedding call 
 		"model": "azure/chatgpt-v-2", # actual model name
 		"api_key": os.getenv("AZURE_API_KEY"),
