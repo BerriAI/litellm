@@ -1152,6 +1152,16 @@ def test_completion_azure_key_completion_arg():
 # test_completion_azure_key_completion_arg()
 
 
+def test_azure_instruct():
+    litellm.set_verbose = True
+    response = completion(
+        model="azure_text/instruct-model",
+        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+        max_tokens=10,
+    )
+    print("response", response)
+
+
 async def test_re_use_azure_async_client():
     try:
         print("azure gpt-3.5 ASYNC with clie nttest\n\n")
