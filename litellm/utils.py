@@ -4269,6 +4269,7 @@ def get_optional_params(
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "mistral"
             and custom_llm_provider != "anthropic"
+            and custom_llm_provider != "cohere_chat"
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
         ):

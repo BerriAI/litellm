@@ -22,6 +22,12 @@ class CohereError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
+def construct_cohere_tool(tools=None):
+    if tools is None:
+        tools = []
+    return {"tools": tools}
+
+
 class CohereConfig:
     """
     Reference: https://docs.cohere.com/reference/generate
@@ -144,6 +150,14 @@ def completion(
             k not in optional_params
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
+
+    ## Handle Tool Calling
+    if "tools" in optional_params:
+        _is_function_call = True
+        tool_calling_system_prompt = construct_cohere_tool(
+            tools=optional_params["tools"]
+        )
+        optional_params["tools"] = tool_calling_system_prompt
 
     data = {
         "model": model,
