@@ -981,8 +981,7 @@
         "litellm_provider": "gemini",
         "mode": "chat"
     },
-
-    "cohere_chat/command-r": {
+    "command-r": {
         "max_tokens": 128000, 
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -991,35 +990,35 @@
         "litellm_provider": "cohere_chat",
         "mode": "chat"
     },
-    "cohere_chat/command-light": {
+    "command-light": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "cohere_chat",
         "mode": "chat"
     },
-    "cohere/command-nightly": {
+    "command-nightly": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
-     "cohere/command": {
+     "command": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
-     "cohere/command-medium-beta": {
+     "command-medium-beta": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
-     "cohere/command-xlarge-beta": {
+     "command-xlarge-beta": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015,
