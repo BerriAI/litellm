@@ -2035,7 +2035,7 @@ async def test_azure_astreaming_and_function_calling():
 
 
 def test_completion_claude_3_function_call_with_streaming():
-    # litellm.set_verbose = True
+    litellm.set_verbose = True
     tools = [
         {
             "type": "function",
