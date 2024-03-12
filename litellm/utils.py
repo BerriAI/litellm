@@ -5371,6 +5371,9 @@ def get_llm_provider(
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
+        ## cohere chat models
+        elif model in litellm.cohere_chat_models:
+            custom_llm_provider = "cohere_chat"
         ## replicate
         elif model in litellm.replicate_models or (":" in model and len(model) > 64):
             model_parts = model.split(":")
