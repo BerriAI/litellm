@@ -6427,7 +6427,7 @@ def convert_to_model_response_object(
                     "system_fingerprint"
                 ]
 
-            if "model" in response_object:
+            if "model" in response_object and model_response_object.model is None:
                 model_response_object.model = response_object["model"]
 
             if start_time is not None and end_time is not None:
