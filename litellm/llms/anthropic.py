@@ -269,7 +269,9 @@ def completion(
             ].finish_reason
             streaming_model_response.choices[0].index = model_response.choices[0].index
             _tool_calls = []
-            if isinstance(model_response.choices[0], litellm.Choices):
+            if isinstance(model_response.choices[0], litellm.Choices) and isinstance(
+                streaming_model_response.choices[0], litellm.utils.StreamingChoices
+            ):
                 if getattr(
                     model_response.choices[0].message, "tool_calls", None
                 ) is not None and isinstance(
