@@ -170,7 +170,7 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache: True # set cache responses to True, litellm defaults to using a redis cache
+  cache: True # set cache responses to True
   cache_params:
     type: "canonical"
 ```
