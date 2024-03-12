@@ -239,6 +239,7 @@ class OpenAIChatCompletion(BaseLLM):
                 )
 
             if custom_llm_provider != "openai":
+                model_response.model = f"{custom_llm_provider}/{model}"
                 # process all OpenAI compatible provider logic here
                 if custom_llm_provider == "mistral":
                     # check if message content passed in as list, and not string
@@ -254,6 +255,7 @@ class OpenAIChatCompletion(BaseLLM):
                         messages=messages,
                         custom_llm_provider=custom_llm_provider,
                     )
+
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message

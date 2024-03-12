@@ -945,6 +945,7 @@ def completion(
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     organization=organization,
+                    custom_llm_provider=custom_llm_provider,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
