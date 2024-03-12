@@ -100,6 +100,59 @@ async def test_pre_call_hook_rpm_limits():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_team_rpm_limits():
+    """
+    Test if error raised on hitting team rpm limits
+    """
+    litellm.set_verbose = True
+    _api_key = "sk-12345"
+    _team_id = "unique-team-id"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        max_parallel_requests=1,
+        tpm_limit=9,
+        rpm_limit=10,
+        team_rpm_limit=1,
+        team_id=_team_id,
+    )
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler()
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"user_api_key": _api_key, "user_api_key_team_id": _team_id}
+        }
+    }
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj="",
+        start_time="",
+        end_time="",
+    )
+
+    print(f"local_cache: {local_cache}")
+
+    ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
+
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+
+        pytest.fail(f"Expected call to fail")
+    except Exception as e:
+        assert e.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_tpm_limits():
     """
     Test if error raised on hitting tpm limits
@@ -116,6 +169,56 @@ async def test_pre_call_hook_tpm_limits():
     )
 
     kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(total_tokens=10)),
+        start_time="",
+        end_time="",
+    )
+
+    ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
+
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+
+        pytest.fail(f"Expected call to fail")
+    except Exception as e:
+        assert e.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_user_tpm_limits():
+    """
+    Test if error raised on hitting tpm limits
+    """
+    # create user with tpm/rpm limits
+
+    _api_key = "sk-12345"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        user_id="ishaan",
+        user_id_rate_limits={"tpm_limit": 9, "rpm_limit": 10},
+    )
+    res = dict(user_api_key_dict)
+    print("dict user", res)
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler()
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"user_api_key_user_id": "ishaan", "user_api_key": "gm"}
+        }
+    }
 
     await parallel_request_handler.async_log_success_event(
         kwargs=kwargs,
@@ -544,6 +647,7 @@ async def test_streaming_router_tpm_limit():
 
 @pytest.mark.asyncio
 async def test_bad_router_call():
+    litellm.set_verbose = True
     model_list = [
         {
             "model_name": "azure-model",

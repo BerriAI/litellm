@@ -35,7 +35,7 @@ def test_router_timeouts():
         {
             "model_name": "anthropic-claude-instant-1.2",
             "litellm_params": {
-                "model": "claude-instant-1",
+                "model": "claude-instant-1.2",
                 "api_key": "os.environ/ANTHROPIC_API_KEY",
             },
             "tpm": 20000,

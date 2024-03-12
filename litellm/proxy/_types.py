@@ -33,6 +33,9 @@ class LiteLLMBase(BaseModel):
             # if using pydantic v1
             return self.__fields_set__
 
+    class Config:
+        protected_namespaces = ()
+
 
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(LiteLLMBase):
@@ -116,6 +119,10 @@ class ModelInfo(LiteLLMBase):
         return values
 
 
+class BlockUsers(LiteLLMBase):
+    user_ids: List[str]  # required
+
+
 class ModelParams(LiteLLMBase):
     model_name: str
     litellm_params: dict
@@ -147,6 +154,7 @@ class GenerateRequestBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
+    soft_budget: Optional[float] = None
 
 
 class GenerateKeyRequest(GenerateRequestBase):
@@ -204,6 +212,12 @@ class KeyRequest(LiteLLMBase):
     keys: List[str]
 
 
+class LiteLLM_ModelTable(LiteLLMBase):
+    model_aliases: Optional[str] = None  # json dump the dict
+    created_by: str
+    updated_by: str
+
+
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -217,25 +231,69 @@ class NewUserResponse(GenerateKeyResponse):
 class UpdateUserRequest(GenerateRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    user_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     user_role: Optional[str] = None
     max_budget: Optional[float] = None
 
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
+
 
 class Member(LiteLLMBase):
     role: Literal["admin", "user"]
-    user_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
 
 
-class NewTeamRequest(LiteLLMBase):
+class TeamBase(LiteLLMBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
+    organization_id: Optional[str] = None
     admins: list = []
     members: list = []
     members_with_roles: List[Member] = []
     metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: list = []
+
+
+class NewTeamRequest(TeamBase):
+    model_aliases: Optional[dict] = None
+
+
+class GlobalEndUsersSpend(LiteLLMBase):
+    api_key: Optional[str] = None
+
+
+class TeamMemberAddRequest(LiteLLMBase):
+    team_id: str
+    member: Member
+
+
+class TeamMemberDeleteRequest(LiteLLMBase):
+    team_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
 
 
 class UpdateTeamRequest(LiteLLMBase):
@@ -251,28 +309,79 @@ class DeleteTeamRequest(LiteLLMBase):
     team_ids: List[str]  # required
 
 
-class LiteLLM_TeamTable(NewTeamRequest):
-    max_budget: Optional[float] = None
+class LiteLLM_TeamTable(TeamBase):
     spend: Optional[float] = None
-    models: list = []
     max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    model_id: Optional[int] = None
 
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        dict_fields = [
+            "metadata",
+            "aliases",
+            "config",
+            "permissions",
+            "model_max_budget",
+            "model_aliases",
+        ]
+        for field in dict_fields:
+            value = values.get(field)
+            if value is not None and isinstance(value, str):
+                try:
+                    values[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Field {field} should be a valid dictionary")
 
-class NewTeamResponse(LiteLLMBase):
-    team_id: str
-    admins: list
-    members: list
-    metadata: dict
-    created_at: datetime
-    updated_at: datetime
+        return values
 
 
 class TeamRequest(LiteLLMBase):
     teams: List[str]
+
+
+class LiteLLM_BudgetTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_BudgetTable record"""
+
+    soft_budget: Optional[float] = None
+    max_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    model_max_budget: Optional[dict] = None
+    budget_duration: Optional[str] = None
+
+
+class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_alias: str
+    models: List = []
+    budget_id: Optional[str] = None
+
+
+class LiteLLM_OrganizationTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
+    created_by: str
+    updated_by: str
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class OrganizationRequest(LiteLLMBase):
+    organizations: List[str]
+
+
+class BudgetRequest(LiteLLMBase):
+    budgets: List[str]
 
 
 class KeyManagementSystem(enum.Enum):
@@ -376,6 +485,9 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="sends alerts if requests hang for 5min+",
     )
+    ui_access_mode: Optional[Literal["admin_only", "all"]] = Field(
+        "all", description="Control access to the Proxy UI"
+    )
 
 
 class ConfigYAML(LiteLLMBase):
@@ -424,18 +536,36 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_spend: Dict = {}
     model_max_budget: Dict = {}
 
+    # hidden params used for parallel request limiting, not required to create a token
+    user_id_rate_limits: Optional[dict] = None
+    team_id_rate_limits: Optional[dict] = None
+
     class Config:
         protected_namespaces = ()
 
 
+class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
+    """
+    Combined view of litellm verification token + litellm team table (select values)
+    """
+
+    team_spend: Optional[float] = None
+    team_tpm_limit: Optional[int] = None
+    team_rpm_limit: Optional[int] = None
+    team_max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
+    team_model_aliases: Optional[Dict] = None
+
+
 class UserAPIKeyAuth(
-    LiteLLM_VerificationToken
+    LiteLLM_VerificationTokenView
 ):  # the expected response object for user api key auth
     """
     Return the row in the db
     """
 
     api_key: Optional[str] = None
+    user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
 
     @root_validator(pre=True)
     def check_api_key(cls, values):
@@ -474,6 +604,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
     api_key: str
     model: Optional[str] = ""
+    api_base: Optional[str] = ""
     call_type: str
     spend: Optional[float] = 0.0
     total_tokens: Optional[int] = 0

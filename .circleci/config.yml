@@ -45,6 +45,8 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "apscheduler==3.10.4"
             pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install python-multipart
       - save_cache:
           paths:
             - ./venv
@@ -88,6 +90,32 @@ jobs:
       - store_test_results:
           path: test-results
 
+  installing_litellm_on_python:
+    docker:
+      - image: circleci/python:3.8
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install python-dotenv
+            pip install pytest
+            pip install tiktoken
+            pip install aiohttp
+            pip install click
+            pip install jinja2
+            pip install tokenizers
+            pip install openai
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv litellm/tests/test_python_38.py
+
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -130,6 +158,7 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install numpydoc
             pip install prisma            
+            pip install fastapi            
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -270,6 +299,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - build_and_test:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - installing_litellm_on_python:
           filters:
             branches:
               only:

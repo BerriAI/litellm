@@ -3,17 +3,19 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, Langfuse, s3 Bucket, Sentry, OpenTelemetry
+# 🔎 Logging - Custom Callbacks, Langfuse, ClickHouse, s3 Bucket, Sentry, OpenTelemetry, Athina
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
+- [Logging to ClickHouse](#logging-proxy-inputoutput---clickhouse)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
-- [Logging to Traceloop (OpenTelemetry)](#opentelemetry---traceloop)
+- [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
+- [Logging to Athina](#logging-proxy-inputoutput-athina)
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -148,7 +150,7 @@ litellm --config proxy_config.yaml
 ```
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --data ' {
     "model": "gpt-3.5-turbo",
@@ -172,7 +174,7 @@ On Success
     Usage: {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21},
     Cost: 3.65e-05,
     Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
-    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
+    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:4000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
 ```
 
 #### Logging Proxy Request Object, Header, Url
@@ -372,7 +374,7 @@ async def log_event(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=4000)
 
 
 ```
@@ -381,7 +383,7 @@ if __name__ == "__main__":
 #### Step 2. Set your `GENERIC_LOGGER_ENDPOINT` to the endpoint + route we should send callback logs to
 
 ```shell
-os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:8000/log-event"
+os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:4000/log-event"
 ```
 
 #### Step 3. Create a `config.yaml` file and set `litellm_settings`: `success_callback` = ["generic"]
@@ -443,7 +445,7 @@ Expected output on Langfuse
 Pass `metadata` as part of the request body
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -470,7 +472,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -507,7 +509,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",
+    openai_api_base="http://0.0.0.0:4000",
     model = "gpt-3.5-turbo",
     temperature=0.1,
     extra_body={
@@ -535,6 +537,90 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+
+## Logging Proxy Input/Output - Clickhouse
+We will use the `--config` to set `litellm.success_callback = ["clickhouse"]` this will log all successfull LLM calls to ClickHouse DB
+
+### [Optional] - Docker Compose - LiteLLM Proxy + Self Hosted Clickhouse DB
+Use this docker compose yaml to start LiteLLM Proxy + Clickhouse DB
+```yaml
+version: "3.9"
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    volumes:
+      - ./proxy_server_config.yaml:/app/proxy_server_config.yaml # mount your litellm config.yaml
+    ports:
+      - "4000:4000"
+    environment:
+      - AZURE_API_KEY=sk-123
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    environment:
+      - CLICKHOUSE_DB=litellm-test
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_PASSWORD=admin
+    ports:
+      - "8123:8123"
+```
+
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["clickhouse"]
+```
+
+**Step 2**: Set Required env variables for clickhouse
+
+<Tabs>
+<TabItem value="self" label="Self Hosted Clickhouse">
+
+Env Variables for self hosted click house 
+```shell
+CLICKHOUSE_HOST = "localhost"
+CLICKHOUSE_PORT = "8123"
+CLICKHOUSE_USERNAME = "admin"
+CLICKHOUSE_PASSWORD = "admin"
+```
+
+</TabItem>
+
+
+
+<TabItem value="cloud" label="Clickhouse.cloud">
+
+Env Variables for cloud click house
+
+```shell
+CLICKHOUSE_HOST = "hjs1z7j37j.us-east1.gcp.clickhouse.cloud"
+CLICKHOUSE_PORT = "8443"
+CLICKHOUSE_USERNAME = "default"
+CLICKHOUSE_PASSWORD = "M~PimRs~c3Z6b"
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
 
 
 ## Logging Proxy Input/Output - s3 Buckets
@@ -577,7 +663,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "Azure OpenAI GPT-4 East",
@@ -612,7 +698,7 @@ litellm_settings:
 Now, when you [generate keys](./virtual_keys.md) for this team-id 
 
 ```bash
-curl -X POST 'http://0.0.0.0:8000/key/generate' \
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
 -D '{"team_id": "ishaans-secret-project"}'
@@ -656,7 +742,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "Azure OpenAI GPT-4 East",
@@ -817,7 +903,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "gpt-3.5-turbo",
@@ -830,4 +916,46 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }'
 ```
 
+## Logging Proxy Input/Output Athina
 
+[Athina](https://athina.ai/) allows you to log LLM Input/Output for monitoring, analytics, and observability.
+
+We will use the `--config` to set `litellm.success_callback = ["athina"]` this will log all successfull LLM calls to athina
+
+**Step 1** Set Athina API key
+
+```shell
+ATHINA_API_KEY = "your-athina-api-key"
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["athina"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "which llm are you"
+        }
+    ]
+    }'
+```

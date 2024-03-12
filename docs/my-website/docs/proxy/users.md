@@ -44,7 +44,7 @@ litellm /path/to/config.yaml
 **Step 3. Send test call**
 
 ```bash
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Autherization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
@@ -72,7 +72,7 @@ By default the `max_budget` is set to `null` and is not checked for keys
 
 #### **Add budgets to users**
 ```shell 
-curl --location 'http://localhost:8000/user/new' \
+curl --location 'http://localhost:4000/user/new' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
@@ -96,7 +96,7 @@ curl --location 'http://localhost:8000/user/new' \
 `budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 
 ```
-curl 'http://0.0.0.0:8000/user/new' \
+curl 'http://0.0.0.0:4000/user/new' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -113,12 +113,57 @@ Now you can just call `/key/generate` with that user_id (i.e. krrish3@berri.ai) 
 - **Spend Tracking**: spend for this key will update krrish3@berri.ai's spend as well
 
 ```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
+curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
 ```
 
+</TabItem>
+<TabItem value="per-team" label="For Team">
+You can:
+- Add budgets to Teams
+
+
+#### **Add budgets to users**
+```shell 
+curl --location 'http://localhost:4000/team/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_alias": "my-new-team_4",
+  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
+  "rpm_limit": 99
+}' 
+```
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
+
+**Sample Response**
+
+```shell
+{
+    "team_alias": "my-new-team_4",
+    "team_id": "13e83b19-f851-43fe-8e93-f96e21033100",
+    "admins": [],
+    "members": [],
+    "members_with_roles": [
+        {
+            "role": "admin",
+            "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"
+        }
+    ],
+    "metadata": {},
+    "tpm_limit": null,
+    "rpm_limit": 99,
+    "max_budget": null,
+    "models": [],
+    "spend": 0.0,
+    "max_parallel_requests": null,
+    "budget_duration": null,
+    "budget_reset_at": null
+}
+```
 </TabItem>
 <TabItem value="per-user-chat" label="For 'user' passed to /chat/completions">
 
@@ -193,7 +238,7 @@ By default the `max_budget` is set to `null` and is not checked for keys
 #### **Add budgets to keys**
 
 ```bash
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -205,7 +250,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
 Example Request to `/chat/completions` when key has crossed budget
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
   --header 'Content-Type: application/json' \
   --header 'Authorization: Bearer <generated-key>' \
   --data ' {
@@ -233,7 +278,7 @@ Expected Response from `/chat/completions` when key has crossed budget
 `budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 
 ```
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -265,7 +310,7 @@ By default the `model_max_budget` is set to `{}` and is not checked for keys
 #### **Add model specific budgets to keys**
 
 ```bash
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -279,9 +324,9 @@ curl 'http://0.0.0.0:8000/key/generate' \
 ## Set Rate Limits 
 
 You can set: 
+- tpm limits (tokens per minute)
+- rpm limits (requests per minute)
 - max parallel requests
-- tpm limits 
-- rpm limits 
 
 <Tabs>
 <TabItem value="per-user" label="Per User">
@@ -290,7 +335,7 @@ Use `/user/new`, to persist rate limits across multiple keys.
 
 
 ```shell
-curl --location 'http://0.0.0.0:8000/user/new' \
+curl --location 'http://0.0.0.0:4000/user/new' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{"user_id": "krrish@berri.ai", "max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
@@ -314,7 +359,7 @@ curl --location 'http://0.0.0.0:8000/user/new' \
 Use `/key/generate`, if you want them for just that key.
 
 ```shell
-curl --location 'http://0.0.0.0:8000/key/generate' \
+curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{"max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
@@ -356,7 +401,7 @@ model_list:
 **Step 2. Create key with access group**
 
 ```bash
-curl --location 'http://localhost:8000/user/new' \
+curl --location 'http://localhost:4000/user/new' \
 -H 'Authorization: Bearer <your-master-key>' \
 -H 'Content-Type: application/json' \
 -d '{"models": ["beta-models"], # 👈 Model Access Group
@@ -369,7 +414,7 @@ curl --location 'http://localhost:8000/user/new' \
 Just include user_id in the `/key/generate` request.
 
 ```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
+curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'

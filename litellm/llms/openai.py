@@ -1,4 +1,4 @@
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, BinaryIO
 import types, time, json, traceback
 import httpx
 from .base import BaseLLM
@@ -9,6 +9,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     convert_to_model_response_object,
     Usage,
+    TranscriptionResponse,
 )
 from typing import Callable, Optional
 import aiohttp, requests
@@ -237,14 +238,22 @@ class OpenAIChatCompletion(BaseLLM):
                     status_code=422, message=f"Timeout needs to be a float"
                 )
 
-            if custom_llm_provider == "mistral":
-                # check if message content passed in as list, and not string
-                messages = prompt_factory(
-                    model=model,
-                    messages=messages,
-                    custom_llm_provider=custom_llm_provider,
-                )
-
+            if custom_llm_provider != "openai":
+                # process all OpenAI compatible provider logic here
+                if custom_llm_provider == "mistral":
+                    # check if message content passed in as list, and not string
+                    messages = prompt_factory(
+                        model=model,
+                        messages=messages,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                if custom_llm_provider == "perplexity" and messages is not None:
+                    # check if messages.name is passed + supported, if not supported remove
+                    messages = prompt_factory(
+                        model=model,
+                        messages=messages,
+                        custom_llm_provider=custom_llm_provider,
+                    )
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
@@ -334,10 +343,14 @@ class OpenAIChatCompletion(BaseLLM):
                             model_response_object=model_response,
                         )
                 except Exception as e:
+                    if print_verbose is not None:
+                        print_verbose(f"openai.py: Received openai error - {str(e)}")
                     if (
                         "Conversation roles must alternate user/assistant" in str(e)
                         or "user and assistant roles should be alternating" in str(e)
                     ) and messages is not None:
+                        if print_verbose is not None:
+                            print_verbose("openai.py: REFORMATS THE MESSAGE!")
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
                         new_messages = []
                         for i in range(len(messages) - 1):  # type: ignore
@@ -740,6 +753,7 @@ class OpenAIChatCompletion(BaseLLM):
             # return response
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
+
             exception_mapping_worked = True
             ## LOGGING
             logging_obj.post_call(
@@ -762,6 +776,105 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 raise OpenAIError(status_code=500, message=str(e))
 
+    def audio_transcriptions(
+        self,
+        model: str,
+        audio_file: BinaryIO,
+        optional_params: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        client=None,
+        max_retries=None,
+        logging_obj=None,
+        atranscription: bool = False,
+    ):
+        data = {"model": model, "file": audio_file, **optional_params}
+        if atranscription == True:
+            return self.async_audio_transcriptions(
+                audio_file=audio_file,
+                data=data,
+                model_response=model_response,
+                timeout=timeout,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                max_retries=max_retries,
+                logging_obj=logging_obj,
+            )
+        if client is None:
+            openai_client = OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=litellm.client_session,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+        else:
+            openai_client = client
+        response = openai_client.audio.transcriptions.create(
+            **data, timeout=timeout  # type: ignore
+        )
+
+        stringified_response = response.model_dump()
+        ## LOGGING
+        logging_obj.post_call(
+            input=audio_file.name,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=stringified_response,
+        )
+        hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        return final_response
+
+    async def async_audio_transcriptions(
+        self,
+        audio_file: BinaryIO,
+        data: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        client=None,
+        max_retries=None,
+        logging_obj=None,
+    ):
+        response = None
+        try:
+            if client is None:
+                openai_aclient = AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=api_base,
+                    http_client=litellm.aclient_session,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                )
+            else:
+                openai_aclient = client
+            response = await openai_aclient.audio.transcriptions.create(
+                **data, timeout=timeout
+            )  # type: ignore
+            stringified_response = response.model_dump()
+            ## LOGGING
+            logging_obj.post_call(
+                input=audio_file.name,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=stringified_response,
+            )
+            hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=input,
+                api_key=api_key,
+                original_response=str(e),
+            )
+            raise e
+
     async def ahealth_check(
         self,
         model: Optional[str],
@@ -772,9 +885,13 @@ class OpenAIChatCompletion(BaseLLM):
         input: Optional[list] = None,
         prompt: Optional[str] = None,
         organization: Optional[str] = None,
+        api_base: Optional[str] = None,
     ):
         client = AsyncOpenAI(
-            api_key=api_key, timeout=timeout, organization=organization
+            api_key=api_key,
+            timeout=timeout,
+            organization=organization,
+            base_url=api_base,
         )
         if model is None and mode != "image_generation":
             raise Exception("model is not set")
@@ -870,9 +987,9 @@ class OpenAITextCompletion(BaseLLM):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            model_response_object._hidden_params[
-                "original_response"
-            ] = response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            model_response_object._hidden_params["original_response"] = (
+                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            )
             return model_response_object
         except Exception as e:
             raise e

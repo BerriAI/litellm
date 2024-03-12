@@ -1,4 +1,4 @@
-# Virtual Keys, Users
+# 🔑 Virtual Keys, Users
 Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
@@ -59,7 +59,7 @@ litellm --config /path/to/config.yaml
 **Step 3: Generate temporary keys**
 
 ```shell 
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai"}}'
@@ -70,7 +70,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -79,6 +79,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
   "metadata": {"user": "ishaan@berri.ai"},
   "team_id": "core-infra",
   "max_budget": 10,
+  "soft_budget": 5,
 }'
 ```
 
@@ -93,6 +94,7 @@ Request Params:
 - `config`: *Optional[dict]* - any key-specific configs, overrides config in config.yaml
 - `spend`: *Optional[int]* - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
 - `max_budget`: *Optional[float]* - Specify max budget for a given key.
+- `soft_budget`: *Optional[float]* - Specify soft limit budget for a given key. Get Alerts when key hits its soft budget
 - `model_max_budget`: *Optional[dict[str, float]]* - Specify max budget for each model, `model_max_budget={"gpt4": 0.5, "gpt-5": 0.01}`
 - `max_parallel_requests`: *Optional[int]* - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
 - `metadata`: *Optional[dict]* - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
@@ -103,7 +105,7 @@ Request Params:
 ```python
 {
     "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
-    "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+    "expires": "2023-11-19T01:38:25.834000+00:00" # datetime object
     "key_name": "sk-...7sFA" # abbreviated key string, ONLY stored in db if `allow_user_auth: true` set - [see](./ui.md)
     ...
 }
@@ -145,7 +147,7 @@ model_list:
 **Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
 
 ```bash
-curl -X POST "https://0.0.0.0:8000/key/generate" \
+curl -X POST "https://0.0.0.0:4000/key/generate" \
 -H "Authorization: Bearer <your-master-key>" \
 -H "Content-Type: application/json" \
 -d '{
@@ -180,7 +182,7 @@ model_list:
 **Step 2. Create key with access group**
 
 ```bash
-curl --location 'http://localhost:8000/key/generate' \
+curl --location 'http://localhost:4000/key/generate' \
 -H 'Authorization: Bearer <your-master-key>' \
 -H 'Content-Type: application/json' \
 -d '{"models": ["beta-models"], # 👈 Model Access Group
@@ -192,7 +194,7 @@ curl --location 'http://localhost:8000/key/generate' \
 
 ### Request
 ```shell
-curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+curl -X GET "http://0.0.0.0:4000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
 -H "Authorization: Bearer sk-1234"
 ```
 
@@ -226,7 +228,7 @@ Request Params:
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/update' \
+curl 'http://0.0.0.0:4000/key/update' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -264,7 +266,7 @@ Request Params:
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/delete' \
+curl 'http://0.0.0.0:4000/key/delete' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -343,18 +345,83 @@ A key will be generated for the new user created
   "key_name": null,
   "expires": null
 }
-
 ```
 
-Request Params:
-- keys: List[str] - List of keys to delete
+
+## /user/info
+
+### Request
+
+#### View all Users
+If you're trying to view all users, we recommend using pagination with the following args
+- `view_all=true`
+- `page=0` Optional(int) min = 0, default=0
+- `page_size=25` Optional(int) min = 1, default = 25
+```shell
+curl -X GET "http://0.0.0.0:4000/user/info?view_all=true&page=0&page_size=25" -H "Authorization: Bearer sk-1234"
+```
+
+#### View specific user_id
+```shell
+curl -X GET "http://0.0.0.0:4000/user/info?user_id=228da235-eef0-4c30-bf53-5d6ac0d278c2" -H "Authorization: Bearer sk-1234"
+```
 
 ### Response
+View user spend, budget, models, keys and teams 
 
 ```json
 {
-  "deleted_keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+  "user_id": "228da235-eef0-4c30-bf53-5d6ac0d278c2",
+  "user_info": {
+    "user_id": "228da235-eef0-4c30-bf53-5d6ac0d278c2",
+    "team_id": null,
+    "teams": [],
+    "user_role": "app_user",
+    "max_budget": null,
+    "spend": 200000.0,
+    "user_email": null,
+    "models": [],
+    "max_parallel_requests": null,
+    "tpm_limit": null,
+    "rpm_limit": null,
+    "budget_duration": null,
+    "budget_reset_at": null,
+    "allowed_cache_controls": [],
+    "model_spend": {
+      "chatgpt-v-2": 200000
+    },
+    "model_max_budget": {}
+  },
+  "keys": [
+    {
+      "token": "16c337f9df00a0e6472627e39a2ed02e67bc9a8a760c983c4e9b8cad7954f3c0",
+      "key_name": null,
+      "key_alias": null,
+      "spend": 200000.0,
+      "expires": null,
+      "models": [],
+      "aliases": {},
+      "config": {},
+      "user_id": "228da235-eef0-4c30-bf53-5d6ac0d278c2",
+      "team_id": null,
+      "permissions": {},
+      "max_parallel_requests": null,
+      "metadata": {},
+      "tpm_limit": null,
+      "rpm_limit": null,
+      "max_budget": null,
+      "budget_duration": null,
+      "budget_reset_at": null,
+      "allowed_cache_controls": [],
+      "model_spend": {
+        "chatgpt-v-2": 200000
+      },
+      "model_max_budget": {}
+    }
+  ],
+  "teams": []
 }
+
 ```
 
 ## Advanced 
@@ -433,7 +500,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Set `max_budget` in (USD $) param in the `key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
 
 ```shell
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
@@ -450,7 +517,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
 Example Request to `/chat/completions` when key has crossed budget
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
   --header 'Content-Type: application/json' \
   --header 'Authorization: Bearer sk-ULl_IKCVFy2EZRzQB16RUA' \
   --data ' {
@@ -478,10 +545,10 @@ Expected Response from `/chat/completions` when key has crossed budget
 
 LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
 
-This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
+This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:4000/`). Here's an example request. 
 
 ```shell 
-curl --location 'http://localhost:8000/user/new' \
+curl --location 'http://localhost:4000/user/new' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
@@ -504,7 +571,7 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 You can get spend for a key by using the `/key/info` endpoint. 
 
 ```bash
-curl 'http://0.0.0.0:8000/key/info?key=<user-key>' \
+curl 'http://0.0.0.0:4000/key/info?key=<user-key>' \
      -X GET \
      -H 'Authorization: Bearer <your-master-key>'
 ```
@@ -704,7 +771,7 @@ general_settings:
 #### Step 3. Generate Key
 
 ```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
+curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
