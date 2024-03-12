@@ -1960,6 +1960,7 @@ def test_completion_cohere():
         pytest.fail(f"Error occurred: {e}")
 
 
+# FYI - cohere_chat looks quite unstable, even when testing locally
 def test_chat_completion_cohere():
     try:
         litellm.set_verbose = True
