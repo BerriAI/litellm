@@ -455,6 +455,7 @@ provider_list: List = [
     "ai21",
     "baseten",
     "azure",
+    "azure_text",
     "sagemaker",
     "bedrock",
     "vllm",
