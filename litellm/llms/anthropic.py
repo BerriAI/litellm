@@ -180,11 +180,12 @@ def completion(
             "headers": headers,
         },
     )
-
+    print_verbose(f"_is_function_call: {_is_function_call}")
     ## COMPLETION CALL
     if (
         stream is not None and stream == True and _is_function_call == False
     ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
+        print_verbose(f"makes anthropic streaming POST request")
         data["stream"] = stream
         response = requests.post(
             api_base,
@@ -288,6 +289,9 @@ def completion(
                 streaming_model_response.choices[0].delta = delta_obj
                 completion_stream = model_response_iterator(
                     model_response=streaming_model_response
+                )
+                print_verbose(
+                    f"Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
