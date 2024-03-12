@@ -101,6 +101,10 @@
 #         print(n, time.time() - start, len(successful_completions))
 #     print()
 #     print(vars(router))
+#     prev_models = router.previous_models
+
+#     print("vars in prev_models")
+#     print(prev_models[0].keys())
 
 
 # if __name__ == "__main__":
