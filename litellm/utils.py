@@ -3677,9 +3677,9 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     else:
+        print('MODEL COST REF', model_cost_ref)
         # if model is not in model_prices_and_context_window.json. Raise an exception-let users know
         error_str = f"Model not in model_prices_and_context_window.json. You passed model={model}. Register pricing for model - https://docs.litellm.ai/docs/proxy/custom_pricing\n"
-
         raise litellm.exceptions.NotFoundError(  # type: ignore
             message=error_str,
             model=model,
@@ -3689,7 +3689,6 @@ def cost_per_token(
                 request=httpx.Request(method="cost_per_token", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
             llm_provider="",
-            model_cost_ref=model_cost_ref,
         )
 
 
