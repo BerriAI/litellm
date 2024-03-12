@@ -164,12 +164,9 @@ model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
-  - model_name: azure-embedding-model
+  - model_name: text-embedding-ada-002
     litellm_params:
-      model: azure/azure-embedding-model
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
+      model: text-embedding-ada-002
 
 litellm_settings:
   set_verbose: True
