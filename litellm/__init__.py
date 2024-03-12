@@ -198,7 +198,7 @@ def get_model_cost_map(url: str):
     ):
         import importlib.resources
         import json
-
+        print("LOADING BACKUP",os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True)
         with importlib.resources.open_text(
             "litellm", "model_prices_and_context_window_backup.json"
         ) as f:
