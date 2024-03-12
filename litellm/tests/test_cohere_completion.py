@@ -22,7 +22,6 @@ def test_chat_completion_cohere():
     try:
         litellm.set_verbose = True
         messages = [
-            {"role": "system", "content": "You're a good bot"},
             {
                 "role": "user",
                 "content": "Hey",
@@ -42,7 +41,6 @@ def test_chat_completion_cohere_stream():
     try:
         litellm.set_verbose = False
         messages = [
-            {"role": "system", "content": "You're a good bot"},
             {
                 "role": "user",
                 "content": "Hey",
