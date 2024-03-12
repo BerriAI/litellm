@@ -441,7 +441,7 @@ class AzureTextCompletion(BaseLLM):
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
-            custom_llm_provider="azure",
+            custom_llm_provider="azure_text",
             logging_obj=logging_obj,
         )
         return streamwrapper
@@ -500,7 +500,7 @@ class AzureTextCompletion(BaseLLM):
             streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
                 model=model,
-                custom_llm_provider="azure",
+                custom_llm_provider="azure_text",
                 logging_obj=logging_obj,
             )
             return streamwrapper  ## DO NOT make this into an async for ... loop, it will yield an async generator, which won't raise errors if the response fails
