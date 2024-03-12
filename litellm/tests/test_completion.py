@@ -1960,6 +1960,26 @@ def test_completion_cohere():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_chat_completion_cohere():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="cohere_chat/command-r",
+            messages=messages,
+            max_tokens=10,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_azure_cloudflare_api():
     litellm.set_verbose = True
     try:
