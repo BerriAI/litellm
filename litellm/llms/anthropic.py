@@ -190,7 +190,7 @@ def completion(
             api_base,
             headers=headers,
             data=json.dumps(data),
-            stream=optional_params["stream"],
+            stream=stream,
         )
 
         if response.status_code != 200:
