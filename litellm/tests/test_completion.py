@@ -1162,6 +1162,20 @@ def test_azure_instruct():
     print("response", response)
 
 
+@pytest.mark.asyncio
+async def test_azure_instruct_stream():
+    litellm.set_verbose = False
+    response = await litellm.acompletion(
+        model="azure_text/instruct-model",
+        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+        max_tokens=10,
+        stream=True,
+    )
+    print("response", response)
+    async for chunk in response:
+        print(chunk)
+
+
 async def test_re_use_azure_async_client():
     try:
         print("azure gpt-3.5 ASYNC with clie nttest\n\n")
