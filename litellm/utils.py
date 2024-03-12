@@ -3593,6 +3593,7 @@ def cost_per_token(
         model = model_with_provider
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
+    print(f"model_cost_ref: {model_cost_ref}", model, model_cost_ref.get(model))
     if model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
@@ -3679,7 +3680,7 @@ def cost_per_token(
     else:
         print('MODEL COST REF', model_cost_ref)
         # if model is not in model_prices_and_context_window.json. Raise an exception-let users know
-        error_str = f"Model not in model_prices_and_context_window.json. You passed model={model}. Register pricing for model - https://docs.litellm.ai/docs/proxy/custom_pricing\n"
+        error_str = f"CHICKEN Model not in model_prices_and_context_window.json. You passed model={model}. Register pricing for model - https://docs.litellm.ai/docs/proxy/custom_pricing\n"
         raise litellm.exceptions.NotFoundError(  # type: ignore
             message=error_str,
             model=model,
@@ -3897,7 +3898,7 @@ def supports_function_calling(model: str):
         return False
     else:
         raise Exception(
-            f"🐱 Model not in model_prices_and_context_window.json. You passed model={model}."
+            f"🐱 DOG Model not in model_prices_and_context_window.json. You passed model={model}."
         )
 
 
