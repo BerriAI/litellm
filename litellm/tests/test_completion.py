@@ -289,6 +289,7 @@ def test_completion_mistral_api():
         cost = litellm.completion_cost(completion_response=response)
         print("cost to make mistral completion=", cost)
         assert cost > 0.0
+        assert response.model == "mistral/mistral-tiny"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
