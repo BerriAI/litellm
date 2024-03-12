@@ -193,8 +193,9 @@ output_parse_pii: bool = False
 
 def get_model_cost_map(url: str):
     if (
-        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
-        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
+        # os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
+        # or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
+        True
     ):
         import importlib.resources
         import json
