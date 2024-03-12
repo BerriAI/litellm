@@ -2103,12 +2103,14 @@ async def generate_key_helper_fn(
     return key_data
 
 
-async def delete_verification_token(tokens: List):
+async def delete_verification_token(tokens: List, user_id: Optional[str] = None):
     global prisma_client
     try:
         if prisma_client:
             # Assuming 'db' is your Prisma Client instance
-            deleted_tokens = await prisma_client.delete_data(tokens=tokens)
+            deleted_tokens = await prisma_client.delete_data(
+                tokens=tokens, user_id=user_id
+            )
         else:
             raise Exception
     except Exception as e:
@@ -3744,7 +3746,10 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
 @router.post(
     "/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def delete_key_fn(data: KeyRequest):
+async def delete_key_fn(
+    data: KeyRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Delete a key from the key management system.
 
@@ -3769,11 +3774,33 @@ async def delete_key_fn(data: KeyRequest):
                 code=status.HTTP_400_BAD_REQUEST,
             )
 
-        result = await delete_verification_token(tokens=keys)
-        verbose_proxy_logger.debug("/key/delete - deleted_keys=", result)
+        ## only allow user to delete keys they own
+        user_id = user_api_key_dict.user_id
+        verbose_proxy_logger.debug(
+            f"user_api_key_dict.user_role: {user_api_key_dict.user_role}"
+        )
+        if (
+            user_api_key_dict.user_role is not None
+            and user_api_key_dict.user_role == "proxy_admin"
+        ):
+            user_id = None  # unless they're admin
 
-        number_deleted_keys = len(result["deleted_keys"])
-        assert len(keys) == number_deleted_keys
+        number_deleted_keys = await delete_verification_token(
+            tokens=keys, user_id=user_id
+        )
+        verbose_proxy_logger.debug(
+            f"/key/delete - deleted_keys={number_deleted_keys['deleted_keys']}"
+        )
+
+        try:
+            assert len(keys) == number_deleted_keys["deleted_keys"]
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in."
+                },
+            )
 
         for key in keys:
             user_api_key_cache.delete_cache(key)
@@ -6529,8 +6556,6 @@ async def login(request: Request):
             algorithm="HS256",
         )
         litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-        # if a user has logged in they should be allowed to create keys - this ensures that it's set to True
-        general_settings["allow_user_auth"] = True
         return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     else:
         raise ProxyException(
