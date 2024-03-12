@@ -10,7 +10,7 @@
 import litellm
 import time, logging, asyncio
 import json, traceback, ast, hashlib
-from typing import Optional, Literal, List, Union, Any, BinaryIO
+from typing import Optional, Literal, List, Union, Any, BinaryIO, List, Dict
 from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
 
@@ -91,25 +91,52 @@ class InMemoryCache(BaseCache):
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
 
+def canonical_cache_key(*args, **kwargs) -> Dict[str, Any]:
+    return {
+        "messages": kwargs.get("messages", []).copy(),
+        "model": kwargs.get("model", "gpt-3.5-turbo"),
+        "temperature": kwargs.get("temperature", 0),
+    }
+
 class CanonicalCache(BaseCache):
-    def __init__(self, bucket_name: str, api_key: str, **kwargs):
-        self.bucket_name = bucket_name
-        self.api_key = api_key
+    def __init__(self, host: str | None,  apikey: str):
+        from litellm._canonical import CanonicalClient
+        self.client = CanonicalClient( host=host, apikey=apikey)
 
-    def set_cache(self, key, value, **kwargs):
-        raise NotImplementedError
+    def set_cache(self, key: str | None, value: Dict[str, Any], **kwargs):
+        try:
+            self.client.set(key, value)
+        except Exception as e:
+            print_verbose(
+                f"LiteLLM Caching: set_cache() - Got exception from CANONICAL : {str(e)}"
+            )
 
-    async def async_set_cache(self, key, value, **kwargs):
-        raise NotImplementedError
+    async def async_set_cache(self, key: str | None, value: Dict[str, Any], **kwargs):
+        try:
+            await self.client.async_set(key, value)
+        except Exception as e:
+            print_verbose(
+                f"LiteLLM Caching: async_set_cache() - Got exception from CANONICAL : {e}"
+            )
 
-    def get_cache(self, key, **kwargs):
-        raise NotImplementedError
+    def get_cache(self, key: Dict[str, Any], **kwargs) -> str | None:
+        try:
+            return self.client.get(key)
+        except Exception as e:
+            print_verbose(
+                f"LiteLLM Caching: get_cache() - Got exception from CANONICAL : {str(e)}"
+            )
 
-    async def async_get_cache(self, key, **kwargs):
-        raise NotImplementedError
+    async def async_get_cache(self, key: Dict[str, Any], **kwargs) -> str | None:
+        try:
+            return await self.client.async_get(key)
+        except Exception as e:
+            print_verbose(
+                f"LiteLLM Caching: async_get_cache() - Got exception from CANONICAL : {str(e)}"
+            )
 
     async def disconnect(self):
-        raise NotImplementedError
+        return
 
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
@@ -778,7 +805,7 @@ class DualCache(BaseCache):
 class Cache:
     def __init__(
         self,
-        type: Optional[Literal["local", "redis", "redis-semantic", "s3"]] = "local",
+        type: Optional[Literal["local", "redis", "redis-semantic", "s3", "canonical"]] = "local",
         host: Optional[str] = None,
         port: Optional[str] = None,
         password: Optional[str] = None,
@@ -866,6 +893,9 @@ class Cache:
                 s3_path=s3_path,
                 **kwargs,
             )
+        elif type == "canonical":
+            self.cache = CanonicalCache(host, **kwargs)
+
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
