@@ -21,7 +21,7 @@ import {
   BarList,
   Metric,
 } from "@tremor/react";
-import { keySpendLogsCall } from "./networking";
+import { keySpendLogsCall, PredictedSpendLogsCall } from "./networking";
 
 interface ViewKeySpendReportProps {
   token: string;
@@ -48,6 +48,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
   const [data, setData] = useState<{ day: string; spend: number }[] | null>(
     null
   );
+  const [predictedSpendString, setPredictedSpendString] = useState("");
   const [userData, setUserData] = useState<
     { name: string; value: number }[] | null
   >(null);
@@ -78,85 +79,25 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
         (token = token)
       );
       console.log("Response:", response);
-      // loop through response
-      // get spend, startTime for each element, place in new array
+      setData(response);
 
-      const pricePerDay: Record<string, number> = (
-        Object.values(response) as ResponseValueType[]
-      ).reduce((acc: Record<string, number>, value) => {
-        const startTime = new Date(value.startTime);
-        const day = new Intl.DateTimeFormat("en-US", {
-          day: "2-digit",
-          month: "short",
-        }).format(startTime);
+      // predict spend based on response
+      const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
+      console.log("Response2:", predictedSpend);
 
-        acc[day] = (acc[day] || 0) + value.spend;
+      // append predictedSpend to data
+      const combinedData = [...response, ...predictedSpend.response];
+      setData(combinedData);
+      setPredictedSpendString(predictedSpend.predicted_spend)
 
-        return acc;
-      }, {});
-
-      // sort pricePerDay by day
-      // Convert object to array of key-value pairs
-      const pricePerDayArray = Object.entries(pricePerDay);
-
-      // Sort the array based on the date (key)
-      pricePerDayArray.sort(([aKey], [bKey]) => {
-        const dateA = new Date(aKey);
-        const dateB = new Date(bKey);
-        return dateA.getTime() - dateB.getTime();
-      });
-
-      // Convert the sorted array back to an object
-      const sortedPricePerDay = Object.fromEntries(pricePerDayArray);
-
-      console.log(sortedPricePerDay);
-
-      const pricePerUser: Record<string, number> = (
-        Object.values(response) as ResponseValueType[]
-      ).reduce((acc: Record<string, number>, value) => {
-        const user = value.user;
-        acc[user] = (acc[user] || 0) + value.spend;
-
-        return acc;
-      }, {});
-
-      console.log(pricePerDay);
-      console.log(pricePerUser);
-
-      const arrayBarChart = [];
-      // [
-      // {
-      //     "day": "02 Feb",
-      //     "spend": pricePerDay["02 Feb"],
-      // }
-      // ]
-      for (const [key, value] of Object.entries(sortedPricePerDay)) {
-        arrayBarChart.push({ day: key, spend: value });
-      }
-
-      // get 5 most expensive users
-      const sortedUsers = Object.entries(pricePerUser).sort(
-        (a, b) => b[1] - a[1]
-      );
-      const top5Users = sortedUsers.slice(0, 5);
-      const userChart = top5Users.map(([key, value]) => ({
-        name: key,
-        value: value,
-      }));
-
-      setData(arrayBarChart);
-      setUserData(userChart);
-      console.log("arrayBarChart:", arrayBarChart);
+      console.log("Combined Data:", combinedData);
+      // setPredictedSpend(predictedSpend);
+      
     } catch (error) {
       console.error("There was an error fetching the data", error);
-      // Optionally, update your UI to reflect the error state here as well
     }
   };
 
-  // useEffect(() => {
-  //   // Fetch data only when the token changes
-  //   fetchData();
-  // }, [token]); // Dependency array containing the 'token' variable
 
   if (!token) {
     return null;
@@ -164,12 +105,12 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
 
   return (
     <div>
-      <Button className="mx-auto" onClick={showModal}>
+      <Button size = "xs" onClick={showModal} variant="secondary">
         View Spend Report
       </Button>
       <Modal
         visible={isModalVisible}
-        width={1000}
+        width={1400}
         onOk={handleOk}
         onCancel={handleCancel}
         footer={null}
@@ -177,25 +118,21 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
         <Title style={{ textAlign: "left" }}>Key Name: {keyName}</Title>
 
         <Metric>Monthly Spend ${keySpend}</Metric>
+        <Title>{predictedSpendString}</Title>
 
         <Card className="mt-6 mb-6">
           {data && (
             <BarChart
               className="mt-6"
               data={data}
-              colors={["green"]}
-              index="day"
-              categories={["spend"]}
-              yAxisWidth={48}
+              colors={["blue", "amber"]}
+              index="date"
+              categories={["spend", "predicted_spend"]}
+              yAxisWidth={80}
             />
           )}
         </Card>
-        <Title className="mt-6">Top 5 Users Spend (USD)</Title>
-        <Card className="mb-6">
-          {userData && (
-            <BarList className="mt-6" data={userData} color="teal" />
-          )}
-        </Card>
+  
       </Modal>
     </div>
   );

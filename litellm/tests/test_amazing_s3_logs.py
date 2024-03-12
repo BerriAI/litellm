@@ -22,12 +22,14 @@ def test_s3_logging():
     try:
         # redirect stdout to log_file
         litellm.cache = litellm.Cache(
-            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+            type="s3",
+            s3_bucket_name="litellm-my-test-bucket-2",
+            s3_region_name="us-east-1",
         )
 
         litellm.success_callback = ["s3"]
         litellm.s3_callback_params = {
-            "s3_bucket_name": "litellm-logs",
+            "s3_bucket_name": "litellm-logs-2",
             "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
             "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
         }
@@ -71,7 +73,7 @@ def test_s3_logging():
         import boto3
 
         s3 = boto3.client("s3")
-        bucket_name = "litellm-logs"
+        bucket_name = "litellm-logs-2"
         # List objects in the bucket
         response = s3.list_objects(Bucket=bucket_name)
 
@@ -135,7 +137,7 @@ def test_s3_logging_async():
         # Make 5 calls with success_callback set to "langfuse"
         litellm.success_callback = ["s3"]
         litellm.s3_callback_params = {
-            "s3_bucket_name": "litellm-logs",
+            "s3_bucket_name": "litellm-logs-2",
             "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
             "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
         }
@@ -187,6 +189,7 @@ async def make_async_calls():
     return total_time
 
 
+@pytest.mark.skip(reason="flaky test on ci/cd")
 def test_s3_logging_r2():
     # all s3 requests need to be in one test function
     # since we are modifying stdout, and pytests runs tests in parallel

@@ -201,14 +201,40 @@ jobs:
             } catch (error) {
               core.setFailed(error.message);
             }
-      - name: Github Releases To Discord
-        uses: SethCohen/github-releases-to-discord@v1.13.1
+      - name: Fetch Release Notes
+        id: release-notes
+        uses: actions/github-script@v6
         with:
-          webhook_url: ${{ secrets.WEBHOOK_URL }}
-          color: "2105893"
-          username: "Release Changelog"
-          avatar_url: "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png"
-          content: "||@everyone||"
-          footer_title: "Changelog"
-          footer_icon_url: "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png"
-          footer_timestamp: true
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          script: |
+            try {
+              const response = await github.rest.repos.getRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: process.env.RELEASE_ID,
+              });
+              return response.data.body;
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+        env:
+          RELEASE_ID: ${{ env.RELEASE_ID }}
+      - name: Github Releases To Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          REALEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_NOTES: ${{ steps.release-notes.outputs.result }}
+        run: |
+          curl -H "Content-Type: application/json" -X POST -d '{
+            "content": "||@everyone||",
+            "username": "Release Changelog",
+            "avatar_url": "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png",
+            "embeds": [
+              {
+                "title": "Changelog for ${RELEASE_TAG}",
+                "description": "${RELEASE_NOTES}",
+                "color": 2105893
+              }
+            ]
+          }' $WEBHOOK_URL
+

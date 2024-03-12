@@ -67,6 +67,7 @@ def verify_log_file(log_file_path):
     assert success_count == 3  # Expect 3 success logs from dynamoDB
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_dynamo_logging():
     # all dynamodb requests need to be in one test function
     # since we are modifying stdout, and pytests runs tests in parallel

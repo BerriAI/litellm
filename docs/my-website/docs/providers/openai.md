@@ -93,6 +93,7 @@ response = completion(
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
 | gpt-3.5-turbo-instruct | `response = completion(model="gpt-3.5-turbo-instruct", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="gpt-3.5-turbo-instruct-091", messages=messages)` |
 | text-davinci-003    | `response = completion(model="text-davinci-003", messages=messages)` |
 | ada-001             | `response = completion(model="ada-001", messages=messages)` |
 | curie-001           | `response = completion(model="curie-001", messages=messages)` |
@@ -156,6 +157,19 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 ```
 
+### Setting `extra_headers` for completion calls
+```python
+import os 
+from litellm import completion
+
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+response = completion(
+    model = "gpt-3.5-turbo", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}],
+    extra_headers={"AI-Resource Group": "ishaan-resource"}
+)
+```
 
 ### Setting Organization-ID for completion calls
 This can be set in one of the following ways:

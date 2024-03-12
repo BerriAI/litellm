@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔑 [BETA] Proxy UI 
+# [BETA] Proxy UI 
 ### **Create + delete keys through a UI**
 
 [Let users create their own keys](#setup-ssoauth-for-ui)
@@ -28,12 +28,12 @@ Follow [setup](./virtual_keys.md#setup)
 ```bash
 litellm --config /path/to/config.yaml
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 ### 2. Go to UI 
 ```bash
-http://0.0.0.0:8000/ui # <proxy_base_url>/ui
+http://0.0.0.0:4000/ui # <proxy_base_url>/ui
 ```
 
 
@@ -152,7 +152,14 @@ GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not e
 
 </Tabs>
 
-#### Step 3. Test flow
+#### Step 3. Set `PROXY_BASE_URL` in your .env
+
+Set this in your .env (so the proxy can set the correct redirect url)
+```shell
+PROXY_BASE_URL=https://litellm-api.up.railway.app/
+```
+
+#### Step 4. Test flow
 <Image img={require('../../img/litellm_ui_3.gif')} />
 
 ### Set Admin view w/ SSO 
@@ -178,6 +185,20 @@ export PROXY_ADMIN_ID="116544810872468347480"
 If you don't see all your keys this could be due to a cached token. So just re-login and it should work.
 
 :::
+
+### Restrict UI Access
+
+You can restrict UI Access to just admins - includes you (proxy_admin) and people you give view only access to (proxy_admin_viewer) for seeing global spend.
+
+**Step 1. Set 'admin_only' access**
+```yaml
+general_settings:
+    ui_access_mode: "admin_only"
+```
+
+**Step 2. Invite view-only users**
+
+<Image img={require('../../img/admin_ui_viewer.png')} />
 
 ### Custom Branding Admin UI
 

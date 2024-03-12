@@ -249,6 +249,27 @@ cache.get_cache_key = custom_get_cache_key # set get_cache_key function for your
 litellm.cache = cache # set litellm.cache to your cache 
 
 ```
+## How to write custom add/get cache functions 
+### 1. Init Cache 
+```python
+from litellm.caching import Cache
+cache = Cache()
+``` 
+
+### 2. Define custom add/get cache functions 
+```python
+def add_cache(self, result, *args, **kwargs):
+  your logic
+  
+def get_cache(self, *args, **kwargs):
+  your logic
+```
+
+### 3. Point cache add/get functions to your add/get functions 
+```python
+cache.add_cache = add_cache
+cache.get_cache = get_cache
+```
 
 ## Cache Initialization Parameters
 

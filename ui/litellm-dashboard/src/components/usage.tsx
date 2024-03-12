@@ -2,7 +2,13 @@ import { BarChart, Card, Title } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 import { Grid, Col, Text, LineChart } from "@tremor/react";
-import { userSpendLogsCall, keyInfoCall } from "./networking";
+import {
+  userSpendLogsCall,
+  keyInfoCall,
+  adminSpendLogsCall,
+  adminTopKeysCall,
+  adminTopModelsCall,
+} from "./networking";
 import { start } from "repl";
 
 interface UsagePageProps {
@@ -126,6 +132,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
   const [topKeys, setTopKeys] = useState<any[]>([]);
+  const [topModels, setTopModels] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
 
   const firstDay = new Date(
@@ -164,29 +171,66 @@ const UsagePage: React.FC<UsagePageProps> = ({
     if (accessToken && token && userRole && userID) {
       const fetchData = async () => {
         try {
-          await userSpendLogsCall(
-            accessToken,
-            token,
-            userRole,
-            userID,
-            startTime,
-            endTime
-          ).then(async (response) => {
-            const topKeysResponse = await keyInfoCall(
-              accessToken,
-              getTopKeys(response)
-            );
-            const filtered_keys = topKeysResponse["info"].map((k: any) => ({
-              key: (k["key_name"] || k["key_alias"] || k["token"]).substring(
+          /**
+           * If user is Admin - query the global views endpoints
+           * If user is App Owner - use the normal spend logs call
+           */
+          console.log(`user role: ${userRole}`);
+          if (userRole == "Admin" || userRole == "Admin Viewer") {
+            const overall_spend = await adminSpendLogsCall(accessToken);
+            setKeySpendData(overall_spend);
+            const top_keys = await adminTopKeysCall(accessToken);
+            const filtered_keys = top_keys.map((k: any) => ({
+              key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
                 0,
                 7
               ),
-              spend: k["spend"],
+              spend: k["total_spend"],
             }));
             setTopKeys(filtered_keys);
-            setTopUsers(getTopUsers(response));
-            setKeySpendData(response);
-          });
+            const top_models = await adminTopModelsCall(accessToken);
+            const filtered_models = top_models.map((k: any) => ({
+              key: k["model"],
+              spend: k["total_spend"],
+            }));
+            setTopModels(filtered_models);
+          } else if (userRole == "App Owner") {
+            await userSpendLogsCall(
+              accessToken,
+              token,
+              userRole,
+              userID,
+              startTime,
+              endTime
+            ).then(async (response) => {
+              console.log("result from spend logs call", response);
+              if ("daily_spend" in response) {
+                // this is from clickhouse analytics
+                //
+                let daily_spend = response["daily_spend"];
+                console.log("daily spend", daily_spend);
+                setKeySpendData(daily_spend);
+                let topApiKeys = response.top_api_keys;
+                setTopKeys(topApiKeys);
+              } else {
+                const topKeysResponse = await keyInfoCall(
+                  accessToken,
+                  getTopKeys(response)
+                );
+                const filtered_keys = topKeysResponse["info"].map((k: any) => ({
+                  key: (
+                    k["key_name"] ||
+                    k["key_alias"] ||
+                    k["token"]
+                  ).substring(0, 7),
+                  spend: k["spend"],
+                }));
+                setTopKeys(filtered_keys);
+                setTopUsers(getTopUsers(response));
+                setKeySpendData(response);
+              }
+            });
+          }
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
@@ -204,13 +248,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
             <Title>Monthly Spend</Title>
             <BarChart
               data={keySpendData}
-              index="startTime"
+              index="date"
               categories={["spend"]}
               colors={["blue"]}
               valueFormatter={valueFormatter}
               yAxisWidth={100}
               tickGap={5}
-              customTooltip={customTooltip}
+              // customTooltip={customTooltip}
             />
           </Card>
         </Col>
@@ -238,6 +282,22 @@ const UsagePage: React.FC<UsagePageProps> = ({
               className="mt-4 h-40"
               data={topUsers}
               index="user_id"
+              categories={["spend"]}
+              colors={["blue"]}
+              yAxisWidth={200}
+              layout="vertical"
+              showXAxis={false}
+              showLegend={false}
+            />
+          </Card>
+        </Col>
+        <Col numColSpan={1}>
+          <Card>
+            <Title>Top Models</Title>
+            <BarChart
+              className="mt-4 h-40"
+              data={topModels}
+              index="key"
               categories={["spend"]}
               colors={["blue"]}
               yAxisWidth={200}

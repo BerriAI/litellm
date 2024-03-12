@@ -53,7 +53,7 @@ def claude_test_completion():
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
-            model="claude-instant-1",
+            model="claude-instant-1.2",
             messages=[{"content": "Hello, how are you?", "role": "user"}],
             max_tokens=10,
         )
@@ -63,7 +63,7 @@ def claude_test_completion():
 
         # USE CONFIG TOKENS
         response_2 = litellm.completion(
-            model="claude-instant-1",
+            model="claude-instant-1.2",
             messages=[{"content": "Hello, how are you?", "role": "user"}],
         )
         # Add any assertions here to check the response
@@ -74,7 +74,7 @@ def claude_test_completion():
 
         try:
             response_3 = litellm.completion(
-                model="claude-instant-1",
+                model="claude-instant-1.2",
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 n=2,
             )
@@ -473,6 +473,7 @@ def aleph_alpha_test_completion():
 #  Sagemaker
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def sagemaker_test_completion():
     litellm.SagemakerConfig(max_new_tokens=10)
     # litellm.set_verbose=True

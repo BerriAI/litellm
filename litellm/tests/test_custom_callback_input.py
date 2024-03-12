@@ -483,12 +483,12 @@ def test_chat_bedrock_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = litellm.completion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
         )
         # test streaming
         response = litellm.completion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
             stream=True,
         )
@@ -497,7 +497,7 @@ def test_chat_bedrock_stream():
         # test failure callback
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-v1",
+                model="bedrock/anthropic.claude-v2",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
                 aws_region_name="my-bad-region",
                 stream=True,
@@ -524,12 +524,12 @@ async def test_async_chat_bedrock_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
         )
         # test streaming
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-v1",
+            model="bedrock/anthropic.claude-v2",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
             stream=True,
         )
@@ -540,7 +540,7 @@ async def test_async_chat_bedrock_stream():
         ## test failure callback
         try:
             response = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v1",
+                model="bedrock/anthropic.claude-v2",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
                 aws_region_name="my-bad-key",
                 stream=True,
@@ -561,6 +561,7 @@ async def test_async_chat_bedrock_stream():
 
 
 ## Test Sagemaker + Async
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_async_chat_sagemaker_stream():
     try:
@@ -596,6 +597,81 @@ async def test_async_chat_sagemaker_stream():
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+
+## Test Vertex AI + Async
+import json
+import tempfile
+
+
+def load_vertex_ai_credentials():
+    # Define the path to the vertex_key.json file
+    print("loading vertex ai credentials")
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/vertex_key.json"
+
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+        # Write the updated content to the temporary file
+        json.dump(service_account_key_data, temp_file, indent=2)
+
+    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+
+
+@pytest.mark.asyncio
+async def test_async_chat_vertex_ai_stream():
+    try:
+        load_vertex_ai_credentials()
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        # test streaming
+        response = await litellm.acompletion(
+            model="gemini-pro",
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Hi 👋 - i'm async vertex_ai {uuid.uuid4()}",
+                }
+            ],
+            stream=True,
+        )
+        print(f"response: {response}")
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+            continue
+        print(f"customHandler.states: {customHandler.states}")
+        assert (
+            customHandler.states.count("async_success") == 1
+        )  # pre, post, success, pre, post, failure
+        assert len(customHandler.states) >= 3  # pre, post, success
     except Exception as e:
         pytest.fail(f"An exception occurred: {str(e)}")
 
@@ -897,6 +973,7 @@ def test_image_generation_openai():
 
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
+        time.sleep(2)
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
