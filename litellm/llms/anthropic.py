@@ -271,17 +271,14 @@ def completion(
                 0
             ].finish_reason
             # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
-            streaming_model_response.choices[0].index = model_response.choices[0].index
+            streaming_choice = litellm.utils.StreamingChoices()
+            streaming_choice.index = model_response.choices[0].index
             _tool_calls = []
             print_verbose(
                 f"type of model_response.choices[0]: {type(model_response.choices[0])}"
             )
-            print_verbose(
-                f"type of streaming_model_response.choices[0]: {type(streaming_model_response.choices[0])}"
-            )
-            if isinstance(model_response.choices[0], litellm.Choices) and isinstance(
-                streaming_model_response.choices[0], litellm.utils.StreamingChoices
-            ):
+            print_verbose(f"type of streaming_choice: {type(streaming_choice)}")
+            if isinstance(model_response.choices[0], litellm.Choices):
                 if getattr(
                     model_response.choices[0].message, "tool_calls", None
                 ) is not None and isinstance(
@@ -295,7 +292,8 @@ def completion(
                     role=model_response.choices[0].message.role,
                     tool_calls=_tool_calls,
                 )
-                streaming_model_response.choices[0].delta = delta_obj
+                streaming_choice.delta = delta_obj
+                streaming_model_response.choices = [streaming_choice]
                 completion_stream = model_response_iterator(
                     model_response=streaming_model_response
                 )
