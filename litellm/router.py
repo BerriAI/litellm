@@ -2204,7 +2204,7 @@ class Router:
             f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}"
         )
         if len(healthy_deployments) == 0:
-            raise ValueError("No models available")
+            raise ValueError(f"No healthy deployment available, passed model={model}")
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -2275,7 +2275,9 @@ class Router:
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, No deployment available"
             )
-            raise ValueError("No models available.")
+            raise ValueError(
+                f"No deployments available for selected model, passed model={model}"
+            )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
         )
