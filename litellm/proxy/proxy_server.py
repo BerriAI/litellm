@@ -141,6 +141,14 @@ import json
 import logging
 from typing import Union
 
+# import enterprise folder
+try:
+    # when using litellm cli
+    import litellm.proxy.enterprise as enterprise
+except:
+    # when using litellm docker image
+    import enterprise  # type: ignore
+
 ui_link = f"/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
@@ -1617,7 +1625,7 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "llamaguard_moderations"
                             ):
-                                from litellm.proxy.enterprise.enterprise_hooks.llama_guard import (
+                                from enterprise.enterprise_hooks.llama_guard import (
                                     _ENTERPRISE_LlamaGuard,
                                 )
 
@@ -1627,7 +1635,7 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "google_text_moderation"
                             ):
-                                from litellm.proxy.enterprise.enterprise_hooks.google_text_moderation import (
+                                from enterprise.enterprise_hooks.google_text_moderation import (
                                     _ENTERPRISE_GoogleTextModeration,
                                 )
 
@@ -1639,7 +1647,7 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "llmguard_moderations"
                             ):
-                                from litellm.proxy.enterprise.enterprise_hooks.llm_guard import (
+                                from enterprise.enterprise_hooks.llm_guard import (
                                     _ENTERPRISE_LLMGuard,
                                 )
 
@@ -1649,7 +1657,7 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "blocked_user_check"
                             ):
-                                from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+                                from enterprise.enterprise_hooks.blocked_user_list import (
                                     _ENTERPRISE_BlockedUserList,
                                 )
 
@@ -1659,7 +1667,7 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "banned_keywords"
                             ):
-                                from litellm.proxy.enterprise.enterprise_hooks.banned_keywords import (
+                                from enterprise.enterprise_hooks.banned_keywords import (
                                     _ENTERPRISE_BannedKeywords,
                                 )
 
@@ -4103,7 +4111,7 @@ async def view_spend_tags(
     ```
     """
 
-    from litellm.proxy.enterprise.utils import get_spend_by_tags
+    from enterprise.utils import get_spend_by_tags
 
     global prisma_client
     try:
@@ -4512,12 +4520,8 @@ async def global_spend_models(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def global_predict_spend_logs(request: Request):
-    try:
-        # when using litellm package
-        from litellm.proxy.enterprise.utils import _forecast_daily_cost
-    except:
-        # when using litellm docker image
-        from enterprise.utils import _forecast_daily_cost
+    from enterprise.utils import _forecast_daily_cost
+
     data = await request.json()
     data = data.get("data")
     return _forecast_daily_cost(data)
@@ -4975,7 +4979,7 @@ async def block_user(data: BlockUsers):
     }'
     ```
     """
-    from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+    from enterprise.enterprise_hooks.blocked_user_list import (
         _ENTERPRISE_BlockedUserList,
     )
 
@@ -5016,7 +5020,7 @@ async def unblock_user(data: BlockUsers):
     }'
     ```
     """
-    from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+    from enterprise.enterprise_hooks.blocked_user_list import (
         _ENTERPRISE_BlockedUserList,
     )
 
