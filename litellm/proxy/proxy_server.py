@@ -3099,8 +3099,7 @@ async def embeddings(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -3250,8 +3249,7 @@ async def image_generation(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -3414,7 +3412,7 @@ async def audio_transcriptions(
             )
         else:
             error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -3567,7 +3565,7 @@ async def moderations(
             )
         else:
             error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
