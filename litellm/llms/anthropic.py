@@ -4,7 +4,7 @@ from enum import Enum
 import requests, copy
 import time, uuid
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage, map_finish_reason
+from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
 import litellm
 from .prompt_templates.factory import (
     prompt_factory,
@@ -118,6 +118,7 @@ def completion(
     headers = validate_environment(api_key, headers)
     _is_function_call = False
     messages = copy.deepcopy(messages)
+    optional_params = copy.deepcopy(optional_params)
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
@@ -161,6 +162,8 @@ def completion(
         )  # add the anthropic tool calling prompt to the system prompt
         optional_params.pop("tools")
 
+    stream = optional_params.pop("stream", None)
+
     data = {
         "model": model,
         "messages": messages,
@@ -177,14 +180,18 @@ def completion(
             "headers": headers,
         },
     )
-
+    print_verbose(f"_is_function_call: {_is_function_call}")
     ## COMPLETION CALL
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if (
+        stream is not None and stream == True and _is_function_call == False
+    ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
+        print_verbose(f"makes anthropic streaming POST request")
+        data["stream"] = stream
         response = requests.post(
             api_base,
             headers=headers,
             data=json.dumps(data),
-            stream=optional_params["stream"],
+            stream=stream,
         )
 
         if response.status_code != 200:
@@ -255,6 +262,51 @@ def completion(
                 completion_response["stop_reason"]
             )
 
+        print_verbose(f"_is_function_call: {_is_function_call}; stream: {stream}")
+        if _is_function_call == True and stream is not None and stream == True:
+            print_verbose(f"INSIDE ANTHROPIC STREAMING TOOL CALLING CONDITION BLOCK")
+            # return an iterator
+            streaming_model_response = ModelResponse(stream=True)
+            streaming_model_response.choices[0].finish_reason = model_response.choices[
+                0
+            ].finish_reason
+            # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
+            streaming_choice = litellm.utils.StreamingChoices()
+            streaming_choice.index = model_response.choices[0].index
+            _tool_calls = []
+            print_verbose(
+                f"type of model_response.choices[0]: {type(model_response.choices[0])}"
+            )
+            print_verbose(f"type of streaming_choice: {type(streaming_choice)}")
+            if isinstance(model_response.choices[0], litellm.Choices):
+                if getattr(
+                    model_response.choices[0].message, "tool_calls", None
+                ) is not None and isinstance(
+                    model_response.choices[0].message.tool_calls, list
+                ):
+                    for tool_call in model_response.choices[0].message.tool_calls:
+                        _tool_call = {**tool_call.dict(), "index": 0}
+                        _tool_calls.append(_tool_call)
+                delta_obj = litellm.utils.Delta(
+                    content=getattr(model_response.choices[0].message, "content", None),
+                    role=model_response.choices[0].message.role,
+                    tool_calls=_tool_calls,
+                )
+                streaming_choice.delta = delta_obj
+                streaming_model_response.choices = [streaming_choice]
+                completion_stream = model_response_iterator(
+                    model_response=streaming_model_response
+                )
+                print_verbose(
+                    f"Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
+                )
+                return CustomStreamWrapper(
+                    completion_stream=completion_stream,
+                    model=model,
+                    custom_llm_provider="cached_response",
+                    logging_obj=logging_obj,
+                )
+
         ## CALCULATING USAGE
         prompt_tokens = completion_response["usage"]["input_tokens"]
         completion_tokens = completion_response["usage"]["output_tokens"]
@@ -269,6 +321,10 @@ def completion(
         )
         model_response.usage = usage
         return model_response
+
+
+def model_response_iterator(model_response):
+    yield model_response
 
 
 def embedding():
