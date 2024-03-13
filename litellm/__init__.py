@@ -191,39 +191,28 @@ output_parse_pii: bool = False
 #############################################
 
 
-def get_model_cost_map(url: str):
-    if (
-        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
-        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
-    ):
-        import importlib.resources
-        import json
-        
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
-
+def load_json_from_file(file_path):
     try:
-        with requests.get(
-            url, timeout=5
-        ) as response:  # set a 5 second timeout for the get request
-            response.raise_for_status()  # Raise an exception if the request is unsuccessful
-            content = response.json()
-            return content
+        with open(file_path, 'r') as file:
+            return json.load(file)
     except Exception as e:
-        import importlib.resources
-        import json
+        print(f"Error loading JSON from file: {e}")
+        return None
 
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+# Specify the path to your backup JSON file
+backup_file_path = "path/to/your/local/model_prices_and_context_window_backup.json"
 
+# Load the model cost map from the backup file
+model_cost_map = load_json_from_file(backup_file_path)
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+# If model_cost_map is None, it means loading from the file failed.
+if model_cost_map is None:
+    print("Failed to load model cost map from backup file.")
+else:
+    # Continue with using model_cost_map as needed
+    print("Model cost map loaded successfully from backup file.")
+
+model_cost = model_cost_map
 custom_prompt_dict: Dict[str, dict] = {}
 
 
@@ -307,7 +296,7 @@ for key, value in model_cost.items():
         deepinfra_models.append(key)
     elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
-    
+
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [

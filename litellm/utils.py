@@ -3678,7 +3678,7 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     else:
-        print('MODEL COST REF', model_cost_ref)
+        print('MODEL COST REF CORN', model_cost_ref)
         # if model is not in model_prices_and_context_window.json. Raise an exception-let users know
         error_str = f"CHICKEN Model not in model_prices_and_context_window.json. You passed model={model}. Register pricing for model - https://docs.litellm.ai/docs/proxy/custom_pricing\n"
         raise litellm.exceptions.NotFoundError(  # type: ignore
