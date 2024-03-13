@@ -270,8 +270,8 @@ def completion(
             streaming_model_response.choices[0].finish_reason = model_response.choices[
                 0
             ].finish_reason
+            # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
             streaming_model_response.choices[0].index = model_response.choices[0].index
-            streaming_model_response.choices = [litellm.utils.StreamingChoices()]
             _tool_calls = []
             print_verbose(
                 f"type of model_response.choices[0]: {type(model_response.choices[0])}"
