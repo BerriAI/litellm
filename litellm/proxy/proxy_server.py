@@ -1828,8 +1828,6 @@ class ProxyConfig:
                 custom_db_client = DBClient(
                     custom_db_args=database_args, custom_db_type=database_type
                 )
-            ## COST TRACKING ##
-            cost_tracking()
             ## ADMIN UI ACCESS ##
             ui_access_mode = general_settings.get(
                 "ui_access_mode", "all"
@@ -2383,6 +2381,10 @@ async def startup_event():
         # if not, assume it's a json string
         worker_config = json.loads(os.getenv("WORKER_CONFIG"))
         await initialize(**worker_config)
+
+    ## COST TRACKING ##
+    cost_tracking()
+
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
     if use_background_health_checks:
