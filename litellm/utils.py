@@ -480,12 +480,12 @@ class ModelResponse(OpenAIObject):
         object=None,
         system_fingerprint=None,
         usage=None,
-        stream=False,
+        stream=None,
         response_ms=None,
         hidden_params=None,
         **params,
     ):
-        if stream:
+        if stream is not None and stream == True:
             object = "chat.completion.chunk"
             choices = [StreamingChoices()]
         else:
