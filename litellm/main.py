@@ -1546,6 +1546,7 @@ def completion(
                 )
                 return response
             response = model_response
+            print('RESPONSE', response)
         elif custom_llm_provider == "palm":
             palm_api_key = api_key or get_secret("PALM_API_KEY") or litellm.api_key
 
