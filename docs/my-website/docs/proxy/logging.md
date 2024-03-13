@@ -678,34 +678,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Your logs should be available on the specified s3 Bucket
 
-## Team-based Logging 
-
-Set success callbacks (e.g. langfuse), for a specific team-id. 
-
-```yaml
-litellm_settings:
-  default_team_settings: 
-    - team_id: my-secret-project
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2
-      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_2
-    - team_id: ishaans-secret-project
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_3
-      langfuse_secret: os.environ/LANGFUSE_SECRET_3
-```
-
-Now, when you [generate keys](./virtual_keys.md) for this team-id 
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--D '{"team_id": "ishaans-secret-project"}'
-```
-
-All requests made with these keys will log data to their team-specific logging.
-
 ## Logging Proxy Input/Output - DynamoDB
 
 We will use the `--config` to set 
