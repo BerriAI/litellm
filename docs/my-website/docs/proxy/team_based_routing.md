@@ -1,8 +1,9 @@
-# 👥 Team-based Routing 
+# 👥 Team-based Routing + Logging
 
+## Routing
 Route calls to different model groups based on the team-id
 
-## Config with model group 
+### Config with model group 
 
 Create a config.yaml with 2 model groups + connected postgres db
 
@@ -32,7 +33,7 @@ Start proxy
 litellm --config /path/to/config.yaml
 ```
 
-## Create Team with Model Alias
+### Create Team with Model Alias
 
 ```bash
 curl --location 'http://0.0.0.0:4000/team/new' \
@@ -46,7 +47,7 @@ curl --location 'http://0.0.0.0:4000/team/new' \
 # Returns team_id: my-team-id
 ```
 
-## Create Team Key 
+### Create Team Key 
 
 ```bash 
 curl --location 'http://localhost:4000/key/generate' \
@@ -57,7 +58,7 @@ curl --location 'http://localhost:4000/key/generate' \
 }'
 ```
 
-## Call Model with alias 
+### Call Model with alias 
 
 ```bash
 curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
@@ -69,3 +70,36 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
   "user": "usha"
 }'
 ```
+
+
+## Logging / Caching
+
+Turn on/off logging and caching for a specific team id. 
+
+**Example:**
+
+This config would send langfuse logs to 2 different langfuse projects, based on the team id 
+
+```yaml
+litellm_settings:
+  default_team_settings: 
+    - team_id: my-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
+    - team_id: ishaans-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
+      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
+```
+
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-D '{"team_id": "ishaans-secret-project"}'
+```
+
+All requests made with these keys will log data to their team-specific logging.
