@@ -262,7 +262,9 @@ def completion(
                 completion_response["stop_reason"]
             )
 
+        print_verbose(f"_is_function_call: {_is_function_call}; stream: {stream}")
         if _is_function_call == True and stream is not None and stream == True:
+            print_verbose(f"INSIDE ANTHROPIC STREAMING TOOL CALLING CONDITION BLOCK")
             # return an iterator
             streaming_model_response = ModelResponse(stream=True)
             streaming_model_response.choices[0].finish_reason = model_response.choices[
@@ -270,6 +272,12 @@ def completion(
             ].finish_reason
             streaming_model_response.choices[0].index = model_response.choices[0].index
             _tool_calls = []
+            print_verbose(
+                f"type of model_response.choices[0]: {type(model_response.choices[0])}"
+            )
+            print_verbose(
+                f"type of streaming_model_response.choices[0]: {type(streaming_model_response.choices[0])}"
+            )
             if isinstance(model_response.choices[0], litellm.Choices) and isinstance(
                 streaming_model_response.choices[0], litellm.utils.StreamingChoices
             ):
