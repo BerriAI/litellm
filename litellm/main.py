@@ -1144,7 +1144,11 @@ def completion(
                     logging_obj=logging,
                     headers=headers,
                 )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if (
+                "stream" in optional_params
+                and optional_params["stream"] == True
+                and not isinstance(response, CustomStreamWrapper)
+            ):
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     response,

@@ -480,12 +480,12 @@ class ModelResponse(OpenAIObject):
         object=None,
         system_fingerprint=None,
         usage=None,
-        stream=False,
+        stream=None,
         response_ms=None,
         hidden_params=None,
         **params,
     ):
-        if stream:
+        if stream is not None and stream == True:
             object = "chat.completion.chunk"
             choices = [StreamingChoices()]
         else:
@@ -9471,14 +9471,18 @@ class CustomStreamWrapper:
     def __next__(self):
         try:
             while True:
-                if isinstance(self.completion_stream, str) or isinstance(
-                    self.completion_stream, bytes
+                if (
+                    isinstance(self.completion_stream, str)
+                    or isinstance(self.completion_stream, bytes)
+                    or isinstance(self.completion_stream, ModelResponse)
                 ):
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
-                    print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
+                    print_verbose(
+                        f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
+                    )
                     response: Optional[ModelResponse] = self.chunk_creator(chunk=chunk)
                     print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
