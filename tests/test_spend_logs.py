@@ -114,7 +114,7 @@ async def test_spend_logs():
 
 
 async def get_predict_spend_logs(session):
-    url = f"http://0.0.0.0:4035/global/predict/spend/logs"
+    url = f"http://0.0.0.0:4000/global/predict/spend/logs"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "data": [
