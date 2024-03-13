@@ -169,10 +169,42 @@ If any call is made to proxy with this user id, it'll be rejected - use this if 
 ```yaml
 litellm_settings: 
      callbacks: ["blocked_user_check"] 
-     blocked_user_id_list: ["user_id_1", "user_id_2", ...]  # can also be a .txt filepath e.g. `/relative/path/blocked_list.txt` 
+     blocked_user_list: ["user_id_1", "user_id_2", ...]  # can also be a .txt filepath e.g. `/relative/path/blocked_list.txt` 
 ```
 
 ### How to test
+
+<Tabs>
+
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+Set `user=<user_id>` to the user id of the user who might have opted out.
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    user="user_id_1"
+)
+
+print(response)
+```
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
 
 ```bash 
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -185,10 +217,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
           "content": "what llm are you"
         }
       ],
-      "user_id": "user_id_1" # this is also an openai supported param 
+      "user": "user_id_1" # this is also an openai supported param 
     }
 '
 ```
+
+</TabItem>
+</Tabs>
 
 :::info 
 
