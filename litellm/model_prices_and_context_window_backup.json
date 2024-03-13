@@ -2042,6 +2042,18 @@
         "litellm_provider": "together_ai",
         "mode": "chat"
     },
+    "upstage/SOLAR-0-70b-16bit": {
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "together_ai",
+        "mode": "chat"
+    },
+    "WizardLM/WizardLM-70B-V1.0": {
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "together_ai",
+        "mode": "chat"
+    },
     "ollama/llama2": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.0,

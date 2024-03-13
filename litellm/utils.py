@@ -3583,7 +3583,7 @@ def cost_per_token(
     model_cost_ref = litellm.model_cost
     model_with_provider = model
     if custom_llm_provider is not None:
-        model_with_provider = custom_llm_provider + "/" + model
+        model_with_provider = model
         if region_name is not None:
             model_with_provider_and_region = (
                 f"{custom_llm_provider}/{region_name}/{model}"
