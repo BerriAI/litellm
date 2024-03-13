@@ -11,6 +11,7 @@ jobs:
       - name: Run Load Test
         uses: apardo04/locust-github-action@master
         with:
+          LOCUSTFILE: ".github/workflows/locustfile.py"
           URL:  "https://exampleopenaiendpoint-production.up.railway.app/"
           USERS: "5"
           RATE: "5"
