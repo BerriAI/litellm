@@ -137,6 +137,8 @@ def mistral_api_pt(messages):
                     return messages
                 elif c["type"] == "text" and isinstance(c["text"], str):
                     texts += c["text"]
+        elif isinstance(m["content"], str):
+            texts = m["content"]
         new_m = {"role": m["role"], "content": texts}
         new_messages.append(new_m)
     return new_messages
