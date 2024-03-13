@@ -7,6 +7,7 @@ from typing import Callable, Optional
 from litellm.utils import ModelResponse, Choices, Message, Usage
 import litellm
 import httpx
+from .prompt_templates.factory import cohere_message_pt
 
 
 class CohereError(Exception):
@@ -116,6 +117,75 @@ def validate_environment(api_key):
     return headers
 
 
+def translate_openai_tool_to_cohere(openai_tool):
+    # cohere tools look like this
+    """
+    {
+       "name": "query_daily_sales_report",
+       "description": "Connects to a database to retrieve overall sales volumes and sales information for a given day.",
+       "parameter_definitions": {
+           "day": {
+               "description": "Retrieves sales data for this day, formatted as YYYY-MM-DD.",
+               "type": "str",
+               "required": True
+           }
+       }
+    }
+    """
+
+    # OpenAI tools look like this
+    """
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+    """
+    cohere_tool = {
+        "name": openai_tool["function"]["name"],
+        "description": openai_tool["function"]["description"],
+        "parameter_definitions": {},
+    }
+
+    for param_name, param_def in openai_tool["function"]["parameters"][
+        "properties"
+    ].items():
+        required_params = (
+            openai_tool.get("function", {}).get("parameters", {}).get("required", [])
+        )
+        cohere_param_def = {
+            "description": param_def.get("description", ""),
+            "type": param_def.get("type", ""),
+            "required": param_name in required_params,
+        }
+        cohere_tool["parameter_definitions"][param_name] = cohere_param_def
+
+    return cohere_tool
+
+
+def construct_cohere_tool(tools=None):
+    if tools is None:
+        tools = []
+    cohere_tools = []
+    for tool in tools:
+        cohere_tool = translate_openai_tool_to_cohere(tool)
+        cohere_tools.append(cohere_tool)
+    return cohere_tools
+
+
 def completion(
     model: str,
     messages: list,
@@ -132,7 +202,7 @@ def completion(
     headers = validate_environment(api_key)
     completion_url = api_base
     model = model
-    prompt = " ".join(message["content"] for message in messages)
+    prompt, tool_results = cohere_message_pt(messages=messages)
 
     ## Load Config
     config = litellm.CohereConfig.get_config()
@@ -141,6 +211,14 @@ def completion(
             k not in optional_params
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
+
+    ## Handle Tool Calling
+    if "tools" in optional_params:
+        _is_function_call = True
+        cohere_tools = construct_cohere_tool(tools=optional_params["tools"])
+        optional_params["tools"] = cohere_tools
+    if len(tool_results) > 0:
+        optional_params["tool_results"] = tool_results
 
     data = {
         "model": model,
@@ -186,6 +264,30 @@ def completion(
             model_response.choices[0].message.content = completion_response["text"]  # type: ignore
         except Exception as e:
             raise CohereError(message=response.text, status_code=response.status_code)
+
+        ## Tool calling response
+        cohere_tools_response = completion_response.get("tool_calls", None)
+        if cohere_tools_response is not None and cohere_tools_response is not []:
+            # convert cohere_tools_response to OpenAI response format
+            tool_calls = []
+            for tool in cohere_tools_response:
+                function_name = tool.get("name", "")
+                generation_id = tool.get("generation_id", "")
+                parameters = tool.get("parameters", {})
+                tool_call = {
+                    "id": f"call_{generation_id}",
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                        "arguments": json.dumps(parameters),
+                    },
+                }
+                tool_calls.append(tool_call)
+            _message = litellm.Message(
+                tool_calls=tool_calls,
+                content=None,
+            )
+            model_response.choices[0].message = _message  # type: ignore
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
         billed_units = completion_response.get("meta", {}).get("billed_units", {})
