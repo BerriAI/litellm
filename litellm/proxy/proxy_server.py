@@ -171,6 +171,15 @@ class ProxyException(Exception):
         self.param = param
         self.code = code
 
+        # rules for proxyExceptions
+        # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+        # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
+        if (
+            "No healthy deployment available" in self.message
+            or "No deployments available" in self.message
+        ):
+            self.code = 429
+
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
         return {
@@ -2919,10 +2928,7 @@ async def chat_completion(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
-        else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
-
+        error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
