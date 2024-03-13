@@ -3643,7 +3643,6 @@ def cost_per_token(
             f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
-        
     elif "ft:gpt-3.5-turbo" in model:
         print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
@@ -3852,12 +3851,10 @@ def completion_cost(
         if (
             "togethercomputer" in model
             or "together_ai" in model
-            or "together" in model
             or custom_llm_provider == "together_ai"
         ):
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-            print(f"TOGETHER AI MODEL: {model}")
             model = get_model_params_and_category(model)
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
