@@ -9,6 +9,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v1
       - name: Run Load Test
+        id: locust_run
         uses: apardo04/locust-github-action@master
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
@@ -16,3 +17,6 @@ jobs:
           USERS: "5"
           RATE: "5"
           RUNTIME: "10s"
+      - name: Echo Load Test Output
+        run: |
+          echo "Load Test Output: ${{ steps.locust_run.outputs }}"
