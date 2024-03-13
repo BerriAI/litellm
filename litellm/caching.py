@@ -99,11 +99,11 @@ def canonical_cache_key(*args, **kwargs) -> Dict[str, Any]:
     }
 
 class CanonicalCache(BaseCache):
-    def __init__(self, host: str | None,  apikey: str):
+    def __init__(self, host: Optional[str],  api_key: str):
         from litellm._canonical import CanonicalClient
-        self.client = CanonicalClient( host=host, apikey=apikey)
+        self.client = CanonicalClient( host=host, api_key=api_key)
 
-    def set_cache(self, key: str | None, value: Dict[str, Any], **kwargs):
+    def set_cache(self, key: Optional[str], value: Dict[str, Any], **kwargs):
         try:
             self.client.set(key, value)
         except Exception as e:
@@ -111,7 +111,7 @@ class CanonicalCache(BaseCache):
                 f"LiteLLM Caching: set_cache() - Got exception from CANONICAL : {str(e)}"
             )
 
-    async def async_set_cache(self, key: str | None, value: Dict[str, Any], **kwargs):
+    async def async_set_cache(self, key: Optional[str], value: Dict[str, Any], **kwargs):
         try:
             await self.client.async_set(key, value)
         except Exception as e:
@@ -119,7 +119,7 @@ class CanonicalCache(BaseCache):
                 f"LiteLLM Caching: async_set_cache() - Got exception from CANONICAL : {e}"
             )
 
-    def get_cache(self, key: Dict[str, Any], **kwargs) -> str | None:
+    def get_cache(self, key: Dict[str, Any], **kwargs) -> Optional[str]:
         try:
             return self.client.get(key)
         except Exception as e:
@@ -127,7 +127,7 @@ class CanonicalCache(BaseCache):
                 f"LiteLLM Caching: get_cache() - Got exception from CANONICAL : {str(e)}"
             )
 
-    async def async_get_cache(self, key: Dict[str, Any], **kwargs) -> str | None:
+    async def async_get_cache(self, key: Dict[str, Any], **kwargs) -> Optional[str]:
         try:
             return await self.client.async_get(key)
         except Exception as e:

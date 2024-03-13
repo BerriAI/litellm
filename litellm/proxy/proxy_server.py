@@ -1581,6 +1581,11 @@ class ProxyConfig:
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                     litellm.cache = Cache(**cache_params)
+                    # The canonical cache uses a custom cache key function, identify if
+                    # Canonical is being used and set the cache key function
+                    if cache_type == "canonical":
+                        from litellm.caching import canonical_cache_key
+                        litellm.cache.get_cache_key = canonical_cache_key
                     print(  # noqa
                         f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                     )
@@ -3412,7 +3417,7 @@ async def moderations(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies. 
+    The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
 
     Quick Start
     ```
@@ -3581,7 +3586,7 @@ async def generate_key_fn(
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[dict] - key-specific model budget in USD. Example - {"text-davinci-002": 0.5, "gpt-3.5-turbo": 0.5}. IF null or {} then no model specific budget.
 
-    Examples: 
+    Examples:
 
     1. Allow users to turn on/off pii masking
 
@@ -3820,7 +3825,7 @@ async def info_key_fn_v2(
         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
     Returns:
         Dict containing the key and its associated information
-    
+
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:8000/key/info" \
@@ -3887,7 +3892,7 @@ async def info_key_fn(
         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
     Returns:
         Dict containing the key and its associated information
-    
+
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
@@ -3947,7 +3952,7 @@ async def spend_key_fn():
     """
     View all keys created, ordered by spend
 
-    Example Request: 
+    Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/keys" \
 -H "Authorization: Bearer sk-1234"
@@ -3984,7 +3989,7 @@ async def spend_user_fn(
     """
     View all users created, ordered by spend
 
-    Example Request: 
+    Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users" \
 -H "Authorization: Bearer sk-1234"
@@ -5051,21 +5056,21 @@ async def new_team(
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
 
-    _deprecated_params: 
-    - admins: list - A list of user_id's for the admin role 
-    - users: list - A list of user_id's for the user role 
+    _deprecated_params:
+    - admins: list - A list of user_id's for the admin role
+    - users: list - A list of user_id's for the user role
 
     Example Request:
     ```
     curl --location 'http://0.0.0.0:8000/team/new' \
-    
+
     --header 'Authorization: Bearer sk-1234' \
-    
+
     --header 'Content-Type: application/json' \
-    
+
     --data '{
       "team_alias": "my-new-team_2",
-      "members_with_roles": [{"role": "admin", "user_id": "user-1234"}, 
+      "members_with_roles": [{"role": "admin", "user_id": "user-1234"},
         {"role": "user", "user_id": "user-2434"}]
     }'
 
@@ -5191,17 +5196,17 @@ async def update_team(
 ):
     """
     [BETA]
-    [RECOMMENDED] - use `/team/member_add` to add new team members instead 
+    [RECOMMENDED] - use `/team/member_add` to add new team members instead
 
     You can now update team budget / rate limits via /team/update
 
     ```
     curl --location 'http://0.0.0.0:8000/team/update' \
-    
+
     --header 'Authorization: Bearer sk-1234' \
-        
+
     --header 'Content-Type: application/json' \
-    
+
     --data-raw '{
         "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
         "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}, {"role": "user", "user_id": "krrish247652@berri.ai"}]
@@ -5294,7 +5299,7 @@ async def team_member_add(
     data: TeamMemberAddRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """ 
+    """
     [BETA]
 
     Add new members (either via user_email or user_id) to a team
@@ -5303,11 +5308,11 @@ async def team_member_add(
 
     ```
     curl -X POST 'http://0.0.0.0:8000/team/update' \
-    
+
     -H 'Authorization: Bearer sk-1234' \
-        
+
     -H 'Content-Type: application/json' \
-    
+
     -D '{
         "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
         "member": {"role": "user", "user_id": "krrish247652@berri.ai"}
@@ -5387,7 +5392,7 @@ async def team_member_delete(
     data: TeamMemberDeleteRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """ 
+    """
     [BETA]
 
     delete members (either via user_email or user_id) from a team
@@ -5395,11 +5400,11 @@ async def team_member_delete(
     If user doesn't exist, an exception will be raised
     ```
     curl -X POST 'http://0.0.0.0:8000/team/update' \
-    
+
     -H 'Authorization: Bearer sk-1234' \
-        
+
     -H 'Content-Type: application/json' \
-    
+
     -D '{
         "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
         "member": {"role": "user", "user_id": "krrish247652@berri.ai"}
@@ -5501,11 +5506,11 @@ async def delete_team(
 
     ```
     curl --location 'http://0.0.0.0:8000/team/delete' \
-        
+
     --header 'Authorization: Bearer sk-1234' \
-        
+
     --header 'Content-Type: application/json' \
-    
+
     --data-raw '{
         "team_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
     }'
@@ -5626,27 +5631,27 @@ async def new_organization(
 
     Only admins can create orgs.
 
-    # Parameters 
+    # Parameters
 
     - `organization_alias`: *str* = The name of the organization.
     - `models`: *List* = The models the organization has access to.
-    - `budget_id`: *Optional[str]* = The id for a budget (tpm/rpm/max budget) for the organization. 
-    ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ### 
+    - `budget_id`: *Optional[str]* = The id for a budget (tpm/rpm/max budget) for the organization.
+    ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - `max_budget`: *Optional[float]* = Max budget for org
     - `tpm_limit`: *Optional[int]* = Max tpm limit for org
     - `rpm_limit`: *Optional[int]* = Max rpm limit for org
     - `model_max_budget`: *Optional[dict]* = Max budget for a specific model
     - `budget_duration`: *Optional[str]* = Frequency of reseting org budget
 
-    Case 1: Create new org **without** a budget_id 
+    Case 1: Create new org **without** a budget_id
 
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
-    
+
     --header 'Authorization: Bearer sk-1234' \
-    
+
     --header 'Content-Type: application/json' \
-    
+
     --data '{
         "organization_alias": "my-secret-org",
         "models": ["model1", "model2"],
@@ -5656,15 +5661,15 @@ async def new_organization(
 
     ```
 
-    Case 2: Create new org **with** a budget_id 
+    Case 2: Create new org **with** a budget_id
 
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
-    
+
     --header 'Authorization: Bearer sk-1234' \
-    
+
     --header 'Content-Type: application/json' \
-    
+
     --data '{
         "organization_alias": "my-secret-org",
         "models": ["model1", "model2"],
@@ -6204,7 +6209,7 @@ async def async_queue_request(
 ):
     global general_settings, user_debug, proxy_logging_obj
     """
-    v2 attempt at a background worker to handle queuing. 
+    v2 attempt at a background worker to handle queuing.
 
     Just supports /chat/completion calls currently.
 

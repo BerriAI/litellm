@@ -173,6 +173,7 @@ litellm_settings:
   cache: True # set cache responses to True
   cache_params:
     type: "canonical"
+    api_key: os.environ/CANONICAL_CACHE_API_KEY
     supported_call_types: ["acompletion", "completion"] # defaults to all litellm call types
 ```
 
