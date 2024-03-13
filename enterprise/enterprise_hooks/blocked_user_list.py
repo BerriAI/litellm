@@ -66,12 +66,13 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
             - check if user id part of blocked list
             """
             self.print_verbose(f"Inside Blocked User List Pre-Call Hook")
-            if "user_id" in data:
-                if data["user_id"] in self.blocked_user_list:
+            if "user_id" in data or "user" in data:
+                user = data.get("user_id", data.get("user", ""))
+                if user in self.blocked_user_list:
                     raise HTTPException(
                         status_code=400,
                         detail={
-                            "error": f"User blocked from making LLM API Calls. User={data['user_id']}"
+                            "error": f"User blocked from making LLM API Calls. User={user}"
                         },
                     )
         except HTTPException as e:
