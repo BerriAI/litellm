@@ -191,18 +191,41 @@ output_parse_pii: bool = False
 #############################################
 
 
-def get_model_cost_map():
-    import importlib.resources
-    import json
+def get_model_cost_map(url: str):
+    if (
+        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
+        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
+    ):
+        import importlib.resources
+        import json
+        
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window_backup.json"
+        ) as f:
+            content = json.load(f)
+            return content
 
-    with importlib.resources.open_text("litellm", "model_prices_and_context_window_backup.json") as f:
-        content = json.load(f)
-        return content
+    try:
+        with requests.get(
+            url, timeout=5
+        ) as response:  # set a 5 second timeout for the get request
+            response.raise_for_status()  # Raise an exception if the request is unsuccessful
+            content = response.json()
+            return content
+    except Exception as e:
+        import importlib.resources
+        import json
 
-model_cost = get_model_cost_map()
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window_backup.json"
+        ) as f:
+            content = json.load(f)
+            return content
+
+
+model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict: Dict[str, dict] = {}
 
-print('MODEL COST MAP:', model_cost)
 
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
