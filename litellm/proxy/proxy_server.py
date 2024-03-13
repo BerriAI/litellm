@@ -1665,6 +1665,18 @@ class ProxyConfig:
 
                                 banned_keywords_obj = _ENTERPRISE_BannedKeywords()
                                 imported_list.append(banned_keywords_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "detect_prompt_injection"
+                            ):
+                                from litellm.proxy.enterprise.enterprise_hooks.prompt_injection_detection import (
+                                    _ENTERPRISE_PromptInjectionDetection,
+                                )
+
+                                prompt_injection_detection_obj = (
+                                    _ENTERPRISE_PromptInjectionDetection()
+                                )
+                                imported_list.append(prompt_injection_detection_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(

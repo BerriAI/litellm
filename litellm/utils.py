@@ -5301,6 +5301,40 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
         ]
 
 
+def get_formatted_prompt(
+    data: dict,
+    call_type: Literal[
+        "completion",
+        "embedding",
+        "image_generation",
+        "audio_transcription",
+        "moderation",
+    ],
+) -> str:
+    """
+    Extracts the prompt from the input data based on the call type.
+
+    Returns a string.
+    """
+    prompt = ""
+    if call_type == "completion":
+        for m in data["messages"]:
+            if "content" in m and isinstance(m["content"], str):
+                prompt += m["content"]
+    elif call_type == "embedding" or call_type == "moderation":
+        if isinstance(data["input"], str):
+            prompt = data["input"]
+        elif isinstance(data["input"], list):
+            for m in data["input"]:
+                prompt += m
+    elif call_type == "image_generation":
+        prompt = data["prompt"]
+    elif call_type == "audio_transcription":
+        if "prompt" in data:
+            prompt = data["prompt"]
+    return prompt
+
+
 def get_llm_provider(
     model: str,
     custom_llm_provider: Optional[str] = None,
