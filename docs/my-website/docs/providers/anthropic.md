@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports
 
-- `claude-3` (`claude-3-opus-20240229`, `claude-3-sonnet-20240229`)
+- `claude-3` (`claude-3-haiku-20240307`, `claude-3-opus-20240229`, `claude-3-sonnet-20240229`)
 - `claude-2`
 - `claude-2.1`
 - `claude-instant-1.2`
@@ -144,6 +144,7 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-3-haiku  | `completion('claude-3-haiku-20240307', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-opus  | `completion('claude-3-opus-20240229', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-sonnet  | `completion('claude-3-sonnet-20240229', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-2.1  | `completion('claude-2.1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
