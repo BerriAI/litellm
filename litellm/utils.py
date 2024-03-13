@@ -3206,6 +3206,8 @@ def get_model_params_and_category(model_name):
         params_match = params_match.group(1)
         params_match = params_match.replace("b", "")
         params_billion = float(params_match)
+
+        print (f"params_billion: {params_billion} MODEL NAME:{model_name.lower()} PARAMS MATCH: {params_match}")
         # Determine the category based on the number of parameters
         if params_billion <= 3.0:
             category = "together-ai-up-to-3b"
@@ -3593,7 +3595,7 @@ def cost_per_token(
         model = model_with_provider
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-    print(f"LOOKING UP MODEL {model} REF MODEL: {model_cost_ref.get(model)}")
+    print(f"LOOKING UP MODEL {model} MODEL WITH PROVIDER: {model_with_provider} MODEL IN REF?:{model in model_cost_ref}")
     if model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
