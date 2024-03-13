@@ -4512,8 +4512,12 @@ async def global_spend_models(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def global_predict_spend_logs(request: Request):
-    from litellm.proxy.enterprise.utils import _forecast_daily_cost
-
+    try:
+        # when using litellm package
+        from litellm.proxy.enterprise.utils import _forecast_daily_cost
+    except:
+        # when using litellm docker image
+        from enterprise.utils import _forecast_daily_cost
     data = await request.json()
     data = data.get("data")
     return _forecast_daily_cost(data)
