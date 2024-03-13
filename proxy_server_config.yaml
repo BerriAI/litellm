@@ -33,6 +33,10 @@ model_list:
   - model_name: openai-dall-e-3
     litellm_params:
       model: dall-e-3
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/chat/completions/
 
 litellm_settings:
   drop_params: True
