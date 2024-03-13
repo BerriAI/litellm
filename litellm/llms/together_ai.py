@@ -128,7 +128,6 @@ def completion(
             optional_params[k] = v
 
     print_verbose(f"CUSTOM PROMPT DICT: {custom_prompt_dict}; model: {model}")
-    print(f"CUSTOM PROMPT DICT: {custom_prompt_dict}; model: {model}")
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]

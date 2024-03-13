@@ -3201,14 +3201,12 @@ def get_model_params_and_category(model_name):
     params_match = re.search(
         r"(\d+b)", model_name
     )  # catch all decimals like 3b, 70b, etc
-    print(f"model_name: {model_name} params_match: {params_match}")
     category = None
     if params_match != None:
         params_match = params_match.group(1)
         params_match = params_match.replace("b", "")
         params_billion = float(params_match)
 
-        print (f"params_billion: {params_billion} MODEL NAME:{model_name.lower()} PARAMS MATCH: {params_match}")
         # Determine the category based on the number of parameters
         if params_billion <= 3.0:
             category = "together-ai-up-to-3b"

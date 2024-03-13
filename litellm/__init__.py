@@ -198,7 +198,6 @@ def get_model_cost_map(url: str):
     ):
         import importlib.resources
         import json
-        
         with importlib.resources.open_text(
             "litellm", "model_prices_and_context_window_backup.json"
         ) as f:
@@ -308,7 +307,6 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
     
-
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
