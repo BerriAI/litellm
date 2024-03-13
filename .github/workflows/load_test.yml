@@ -12,7 +12,7 @@ jobs:
         uses: apardo04/locust-github-action@master
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
-          URL:  "https://exampleopenaiendpoint-production.up.railway.app/"
+          URL:  "https://litellm-api.up.railway.app/"
           USERS: "5"
           RATE: "5"
           RUNTIME: "10s"
