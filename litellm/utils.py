@@ -3593,7 +3593,7 @@ def cost_per_token(
         model = model_with_provider
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-    print(f"LOOKING UP MODEL {model} REF MODEL: {model_cost_ref.get(model)})
+    print(f"LOOKING UP MODEL {model} REF MODEL: {model_cost_ref.get(model)}")
     if model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
