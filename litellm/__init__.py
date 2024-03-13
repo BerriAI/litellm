@@ -200,7 +200,7 @@ def load_json_from_file(file_path):
         return None
 
 # Specify the path to your backup JSON file
-backup_file_path = "path/to/your/local/model_prices_and_context_window_backup.json"
+backup_file_path = "./model_prices_and_context_window_backup.json"
 
 # Load the model cost map from the backup file
 model_cost_map = load_json_from_file(backup_file_path)
