@@ -33,6 +33,7 @@ class LangFuseLogger:
             host=self.langfuse_host,
             release=self.langfuse_release,
             debug=self.langfuse_debug,
+            flush_interval=1,  # flush interval in seconds
         )
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
@@ -147,8 +148,6 @@ class LangFuseLogger:
                     input,
                     response_obj,
                 )
-
-            self.Langfuse.flush()
             print_verbose(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
