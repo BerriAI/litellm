@@ -652,6 +652,65 @@ def parse_xml_params(xml_content):
 ###
 
 
+def convert_openai_message_to_cohere_tool_result(message):
+    """
+    OpenAI message with a tool result looks like:
+    {
+            "tool_call_id": "tool_1",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": {"location": "San Francisco, CA", "unit": "fahrenheit", "temperature": "72"},
+    },
+    """
+
+    """
+    Cohere tool_results look like:
+    {
+       "call": {
+           "name": "query_daily_sales_report",
+           "parameters": {
+               "day": "2023-09-29"
+           },
+           "generation_id": "4807c924-9003-4d6b-8069-eda03962c465"
+       },
+       "outputs": [
+           {
+               "date": "2023-09-29",
+               "summary": "Total Sales Amount: 10000, Total Units Sold: 250"
+           }
+       ]
+   },
+    """
+
+    tool_call_id = message.get("tool_call_id")
+    name = message.get("name")
+    content = message.get("content")
+
+    # Create the Cohere tool_result dictionary
+    cohere_tool_result = {
+        "call": {
+            "name": name,
+            "parameters": {"location": "San Francisco, CA"},
+            "generation_id": tool_call_id,
+        },
+        "outputs": [content],
+    }
+    return cohere_tool_result
+
+
+def cohere_message_pt(messages: list):
+    prompt = ""
+    tool_results = []
+    for message in messages:
+        # check if this is a tool_call result
+        if message["role"] == "tool":
+            tool_result = convert_openai_message_to_cohere_tool_result(message)
+            tool_results.append(tool_result)
+        else:
+            prompt += message["content"]
+    return prompt, tool_results
+
+
 def amazon_titan_pt(
     messages: list,
 ):  # format - https://github.com/BerriAI/litellm/issues/1896
