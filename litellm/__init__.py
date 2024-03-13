@@ -202,6 +202,7 @@ def get_model_cost_map():
 model_cost = get_model_cost_map()
 custom_prompt_dict: Dict[str, dict] = {}
 
+print('MODEL COST MAP:', model_cost)
 
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
