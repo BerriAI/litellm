@@ -20,3 +20,4 @@ jobs:
       - name: Echo Load Test Output
         run: |
           echo "Load Test Output: ${{ steps.locust_run.outputs }}"
+          echo "Load Test Output: ${{ steps.locust_run.outputs.logs }}"
