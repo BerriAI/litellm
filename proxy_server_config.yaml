@@ -37,7 +37,7 @@ model_list:
     litellm_params:
       model: openai/fake
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/chat/completions/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
   drop_params: True
