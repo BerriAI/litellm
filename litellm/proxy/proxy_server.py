@@ -1773,7 +1773,7 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "detect_prompt_injection"
                             ):
-                                from litellm.proxy.enterprise.enterprise_hooks.prompt_injection_detection import (
+                                from enterprise.enterprise_hooks.prompt_injection_detection import (
                                     _ENTERPRISE_PromptInjectionDetection,
                                 )
 
