@@ -658,23 +658,37 @@ async def user_api_key_auth(
 
             # Check 5. Token Model Spend is under Model budget
             max_budget_per_model = valid_token.model_max_budget
-            spend_per_model = valid_token.model_spend
 
-            if max_budget_per_model is not None and spend_per_model is not None:
+            if (
+                max_budget_per_model is not None
+                and isinstance(max_budget_per_model, dict)
+                and len(max_budget_per_model) > 0
+            ):
                 current_model = request_data.get("model")
-                if current_model is not None:
-                    current_model_spend = spend_per_model.get(current_model, None)
-                    current_model_budget = max_budget_per_model.get(current_model, None)
-
+                ## GET THE SPEND FOR THIS MODEL
+                twenty_eight_days_ago = datetime.now() - timedelta(days=28)
+                model_spend = await prisma_client.db.litellm_spendlogs.group_by(
+                    by=["model"],
+                    sum={"spend": True},
+                    where={
+                        "AND": [
+                            {"api_key": valid_token.token},
+                            {"startTime": {"gt": twenty_eight_days_ago}},
+                            {"model": current_model},
+                        ]
+                    },
+                )
+                if len(model_spend) > 0:
                     if (
-                        current_model_spend is not None
-                        and current_model_budget is not None
+                        model_spend[0]["model"] == model
+                        and model_spend[0]["_sum"]["spend"]
+                        >= max_budget_per_model["model"]
                     ):
-                        if current_model_spend > current_model_budget:
-                            raise Exception(
-                                f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
-                            )
-
+                        current_model_spend = model_spend[0]["_sum"]["spend"]
+                        current_model_budget = max_budget_per_model["model"]
+                        raise Exception(
+                            f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
+                        )
             # Check 6. Token spend is under Team budget
             if (
                 valid_token.spend is not None
