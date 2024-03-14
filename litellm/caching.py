@@ -798,6 +798,7 @@ class Cache:
         host: Optional[str] = None,
         port: Optional[str] = None,
         password: Optional[str] = None,
+        namespace: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
         supported_call_types: Optional[
             List[
@@ -890,6 +891,7 @@ class Cache:
             litellm._async_success_callback.append("cache")
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
+        self.namespace = namespace
 
     def get_cache_key(self, *args, **kwargs):
         """
@@ -996,6 +998,9 @@ class Cache:
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         print_verbose(f"Hashed cache key (SHA-256): {hash_hex}")
+        if self.namespace is not None:
+            hash_hex = f"{self.namespace}:{hash_hex}"
+            print_verbose(f"Hashed Key with Namespace: {hash_hex}")
         return hash_hex
 
     def generate_streaming_content(self, content):
