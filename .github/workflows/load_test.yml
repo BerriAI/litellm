@@ -21,3 +21,6 @@ jobs:
         run: |
           echo "Contents of example_stats.csv:"
           cat results_stats.csv
+      - name: Access Output
+        run: |
+          echo "Accessing output: ${{ steps.locust_run.outputs.csv_values }}"
