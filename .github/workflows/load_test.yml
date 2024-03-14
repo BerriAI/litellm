@@ -34,3 +34,4 @@ jobs:
         with:
           file: "load_test_stats.csv;load_test.html"
           update_latest_release: true
+          tag_name: "load-test"
