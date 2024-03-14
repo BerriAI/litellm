@@ -30,6 +30,7 @@ LiteLLM manages:
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 - Set Budgets & Rate limits per project, api key, model [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
+**Stable Release**: v`1.30.2` 👈 Recommended stable version of proxy. 
 
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
@@ -143,13 +144,13 @@ pip install 'litellm[proxy]'
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 ### Step 2: Make ChatCompletions Request to Proxy
 ```python
 import openai # openai v1.0.0+
-client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
     {
@@ -170,7 +171,7 @@ Set budgets and rate limits across multiple projects
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'

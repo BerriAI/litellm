@@ -100,7 +100,7 @@ class TmpFunction:
 def test_async_chat_openai_stream():
     try:
         tmp_function = TmpFunction()
-        # litellm.set_verbose = True
+        litellm.set_verbose = True
         litellm.success_callback = [tmp_function.async_test_logging_fn]
         complete_streaming_response = ""
 

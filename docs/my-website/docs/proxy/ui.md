@@ -28,12 +28,12 @@ Follow [setup](./virtual_keys.md#setup)
 ```bash
 litellm --config /path/to/config.yaml
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 ### 2. Go to UI 
 ```bash
-http://0.0.0.0:8000/ui # <proxy_base_url>/ui
+http://0.0.0.0:4000/ui # <proxy_base_url>/ui
 ```
 
 

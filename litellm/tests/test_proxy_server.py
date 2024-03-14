@@ -336,6 +336,8 @@ def test_load_router_config():
             "acompletion",
             "embedding",
             "aembedding",
+            "atranscription",
+            "transcription",
         ]  # init with all call types
 
         litellm.disable_cache()

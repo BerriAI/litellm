@@ -126,6 +126,8 @@ class AmazonAnthropicClaude3Config:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
+            if param == "stream":
+                optional_params["stream"] = value
         return optional_params
 
 
