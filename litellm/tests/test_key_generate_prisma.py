@@ -318,7 +318,7 @@ def test_call_with_user_over_budget(prisma_client):
 
 
 def test_call_with_end_user_over_budget(prisma_client):
-    # Test if a user passed to /chat/completions is tracked & fails whe they cross their budget
+    # Test if a user passed to /chat/completions is tracked & fails when they cross their budget
     # we only check this when litellm.max_user_budget is set
     import random
 
@@ -338,6 +338,8 @@ def test_call_with_end_user_over_budget(prisma_client):
             user = f"ishaan {random.randint(0, 10000)}"
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
+
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
 
             async def return_body():
                 return_string = f'{{"model": "gemini-pro-vision", "user": "{user}"}}'
