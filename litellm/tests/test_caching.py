@@ -438,11 +438,10 @@ def test_redis_cache_completion_stream():
             temperature=0.2,
             stream=True,
         )
-        response_1_content = ""
+        response_1_id = ""
         for chunk in response1:
             print(chunk)
-            response_1_content += chunk.choices[0].delta.content or ""
-        print(response_1_content)
+            response_1_id = chunk.id
         time.sleep(0.5)
         response2 = completion(
             model="gpt-3.5-turbo",
@@ -451,15 +450,13 @@ def test_redis_cache_completion_stream():
             temperature=0.2,
             stream=True,
         )
-        response_2_content = ""
+        response_2_id = ""
         for chunk in response2:
             print(chunk)
-            response_2_content += chunk.choices[0].delta.content or ""
-        print("\nresponse 1", response_1_content)
-        print("\nresponse 2", response_2_content)
+            response_2_id += chunk.id
         assert (
-            response_1_content == response_2_content
-        ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+            response_1_id == response_2_id
+        ), f"Response 1 != Response 2. Same params, Response 1{response_1_id} != Response 2{response_2_id}"
         litellm.success_callback = []
         litellm.cache = None
         litellm.success_callback = []
@@ -629,7 +626,9 @@ def test_s3_cache_acompletion_stream_azure():
             }
         ]
         litellm.cache = Cache(
-            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+            type="s3",
+            s3_bucket_name="litellm-my-test-bucket-2",
+            s3_region_name="us-east-1",
         )
         print("s3 Cache: test for caching, streaming + completion")
         response_1_content = ""
@@ -698,7 +697,6 @@ def test_s3_cache_acompletion_stream_azure():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="AWS Suspended Account")
 async def test_s3_cache_acompletion_azure():
     import asyncio
     import logging
@@ -717,7 +715,9 @@ async def test_s3_cache_acompletion_azure():
             }
         ]
         litellm.cache = Cache(
-            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+            type="s3",
+            s3_bucket_name="litellm-my-test-bucket-2",
+            s3_region_name="us-east-1",
         )
         print("s3 Cache: test for caching, streaming + completion")
 

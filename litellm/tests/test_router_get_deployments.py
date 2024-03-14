@@ -429,11 +429,11 @@ def test_usage_based_routing():
                 mock_response="good morning",
             )
 
-            # print(response)
+            # print("response", response)
 
             selection_counts[response["model"]] += 1
 
-        print(selection_counts)
+        # print("selection counts", selection_counts)
 
         total_requests = sum(selection_counts.values())
 

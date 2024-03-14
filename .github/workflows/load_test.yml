@@ -1,0 +1,28 @@
+name: Test Locust Load Test
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+      - name: Run Load Test
+        id: locust_run
+        uses: BerriAI/locust-github-action@master
+        with:
+          LOCUSTFILE: ".github/workflows/locustfile.py"
+          URL:  "https://litellm-api.up.railway.app/"
+          USERS: "100"
+          RATE: "10"
+          RUNTIME: "60s"
+      - name: Upload CSV as Asset to Latest Release
+        uses: xresloader/upload-to-github-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          file: "load_test_stats.csv;load_test.html"
+          update_latest_release: true
+          tag_name: "load-test"
+          overwrite: true

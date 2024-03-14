@@ -252,6 +252,7 @@ config_path = None
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
+cohere_chat_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
@@ -274,6 +275,8 @@ for key, value in model_cost.items():
         open_ai_text_completion_models.append(key)
     elif value.get("litellm_provider") == "cohere":
         cohere_models.append(key)
+    elif value.get("litellm_provider") == "cohere_chat":
+        cohere_chat_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
@@ -421,6 +424,7 @@ model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
     + cohere_models
+    + cohere_chat_models
     + anthropic_models
     + replicate_models
     + openrouter_models
@@ -444,6 +448,7 @@ provider_list: List = [
     "custom_openai",
     "text-completion-openai",
     "cohere",
+    "cohere_chat",
     "anthropic",
     "replicate",
     "huggingface",
@@ -455,6 +460,7 @@ provider_list: List = [
     "ai21",
     "baseten",
     "azure",
+    "azure_text",
     "sagemaker",
     "bedrock",
     "vllm",
@@ -478,6 +484,7 @@ provider_list: List = [
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "cohere": cohere_models,
+    "cohere_chat": cohere_chat_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
     "huggingface": huggingface_models,
@@ -570,7 +577,7 @@ from .utils import (
     _calculate_retry_after,
     _should_retry,
     get_secret,
-    get_mapped_model_params,
+    get_supported_openai_params,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -588,6 +595,7 @@ from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
+from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock import (
     AmazonTitanConfig,

@@ -8,7 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
-from typing import Any, Literal, Union
+from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
@@ -54,6 +54,7 @@ from .llms import (
     ollama_chat,
     cloudflare,
     cohere,
+    cohere_chat,
     petals,
     oobabooga,
     openrouter,
@@ -64,6 +65,7 @@ from .llms import (
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
+from .llms.azure_text import AzureTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -88,6 +90,7 @@ from litellm.utils import (
     read_config_args,
     Choices,
     Message,
+    TranscriptionResponse,
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -95,6 +98,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 azure_chat_completions = AzureChatCompletion()
+azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
 ####### COMPLETION ENDPOINTS ################
 
@@ -253,6 +257,7 @@ async def acompletion(
         if (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
+            or custom_llm_provider == "azure_text"
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
@@ -487,6 +492,8 @@ def completion(
     ### ASYNC CALLS ###
     acompletion = kwargs.get("acompletion", False)
     client = kwargs.get("client", None)
+    ### Admin Controls ###
+    no_log = kwargs.get("no-log", False)
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -563,6 +570,7 @@ def completion(
         "caching_groups",
         "ttl",
         "cache",
+        "no-log",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -726,6 +734,7 @@ def completion(
             model_info=model_info,
             proxy_server_request=proxy_server_request,
             preset_cache_key=preset_cache_key,
+            no_log=no_log,
         )
         logging.update_environment_variables(
             model=model,
@@ -776,6 +785,71 @@ def completion(
 
             ## COMPLETION CALL
             response = azure_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                api_type=api_type,
+                azure_ad_token=azure_ad_token,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                logging_obj=logging,
+                acompletion=acompletion,
+                timeout=timeout,
+                client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
+            )
+
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={
+                        "headers": headers,
+                        "api_version": api_version,
+                        "api_base": api_base,
+                    },
+                )
+        elif custom_llm_provider == "azure_text":
+            # azure configs
+            api_type = get_secret("AZURE_API_TYPE") or "azure"
+
+            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+
+            api_version = (
+                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )
+
+            azure_ad_token = optional_params.get("extra_body", {}).pop(
+                "azure_ad_token", None
+            ) or get_secret("AZURE_AD_TOKEN")
+
+            headers = headers or litellm.headers
+
+            ## LOAD CONFIG - if set
+            config = litellm.AzureOpenAIConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in optional_params
+                ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            ## COMPLETION CALL
+            response = azure_text_completions.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -870,6 +944,7 @@ def completion(
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     organization=organization,
+                    custom_llm_provider=custom_llm_provider,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -1068,7 +1143,11 @@ def completion(
                     logging_obj=logging,
                     headers=headers,
                 )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if (
+                "stream" in optional_params
+                and optional_params["stream"] == True
+                and not isinstance(response, CustomStreamWrapper)
+            ):
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     response,
@@ -1209,6 +1288,46 @@ def completion(
                     model_response,
                     model,
                     custom_llm_provider="cohere",
+                    logging_obj=logging,
+                )
+                return response
+            response = model_response
+        elif custom_llm_provider == "cohere_chat":
+            cohere_key = (
+                api_key
+                or litellm.cohere_key
+                or get_secret("COHERE_API_KEY")
+                or get_secret("CO_API_KEY")
+                or litellm.api_key
+            )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("COHERE_API_BASE")
+                or "https://api.cohere.ai/v1/chat"
+            )
+
+            model_response = cohere_chat.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=cohere_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+            )
+
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response,
+                    model,
+                    custom_llm_provider="cohere_chat",
                     logging_obj=logging,
                 )
                 return response
@@ -2417,6 +2536,7 @@ def embedding(
         "caching_groups",
         "ttl",
         "cache",
+        "no-log",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -3043,7 +3163,6 @@ def moderation(
     return response
 
 
-##### Moderation #######################
 @client
 async def amoderation(input: str, model: str, api_key: Optional[str] = None, **kwargs):
     # only supports open ai for now
@@ -3066,11 +3185,11 @@ async def aimage_generation(*args, **kwargs):
     Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
 
     Parameters:
-    - `args` (tuple): Positional arguments to be passed to the `embedding` function.
-    - `kwargs` (dict): Keyword arguments to be passed to the `embedding` function.
+    - `args` (tuple): Positional arguments to be passed to the `image_generation` function.
+    - `kwargs` (dict): Keyword arguments to be passed to the `image_generation` function.
 
     Returns:
-    - `response` (Any): The response returned by the `embedding` function.
+    - `response` (Any): The response returned by the `image_generation` function.
     """
     loop = asyncio.get_event_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
@@ -3092,7 +3211,7 @@ async def aimage_generation(*args, **kwargs):
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(
-            init_response, ModelResponse
+            init_response, ImageResponse
         ):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
@@ -3308,6 +3427,144 @@ def image_generation(
             original_exception=e,
             completion_kwargs=locals(),
         )
+
+
+##### Transcription #######################
+
+
+@client
+async def atranscription(*args, **kwargs):
+    """
+    Calls openai + azure whisper endpoints.
+
+    Allows router to load balance between them
+    """
+    loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO Image Generation ###
+    kwargs["atranscription"] = True
+    custom_llm_provider = None
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(transcription, *args, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, api_base=kwargs.get("api_base", None)
+        )
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if isinstance(init_response, dict) or isinstance(
+            init_response, TranscriptionResponse
+        ):  ## CACHING SCENARIO
+            response = init_response
+        elif asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            # Call the synchronous function using run_in_executor
+            response = await loop.run_in_executor(None, func_with_context)
+        return response
+    except Exception as e:
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=args,
+        )
+
+
+@client
+def transcription(
+    model: str,
+    file: BinaryIO,
+    ## OPTIONAL OPENAI PARAMS ##
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    response_format: Optional[
+        Literal["json", "text", "srt", "verbose_json", "vtt"]
+    ] = None,
+    temperature: Optional[int] = None,  # openai defaults this to 0
+    ## LITELLM PARAMS ##
+    user: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    litellm_logging_obj=None,
+    custom_llm_provider=None,
+    **kwargs,
+):
+    """
+    Calls openai + azure whisper endpoints.
+
+    Allows router to load balance between them
+    """
+    atranscription = kwargs.get("atranscription", False)
+    litellm_call_id = kwargs.get("litellm_call_id", None)
+    logger_fn = kwargs.get("logger_fn", None)
+    proxy_server_request = kwargs.get("proxy_server_request", None)
+    model_info = kwargs.get("model_info", None)
+    metadata = kwargs.get("metadata", {})
+
+    model_response = litellm.utils.TranscriptionResponse()
+
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
+
+    optional_params = {
+        "language": language,
+        "prompt": prompt,
+        "response_format": response_format,
+        "temperature": None,  # openai defaults this to 0
+    }
+
+    if custom_llm_provider == "azure":
+        # azure configs
+        api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+
+        api_version = (
+            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+        )
+
+        azure_ad_token = kwargs.pop("azure_ad_token", None) or get_secret(
+            "AZURE_AD_TOKEN"
+        )
+
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_API_KEY")
+        )
+
+        response = azure_chat_completions.audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            model_response=model_response,
+            atranscription=atranscription,
+            timeout=timeout,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+        )
+    elif custom_llm_provider == "openai":
+        response = openai_chat_completions.audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            model_response=model_response,
+            atranscription=atranscription,
+            timeout=timeout,
+            logging_obj=litellm_logging_obj,
+        )
+    return response
 
 
 ##### Health Endpoints #######################

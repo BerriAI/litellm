@@ -28,18 +28,15 @@ class LangFuseLogger:
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
 
-        parameters = {
-            "public_key": self.public_key,
-            "secret_key": self.secret_key,
-            "host": self.langfuse_host,
-            "release": self.langfuse_release,
-            "debug": self.langfuse_debug,
-        }
-
-        if Version(langfuse.version.__version__) >= Version("2.6.0"):
-            parameters["sdk_integration"] = "litellm"
-        
-        self.Langfuse = Langfuse(**parameters)
+        self.Langfuse = Langfuse(
+            public_key=self.public_key,
+            secret_key=self.secret_key,
+            host=self.langfuse_host,
+            release=self.langfuse_release,
+            debug=self.langfuse_debug,
+            flush_interval=1,  # flush interval in seconds
+            sdk_integration="litellm",
+        )
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
             self.upstream_langfuse_secret_key = os.getenv(
@@ -153,8 +150,6 @@ class LangFuseLogger:
                     input,
                     response_obj,
                 )
-
-            self.Langfuse.flush()
             print_verbose(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )

@@ -39,12 +39,10 @@ const sidebars = {
         "proxy/user_keys",
         "proxy/virtual_keys",
         "proxy/users",
+        "proxy/team_based_routing",
         "proxy/ui",
         "proxy/budget_alerts",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
-        "proxy/pii_masking",
+        "proxy/cost_tracking",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
@@ -53,6 +51,10 @@ const sidebars = {
             "proxy/reliability",
           ]
         },
+        "proxy/model_management",
+        "proxy/health",
+        "proxy/debugging",
+        "proxy/pii_masking",
         "proxy/caching",
         {
           "type": "category",
@@ -100,12 +102,13 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Moderation(), Image Generation()",
+      label: "Embedding(), Moderation(), Image Generation(), Audio Transcriptions()",
       items: [
         "embedding/supported_embedding", 
         "embedding/async_embedding",
         "embedding/moderation",
-        "image_generation"
+        "image_generation",
+        "audio_transcription"
       ],
     },
     {
@@ -129,6 +132,7 @@ const sidebars = {
         "providers/anthropic", 
         "providers/aws_sagemaker",
         "providers/bedrock", 
+        "providers/cohere", 
         "providers/anyscale",
         "providers/huggingface", 
         "providers/ollama", 
@@ -141,7 +145,6 @@ const sidebars = {
         "providers/ai21", 
         "providers/nlp_cloud",
         "providers/replicate", 
-        "providers/cohere", 
         "providers/togetherai", 
         "providers/voyage", 
         "providers/aleph_alpha", 
