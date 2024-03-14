@@ -27,9 +27,11 @@ jobs:
       - name: Store Results
         run: |
           results=$(cat results_stats.csv)
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v1
+      - name: Upload CSV File to Release
+        id: upload_release_asset
+        uses: irongut/EditRelease@v1.2.0
         with:
-          files: results_stats.csv
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "v1.31.8" # Release name you want to target
+          files: "results_stats.csv" # CSV file to upload as an asset
+      
