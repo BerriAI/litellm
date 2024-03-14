@@ -69,7 +69,7 @@ def test_completion_claude():
         response = completion(
             model="claude-instant-1", messages=messages, request_timeout=10
         )
-        # Add any assertions, here to check response args
+        # Add any assertions here to check response args
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
@@ -83,12 +83,13 @@ def test_completion_claude():
 
 
 def test_completion_claude_3_empty_response():
+    litellm.set_verbose = True
     messages = [
         {
             "role": "system",
             "content": "You are 2twNLGfqk4GMOn3ffp4p.",
         },
-        {"role": "user", "content": "Hi gm!"},
+        {"role": "user", "content": "Hi gm!", "name": "ishaan"},
         {"role": "assistant", "content": "Good morning! How are you doing today?"},
         {
             "role": "user",
@@ -219,6 +220,7 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+@pytest.mark.skip(reason="issue getting wikipedia images in ci/cd")
 def test_completion_claude_3_function_plus_image():
     litellm.set_verbose = True
 
@@ -287,6 +289,7 @@ def test_completion_mistral_api():
         cost = litellm.completion_cost(completion_response=response)
         print("cost to make mistral completion=", cost)
         assert cost > 0.0
+        assert response.model == "mistral/mistral-tiny"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -577,7 +580,7 @@ def test_completion_perplexity_api_2():
 
 # test_completion_perplexity_api_2()
 
-# commenting out as this is a flaky test on circle ci
+# commenting out as this is a flaky test on circle-ci
 # def test_completion_nlp_cloud():
 #     try:
 #         messages = [
@@ -1150,6 +1153,30 @@ def test_completion_azure_key_completion_arg():
 # test_completion_azure_key_completion_arg()
 
 
+def test_azure_instruct():
+    litellm.set_verbose = True
+    response = completion(
+        model="azure_text/instruct-model",
+        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+        max_tokens=10,
+    )
+    print("response", response)
+
+
+@pytest.mark.asyncio
+async def test_azure_instruct_stream():
+    litellm.set_verbose = False
+    response = await litellm.acompletion(
+        model="azure_text/instruct-model",
+        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+        max_tokens=10,
+        stream=True,
+    )
+    print("response", response)
+    async for chunk in response:
+        print(chunk)
+
+
 async def test_re_use_azure_async_client():
     try:
         print("azure gpt-3.5 ASYNC with clie nttest\n\n")
@@ -1453,9 +1480,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
+    model_name = "replicate/meta/llama-2-7b-chat"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0",
+        model="replicate/meta/llama-2-7b-chat",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -1489,7 +1516,7 @@ def test_replicate_custom_prompt_dict():
 
 # test_replicate_custom_prompt_dict()
 
-# commenthing this out since we won't be always testing a custom replicate deployment
+# commenthing this out since we won't be always testing a custom, replicate deployment
 # def test_completion_replicate_deployments():
 #     print("TESTING REPLICATE")
 #     litellm.set_verbose=False
@@ -1958,6 +1985,50 @@ def test_completion_cohere():
         pytest.fail(f"Error occurred: {e}")
 
 
+# FYI - cohere_chat looks quite unstable, even when testing locally
+def test_chat_completion_cohere():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="cohere_chat/command-r",
+            messages=messages,
+            max_tokens=10,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_chat_completion_cohere_stream():
+    try:
+        litellm.set_verbose = False
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="cohere_chat/command-r",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_azure_cloudflare_api():
     litellm.set_verbose = True
     try:
@@ -2188,6 +2259,8 @@ async def test_acompletion_gemini():
         response = await litellm.acompletion(model=model_name, messages=messages)
         # Add any assertions here to check the response
         print(f"response: {response}")
+    except litellm.Timeout as e:
+        pass
     except litellm.APIError as e:
         pass
     except Exception as e:

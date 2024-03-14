@@ -65,4 +65,7 @@ EXPOSE 4000/tcp
 # # Set your entrypoint and command
 
 ENTRYPOINT ["litellm"]
+
+# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
+# CMD ["--port", "4000","--run_gunicorn", "--detailed_debug"]
 CMD ["--port", "4000", "--run_gunicorn"]

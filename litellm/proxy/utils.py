@@ -96,7 +96,11 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
         call_type: Literal[
-            "completion", "embeddings", "image_generation", "moderation"
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
         ],
     ):
         """
@@ -693,6 +697,9 @@ class PrismaClient:
         """
         Generic implementation of get data
         """
+        verbose_proxy_logger.debug(
+            f"PrismaClient: get_generic_data: {key}, table_name: {table_name}"
+        )
         try:
             if table_name == "users":
                 response = await self.db.litellm_usertable.find_first(
@@ -758,6 +765,10 @@ class PrismaClient:
             int
         ] = None,  # pagination, number of rows to getch when find_all==True
     ):
+        args_passed_in = locals()
+        verbose_proxy_logger.debug(
+            f"PrismaClient: get_data - args_passed_in: {args_passed_in}"
+        )
         try:
             response: Any = None
             if (token is not None and table_name is None) or (
@@ -788,6 +799,12 @@ class PrismaClient:
                             response.expires, datetime
                         ):
                             response.expires = response.expires.isoformat()
+                    else:
+                        # Token does not exist.
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=f"Authentication Error: invalid user key - user key does not exist in db. User Key={token}",
+                        )
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_verificationtoken.find_many(
                         where={"user_id": user_id},
@@ -965,12 +982,21 @@ class PrismaClient:
                         )
 
                     sql_query = f"""
-                    SELECT *
-                    FROM "LiteLLM_VerificationTokenView"
-                    WHERE token = '{token}'
+                    SELECT 
+                    v.*,
+                    t.spend AS team_spend, 
+                    t.max_budget AS team_max_budget, 
+                    t.tpm_limit AS team_tpm_limit,
+                    t.rpm_limit AS team_rpm_limit,
+                    m.aliases as team_model_aliases
+                    FROM "LiteLLM_VerificationToken" AS v
+                    LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
+                    LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
+                    WHERE v.token = '{token}'
                     """
 
                     response = await self.db.query_first(query=sql_query)
+
                     if response is not None:
                         response = LiteLLM_VerificationTokenView(**response)
                         # for prisma we need to cast the expires time to str
@@ -982,9 +1008,11 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception get_data: {str(e)}"
+            prisma_query_info = f"LiteLLM Prisma Client Exception: Error with `get_data`. Args passed in: {args_passed_in}"
+            error_msg = prisma_query_info + str(e)
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
+            verbose_proxy_logger.debug(error_traceback)
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e, traceback_str=error_traceback
@@ -1011,6 +1039,7 @@ class PrismaClient:
         Add a key to the database. If it already exists, do nothing.
         """
         try:
+            verbose_proxy_logger.debug(f"PrismaClient: insert_data: {data}")
             if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
@@ -1143,6 +1172,9 @@ class PrismaClient:
         """
         Update existing data
         """
+        verbose_proxy_logger.debug(
+            f"PrismaClient: update_data, table_name: {table_name}"
+        )
         try:
             db_data = self.jsonify_object(data=data)
             if update_key_values is not None:
@@ -1324,9 +1356,12 @@ class PrismaClient:
         tokens: Optional[List] = None,
         team_id_list: Optional[List] = None,
         table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
+        user_id: Optional[str] = None,
     ):
         """
         Allow user to delete a key(s)
+
+        Ensure user owns that key, unless admin.
         """
         try:
             if tokens is not None and isinstance(tokens, List):
@@ -1337,15 +1372,25 @@ class PrismaClient:
                     else:
                         hashed_token = token
                     hashed_tokens.append(hashed_token)
-                await self.db.litellm_verificationtoken.delete_many(
-                    where={"token": {"in": hashed_tokens}}
+                filter_query: dict = {}
+                if user_id is not None:
+                    filter_query = {
+                        "AND": [{"token": {"in": hashed_tokens}}, {"user_id": user_id}]
+                    }
+                else:
+                    filter_query = {"token": {"in": hashed_tokens}}
+
+                deleted_tokens = await self.db.litellm_verificationtoken.delete_many(
+                    where=filter_query  # type: ignore
                 )
-                return {"deleted_keys": tokens}
+                verbose_proxy_logger.debug(f"deleted_tokens: {deleted_tokens}")
+                return {"deleted_keys": deleted_tokens}
             elif (
                 table_name == "team"
                 and team_id_list is not None
                 and isinstance(team_id_list, List)
             ):
+                # admin only endpoint -> `/team/delete`
                 await self.db.litellm_teamtable.delete_many(
                     where={"team_id": {"in": team_id_list}}
                 )
@@ -1355,6 +1400,7 @@ class PrismaClient:
                 and team_id_list is not None
                 and isinstance(team_id_list, List)
             ):
+                # admin only endpoint -> `/team/delete`
                 await self.db.litellm_verificationtoken.delete_many(
                     where={"team_id": {"in": team_id_list}}
                 )
@@ -1550,7 +1596,6 @@ async def _cache_user_row(
     Check if a user_id exists in cache,
     if not retrieve it.
     """
-    print_verbose(f"Prisma: _cache_user_row, user_id: {user_id}")
     cache_key = f"{user_id}_user_api_key_user_id"
     response = cache.get_cache(key=cache_key)
     if response is None:  # Cache miss
