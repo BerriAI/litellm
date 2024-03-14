@@ -142,7 +142,9 @@ class RedisCache(BaseCache):
                 )
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
-                print_verbose("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+                print_verbose(
+                    f"LiteLLM Redis Caching: async set() - Got exception from REDIS : {str(e)}"
+                )
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         """
@@ -905,8 +907,11 @@ class Cache:
 
         # for streaming, we use preset_cache_key. It's created in wrapper(), we do this because optional params like max_tokens, get transformed for bedrock -> max_new_tokens
         if kwargs.get("litellm_params", {}).get("preset_cache_key", None) is not None:
-            print_verbose(f"\nReturning preset cache key: {cache_key}")
-            return kwargs.get("litellm_params", {}).get("preset_cache_key", None)
+            _preset_cache_key = kwargs.get("litellm_params", {}).get(
+                "preset_cache_key", None
+            )
+            print_verbose(f"\nReturning preset cache key: {_preset_cache_key}")
+            return _preset_cache_key
 
         # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
         completion_kwargs = [
