@@ -742,6 +742,39 @@ class DualCache(BaseCache):
         except Exception as e:
             traceback.print_exc()
 
+    async def async_get_cache(self, key, local_only: bool = False, **kwargs):
+        # Try to fetch from in-memory cache first
+        try:
+            print_verbose(
+                f"async get cache: cache key: {key}; local_only: {local_only}"
+            )
+            result = None
+            if self.in_memory_cache is not None:
+                in_memory_result = await self.in_memory_cache.async_get_cache(
+                    key, **kwargs
+                )
+
+                print_verbose(f"in_memory_result: {in_memory_result}")
+                if in_memory_result is not None:
+                    result = in_memory_result
+
+            if result is None and self.redis_cache is not None and local_only == False:
+                # If not found in in-memory cache, try fetching from Redis
+                redis_result = await self.redis_cache.async_get_cache(key, **kwargs)
+
+                if redis_result is not None:
+                    # Update in-memory cache with the value from Redis
+                    await self.in_memory_cache.async_set_cache(
+                        key, redis_result, **kwargs
+                    )
+
+                result = redis_result
+
+            print_verbose(f"get cache: cache result: {result}")
+            return result
+        except Exception as e:
+            traceback.print_exc()
+
     def flush_cache(self):
         if self.in_memory_cache is not None:
             self.in_memory_cache.flush_cache()
