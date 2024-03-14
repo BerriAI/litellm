@@ -38,6 +38,35 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: glm-4
+    litellm_params:
+      model: zhipuai/glm-4
+      api_key: os.environ/ZHIPU_API_KEY
+      input_cost_per_token: 0.0001
+      output_cost_per_token: 0.0001
+  - model_name: glm-4v
+    litellm_params:
+      model: zhipuai/glm-4v
+      api_key: os.environ/ZHIPU_API_KEY
+      input_cost_per_token: 0.0001
+      output_cost_per_token: 0.0001
+  - model_name: glm-3-turbo
+    litellm_params:
+      model: zhipuai/glm-3-turbo
+      api_key: os.environ/ZHIPU_API_KEY
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.000005
+  - model_name: cogview-3
+    litellm_params:
+      model: zhipuai/cogview-3
+      api_key: os.environ/ZHIPU_API_KEY
+      input_cost_per_pixel: 0.0000002384185791015625
+  - model_name: embedding-2
+    litellm_params:
+      model: zhipuai/embedding-2
+      api_key: os.environ/ZHIPU_API_KEY
+      input_cost_per_token: 0.0000005
+      output_cost_per_token: 0.0000005
 
 litellm_settings:
   drop_params: True

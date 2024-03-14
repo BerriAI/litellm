@@ -40,6 +40,7 @@ retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
+zhipuai_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
@@ -461,6 +462,7 @@ provider_list: List = [
     "baseten",
     "azure",
     "azure_text",
+    "zhipuai",
     "sagemaker",
     "bedrock",
     "vllm",

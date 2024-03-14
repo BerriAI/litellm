@@ -35,4 +35,5 @@ certifi>=2023.7.22 # [TODO] clean up
 aiohttp==3.9.0 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 argon2-cffi==23.1.0 # for checking secrets
+zhipuai==2.0.1 # zhipuai req.
 ####

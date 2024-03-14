@@ -66,6 +66,7 @@ from .llms import (
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
+from .llms.zhipuai import ZhipuAICompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -99,6 +100,7 @@ openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_text_completions = AzureTextCompletion()
+zhipuai_completions = ZhipuAICompletion()
 huggingface = Huggingface()
 ####### COMPLETION ENDPOINTS ################
 
@@ -870,6 +872,65 @@ def completion(
             )
 
             if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={
+                        "headers": headers,
+                        "api_version": api_version,
+                        "api_base": api_base,
+                    },
+                )
+        elif custom_llm_provider == "zhipuai":
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.zhipuai_key
+                or get_secret("ZHIPU_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            ## LOAD CONFIG - if set
+            config = litellm.OpenAIConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in optional_params
+                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            ## COMPLETION CALL
+            try:
+                response = zhipuai_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    api_key=api_key,
+                    api_base=api_base,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    timeout=timeout,
+                    client=client,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
+            if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -2634,6 +2695,25 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "zhipuai":
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.zhipuai_key
+                or get_secret("ZHIPU_API_KEY")
+            )
+            response = zhipuai_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
         elif (
             model in litellm.open_ai_embedding_models or custom_llm_provider == "openai"
         ):
@@ -3253,6 +3333,24 @@ def image_generation(
 
     Currently supports just Azure + OpenAI.
     """
+    ### CUSTOM MODEL COST ###
+    input_cost_per_pixel = kwargs.get("input_cost_per_pixel", None)
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+    )
+    ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
+    if input_cost_per_pixel is not None:
+        litellm.register_model(
+            {
+                f"1024-x-1024/{model}": {
+                    "input_cost_per_pixel": input_cost_per_pixel,
+                    "litellm_provider": custom_llm_provider,
+                }
+            }
+        )
     try:
         aimg_generation = kwargs.get("aimg_generation", False)
         litellm_call_id = kwargs.get("litellm_call_id", None)
@@ -3392,6 +3490,24 @@ def image_generation(
                 optional_params=optional_params,
                 model_response=model_response,
                 api_version=api_version,
+                aimg_generation=aimg_generation,
+            )
+        elif custom_llm_provider == "zhipuai":
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.zhipuai_key
+                or get_secret("ZHIPU_API_KEY")
+            )
+
+            model_response = zhipuai_completions.image_generation(
+                model=model,
+                prompt=prompt,
+                timeout=timeout,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=litellm_logging_obj,
+                model_response=model_response,
                 aimg_generation=aimg_generation,
             )
         elif custom_llm_provider == "openai":

@@ -9327,18 +9327,20 @@ class CustomStreamWrapper:
                 model_response.id = original_chunk.id
                 if len(original_chunk.choices) > 0:
                     if (
-                        original_chunk.choices[0].delta.function_call is not None
-                        or original_chunk.choices[0].delta.tool_calls is not None
+                        (hasattr(original_chunk.choices[0].delta, "function_call")
+                        and original_chunk.choices[0].delta.function_call is not None)
+                        or (hasattr(original_chunk.choices[0].delta, "tool_calls")
+                        and original_chunk.choices[0].delta.tool_calls is not None)
                     ):
                         try:
                             delta = original_chunk.choices[0].delta
-                            model_response.system_fingerprint = (
-                                original_chunk.system_fingerprint
+                            model_response.system_fingerprint = getattr(
+                                original_chunk, "system_fingerprint", None
                             )
                             ## AZURE - check if arguments is not None
                             if (
-                                original_chunk.choices[0].delta.function_call
-                                is not None
+                                hasattr(original_chunk.choices[0].delta, "function_call")
+                                and original_chunk.choices[0].delta.function_call is not None
                             ):
                                 if (
                                     getattr(
@@ -9350,7 +9352,10 @@ class CustomStreamWrapper:
                                     original_chunk.choices[
                                         0
                                     ].delta.function_call.arguments = ""
-                            elif original_chunk.choices[0].delta.tool_calls is not None:
+                            elif (
+                                hasattr(original_chunk.choices[0].delta, "tool_calls")
+                                and original_chunk.choices[0].delta.tool_calls is not None
+                            ):
                                 if isinstance(
                                     original_chunk.choices[0].delta.tool_calls, list
                                 ):
@@ -9415,8 +9420,8 @@ class CustomStreamWrapper:
                                 model_response.choices[0].delta = Delta()
                         else:
                             return
-                        model_response.system_fingerprint = (
-                            original_chunk.system_fingerprint
+                        model_response.system_fingerprint = getattr(
+                            original_chunk, "system_fingerprint", None
                         )
                         print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                         if self.sent_first_chunk == False:
