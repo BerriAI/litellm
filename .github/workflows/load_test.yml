@@ -32,5 +32,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          file: "load_test_stats.csv"
+          file: "load_test_stats.csv;load_test.html"
           update_latest_release: true
