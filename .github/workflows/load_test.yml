@@ -34,4 +34,5 @@ jobs:
           asset_path: ./results_stats.csv
           asset_name: results_stats.csv
           asset_content_type: text/csv
-          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
