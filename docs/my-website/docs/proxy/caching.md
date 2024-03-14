@@ -32,6 +32,24 @@ litellm_settings:
   cache: True          # set cache responses to True, litellm defaults to using a redis cache
 ```
 
+#### [OPTIONAL] Step 1.5: Add redis namespaces 
+
+If you want to create some folder for your keys, you can set a namespace, like this:
+
+```yaml
+litellm_settings:
+  cache: true 
+  cache_params:        # set cache params for redis
+    type: redis
+    namespace: "litellm_caching"
+```
+
+and keys will be stored like:
+
+```
+litellm_caching:<hash>
+```
+
 #### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
