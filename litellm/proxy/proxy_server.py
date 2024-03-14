@@ -1112,15 +1112,25 @@ async def update_database(
                                 max_budget=max_user_budget,
                                 user_email=None,
                             )
+
                         else:
                             existing_user_obj.spend = (
                                 existing_user_obj.spend + response_cost
                             )
 
+                        user_object_json = {**existing_user_obj.json(exclude_none=True)}
+
+                        user_object_json["model_max_budget"] = json.dumps(
+                            user_object_json["model_max_budget"]
+                        )
+                        user_object_json["model_spend"] = json.dumps(
+                            user_object_json["model_spend"]
+                        )
+
                         await prisma_client.db.litellm_usertable.upsert(
                             where={"user_id": end_user_id},
                             data={
-                                "create": {**existing_user_obj.json(exclude_none=True)},
+                                "create": user_object_json,
                                 "update": {"spend": {"increment": response_cost}},
                             },
                         )
