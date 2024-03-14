@@ -17,16 +17,6 @@ jobs:
           USERS: "100"
           RATE: "10"
           RUNTIME: "60s"
-      - name: Print CSV File Contents
-        run: |
-          echo "Contents of example_stats.csv:"
-          cat load_test_stats.csv
-      - name: Find Latest Release
-        id: find_release
-        run: |
-          latest_release=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")')
-          echo "::set-output name=latest_release::$latest_release"
-      
       - name: Upload CSV as Asset to Latest Release
         uses: xresloader/upload-to-github-release@v1
         env:
