@@ -21,17 +21,23 @@ jobs:
         run: |
           echo "Contents of example_stats.csv:"
           cat results_stats.csv
-      - name: Access Output
-        run: |
-          echo "Accessing output: ${{ steps.locust_run.outputs.csv_values }}"
-      - name: Store Results
-        run: |
-          results=$(cat results_stats.csv)
-      - name: Upload CSV File to Release
-        id: upload_release_asset
-        uses: irongut/EditRelease@v1.2.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: "v1.31.8" # Release name you want to target
-          files: "results_stats.csv" # CSV file to upload as an asset
-      
+  upload-asset:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+        
+    - name: Upload Release Asset
+      env:
+        GITHUB_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+          python upload_release_asset.py
