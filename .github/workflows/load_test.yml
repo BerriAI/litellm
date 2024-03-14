@@ -26,13 +26,11 @@ jobs:
         run: |
           latest_release=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")')
           echo "::set-output name=latest_release::$latest_release"
-  
+      
       - name: Upload CSV as Asset to Latest Release
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ steps.find_release.outputs.latest_release }}/assets?name=results_stats.csv"
-          asset_path: ./results_stats.csv
-          asset_name: results_stats.csv
-          asset_content_type: text/csv
+        uses: xresloader/upload-to-github-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          file: "results_stats.csv"
+          update_latest_release: true
