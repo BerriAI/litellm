@@ -28,7 +28,7 @@ def test_chat_completion_cohere():
             },
         ]
         response = completion(
-            model="cohere_chat/command-r",
+            model="cohere/command-r",
             messages=messages,
             max_tokens=10,
         )
@@ -47,7 +47,7 @@ def test_chat_completion_cohere_stream():
             },
         ]
         response = completion(
-            model="cohere_chat/command-r",
+            model="cohere/command-r",
             messages=messages,
             max_tokens=10,
             stream=True,
@@ -69,7 +69,7 @@ def test_chat_completion_cohere_tool_calling():
             },
         ]
         response = completion(
-            model="cohere_chat/command-r",
+            model="cohere/command-r",
             messages=messages,
             tools=[
                 {
