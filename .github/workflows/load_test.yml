@@ -21,23 +21,17 @@ jobs:
         run: |
           echo "Contents of example_stats.csv:"
           cat results_stats.csv
-  upload-asset:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests
-        
-    - name: Upload Release Asset
-      env:
-        GITHUB_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-          python upload_release_asset.py
+      - name: Find Latest Release
+        id: find_release
+        run: |
+          latest_release=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")')
+          echo "::set-output name=latest_release::$latest_release"
+  
+      - name: Upload CSV as Asset to Latest Release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ steps.find_release.outputs.latest_release }}/assets?name=results_stats.csv"
+          asset_path: ./results_stats.csv
+          asset_name: results_stats.csv
+          asset_content_type: text/csv
+          token: ${{ secrets.GITHUB_TOKEN }}
