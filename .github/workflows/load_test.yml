@@ -20,7 +20,7 @@ jobs:
       - name: Print CSV File Contents
         run: |
           echo "Contents of example_stats.csv:"
-          cat results_stats.csv
+          cat load_test_stats.csv
       - name: Find Latest Release
         id: find_release
         run: |
@@ -32,5 +32,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          file: "results_stats.csv"
+          file: "load_test_stats.csv"
           update_latest_release: true
