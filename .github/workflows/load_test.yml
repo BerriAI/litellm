@@ -17,3 +17,7 @@ jobs:
           USERS: "5"
           RATE: "5"
           RUNTIME: "10s"
+      - name: Print CSV File Contents
+        run: |
+          echo "Contents of example_stats.csv:"
+          cat results_stats.csv
