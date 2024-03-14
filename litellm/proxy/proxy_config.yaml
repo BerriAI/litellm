@@ -5,9 +5,13 @@ model_list:
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
-litellm_settings:
-  set_verbose: True
-  success_callback: ["langfuse"]
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+general_settings:
+  master_key: sk-1234
 router_settings:
   set_verbose: True
   debug_level: "DEBUG"
