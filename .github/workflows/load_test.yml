@@ -24,3 +24,12 @@ jobs:
       - name: Access Output
         run: |
           echo "Accessing output: ${{ steps.locust_run.outputs.csv_values }}"
+      - name: Store Results
+        run: |
+          results=$(cat results_stats.csv)
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: results_stats.csv
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
