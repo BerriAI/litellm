@@ -1596,7 +1596,6 @@ async def _cache_user_row(
     Check if a user_id exists in cache,
     if not retrieve it.
     """
-    print_verbose(f"Prisma: _cache_user_row, user_id: {user_id}")
     cache_key = f"{user_id}_user_api_key_user_id"
     response = cache.get_cache(key=cache_key)
     if response is None:  # Cache miss
