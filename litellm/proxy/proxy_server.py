@@ -6632,7 +6632,7 @@ async def login(request: Request):
         ui_password = str(master_key) if master_key is not None else None
     if ui_password is None:
         raise ProxyException(
-            message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys",
+            message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
             type="auth_error",
             param="UI_PASSWORD",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
