@@ -541,6 +541,8 @@ def test_completion_deep_infra_stream():
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
     except Exception as e:
+        if "Model busy, retry later" in str(e):
+            pass
         pytest.fail(f"Error occurred: {e}")
 
 
