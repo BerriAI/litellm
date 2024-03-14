@@ -14,9 +14,9 @@ jobs:
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
           URL:  "https://litellm-api.up.railway.app/"
-          USERS: "5"
-          RATE: "5"
-          RUNTIME: "10s"
+          USERS: "100"
+          RATE: "10"
+          RUNTIME: "60s"
       - name: Print CSV File Contents
         run: |
           echo "Contents of example_stats.csv:"
