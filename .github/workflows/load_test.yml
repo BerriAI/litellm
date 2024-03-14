@@ -17,3 +17,10 @@ jobs:
           USERS: "5"
           RATE: "5"
           RUNTIME: "10s"
+     # Echo the content of the current directory
+      - name: Echo Current Directory Contents
+        run: ls -al
+
+      # Read the example.csv file
+      - name: Read example.csv
+        run: cat example.csv
