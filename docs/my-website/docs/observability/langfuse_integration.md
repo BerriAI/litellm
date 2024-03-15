@@ -139,7 +139,15 @@ import os
 from langchain.chat_models import ChatLiteLLM
 from langchain.schema import HumanMessage
 
-os.environ['OPENAI_API_KEY'] = ""
+# from https://cloud.langfuse.com/
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
+
+os.environ['OPENAI_API_KEY']=""
+
+# set langfuse as a callback, litellm will send the data to langfuse
+litellm.success_callback = ["langfuse"] 
+
 chat = ChatLiteLLM(
   model="gpt-3.5-turbo"
   model_kwargs={
