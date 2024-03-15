@@ -31,12 +31,12 @@ def interpret_results(csv_file):
                 row["Status"] = "Failed ❌"
 
         # Construct Markdown table header
-        markdown_table = "| Name | Status | Median Response Time (ms) | Average Response Time (ms) | Requests/s | Failures/s | Min Response Time (ms) | Max Response Time (ms) |"
+        markdown_table = "| Name | Status | Median Response Time (ms) | Average Response Time (ms) | Requests/s | Failures/s | Request Count | Failure Count | Min Response Time (ms) | Max Response Time (ms) |"
         markdown_table += "\n| --- | --- | --- | --- | --- | --- | --- | --- |"
 
         # Construct Markdown table rows
         for row in rows:
-            markdown_table += f"\n| {row['Name']} | {row['Status']} | {row['Median Response Time']} | {row['Average Response Time']} | {row['Requests/s']} | {row['Failures/s']} | {row['Min Response Time']} | {row['Max Response Time']} |"
+            markdown_table += f"\n| {row['Name']} | {row['Status']} | {row['Median Response Time']} | {row['Average Response Time']} | {row['Requests/s']} | {row['Failures/s']} | {row['Request Count']} | {row['Failure Count']} | {row['Min Response Time']} | {row['Max Response Time']} |"
     print("markdown table: ", markdown_table)
     return markdown_table
 
