@@ -6,7 +6,7 @@ import time
 class MyUser(HttpUser):
     wait_time = between(1, 5)
 
-    @task(20)
+    @task
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
@@ -29,13 +29,13 @@ class MyUser(HttpUser):
 
         # Print or log the response if needed
 
-    @task(40)
+    @task(10)
     def health_readiness(self):
         start_time = time.time()
         response = self.client.get("health/readiness")
         response_time = time.time() - start_time
 
-    @task(40)
+    @task(10)
     def health_liveliness(self):
         start_time = time.time()
         response = self.client.get("health/liveliness")
