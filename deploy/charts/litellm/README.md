@@ -33,6 +33,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `proxy_config.*`                                           | See [values.yaml](./values.yaml) for default settings.  See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples.                            | N/A  |
 
 #### Example `environmentSecrets` Secret 
+
 ```
 apiVersion: v1
 kind: Secret
