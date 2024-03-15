@@ -246,11 +246,11 @@ git clone https://github.com/BerriAI/litellm.git
 
 #### Step 2. Deploy with Helm
 
-Run the following command in the root of your `litellm` repo
+Run the following command in the root of your `litellm` repo. This will set the litellm proxy master key as `sk-1234`
 
 ```bash
 helm install \
-  --set masterkey=SuPeRsEcReT \
+  --set masterkey=sk-1234 \
   mydeploy \
   deploy/charts/litellm
 ```
