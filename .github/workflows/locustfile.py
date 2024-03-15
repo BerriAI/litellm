@@ -4,6 +4,8 @@ import time
 
 
 class MyUser(HttpUser):
+    wait_time = between(1, 5)
+
     @task(20)
     def chat_completion(self):
         headers = {
