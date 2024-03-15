@@ -144,9 +144,13 @@ from typing import Union
 try:
     # when using litellm cli
     import litellm.proxy.enterprise as enterprise
-except:
+except Exception as e:
     # when using litellm docker image
-    import enterprise  # type: ignore
+    try:
+        import enterprise  # type: ignore
+    except Exception as e:
+        print("Error importing enterprise: " + str(e))  # noqa
+        pass
 
 ui_link = f"/ui/"
 ui_message = (
