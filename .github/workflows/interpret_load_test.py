@@ -57,8 +57,16 @@ if __name__ == "__main__":
     print("got latest release: ", latest_release)
     print("latest release body: ", latest_release.body)
     print("markdown table: ", markdown_table)
+
+    # check if "Load Test LiteLLM Proxy Results" exists
+    existing_release_body = latest_release.body
+    if "Load Test LiteLLM Proxy Results" in latest_release.body:
+        # find the "Load Test LiteLLM Proxy Results" section and delete it
+        start_index = latest_release.body.find("Load Test LiteLLM Proxy Results")
+        existing_release_body = latest_release.body[:start_index]
+
     new_release_body = (
-        latest_release.body
+        existing_release_body
         + "\n\n"
         + "## Load Test LiteLLM Proxy Results"
         + "\n\n"
