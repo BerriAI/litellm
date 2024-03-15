@@ -4,11 +4,23 @@ import Image from '@theme/IdealImage';
 
 ## How to run a locust load test on LiteLLM Proxy 
 
-1. `pip install locust`
+1. Add `fake-openai-endpoint` to your proxy config.yaml and start your litellm proxy
+litellm provides a free hosted `fake-openai-endpoint` you can load test against
 
-2. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+```
 
-3. Start locust
+2. `pip install locust`
+
+3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
+
+4. Start locust
   Run `locust` in the same directory as your `locustfile.py` from step 2
 
   ```shell
@@ -21,7 +33,7 @@ import Image from '@theme/IdealImage';
   [2024-03-15 07:19:58,898] Starting Locust 2.24.0
   ```
 
-4. Run Load test on locust
+5. Run Load test on locust
 
   Head to the locust UI on http://0.0.0.0:8089
 
@@ -29,7 +41,7 @@ import Image from '@theme/IdealImage';
 
   <Image img={require('../img/locust_load_test.png')} />
 
-5. Expected Results
+6. Expected Results
 
   Expect to see the following response times for `/health/readiness` 
   Median → /health/readiness is `150ms`
