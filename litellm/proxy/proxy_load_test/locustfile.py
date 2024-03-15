@@ -6,7 +6,7 @@ import time
 class MyUser(HttpUser):
     wait_time = between(1, 5)
 
-    @task
+    @task(3)
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
@@ -56,37 +56,3 @@ class MyUser(HttpUser):
                 exception=None,
                 response=response,
             )
-
-    # @task
-    # def key_generate(self):
-    #     headers = {
-    #         "Authorization": "Bearer sk-1234",
-    #         "Content-Type": "application/json",
-    #     }
-
-    #     payload = {
-    #         "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
-    #         "duration": "20m",
-    #         "metadata": {"user": "ishaan@berri.ai"},
-    #         "team_id": "core-infra",
-    #         "max_budget": 10,
-    #         "soft_budget": 5,
-    #     }
-
-    #     response = self.client.post("key/generate", json=payload, headers=headers)
-
-    #     if response.status_code == 200:
-    #         key_response = response.json()
-    #         models = key_response.get("models", [])
-    #         if models:
-    #             # Use the first model from the key generation response to make a chat completions request
-    #             model_to_use = models[0]
-    #             chat_payload = {
-    #                 "model": model_to_use,
-    #                 "messages": [
-    #                     {"role": "system", "content": "You are a chat bot."},
-    #                     {"role": "user", "content": "Hello, how are you?"},
-    #                 ],
-    #             }
-    #             chat_response = self.client.post("chat/completions", json=chat_payload, headers=headers)
-    #             # Print or log the chat response if needed
