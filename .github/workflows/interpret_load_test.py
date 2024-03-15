@@ -23,9 +23,6 @@ def csv_to_markdown(csv_file):
 
 
 def interpret_results(csv_file):
-    below_300_ms = True
-    below_300_s = True
-    requests_per_sec = []
     interpreted_results_str = ""
     with open(csv_file, newline="") as csvfile:
         csvreader = csv.DictReader(csvfile)
@@ -44,11 +41,6 @@ def interpret_results(csv_file):
             print(result_str)
         interpreted_results_str += result_str
     print(interpreted_results_str)
-
-    # write interpreted results to .txt file
-    with open("load_test_interpreted_results.txt", "w") as f:
-        f.write(interpreted_results_str)
-
     return interpreted_results_str
 
 
@@ -67,12 +59,15 @@ if __name__ == "__main__":
     latest_release = repo.get_latest_release()
     print("got latest release: ", latest_release)
     print("latest release body: ", latest_release.body)
-    print("new release body: ", latest_release.body + "\n\n" + interpreted_results_str)
+    print("markdown table: ", markdown_table)
+    new_release_body = (
+        latest_release.body + "\n\n" + interpreted_results_str + "\n\n" + markdown_table
+    )
+    print("new release body: ", new_release_body)
     try:
         latest_release.update_release(
             name=latest_release.tag_name,
-            message="Load Test Results",
-            body=latest_release.body + "\n\n" + interpreted_results_str,
+            message=new_release_body,
         )
     except Exception as e:
         print(e)
