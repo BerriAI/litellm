@@ -551,7 +551,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
         )
 
 
-def convert_openai_message_to_anthropic_tool_result(message):
+def convert_to_anthropic_tool_result(message: dict) -> str:
     """
     OpenAI message with a tool result looks like:
     {
@@ -587,20 +587,43 @@ def convert_openai_message_to_anthropic_tool_result(message):
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
-    anthropic_tool_result = {
-        "role": "user",
-        "content": (
-            "<function_results>\n"
-            "<result>\n"
-            f"<tool_name>{name}</tool_name>\n"
-            "<stdout>\n"
-            f"{content}\n"
-            "</stdout>\n"
-            "</result>\n"
-            "</function_results>"
-        ),
-    }
+    anthropic_tool_result = (
+        "<function_results>\n"
+        "<result>\n"
+        f"<tool_name>{name}</tool_name>\n"
+        "<stdout>\n"
+        f"{content}\n"
+        "</stdout>\n"
+        "</result>\n"
+        "</function_results>"
+    )
+
     return anthropic_tool_result
+
+
+def convert_to_anthropic_tool_invoke(tool_calls: list) -> str:
+    invokes = ""
+    for tool in tool_calls:
+        if tool["type"] != "function":
+            continue
+
+        tool_name = tool["function"]["name"]
+        parameters = "".join(
+            f"<{param}>{val}</{param}>\n"
+            for param, val in json.loads(tool["function"]["arguments"]).items()
+        )
+        invokes += (
+            "<invoke>\n"
+            f"<tool_name>{tool_name}</tool_name>\n"
+            "<parameters>\n"
+            f"{parameters}"
+            "</parameters>\n"
+            "</invoke>\n"
+        )
+
+    anthropic_tool_invoke = f"<function_calls>\n{invokes}</function_calls>"
+
+    return anthropic_tool_invoke
 
 
 def anthropic_messages_pt(messages: list):
@@ -613,97 +636,74 @@ def anthropic_messages_pt(messages: list):
     5. System messages are a separate param to the Messages API (used for tool calling)
     6. Ensure we only accept role, content. (message.name is not supported)
     """
-    ## Ensure final assistant message has no trailing whitespace
-    last_assistant_message_idx: Optional[int] = None
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
     new_messages = []
-    if len(messages) == 1:
-        # check if the message is a user message
-        if messages[0]["role"] == "assistant":
-            new_messages.append({"role": "user", "content": ""})
+    msg_i = 0
+    while msg_i < len(messages):
+        user_content = []
+        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
+            if isinstance(messages[msg_i]["content"], list):
+                for m in messages[msg_i]["content"]:
+                    if m.get("type", "") == "image_url":
+                        user_content.append(
+                            {
+                                "type": "image",
+                                "source": convert_to_anthropic_image_obj(
+                                    m["image_url"]["url"]
+                                ),
+                            }
+                        )
+                    elif m.get("type", "") == "text":
+                        user_content.append({"type": "text", "text": m["text"]})
+            else:
+                # Tool message content will always be a string
+                user_content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            convert_to_anthropic_tool_result(messages[msg_i])
+                            if messages[msg_i]["role"] == "tool"
+                            else messages[msg_i]["content"]
+                        ),
+                    }
+                )
 
-        # check if content is a list (vision)
-        if isinstance(messages[0]["content"], list):  # vision input
-            new_content = []
-            for m in messages[0]["content"]:
-                if m.get("type", "") == "image_url":
-                    new_content.append(
-                        {
-                            "type": "image",
-                            "source": convert_to_anthropic_image_obj(
-                                m["image_url"]["url"]
-                            ),
-                        }
-                    )
-                elif m.get("type", "") == "text":
-                    new_content.append({"type": "text", "text": m["text"]})
-            new_messages.append({"role": messages[0]["role"], "content": new_content})  # type: ignore
-        else:
-            new_messages.append(
-                {"role": messages[0]["role"], "content": messages[0]["content"]}
-            )
+            msg_i += 1
 
-        if new_messages[-1]["role"] == "tool":  # function call result or error
-            new_messages[-1] = convert_openai_message_to_anthropic_tool_result(
-                new_messages[-1]
-            )
+        if user_content:
+            new_messages.append({"role": "user", "content": user_content})
 
-        return new_messages
+        assistant_content = []
+        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+            assistant_text = (
+                messages[msg_i].get("content") or ""
+            )  # either string or none
+            if messages[msg_i].get(
+                "tool_calls", []
+            ):  # support assistant tool invoke convertion
+                assistant_text += convert_to_anthropic_tool_invoke(
+                    messages[msg_i]["tool_calls"]
+                )
 
-    for i in range(len(messages) - 1):  # type: ignore
-        if i == 0 and messages[i]["role"] == "assistant":
-            new_messages.append({"role": "user", "content": ""})
-        if isinstance(messages[i]["content"], list):  # vision input
-            new_content = []
-            for m in messages[i]["content"]:
-                if m.get("type", "") == "image_url":
-                    new_content.append(
-                        {
-                            "type": "image",
-                            "source": convert_to_anthropic_image_obj(
-                                m["image_url"]["url"]
-                            ),
-                        }
-                    )
-                elif m.get("type", "") == "text":
-                    new_content.append({"type": "text", "content": m["text"]})
-            new_messages.append({"role": messages[i]["role"], "content": new_content})  # type: ignore
-        else:
-            new_messages.append(
-                {"role": messages[i]["role"], "content": messages[i]["content"]}
-            )
+            assistant_content.append({"type": "text", "text": assistant_text})
+            msg_i += 1
 
-        if new_messages[-1]["role"] == "tool":  # function call result or error
-            new_messages[-1] = convert_openai_message_to_anthropic_tool_result(
-                new_messages[-1]
-            )
+        if assistant_content:
+            new_messages.append({"role": "assistant", "content": assistant_content})
 
-        if (
-            messages[i]["role"] in user_message_types
-            and messages[i + 1]["role"] in user_message_types
-        ):
-            new_messages.append({"role": "assistant", "content": ""})
+    if new_messages[0]["role"] != "user":
+        new_messages.insert(
+            0, {"role": "user", "content": [{"type": "text", "text": "."}]}
+        )
 
-        if messages[i]["role"] == "assistant":
-            if messages[i + 1]["role"] == "assistant":
-                new_messages.append({"role": "user", "content": ""})
-
-            last_assistant_message_idx = i
-
-    new_messages.append(
-        convert_openai_message_to_anthropic_tool_result(messages[-1])
-        if messages[-1]["role"] == "tool"
-        else messages[-1]
-    )
-
-    if last_assistant_message_idx is not None:
-        new_messages[last_assistant_message_idx]["content"] = new_messages[
-            last_assistant_message_idx
-        ][
-            "content"
-        ].strip()  # no trailing whitespace for final assistant message
+    if new_messages[-1]["role"] == "assistant":
+        for content in new_messages[-1]["content"]:
+            if content["type"] == "text":
+                content["text"] = content[
+                    "text"
+                ].rstrip()  # no trailing whitespace for final assistant message
 
     return new_messages
 
