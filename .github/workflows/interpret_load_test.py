@@ -3,51 +3,47 @@ import os
 from github import Github
 
 
-def csv_to_markdown(csv_file):
-    markdown_table = ""
-
-    # Read CSV file
-    with open(csv_file, newline="") as csvfile:
-        csvreader = csv.reader(csvfile)
-        header = next(csvreader)
-
-        # Create header row
-        markdown_table += "|" + " | ".join(header) + "|\n"
-        markdown_table += "|" + " | ".join(["---"] * len(header)) + "|\n"
-
-        # Add data rows
-        for row in csvreader:
-            markdown_table += "|" + " | ".join(row) + "|\n"
-
-    return markdown_table
-
-
 def interpret_results(csv_file):
-    interpreted_results_str = ""
     with open(csv_file, newline="") as csvfile:
         csvreader = csv.DictReader(csvfile)
-        for row in csvreader:
+        rows = list(csvreader)
+        """
+        in this csv reader
+        - Create 1 new column "Status"
+        - if a row has a median response time < 300 and an average response time < 300, Status = "Passed ✅"
+        - if a row has a median response time >= 300 or an average response time >= 300, Status = "Failed ❌"
+        - Order the table in this order Name, Status, Median Response Time, Average Response Time, Requests/s,Failures/s, Min Response Time, Max Response Time, all other columns
+        """
+
+        # Add a new column "Status"
+        for row in rows:
             median_response_time = float(
                 row["Median Response Time"].strip().rstrip("ms")
             )
             average_response_time = float(
                 row["Average Response Time"].strip().rstrip("s")
             )
-            result_str = f"endpoint: {row['Name']}, median_response_time: {median_response_time}, average_response_time: {average_response_time}, requests_per_sec: {row['Requests/s']}"
+
+            # Determine status based on conditions
             if median_response_time < 300 and average_response_time < 300:
-                result_str += " Passed ✅\n"
+                row["Status"] = "Passed ✅"
             else:
-                result_str += " Failed ❌\n"
-            print(result_str)
-        interpreted_results_str += result_str
-    print("interpreted_results_str() output: ", interpreted_results_str)
-    return interpreted_results_str
+                row["Status"] = "Failed ❌"
+
+        # Construct Markdown table header
+        markdown_table = "| Name | Status | Median Response Time (ms) | Average Response Time (ms) | Requests/s | Failures/s | Min Response Time (ms) | Max Response Time (ms) |"
+        markdown_table += "\n| --- | --- | --- | --- | --- | --- | --- | --- |"
+
+        # Construct Markdown table rows
+        for row in rows:
+            markdown_table += f"\n| {row['Name']} | {row['Status']} | {row['Median Response Time']} | {row['Average Response Time']} | {row['Requests/s']} | {row['Failures/s']} | {row['Min Response Time']} | {row['Max Response Time']} |"
+    print("markdown table: ", markdown_table)
+    return markdown_table
 
 
 if __name__ == "__main__":
     csv_file = "load_test_stats.csv"  # Change this to the path of your CSV file
-    interpreted_results_str = interpret_results(csv_file)
-    markdown_table = csv_to_markdown(csv_file)
+    markdown_table = interpret_results(csv_file)
 
     # Update release body with interpreted results
     github_token = os.getenv("GITHUB_TOKEN")
@@ -60,7 +56,11 @@ if __name__ == "__main__":
     print("latest release body: ", latest_release.body)
     print("markdown table: ", markdown_table)
     new_release_body = (
-        latest_release.body + "\n\n" + interpreted_results_str + "\n\n" + markdown_table
+        latest_release.body
+        + "\n\n"
+        + "## Load Test LiteLLM Proxy Results"
+        + "\n\n"
+        + markdown_table
     )
     print("new release body: ", new_release_body)
     try:
