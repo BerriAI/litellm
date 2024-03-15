@@ -132,7 +132,7 @@ print(response)
 
 ```
 
-### ChatLiteLLM Integration
+### Use LangChain ChatLiteLLM + Langfuse
 Pass `trace_user_id`, `session_id` in model_kwargs
 ```python
 import os
