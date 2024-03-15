@@ -10,7 +10,7 @@ class MyUser(HttpUser):
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer sk-mh3YNUDs1d_f6fMXfvEqBA",
+            "Authorization": f"Bearer sk-Tbw10FmfaKMsFOD_KJ73tQ",
             # Include any additional headers you may need for authentication, etc.
         }
 
