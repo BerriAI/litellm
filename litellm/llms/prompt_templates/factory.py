@@ -672,38 +672,18 @@ def anthropic_messages_pt(messages: list):
 
             msg_i += 1
 
-        if user_content:
-            new_messages.append({"role": "user", "content": user_content})
-
-        assistant_content = []
-        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
-            if messages[msg_i].get(
-                "tool_calls", []
-            ):  # support assistant tool invoke convertion
-                assistant_text += convert_to_anthropic_tool_invoke(
-                    messages[msg_i]["tool_calls"]
-                )
-
-            assistant_content.append({"type": "text", "text": assistant_text})
-            msg_i += 1
-
-        if assistant_content:
-            new_messages.append({"role": "assistant", "content": assistant_content})
-
-    if new_messages[0]["role"] != "user":
-        new_messages.insert(
-            0, {"role": "user", "content": [{"type": "text", "text": "."}]}
-        )
-
-    if new_messages[-1]["role"] == "assistant":
-        for content in new_messages[-1]["content"]:
-            if content["type"] == "text":
-                content["text"] = content[
-                    "text"
-                ].rstrip()  # no trailing whitespace for final assistant message
+    new_messages.append(messages[-1])
+    if last_assistant_message_idx is not None:
+        try:
+            new_messages[last_assistant_message_idx]["content"] = new_messages[
+                last_assistant_message_idx
+            ][
+                "content"
+            ].strip()  # no trailing whitespace for final assistant message
+        except Exception as e:
+            raise ValueError(
+                f"LiteLLMException: Invalid final assistant message passed in. Messages={messages}"
+            )
 
     return new_messages
 
