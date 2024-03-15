@@ -71,7 +71,8 @@ if __name__ == "__main__":
     try:
         latest_release.update_release(
             name=latest_release.tag_name,
-            message=latest_release.body + "\n\n" + interpreted_results_str,
+            message="Load Test Results",
+            body=latest_release.body + "\n\n" + interpreted_results_str,
         )
     except Exception as e:
         print(e)
