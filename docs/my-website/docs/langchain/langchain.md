@@ -133,3 +133,6 @@ chat(messages)
 ```
 </TabItem>
 </Tabs>
+
+## Langfuse Integration
+Checkout this section [here](../observability/langfuse_integration#chatlitellm-integration) for more details on how to integrate langfuse with ChatLiteLLM.
