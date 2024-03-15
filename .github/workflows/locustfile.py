@@ -6,7 +6,7 @@ import time
 class MyUser(HttpUser):
     wait_time = between(1, 5)
 
-    @task
+    @task(2)
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
