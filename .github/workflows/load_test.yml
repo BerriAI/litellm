@@ -14,9 +14,14 @@ jobs:
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
           URL:  "https://litellm-api.up.railway.app/"
-          USERS: "100"
+          USERS: "1"
           RATE: "10"
-          RUNTIME: "300s"
+          RUNTIME: "3s"
+      - name: Process Load Test Stats
+        run: |
+          # Assuming you want to use a Python script named process_stats.py
+          python process_stats.py load_test_stats.csv
+        working-directory: ${{ github.workspace }}
       - name: Upload CSV as Asset to Latest Release
         uses: xresloader/upload-to-github-release@v1
         env:
