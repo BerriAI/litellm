@@ -77,9 +77,32 @@ litellm --config /path/to/config.yaml
 
 ### Test 
 
+<Tabs>
+<TabItem value="curl" label="Curl">
+
 ```bash
-curl --location 'http://0.0.0.0:4000/v1/audio/transcriptions' \
+curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
 --header 'Authorization: Bearer sk-1234' \
 --form 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
 --form 'model="whisper"'
 ```
+
+</TabItem>
+<TabItem value="openai" label="OpenAI">
+
+```python
+from openai import OpenAI
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:8000"
+)
+
+
+audio_file = open("speech.mp3", "rb")
+transcript = client.audio.transcriptions.create(
+  model="whisper",
+  file=audio_file
+)
+```
+</TabItem>
+</Tabs>
