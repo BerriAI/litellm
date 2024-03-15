@@ -627,11 +627,16 @@ def anthropic_messages_pt(messages: list):
 
     new_messages.append(messages[-1])
     if last_assistant_message_idx is not None:
-        new_messages[last_assistant_message_idx]["content"] = new_messages[
-            last_assistant_message_idx
-        ][
-            "content"
-        ].strip()  # no trailing whitespace for final assistant message
+        try:
+            new_messages[last_assistant_message_idx]["content"] = new_messages[
+                last_assistant_message_idx
+            ][
+                "content"
+            ].strip()  # no trailing whitespace for final assistant message
+        except Exception as e:
+            raise ValueError(
+                f"LiteLLMException: Invalid final assistant message passed in. Messages={messages}"
+            )
 
     return new_messages
 
