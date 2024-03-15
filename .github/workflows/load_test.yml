@@ -16,7 +16,7 @@ jobs:
           URL:  "https://litellm-api.up.railway.app/"
           USERS: "100"
           RATE: "10"
-          RUNTIME: "60s"
+          RUNTIME: "300s"
       - name: Upload CSV as Asset to Latest Release
         uses: xresloader/upload-to-github-release@v1
         env:
