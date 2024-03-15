@@ -21,7 +21,7 @@ jobs:
         run: |
           echo "Current working directory: $PWD"
           ls
-          python ".github/workflows/process_stats.py"
+          python ".github/workflows/interpret_load_test.py"
         working-directory: ${{ github.workspace }}
       - name: Upload CSV as Asset to Latest Release
         uses: xresloader/upload-to-github-release@v1
