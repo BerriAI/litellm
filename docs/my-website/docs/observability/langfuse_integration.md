@@ -138,6 +138,7 @@ Pass `trace_user_id`, `session_id` in model_kwargs
 import os
 from langchain.chat_models import ChatLiteLLM
 from langchain.schema import HumanMessage
+import litellm
 
 # from https://cloud.langfuse.com/
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
