@@ -1,4 +1,6 @@
 import csv
+import os
+from github import Github
 
 
 def csv_to_markdown(csv_file):
@@ -52,6 +54,18 @@ def interpret_results(csv_file):
 
 if __name__ == "__main__":
     csv_file = "load_test_stats.csv"  # Change this to the path of your CSV file
-    interpret_results(csv_file)
+    interpreted_results_str = interpret_results(csv_file)
     markdown_table = csv_to_markdown(csv_file)
     print(markdown_table)
+
+    # Update release body with interpreted results
+    github_token = os.getenv("GITHUB_TOKEN")
+    g = Github(github_token)
+    repo = g.get_repo(
+        "BerriAI/litellm"
+    )  # Replace with your repository's username and name
+    latest_release = repo.get_latest_release()
+    print("got latest release: ", latest_release)
+    latest_release.update_release(
+        body=latest_release.body + "\n\n" + interpreted_results_str
+    )
