@@ -34,5 +34,4 @@ jobs:
           update_latest_release: true
           tag_name: "load-test"
           overwrite: true
-          body: |
-            ${{ steps.build.outputs.interpreted_results }}
+          default_release_body: ${{ steps.locust_run.outputs.interpreted_results }}
