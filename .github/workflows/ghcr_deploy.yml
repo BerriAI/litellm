@@ -178,13 +178,13 @@ jobs:
           RELEASE_NOTES: ${{ steps.release-notes.outputs.result }}
         run: |
           curl -H "Content-Type: application/json" -X POST -d '{
-            "content": "||@everyone||",
+            "content": "New LiteLLM release ${{ env.RELEASE_TAG }}",
             "username": "Release Changelog",
             "avatar_url": "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png",
             "embeds": [
               {
-                "title": "Changelog for ${RELEASE_TAG}",
-                "description": "${RELEASE_NOTES}",
+                "title": "Changelog for LiteLLM ${{ env.RELEASE_TAG }}",
+                "description": "${{ env.RELEASE_NOTES }}",
                 "color": 2105893
               }
             ]
