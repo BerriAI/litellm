@@ -1,6 +1,6 @@
 name: Test Locust Load Test
 
-on: [push]
+on: [release, workflow_dispatch]
 
 jobs:
   build:
