@@ -25,7 +25,7 @@ jobs:
           URL:  "https://litellm-api.up.railway.app/"
           USERS: "100"
           RATE: "10"
-          RUNTIME: "10s"
+          RUNTIME: "120s"
       - name: Process Load Test Stats
         run: |
           echo "Current working directory: $PWD"
