@@ -86,7 +86,7 @@ proxy_config:
         model: gpt-3.5-turbo
         api_key: eXaMpLeOnLy
   general_settings:
-    master_key: os.environ/PROXY_MASTER_KEY
+    #master_key: os.environ/PROXY_MASTER_KEY
 #  litellm_settings:
 #    cache: true
 
