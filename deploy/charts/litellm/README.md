@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Kubernetes 1.23+
+- Kubernetes 1.21+
 - Helm 3.8.0+
 
 If `db.deployStandalone` is used:
@@ -33,6 +33,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `proxy_config.*`                                           | See [values.yaml](./values.yaml) for default settings.  See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples.                            | N/A  |
 
 #### Example `environmentSecrets` Secret 
+
 ```
 apiVersion: v1
 kind: Secret
