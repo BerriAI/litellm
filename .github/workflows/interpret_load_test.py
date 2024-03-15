@@ -40,7 +40,7 @@ def interpret_results(csv_file):
                 result_str += " Failed ❌\n"
             print(result_str)
         interpreted_results_str += result_str
-    print(interpreted_results_str)
+    print("interpreted_results_str() output: ", interpreted_results_str)
     return interpreted_results_str
 
 
@@ -48,7 +48,6 @@ if __name__ == "__main__":
     csv_file = "load_test_stats.csv"  # Change this to the path of your CSV file
     interpreted_results_str = interpret_results(csv_file)
     markdown_table = csv_to_markdown(csv_file)
-    print(markdown_table)
 
     # Update release body with interpreted results
     github_token = os.getenv("GITHUB_TOKEN")

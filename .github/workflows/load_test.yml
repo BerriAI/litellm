@@ -23,16 +23,14 @@ jobs:
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
           URL:  "https://litellm-api.up.railway.app/"
-          USERS: "1"
+          USERS: "100"
           RATE: "10"
-          RUNTIME: "3s"
+          RUNTIME: "10s"
       - name: Process Load Test Stats
         run: |
           echo "Current working directory: $PWD"
           ls
           python ".github/workflows/interpret_load_test.py"
-          interpreted_results=$(cat load_test_interpreted_results.txt)
-          echo "::set-output name=interpreted_results::$interpreted_results"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: ${{ github.workspace }}
@@ -45,4 +43,3 @@ jobs:
           update_latest_release: true
           tag_name: "load-test"
           overwrite: true
-          default_release_body: ${{ steps.locust_run.outputs.interpreted_results }}
