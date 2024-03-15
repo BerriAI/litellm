@@ -132,6 +132,41 @@ print(response)
 
 ```
 
+### Use LangChain ChatLiteLLM + Langfuse
+Pass `trace_user_id`, `session_id` in model_kwargs
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+from langchain.schema import HumanMessage
+import litellm
+
+# from https://cloud.langfuse.com/
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
+
+os.environ['OPENAI_API_KEY']=""
+
+# set langfuse as a callback, litellm will send the data to langfuse
+litellm.success_callback = ["langfuse"] 
+
+chat = ChatLiteLLM(
+  model="gpt-3.5-turbo"
+  model_kwargs={
+      "metadata": {
+        "trace_user_id": "user-id2", # set langfuse Trace User ID
+        "session_id": "session-1" ,  # set langfuse Session ID
+        "tags": ["tag1", "tag2"] 
+      }
+    }
+  )
+messages = [
+    HumanMessage(
+        content="what model are you"
+    )
+]
+chat(messages)
+```
+
 
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 
