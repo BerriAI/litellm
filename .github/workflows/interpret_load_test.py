@@ -66,6 +66,12 @@ if __name__ == "__main__":
     )  # Replace with your repository's username and name
     latest_release = repo.get_latest_release()
     print("got latest release: ", latest_release)
-    latest_release.update_release(
-        body=latest_release.body + "\n\n" + interpreted_results_str
-    )
+    print("latest release body: ", latest_release.body)
+    print("new release body: ", latest_release.body + "\n\n" + interpreted_results_str)
+    try:
+        latest_release.update_release(
+            name=latest_release.tag_name,
+            message=latest_release.body + "\n\n" + interpreted_results_str,
+        )
+    except Exception as e:
+        print(e)
