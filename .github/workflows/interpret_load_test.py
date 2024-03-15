@@ -42,6 +42,7 @@ def interpret_results(csv_file):
             print(result_str)
         interpreted_results_str += result_str
     print(interpreted_results_str)
+    return interpreted_results_str
 
 
 if __name__ == "__main__":
