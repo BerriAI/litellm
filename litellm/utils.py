@@ -2589,7 +2589,7 @@ def client(original_function):
             if (
                 kwargs.get("max_tokens", None) is not None
                 and model is not None
-                and litellm.drop_params
+                and litellm.modify_params
                 == True  # user is okay with params being modified
                 and (
                     call_type == CallTypes.acompletion.value

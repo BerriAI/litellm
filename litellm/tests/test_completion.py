@@ -312,7 +312,7 @@ def test_completion_mistral_azure():
                 }
             ],
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check,the response
         print(response)
 
     except Exception as e:
@@ -580,7 +580,7 @@ def test_completion_perplexity_api_2():
 
 # test_completion_perplexity_api_2()
 
-# commenting out as this is a flaky test on circle ci
+# commenting out as this is a flaky test on circle-ci
 # def test_completion_nlp_cloud():
 #     try:
 #         messages = [
