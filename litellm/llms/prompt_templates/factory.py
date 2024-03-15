@@ -175,8 +175,9 @@ def falcon_chat_pt(messages):
     return prompt
 
 
+# ChatML is used by openhermes
 # MPT prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
-def mpt_chat_pt(messages):
+def chatml_chat_pt(messages):
     prompt = ""
     for message in messages:
         if message["role"] == "system":
@@ -637,7 +638,9 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     try:
-        if ("mistral" in model or "mixtral" in model) and "instruct" in model:
+        if "openhermes" in model:
+            return chatml_chat_pt(messages=messages)
+        elif ("mistral" in model or "mixtral" in model) and "instruct" in model:
             return mistral_instruct_pt(messages=messages)
         elif "llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
@@ -650,7 +653,7 @@ def prompt_factory(
                 return falcon_instruct_pt(messages=messages)
         elif "mosaicml/mpt" in model:
             if "chat" in model:
-                return mpt_chat_pt(messages=messages)
+                return chatml_chat_pt(messages=messages)
         elif "codellama/codellama" in model or "togethercomputer/codellama" in model:
             if "instruct" in model:
                 return llama_2_chat_pt(
