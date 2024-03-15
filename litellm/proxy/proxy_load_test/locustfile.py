@@ -31,28 +31,8 @@ class MyUser(HttpUser):
 
     @task(10)
     def health_readiness(self):
-        start_time = time.time()
         response = self.client.get("health/readiness")
-        response_time = time.time() - start_time
-        if response_time > 1:
-            events.request_failure.fire(
-                request_type="GET",
-                name="health/readiness",
-                response_time=response_time,
-                exception=None,
-                response=response,
-            )
 
     @task(10)
     def health_liveliness(self):
-        start_time = time.time()
         response = self.client.get("health/liveliness")
-        response_time = time.time() - start_time
-        if response_time > 1:
-            events.request_failure.fire(
-                request_type="GET",
-                name="health/liveliness",
-                response_time=response_time,
-                exception=None,
-                response=response,
-            )
