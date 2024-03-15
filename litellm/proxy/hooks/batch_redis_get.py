@@ -85,10 +85,10 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                         )
 
             ## Add to cache
-            for key, value in key_value_dict.items():
-                _cache_key = f"{cache_key_name}:{key}"
-                cache.in_memory_cache.cache_dict[_cache_key] = value
-
+            if len(key_value_dict.items()) > 0:
+                await cache.in_memory_cache.async_set_cache_pipeline(
+                    cache_list=list(key_value_dict.items()), ttl=60
+                )
             ## Set cache namespace if it's a miss
             data["metadata"]["redis_namespace"] = cache_key_name
         except HTTPException as e:
