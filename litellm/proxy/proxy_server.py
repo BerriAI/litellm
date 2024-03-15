@@ -1422,6 +1422,8 @@ async def update_cache(
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
+                if _id is None:
+                    continue
                 existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
                 if existing_spend_obj is None:
                     # if user does not exist in LiteLLM_UserTable, create a new user
