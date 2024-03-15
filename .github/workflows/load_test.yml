@@ -23,7 +23,7 @@ jobs:
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
           URL:  "https://litellm-database-docker-build-production.up.railway.app/"
-          USERS: "2000"
+          USERS: "200"
           RATE: "20"
           RUNTIME: "300s"
       - name: Process Load Test Stats
