@@ -529,6 +529,25 @@ def test_completion_azure_gpt4_vision():
 # test_completion_azure_gpt4_vision()
 
 
+def test_completion_fireworks_ai():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
+            messages=messages,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
