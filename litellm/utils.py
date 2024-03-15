@@ -5375,6 +5375,17 @@ def get_llm_provider(
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
+            elif custom_llm_provider == "fireworks_ai":
+                # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
+                if not model.startswith("accounts/fireworks/models"):
+                    model = f"accounts/fireworks/models/{model}"
+                api_base = "https://api.fireworks.ai/inference/v1"
+                dynamic_api_key = (
+                    get_secret("FIREWORKS_API_KEY")
+                    or get_secret("FIREWORKS_AI_API_KEY")
+                    or get_secret("FIREWORKSAI_API_KEY")
+                    or get_secret("FIREWORKS_AI_TOKEN")
+                )
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
                 api_base = (

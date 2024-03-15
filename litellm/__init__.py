@@ -328,6 +328,7 @@ openai_compatible_providers: List = [
     "perplexity",
     "xinference",
     "together_ai",
+    "fireworks_ai",
 ]
 
 
@@ -479,6 +480,7 @@ provider_list: List = [
     "voyage",
     "cloudflare",
     "xinference",
+    "fireworks_ai",
     "custom",  # custom apis
 ]
 
