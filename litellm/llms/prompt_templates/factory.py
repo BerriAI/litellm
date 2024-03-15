@@ -551,6 +551,58 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
         )
 
 
+def convert_openai_message_to_anthropic_tool_result(message):
+    """
+    OpenAI message with a tool result looks like:
+    {
+        "tool_call_id": "tool_1",
+        "role": "tool",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    },
+    """
+
+    """
+    Anthropic tool_results look like:
+    
+    [Successful results]
+    <function_results>
+    <result>
+    <tool_name>get_current_weather</tool_name>
+    <stdout>
+    function result goes here
+    </stdout>
+    </result>
+    </function_results>
+
+    [Error results]
+    <function_results>
+    <error>
+    error message goes here
+    </error>
+    </function_results>
+    """
+    name = message.get("name")
+    content = message.get("content")
+
+    # We can't determine from openai message format whether it's a successful or
+    # error call result so default to the successful result template
+    anthropic_tool_result = {
+        "role": "user",
+        "content": (
+            "<function_results>\n"
+            "<result>\n"
+            f"<tool_name>{name}</tool_name>\n"
+            "<stdout>\n"
+            f"{content}\n"
+            "</stdout>\n"
+            "</result>\n"
+            "</function_results>"
+        ),
+    }
+    return anthropic_tool_result
+
+
 def anthropic_messages_pt(messages: list):
     """
     format messages for anthropic
@@ -563,6 +615,8 @@ def anthropic_messages_pt(messages: list):
     """
     ## Ensure final assistant message has no trailing whitespace
     last_assistant_message_idx: Optional[int] = None
+    # add role=tool support to allow function call result/error submission
+    user_message_types = {"user", "tool"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
     new_messages = []
     if len(messages) == 1:
@@ -591,6 +645,11 @@ def anthropic_messages_pt(messages: list):
                 {"role": messages[0]["role"], "content": messages[0]["content"]}
             )
 
+        if new_messages[-1]["role"] == "tool":  # function call result or error
+            new_messages[-1] = convert_openai_message_to_anthropic_tool_result(
+                new_messages[-1]
+            )
+
         return new_messages
 
     for i in range(len(messages) - 1):  # type: ignore
@@ -616,16 +675,29 @@ def anthropic_messages_pt(messages: list):
                 {"role": messages[i]["role"], "content": messages[i]["content"]}
             )
 
-        if messages[i]["role"] == messages[i + 1]["role"]:
-            if messages[i]["role"] == "user":
-                new_messages.append({"role": "assistant", "content": ""})
-            else:
-                new_messages.append({"role": "user", "content": ""})
+        if new_messages[-1]["role"] == "tool":  # function call result or error
+            new_messages[-1] = convert_openai_message_to_anthropic_tool_result(
+                new_messages[-1]
+            )
+
+        if (
+            messages[i]["role"] in user_message_types
+            and messages[i + 1]["role"] in user_message_types
+        ):
+            new_messages.append({"role": "assistant", "content": ""})
 
         if messages[i]["role"] == "assistant":
+            if messages[i + 1]["role"] == "assistant":
+                new_messages.append({"role": "user", "content": ""})
+
             last_assistant_message_idx = i
 
-    new_messages.append(messages[-1])
+    new_messages.append(
+        convert_openai_message_to_anthropic_tool_result(messages[-1])
+        if messages[-1]["role"] == "tool"
+        else messages[-1]
+    )
+
     if last_assistant_message_idx is not None:
         new_messages[last_assistant_message_idx]["content"] = new_messages[
             last_assistant_message_idx
