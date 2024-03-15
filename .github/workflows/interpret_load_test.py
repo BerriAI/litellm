@@ -32,7 +32,9 @@ def interpret_results(csv_file):
 
         # Construct Markdown table header
         markdown_table = "| Name | Status | Median Response Time (ms) | Average Response Time (ms) | Requests/s | Failures/s | Request Count | Failure Count | Min Response Time (ms) | Max Response Time (ms) |"
-        markdown_table += "\n| --- | --- | --- | --- | --- | --- | --- | --- |"
+        markdown_table += (
+            "\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        )
 
         # Construct Markdown table rows
         for row in rows:
