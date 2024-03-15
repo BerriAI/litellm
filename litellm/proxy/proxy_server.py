@@ -889,6 +889,9 @@ async def user_api_key_auth(
                     raise Exception(
                         f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
                     )
+        if valid_token is None:
+            # No token was found when looking up in the DB
+            raise Exception("Invalid token passed")
         if valid_token_dict is not None:
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
         else:
