@@ -24,8 +24,17 @@ def interpret_results(csv_file):
                 row["Average Response Time"].strip().rstrip("s")
             )
 
+            request_count = int(row["Request Count"])
+            failure_count = int(row["Failure Count"])
+
+            failure_percent = round((failure_count / request_count) * 100, 2)
+
             # Determine status based on conditions
-            if median_response_time < 300 and average_response_time < 300:
+            if (
+                median_response_time < 300
+                and average_response_time < 300
+                and failure_percent < 5
+            ):
                 row["Status"] = "Passed ✅"
             else:
                 row["Status"] = "Failed ❌"
