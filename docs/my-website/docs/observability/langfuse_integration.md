@@ -132,6 +132,32 @@ print(response)
 
 ```
 
+### ChatLiteLLM Integration
+Pass `trace_user_id`, `session_id` in model_kwargs
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+from langchain.schema import HumanMessage
+
+os.environ['OPENAI_API_KEY'] = ""
+chat = ChatLiteLLM(
+  model="gpt-3.5-turbo"
+  model_kwargs={
+      "metadata": {
+        "trace_user_id": "user-id2", # set langfuse Trace User ID
+        "session_id": "session-1" ,  # set langfuse Session ID
+        "tags": ["tag1", "tag2"] 
+      }
+    }
+  )
+messages = [
+    HumanMessage(
+        content="what model are you"
+    )
+]
+chat(messages)
+```
+
 
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 
