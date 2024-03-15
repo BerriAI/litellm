@@ -35,7 +35,6 @@ try:
     import orjson
     import logging
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from argon2 import PasswordHasher
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -252,7 +251,6 @@ user_headers = None
 user_config_file_path = f"config_{int(time.time())}.yaml"
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
-ph = PasswordHasher()
 #### GLOBAL VARIABLES ####
 llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
@@ -382,7 +380,7 @@ async def user_api_key_auth(
             return valid_token
 
         try:
-            is_master_key_valid = ph.verify(litellm_master_key_hash, api_key)
+            is_master_key_valid = secrets.compare_digest(api_key, master_key)
         except Exception as e:
             is_master_key_valid = False
 
@@ -1913,7 +1911,7 @@ class ProxyConfig:
                 master_key = litellm.get_secret(master_key)
 
             if master_key is not None and isinstance(master_key, str):
-                litellm_master_key_hash = ph.hash(master_key)
+                litellm_master_key_hash = master_key
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
