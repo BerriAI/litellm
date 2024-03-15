@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Kubernetes 1.23+
+- Kubernetes 1.21+
 - Helm 3.8.0+
 
 If `db.deployStandalone` is used:
