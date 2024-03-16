@@ -150,6 +150,9 @@ class RedisCache(BaseCache):
                 await redis_client.set(
                     name=key, value=json.dumps(value), ex=ttl, get=True
                 )
+                print_verbose(
+                    f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
+                )
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
                 print_verbose(
@@ -216,7 +219,7 @@ class RedisCache(BaseCache):
         _redis_client = self.init_async_client()
         async with _redis_client as redis_client:
             try:
-                print_verbose(f"Get Redis Cache: key: {key}")
+                print_verbose(f"Get Async Redis Cache: key: {key}")
                 cached_response = await redis_client.get(key)
                 print_verbose(
                     f"Got Async Redis Cache: key: {key}, cached_response {cached_response}"
@@ -225,8 +228,9 @@ class RedisCache(BaseCache):
                 return response
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
-                traceback.print_exc()
-                logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
+                print_verbose(
+                    f"LiteLLM Caching: async get() - Got exception from REDIS: {str(e)}"
+                )
 
     async def async_get_cache_pipeline(self, key_list) -> dict:
         """
