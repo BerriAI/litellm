@@ -5118,9 +5118,9 @@ async def block_user(data: BlockUsers):
         if prisma_client is not None:
             for id in data.user_ids:
                 record = await prisma_client.db.litellm_endusertable.upsert(
-                    where={"user_id": id},
+                    where={"user_id": id},  # type: ignore
                     data={
-                        "create": {"user_id": id, "blocked": True},
+                        "create": {"user_id": id, "blocked": True},  # type: ignore
                         "update": {"blocked": True},
                     },
                 )
