@@ -152,6 +152,52 @@ def test_completion_claude_3_function_call():
         assert isinstance(
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
+
+        messages.append(
+            response.choices[0].message.model_dump()
+        )  # Add assistant tool invokes
+        tool_result = (
+            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+        )
+        # Add user submitted tool results in OpenAI format
+        messages.append(
+            {
+                "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                "role": "tool",
+                "name": response.choices[0].message.tool_calls[0].function.name,
+                "content": tool_result,
+            }
+        )
+        # In the second response, Claude should deduce answer from tool results
+        second_response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(second_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_claude_3_multi_turn_conversations():
+    litellm.set_verbose = True
+    messages = [
+        {"role": "assistant", "content": "?"},  # test first user message auto injection
+        {"role": "user", "content": "Hi!"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "What is the weather like today?"}],
+        },
+        {"role": "assistant", "content": "Hi! I am Claude. "},
+        {"role": "assistant", "content": "Today is a sunny "},
+    ]
+    try:
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+        )
+        print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
