@@ -602,6 +602,22 @@ class LiteLLM_UserTable(LiteLLMBase):
         protected_namespaces = ()
 
 
+class LiteLLM_EndUserTable(LiteLLMBase):
+    user_id: str
+    blocked: bool
+    alias: Optional[str] = None
+    spend: float = 0.0
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("spend") is None:
+            values.update({"spend": 0.0})
+        return values
+
+    class Config:
+        protected_namespaces = ()
+
+
 class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
     api_key: str
