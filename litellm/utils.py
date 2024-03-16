@@ -72,7 +72,7 @@ from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
-from .caching import S3Cache, RedisSemanticCache
+from .caching import S3Cache, RedisSemanticCache, RedisCache
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
@@ -1795,7 +1795,12 @@ class Logging:
                             )
                             result = kwargs["async_complete_streaming_response"]
                             # only add to cache once we have a complete streaming response
-                            litellm.cache.add_cache(result, **kwargs)
+                            if litellm.cache is not None and not isinstance(
+                                litellm.cache.cache, S3Cache
+                            ):
+                                await litellm.cache.async_add_cache(result, **kwargs)
+                            else:
+                                litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
                     print_verbose(
                         f"Running Async success callback: {callback}; self.stream: {self.stream}; async_complete_streaming_response: {self.model_call_details.get('async_complete_streaming_response', None)} result={result}"
@@ -2589,7 +2594,7 @@ def client(original_function):
             if (
                 kwargs.get("max_tokens", None) is not None
                 and model is not None
-                and litellm.drop_params
+                and litellm.modify_params
                 == True  # user is okay with params being modified
                 and (
                     call_type == CallTypes.acompletion.value
@@ -2806,7 +2811,9 @@ def client(original_function):
                         ):
                             if len(cached_result) == 1 and cached_result[0] is None:
                                 cached_result = None
-                    elif isinstance(litellm.cache.cache, RedisSemanticCache):
+                    elif isinstance(
+                        litellm.cache.cache, RedisSemanticCache
+                    ) or isinstance(litellm.cache.cache, RedisCache):
                         preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
                         kwargs["preset_cache_key"] = (
                             preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
@@ -5375,6 +5382,17 @@ def get_llm_provider(
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
+            elif custom_llm_provider == "fireworks_ai":
+                # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
+                if not model.startswith("accounts/fireworks/models"):
+                    model = f"accounts/fireworks/models/{model}"
+                api_base = "https://api.fireworks.ai/inference/v1"
+                dynamic_api_key = (
+                    get_secret("FIREWORKS_API_KEY")
+                    or get_secret("FIREWORKS_AI_API_KEY")
+                    or get_secret("FIREWORKSAI_API_KEY")
+                    or get_secret("FIREWORKS_AI_TOKEN")
+                )
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
                 api_base = (

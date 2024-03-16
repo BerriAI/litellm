@@ -300,8 +300,7 @@ def embedding(
     for text in input:
         input_tokens += len(encoding.encode(text))
 
-    model_response["usage"] = {
-        "prompt_tokens": input_tokens,
-        "total_tokens": input_tokens,
-    }
+    model_response["usage"] = Usage(
+        prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+    )
     return model_response

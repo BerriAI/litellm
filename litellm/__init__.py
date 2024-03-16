@@ -36,6 +36,7 @@ token: Optional[str] = (
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
+modify_params = False
 retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
@@ -327,6 +328,7 @@ openai_compatible_providers: List = [
     "perplexity",
     "xinference",
     "together_ai",
+    "fireworks_ai",
 ]
 
 
@@ -478,6 +480,7 @@ provider_list: List = [
     "voyage",
     "cloudflare",
     "xinference",
+    "fireworks_ai",
     "custom",  # custom apis
 ]
 

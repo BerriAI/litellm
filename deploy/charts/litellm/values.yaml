@@ -6,7 +6,6 @@ replicaCount: 1
 
 image:
   # Use "ghcr.io/berriai/litellm-database" for optimized image with database
-  # Alternatively, use "ghcr.io/berriai/litellm" for the default image
   repository: ghcr.io/berriai/litellm-database
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
@@ -85,10 +84,13 @@ proxy_config:
       litellm_params:
         model: gpt-3.5-turbo
         api_key: eXaMpLeOnLy
+    - model_name: fake-openai-endpoint
+      litellm_params:
+        model: openai/fake
+        api_key: fake-key
+        api_base: https://exampleopenaiendpoint-production.up.railway.app/
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
-#  litellm_settings:
-#    cache: true
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious

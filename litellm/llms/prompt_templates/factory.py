@@ -705,6 +705,7 @@ def anthropic_messages_pt(messages: list):
                     "text"
                 ].rstrip()  # no trailing whitespace for final assistant message
 
+
     return new_messages
 
 
