@@ -5094,39 +5094,36 @@ async def user_get_requests():
 
 @router.post(
     "/user/block",
-    tags=["user management"],
+    tags=["End User Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def block_user(data: BlockUsers):
     """
-    [BETA] Reject calls with this user id
+    [BETA] Reject calls with this end-user id
 
-    ```
-    curl -X POST "http://0.0.0.0:8000/user/block"
-    -H "Authorization: Bearer sk-1234"
-    -D '{
-    "user_ids": [<user_id>, ...]
-    }'
-    ```
+        (any /chat/completion call with this user={end-user-id} param, will be rejected.)
+
+        ```
+        curl -X POST "http://0.0.0.0:8000/user/block"
+        -H "Authorization: Bearer sk-1234"
+        -D '{
+        "user_ids": [<user_id>, ...]
+        }'
+        ```
     """
-    from enterprise.enterprise_hooks.blocked_user_list import (
-        _ENTERPRISE_BlockedUserList,
-    )
-
-    if not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks):
-        blocked_user_list = _ENTERPRISE_BlockedUserList()
-        litellm.callbacks.append(blocked_user_list)  # type: ignore
-
-    if litellm.blocked_user_list is None:
-        litellm.blocked_user_list = data.user_ids
-    elif isinstance(litellm.blocked_user_list, list):
-        litellm.blocked_user_list = litellm.blocked_user_list + data.user_ids
+    if prisma_client is not None:
+        for id in data.user_ids:
+            await prisma_client.db.litellm_endusertable.upsert(
+                where={"id": id},
+                data={
+                    "create": {"id": id, "blocked": True},
+                    "update": {"blocked": True},
+                },
+            )
     else:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "`blocked_user_list` must be a list or not set. Filepaths can't be updated."
-            },
+            detail={"error": "Postgres DB Not connected"},
         )
 
     return {"blocked_users": litellm.blocked_user_list}
@@ -5134,7 +5131,7 @@ async def block_user(data: BlockUsers):
 
 @router.post(
     "/user/unblock",
-    tags=["user management"],
+    tags=["End User Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def unblock_user(data: BlockUsers):
