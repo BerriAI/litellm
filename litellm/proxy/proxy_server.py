@@ -1090,6 +1090,8 @@ async def update_database(
                 key=hashed_token
             )
             existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+            if existing_user_obj is not None and isinstance(existing_user_obj, dict):
+                existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
             if existing_token_obj.user_id != user_id:  # an end-user id was passed in
                 end_user_id = user_id
             user_ids = [existing_token_obj.user_id, litellm_proxy_budget_name]
@@ -1201,7 +1203,8 @@ async def update_database(
                             )
             except Exception as e:
                 verbose_proxy_logger.info(
-                    f"Update User DB call failed to execute {str(e)}"
+                    "\033[91m"
+                    + f"Update User DB call failed to execute {str(e)}\n{traceback.format_exc()}"
                 )
 
         ### UPDATE KEY SPEND ###
@@ -1241,9 +1244,8 @@ async def update_database(
                         valid_token.spend = new_spend
                         user_api_key_cache.set_cache(key=token, value=valid_token)
             except Exception as e:
-                traceback.print_exc()
                 verbose_proxy_logger.info(
-                    f"Update Key DB Call failed to execute - {str(e)}"
+                    f"Update Key DB Call failed to execute - {str(e)}\n{traceback.format_exc()}"
                 )
                 raise e
 
@@ -1267,7 +1269,7 @@ async def update_database(
 
             except Exception as e:
                 verbose_proxy_logger.info(
-                    f"Update Spend Logs DB failed to execute - {str(e)}"
+                    f"Update Spend Logs DB failed to execute - {str(e)}\n{traceback.format_exc()}"
                 )
                 raise e
 
@@ -1314,7 +1316,7 @@ async def update_database(
                         user_api_key_cache.set_cache(key=token, value=valid_token)
             except Exception as e:
                 verbose_proxy_logger.info(
-                    f"Update Team DB failed to execute - {str(e)}"
+                    f"Update Team DB failed to execute - {str(e)}\n{traceback.format_exc()}"
                 )
                 raise e
 
@@ -1323,7 +1325,7 @@ async def update_database(
         asyncio.create_task(_update_team_db())
         asyncio.create_task(_insert_spend_log_to_db())
 
-        verbose_proxy_logger.info("Successfully updated spend in all 3 tables")
+        verbose_proxy_logger.debug("Runs spend update on all tables")
     except Exception as e:
         verbose_proxy_logger.debug(
             f"Error updating Prisma database: {traceback.format_exc()}"
@@ -1439,7 +1441,7 @@ async def update_cache(
                         user_email=None,
                     )
                 verbose_proxy_logger.debug(
-                    f"_update_user_db: existing spend: {existing_spend_obj}"
+                    f"_update_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
                 )
                 if existing_spend_obj is None:
                     existing_spend = 0
