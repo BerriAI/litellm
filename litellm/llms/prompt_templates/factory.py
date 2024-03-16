@@ -714,6 +714,8 @@ def extract_between_tags(tag: str, string: str, strip: bool = False) -> List[str
         ext_list = [e.strip() for e in ext_list]
     return ext_list
 
+def contains_tag(tag: str, string: str) -> bool:
+    return bool(re.search(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL))
 
 def parse_xml_params(xml_content):
     root = ET.fromstring(xml_content)
