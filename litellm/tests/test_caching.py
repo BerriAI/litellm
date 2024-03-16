@@ -474,11 +474,10 @@ def test_redis_cache_completion_stream():
 # test_redis_cache_completion_stream()
 
 
-def test_redis_cache_acompletion_stream():
-    import asyncio
-
+@pytest.mark.asyncio
+async def test_redis_cache_acompletion_stream():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         random_word = generate_random_word()
         messages = [
             {
@@ -496,37 +495,31 @@ def test_redis_cache_acompletion_stream():
         response_1_content = ""
         response_2_content = ""
 
-        async def call1():
-            nonlocal response_1_content
-            response1 = await litellm.acompletion(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                max_tokens=40,
-                temperature=1,
-                stream=True,
-            )
-            async for chunk in response1:
-                response_1_content += chunk.choices[0].delta.content or ""
-            print(response_1_content)
+        response1 = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+            stream=True,
+        )
+        async for chunk in response1:
+            response_1_content += chunk.choices[0].delta.content or ""
+        print(response_1_content)
 
-        asyncio.run(call1())
         time.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
-        async def call2():
-            nonlocal response_2_content
-            response2 = await litellm.acompletion(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                max_tokens=40,
-                temperature=1,
-                stream=True,
-            )
-            async for chunk in response2:
-                response_2_content += chunk.choices[0].delta.content or ""
-            print(response_2_content)
+        response2 = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+            stream=True,
+        )
+        async for chunk in response2:
+            response_2_content += chunk.choices[0].delta.content or ""
+        print(response_2_content)
 
-        asyncio.run(call2())
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
         assert (
@@ -536,14 +529,15 @@ def test_redis_cache_acompletion_stream():
         litellm.success_callback = []
         litellm._async_success_callback = []
     except Exception as e:
-        print(e)
+        print(f"{str(e)}\n\n{traceback.format_exc()}")
         raise e
 
 
 # test_redis_cache_acompletion_stream()
 
 
-def test_redis_cache_acompletion_stream_bedrock():
+@pytest.mark.asyncio
+async def test_redis_cache_acompletion_stream_bedrock():
     import asyncio
 
     try:
@@ -565,39 +559,33 @@ def test_redis_cache_acompletion_stream_bedrock():
         response_1_content = ""
         response_2_content = ""
 
-        async def call1():
-            nonlocal response_1_content
-            response1 = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v2",
-                messages=messages,
-                max_tokens=40,
-                temperature=1,
-                stream=True,
-            )
-            async for chunk in response1:
-                print(chunk)
-                response_1_content += chunk.choices[0].delta.content or ""
-            print(response_1_content)
+        response1 = await litellm.acompletion(
+            model="bedrock/anthropic.claude-v2",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+            stream=True,
+        )
+        async for chunk in response1:
+            print(chunk)
+            response_1_content += chunk.choices[0].delta.content or ""
+        print(response_1_content)
 
-        asyncio.run(call1())
         time.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
-        async def call2():
-            nonlocal response_2_content
-            response2 = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v2",
-                messages=messages,
-                max_tokens=40,
-                temperature=1,
-                stream=True,
-            )
-            async for chunk in response2:
-                print(chunk)
-                response_2_content += chunk.choices[0].delta.content or ""
-            print(response_2_content)
+        response2 = await litellm.acompletion(
+            model="bedrock/anthropic.claude-v2",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+            stream=True,
+        )
+        async for chunk in response2:
+            print(chunk)
+            response_2_content += chunk.choices[0].delta.content or ""
+        print(response_2_content)
 
-        asyncio.run(call2())
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
         assert (
@@ -612,8 +600,8 @@ def test_redis_cache_acompletion_stream_bedrock():
         raise e
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_s3_cache_acompletion_stream_azure():
+@pytest.mark.asyncio
+async def test_s3_cache_acompletion_stream_azure():
     import asyncio
 
     try:
@@ -637,41 +625,35 @@ def test_s3_cache_acompletion_stream_azure():
         response_1_created = ""
         response_2_created = ""
 
-        async def call1():
-            nonlocal response_1_content, response_1_created
-            response1 = await litellm.acompletion(
-                model="azure/chatgpt-v-2",
-                messages=messages,
-                max_tokens=40,
-                temperature=1,
-                stream=True,
-            )
-            async for chunk in response1:
-                print(chunk)
-                response_1_created = chunk.created
-                response_1_content += chunk.choices[0].delta.content or ""
-            print(response_1_content)
+        response1 = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+            stream=True,
+        )
+        async for chunk in response1:
+            print(chunk)
+            response_1_created = chunk.created
+            response_1_content += chunk.choices[0].delta.content or ""
+        print(response_1_content)
 
-        asyncio.run(call1())
         time.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
-        async def call2():
-            nonlocal response_2_content, response_2_created
-            response2 = await litellm.acompletion(
-                model="azure/chatgpt-v-2",
-                messages=messages,
-                max_tokens=40,
-                temperature=1,
-                stream=True,
-            )
-            async for chunk in response2:
-                print(chunk)
-                response_2_content += chunk.choices[0].delta.content or ""
-                response_2_created = chunk.created
-            print(response_2_content)
+        response2 = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            max_tokens=40,
+            temperature=1,
+            stream=True,
+        )
+        async for chunk in response2:
+            print(chunk)
+            response_2_content += chunk.choices[0].delta.content or ""
+            response_2_created = chunk.created
+        print(response_2_content)
 
-        asyncio.run(call2())
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
 
