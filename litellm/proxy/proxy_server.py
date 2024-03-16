@@ -7280,10 +7280,8 @@ def _db_health_readiness_check():
     # Note - Intentionally don't try/except this so it raises an exception when it fails
 
     # if timedelta is less than 2 minutes return DB Status
-    if (
-        db_health_cache["status"] != "unknown"
-        and db_health_cache["last_updated"] + timedelta(minutes=2) > datetime.now()
-    ):
+    time_diff = datetime.now() - db_health_cache["last_updated"]
+    if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
         return db_health_cache
     prisma_client.health_check()
     db_health_cache = {"status": "connected", "last_updated": datetime.now()}
