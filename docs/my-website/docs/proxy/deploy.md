@@ -266,6 +266,9 @@ kubectl \
 
 Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 
+
+If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm/values.yaml)
+
 </TabItem>
 </Tabs>
 
