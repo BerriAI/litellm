@@ -1780,9 +1780,11 @@ def completion(
             ## RESPONSE OBJECT
             response = response
         elif custom_llm_provider == "vllm":
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             model_response = vllm.completion(
                 model=model,
                 messages=messages,
+                custom_prompt_dict=custom_prompt_dict,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
