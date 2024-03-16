@@ -66,4 +66,4 @@ ENTRYPOINT ["litellm"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs 
 # CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--detailed_debug"]
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--num_workers", "1"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--num_workers", "4"]
