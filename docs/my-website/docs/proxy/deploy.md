@@ -236,7 +236,7 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 </TabItem>
 <TabItem value="helm-deploy" label="Helm">
 
-Use this to deploy litellm using a helm chart. Link to [the LiteLLM Helm Chart](https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm)
+Use this to deploy litellm using a helm chart. Link to [the LiteLLM Helm Chart](https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm-helm)
 
 #### Step 1. Clone the repository
 
@@ -252,7 +252,7 @@ Run the following command in the root of your `litellm` repo. This will set the 
 helm install \
   --set masterkey=sk-1234 \
   mydeploy \
-  deploy/charts/litellm
+  deploy/charts/litellm-helm
 ```
 
 #### Step 3. Expose the service to localhost
@@ -260,14 +260,14 @@ helm install \
 ```bash
 kubectl \
   port-forward \
-  service/mydeploy-litellm \
+  service/mydeploy-litellm-helm \
   4000:4000
 ```
 
 Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 
 
-If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm/values.yaml)
+If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/values.yaml)
 
 </TabItem>
 </Tabs>
