@@ -7303,6 +7303,17 @@ async def health_readiness():
     Unprotected endpoint for checking if worker can receive requests
     """
     try:
+        # get success callback
+        success_callback_names = []
+        try:
+            # this was returning a JSON of the values in some of the callbacks
+            # all we need is the callback name, hence we do str(callback)
+            success_callback_names = [str(x) for x in litellm.success_callback]
+        except:
+            # don't let this block the /health/readiness response, if we can't convert to str -> return litellm.success_callback
+            success_callback_names = litellm.success_callback
+
+        # check Cache
         cache_type = None
         if litellm.cache is not None:
             from litellm.caching import RedisSemanticCache
@@ -7318,6 +7329,7 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
+        # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = _db_health_readiness_check()
 
@@ -7326,7 +7338,7 @@ async def health_readiness():
                 "db": "connected",
                 "cache": cache_type,
                 "litellm_version": version,
-                "success_callbacks": litellm.success_callback,
+                "success_callbacks": success_callback_names,
                 **db_health_status,
             }
         else:
@@ -7335,7 +7347,7 @@ async def health_readiness():
                 "db": "Not connected",
                 "cache": cache_type,
                 "litellm_version": version,
-                "success_callbacks": litellm.success_callback,
+                "success_callbacks": success_callback_names,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
