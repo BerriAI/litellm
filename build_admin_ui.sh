@@ -8,8 +8,8 @@ echo
 pwd
 
 
-# only run this step for litellm enterprise, we run this if enterprise/enterprise_ui/_enterprise.json exists
-if [ ! -f "enterprise/enterprise_ui/enterprise_colors.json" ]; then
+# only run this step for litellm enterprise, we run this if litellm/proxy/enterprise/enterprise_ui/_enterprise.json exists
+if [ ! -f "litellm/proxy/enterprise/enterprise_ui/enterprise_colors.json" ]; then
     echo "Admin UI - using default LiteLLM UI"
     exit 0
 fi
@@ -47,7 +47,7 @@ nvm use v18.17.0
 npm install -g npm
 
 # copy _enterprise.json from this directory to /ui/litellm-dashboard, and rename it to ui_colors.json
-cp enterprise/enterprise_ui/enterprise_colors.json ui/litellm-dashboard/ui_colors.json
+cp litellm/proxy/enterprise/enterprise_ui/enterprise_colors.json ui/litellm-dashboard/ui_colors.json
 
 # cd in to /ui/litellm-dashboard
 cd ui/litellm-dashboard
