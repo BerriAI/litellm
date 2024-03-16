@@ -5095,7 +5095,7 @@ async def user_get_requests():
 
 
 @router.post(
-    "/user/block",
+    "/end_user/block",
     tags=["End User Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -5133,11 +5133,12 @@ async def block_user(data: BlockUsers):
 
         return {"blocked_users": records}
     except Exception as e:
+        verbose_proxy_logger.error(f"An error occurred - {str(e)}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 @router.post(
-    "/user/unblock",
+    "/end_user/unblock",
     tags=["End User Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
