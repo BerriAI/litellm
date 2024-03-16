@@ -165,7 +165,7 @@ jobs:
         with:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
-          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}, ${{ steps.meta.outputs.tags }}-latest
+          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
           app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}
