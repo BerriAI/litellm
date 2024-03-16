@@ -150,17 +150,20 @@ To avoid issues with predictability, difficulties in rollback, and inconsistent 
 
 
 ## Deploy with Database
+### Docker, Kubernetes, Helm Chart
+
+
+<Tabs>
+
+<TabItem value="docker-deploy" label="Dockerfile">
 
 We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
 
-<Tabs>
-<TabItem value="docker-deploy" label="Dockerfile">
-
-```
+```shell
 docker pull docker pull ghcr.io/berriai/litellm-database:main-latest
 ```
 
-```
+```shell
 docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
@@ -233,6 +236,8 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 </TabItem>
 <TabItem value="helm-deploy" label="Helm">
 
+Use this to deploy litellm using a helm chart. Link to [the LiteLLM Helm Chart](https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm)
+
 #### Step 1. Clone the repository
 
 ```bash
@@ -241,9 +246,11 @@ git clone https://github.com/BerriAI/litellm.git
 
 #### Step 2. Deploy with Helm
 
+Run the following command in the root of your `litellm` repo. This will set the litellm proxy master key as `sk-1234`
+
 ```bash
 helm install \
-  --set masterkey=SuPeRsEcReT \
+  --set masterkey=sk-1234 \
   mydeploy \
   deploy/charts/litellm
 ```
@@ -258,6 +265,9 @@ kubectl \
 ```
 
 Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+
+
+If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm/values.yaml)
 
 </TabItem>
 </Tabs>

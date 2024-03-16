@@ -1,12 +1,12 @@
-# Groq
-https://groq.com/
+# Fireworks AI
+https://fireworks.ai/
 
-**We support ALL Groq models, just set `groq/` as a prefix when sending completion requests**
+**We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending completion requests**
 
 ## API Key
 ```python
 # env variable
-os.environ['GROQ_API_KEY']
+os.environ['FIREWORKS_AI_API_KEY']
 ```
 
 ## Sample Usage
@@ -14,9 +14,9 @@ os.environ['GROQ_API_KEY']
 from litellm import completion
 import os
 
-os.environ['GROQ_API_KEY'] = ""
+os.environ['FIREWORKS_AI_API_KEY'] = ""
 response = completion(
-    model="groq/llama2-70b-4096", 
+    model="fireworks_ai/mixtral-8x7b-instruct", 
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -29,9 +29,9 @@ print(response)
 from litellm import completion
 import os
 
-os.environ['GROQ_API_KEY'] = ""
+os.environ['FIREWORKS_AI_API_KEY'] = ""
 response = completion(
-    model="groq/llama2-70b-4096", 
+    model="fireworks_ai/mixtral-8x7b-instruct", 
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -43,11 +43,11 @@ for chunk in response:
 ```
 
 
-## Supported Models - ALL Groq Models Supported!
-We support ALL Groq models, just set `groq/` as a prefix when sending completion requests
+## Supported Models - ALL Fireworks AI Models Supported!
+We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending completion requests
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| llama2-70b-4096 | `completion(model="groq/llama2-70b-4096", messages)` | 
-| mixtral-8x7b-32768 | `completion(model="groq/mixtral-8x7b-32768", messages)` |
-| gemma-7b-it | `completion(model="groq/gemma-7b-it", messages)` |  
+| mixtral-8x7b-instruct | `completion(model="fireworks_ai/mixtral-8x7b-instruct", messages)` | 
+| firefunction-v1 | `completion(model="fireworks_ai/firefunction-v1", messages)` |
+| llama-v2-70b-chat | `completion(model="fireworks_ai/llama-v2-70b-chat", messages)` |  

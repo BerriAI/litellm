@@ -12,6 +12,7 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
+
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -891,6 +892,7 @@ def completion(
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -2393,6 +2395,7 @@ async def aembedding(*args, **kwargs):
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
@@ -2892,6 +2895,7 @@ async def atext_completion(*args, **kwargs):
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"

@@ -1,4 +1,6 @@
-from locust import HttpUser, task, between
+from locust import HttpUser, task, between, events
+import json
+import time
 
 
 class MyUser(HttpUser):
@@ -8,7 +10,7 @@ class MyUser(HttpUser):
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer sk-1234",
+            "Authorization": f"Bearer sk-gUvTeN9g0sgHBMf9HeCaqA",
             # Include any additional headers you may need for authentication, etc.
         }
 
@@ -26,3 +28,15 @@ class MyUser(HttpUser):
         response = self.client.post("chat/completions", json=payload, headers=headers)
 
         # Print or log the response if needed
+
+    @task(10)
+    def health_readiness(self):
+        start_time = time.time()
+        response = self.client.get("health/readiness")
+        response_time = time.time() - start_time
+
+    @task(10)
+    def health_liveliness(self):
+        start_time = time.time()
+        response = self.client.get("health/liveliness")
+        response_time = time.time() - start_time

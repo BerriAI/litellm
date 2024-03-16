@@ -8,7 +8,6 @@ import hashlib, uuid
 import warnings
 import importlib
 import warnings
-import backoff
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -35,7 +34,6 @@ try:
     import orjson
     import logging
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from argon2 import PasswordHasher
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -145,9 +143,12 @@ from typing import Union
 try:
     # when using litellm cli
     import litellm.proxy.enterprise as enterprise
-except:
+except Exception as e:
     # when using litellm docker image
-    import enterprise  # type: ignore
+    try:
+        import enterprise  # type: ignore
+    except Exception as e:
+        pass
 
 ui_link = f"/ui/"
 ui_message = (
@@ -252,7 +253,6 @@ user_headers = None
 user_config_file_path = f"config_{int(time.time())}.yaml"
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
-ph = PasswordHasher()
 #### GLOBAL VARIABLES ####
 llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
@@ -382,7 +382,7 @@ async def user_api_key_auth(
             return valid_token
 
         try:
-            is_master_key_valid = ph.verify(litellm_master_key_hash, api_key)
+            is_master_key_valid = secrets.compare_digest(api_key, master_key)
         except Exception as e:
             is_master_key_valid = False
 
@@ -887,6 +887,9 @@ async def user_api_key_auth(
                     raise Exception(
                         f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
                     )
+        if valid_token is None:
+            # No token was found when looking up in the DB
+            raise Exception("Invalid token passed")
         if valid_token_dict is not None:
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
         else:
@@ -1420,6 +1423,8 @@ async def update_cache(
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
+                if _id is None:
+                    continue
                 existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
                 if existing_spend_obj is None:
                     # if user does not exist in LiteLLM_UserTable, create a new user
@@ -1791,6 +1796,16 @@ class ProxyConfig:
                                     _ENTERPRISE_PromptInjectionDetection()
                                 )
                                 imported_list.append(prompt_injection_detection_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "batch_redis_requests"
+                            ):
+                                from litellm.proxy.hooks.batch_redis_get import (
+                                    _PROXY_BatchRedisRequests,
+                                )
+
+                                batch_redis_obj = _PROXY_BatchRedisRequests()
+                                imported_list.append(batch_redis_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
@@ -1913,7 +1928,7 @@ class ProxyConfig:
                 master_key = litellm.get_secret(master_key)
 
             if master_key is not None and isinstance(master_key, str):
-                litellm_master_key_hash = ph.hash(master_key)
+                litellm_master_key_hash = master_key
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
