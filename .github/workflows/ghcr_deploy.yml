@@ -10,7 +10,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  CHART_NAME: litellm
+  CHART_NAME: litellm-helm
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
@@ -143,7 +143,7 @@ jobs:
         id: current_version
         shell: bash
         run: |
-          CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }}-helm 2>/dev/null || true)
+          CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} 2>/dev/null || true)
           if [ -z "${CHART_LIST}" ]; then
             echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
           else
@@ -163,7 +163,7 @@ jobs:
       - uses: ./.github/actions/helm-oci-chart-releaser
         with:
           name: ${{ env.CHART_NAME }}
-          repository: ${{ env.REPO_OWNER }}-helm
+          repository: ${{ env.REPO_OWNER }}
           tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
           app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
           path: deploy/charts/${{ env.CHART_NAME }}
