@@ -161,6 +161,7 @@ spec:
           args:
             - --config
             - /etc/litellm/config.yaml
+            - --run_gunicorn
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
