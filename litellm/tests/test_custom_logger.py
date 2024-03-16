@@ -97,27 +97,23 @@ class TmpFunction:
         )
 
 
-def test_async_chat_openai_stream():
+@pytest.mark.asyncio
+async def test_async_chat_openai_stream():
     try:
         tmp_function = TmpFunction()
         litellm.set_verbose = True
         litellm.success_callback = [tmp_function.async_test_logging_fn]
         complete_streaming_response = ""
 
-        async def call_gpt():
-            nonlocal complete_streaming_response
-            response = await litellm.acompletion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
-                stream=True,
-            )
-            async for chunk in response:
-                complete_streaming_response += (
-                    chunk["choices"][0]["delta"]["content"] or ""
-                )
-                print(complete_streaming_response)
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+            stream=True,
+        )
+        async for chunk in response:
+            complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
+            print(complete_streaming_response)
 
-        asyncio.run(call_gpt())
         complete_streaming_response = complete_streaming_response.strip("'")
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"
@@ -130,7 +126,7 @@ def test_async_chat_openai_stream():
         assert tmp_function.async_success == True
     except Exception as e:
         print(e)
-        pytest.fail(f"An error occurred - {str(e)}")
+        pytest.fail(f"An error occurred - {str(e)}\n\n{traceback.format_exc()}")
 
 
 # test_async_chat_openai_stream()
