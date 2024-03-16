@@ -8,7 +8,6 @@ import hashlib, uuid
 import warnings
 import importlib
 import warnings
-import backoff
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
