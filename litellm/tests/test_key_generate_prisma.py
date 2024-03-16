@@ -158,7 +158,7 @@ def test_call_with_invalid_key(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
-            generated_key = "bad-key"
+            generated_key = "sk-126666"
             bearer_token = "Bearer " + generated_key
 
             request = Request(scope={"type": "http"}, receive=None)
@@ -173,7 +173,7 @@ def test_call_with_invalid_key(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         print(e.message)
-        assert "Authentication Error" in e.message
+        assert "Authentication Error, Invalid token passed" in e.message
         pass
 
 

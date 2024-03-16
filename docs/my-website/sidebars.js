@@ -138,6 +138,7 @@ const sidebars = {
         "providers/ollama", 
         "providers/perplexity", 
         "providers/groq", 
+        "providers/fireworks_ai", 
         "providers/vllm", 
         "providers/xinference", 
         "providers/cloudflare_workers", 
