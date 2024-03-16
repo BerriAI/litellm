@@ -4520,7 +4520,7 @@ async def global_spend_logs(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     if api_key is None:
-        sql_query = """SELECT * FROM "MonthlyGlobalSpend";"""
+        sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
 
         response = await prisma_client.db.query_raw(query=sql_query)
 
