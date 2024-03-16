@@ -129,7 +129,7 @@ model LiteLLM_VerificationToken {
 }
 
 model LiteLLM_EndUserTable {
-  id String @id
+  user_id String @id
   alias    String? // admin-facing alias
   spend      Float    @default(0.0)
   budget_id String?
