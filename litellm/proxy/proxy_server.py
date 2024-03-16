@@ -7430,6 +7430,7 @@ async def shutdown_event():
 
     if litellm.cache is not None:
         await litellm.cache.disconnect()
+
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
 
