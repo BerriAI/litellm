@@ -1774,7 +1774,9 @@ class ProxyConfig:
                                     _ENTERPRISE_BlockedUserList,
                                 )
 
-                                blocked_user_list = _ENTERPRISE_BlockedUserList()
+                                blocked_user_list = _ENTERPRISE_BlockedUserList(
+                                    prisma_client=prisma_client
+                                )
                                 imported_list.append(blocked_user_list)
                             elif (
                                 isinstance(callback, str)
@@ -5111,22 +5113,27 @@ async def block_user(data: BlockUsers):
         }'
         ```
     """
-    if prisma_client is not None:
-        for id in data.user_ids:
-            await prisma_client.db.litellm_endusertable.upsert(
-                where={"id": id},
-                data={
-                    "create": {"id": id, "blocked": True},
-                    "update": {"blocked": True},
-                },
+    try:
+        records = []
+        if prisma_client is not None:
+            for id in data.user_ids:
+                record = await prisma_client.db.litellm_endusertable.upsert(
+                    where={"user_id": id},
+                    data={
+                        "create": {"user_id": id, "blocked": True},
+                        "update": {"blocked": True},
+                    },
+                )
+                records.append(record)
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Postgres DB Not connected"},
             )
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Postgres DB Not connected"},
-        )
 
-    return {"blocked_users": litellm.blocked_user_list}
+        return {"blocked_users": records}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 @router.post(
