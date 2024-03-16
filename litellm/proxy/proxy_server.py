@@ -1798,6 +1798,16 @@ class ProxyConfig:
                                     _ENTERPRISE_PromptInjectionDetection()
                                 )
                                 imported_list.append(prompt_injection_detection_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "batch_redis_requests"
+                            ):
+                                from litellm.proxy.hooks.batch_redis_get import (
+                                    _PROXY_BatchRedisRequests,
+                                )
+
+                                batch_redis_obj = _PROXY_BatchRedisRequests()
+                                imported_list.append(batch_redis_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
