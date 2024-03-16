@@ -19,9 +19,9 @@ Requirements:
 
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
 - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
-- Set a `master key`, this is your Proxy Admin key - you can use this to create other keys
+- Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
   - ** Set on config.yaml** set your master key under `general_settings:master_key`, example below
-  - ** Set env variable** set `LITELLM_MASTER_KEY` (**Note: either set this on the config.yaml or in your env** whatever is more convenient for you)
+  - ** Set env variable** set `LITELLM_MASTER_KEY`
 
 (the proxy Dockerfile checks if the `DATABASE_URL` is set and then intializes the DB connection)
 

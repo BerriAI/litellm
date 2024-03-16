@@ -700,11 +700,10 @@ def anthropic_messages_pt(messages: list):
 
     if new_messages[-1]["role"] == "assistant":
         for content in new_messages[-1]["content"]:
-            if content["type"] == "text":
+            if isinstance(content, dict) and content["type"] == "text":
                 content["text"] = content[
                     "text"
                 ].rstrip()  # no trailing whitespace for final assistant message
-
 
     return new_messages
 
