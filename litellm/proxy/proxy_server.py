@@ -149,7 +149,6 @@ except Exception as e:
     try:
         import enterprise  # type: ignore
     except Exception as e:
-        print("Error importing enterprise: " + str(e))  # noqa
         pass
 
 ui_link = f"/ui/"
