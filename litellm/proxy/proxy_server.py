@@ -7271,6 +7271,25 @@ async def health_endpoint(
         raise e
 
 
+db_health_cache = {"status": "unknown", "last_updated": datetime.now()}
+
+
+def _db_health_readiness_check():
+    global db_health_cache, prisma_client
+
+    # Note - Intentionally don't try/except this so it raises an exception when it fails
+
+    # if timedelta is less than 2 minutes return DB Status
+    if (
+        db_health_cache["status"] != "unknown"
+        and db_health_cache["last_updated"] + timedelta(minutes=2) > datetime.now()
+    ):
+        return db_health_cache
+    prisma_client.health_check()
+    db_health_cache = {"status": "connected", "last_updated": datetime.now()}
+    return db_health_cache
+
+
 @router.get(
     "/health/readiness",
     tags=["health"],
@@ -7280,41 +7299,43 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
-    global prisma_client
+    try:
+        cache_type = None
+        if litellm.cache is not None:
+            from litellm.caching import RedisSemanticCache
 
-    cache_type = None
-    if litellm.cache is not None:
-        from litellm.caching import RedisSemanticCache
+            cache_type = litellm.cache.type
 
-        cache_type = litellm.cache.type
+            if isinstance(litellm.cache.cache, RedisSemanticCache):
+                # ping the cache
+                # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
+                try:
+                    index_info = await litellm.cache.cache._index_info()
+                except Exception as e:
+                    index_info = "index does not exist - error: " + str(e)
+                cache_type = {"type": cache_type, "index_info": index_info}
 
-        if isinstance(litellm.cache.cache, RedisSemanticCache):
-            # ping the cache
-            try:
-                index_info = await litellm.cache.cache._index_info()
-            except Exception as e:
-                index_info = "index does not exist - error: " + str(e)
-            cache_type = {"type": cache_type, "index_info": index_info}
-    if prisma_client is not None:  # if db passed in, check if it's connected
-        await prisma_client.health_check()  # test the db connection
-        response_object = {"db": "connected"}
+        if prisma_client is not None:  # if db passed in, check if it's connected
+            db_health_status = _db_health_readiness_check()
 
-        return {
-            "status": "healthy",
-            "db": "connected",
-            "cache": cache_type,
-            "litellm_version": version,
-            "success_callbacks": litellm.success_callback,
-        }
-    else:
-        return {
-            "status": "healthy",
-            "db": "Not connected",
-            "cache": cache_type,
-            "litellm_version": version,
-            "success_callbacks": litellm.success_callback,
-        }
-    raise HTTPException(status_code=503, detail="Service Unhealthy")
+            return {
+                "status": "healthy",
+                "db": "connected",
+                "cache": cache_type,
+                "litellm_version": version,
+                "success_callbacks": litellm.success_callback,
+                **db_health_status,
+            }
+        else:
+            return {
+                "status": "healthy",
+                "db": "Not connected",
+                "cache": cache_type,
+                "litellm_version": version,
+                "success_callbacks": litellm.success_callback,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
 
 
 @router.get(
