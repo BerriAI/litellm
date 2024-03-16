@@ -172,6 +172,7 @@ jobs:
           registry_username: ${{ github.actor }}
           registry_password: ${{ secrets.GITHUB_TOKEN }}
           update_dependencies: true
+
   release:
     name: "New LiteLLM Release"
     needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
