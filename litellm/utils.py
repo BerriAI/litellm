@@ -1795,7 +1795,12 @@ class Logging:
                             )
                             result = kwargs["async_complete_streaming_response"]
                             # only add to cache once we have a complete streaming response
-                            litellm.cache.add_cache(result, **kwargs)
+                            if litellm.cache is not None and not isinstance(
+                                litellm.cache.cache, S3Cache
+                            ):
+                                await litellm.cache.async_add_cache(result, **kwargs)
+                            else:
+                                litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
                     print_verbose(
                         f"Running Async success callback: {callback}; self.stream: {self.stream}; async_complete_streaming_response: {self.model_call_details.get('async_complete_streaming_response', None)} result={result}"
