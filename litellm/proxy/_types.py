@@ -391,6 +391,10 @@ class KeyManagementSystem(enum.Enum):
     LOCAL = "local"
 
 
+class KeyManagementSettings(LiteLLMBase):
+    hosted_keys: List
+
+
 class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
