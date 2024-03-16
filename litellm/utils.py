@@ -8332,6 +8332,19 @@ def get_secret(
                     secret = response.plaintext.decode(
                         "utf-8"
                     )  # assumes the original value was encoded with utf-8
+                elif key_manager == KeyManagementSystem.AWS_SECRET_MANAGER.value:
+                    try:
+                        get_secret_value_response = client.get_secret_value(
+                            SecretId=secret_name
+                        )
+                    except Exception as e:
+                        # For a list of exceptions thrown, see
+                        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+                        raise e
+
+                    # assume there is 1 secretstring per secret_name
+                    for k, v in get_secret_value_response.items():
+                        secret = v
                 else:  # assume the default is infisicial client
                     secret = client.get_secret(secret_name).secret_value
             except Exception as e:  # check if it's in os.environ
