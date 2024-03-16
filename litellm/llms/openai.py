@@ -360,17 +360,17 @@ class OpenAIChatCompletion(BaseLLM):
                             if messages[i]["role"] == messages[i + 1]["role"]:
                                 if messages[i]["role"] == "user":
                                     new_messages.append(
-                                        {"role": "assistant", "content": ""}
+                                        {"role": "assistant", "content": " "}
                                     )
                                 else:
-                                    new_messages.append({"role": "user", "content": ""})
+                                    new_messages.append({"role": "user", "content": " "})
                         new_messages.append(messages[-1])
                         messages = new_messages
                     elif (
                         "Last message must have role `user`" in str(e)
                     ) and messages is not None:
                         new_messages = messages
-                        new_messages.append({"role": "user", "content": ""})
+                        new_messages.append({"role": "user", "content": " "})
                         messages = new_messages
                     else:
                         raise e

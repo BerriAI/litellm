@@ -303,10 +303,10 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
                         ):
                             if reformatted_messages[i]["role"] == "user":
                                 new_messages.append(
-                                    {"role": "assistant", "content": ""}
+                                    {"role": "assistant", "content": " "}
                                 )
                             else:
-                                new_messages.append({"role": "user", "content": ""})
+                                new_messages.append({"role": "user", "content": " "})
                     new_messages.append(reformatted_messages[-1])
                     rendered_text = template.render(
                         bos_token=bos_token, eos_token=eos_token, messages=new_messages
@@ -568,7 +568,7 @@ def anthropic_messages_pt(messages: list):
     if len(messages) == 1:
         # check if the message is a user message
         if messages[0]["role"] == "assistant":
-            new_messages.append({"role": "user", "content": ""})
+            new_messages.append({"role": "user", "content": " "})
 
         # check if content is a list (vision)
         if isinstance(messages[0]["content"], list):  # vision input
@@ -595,7 +595,7 @@ def anthropic_messages_pt(messages: list):
 
     for i in range(len(messages) - 1):  # type: ignore
         if i == 0 and messages[i]["role"] == "assistant":
-            new_messages.append({"role": "user", "content": ""})
+            new_messages.append({"role": "user", "content": " "})
         if isinstance(messages[i]["content"], list):  # vision input
             new_content = []
             for m in messages[i]["content"]:
@@ -618,9 +618,9 @@ def anthropic_messages_pt(messages: list):
 
         if messages[i]["role"] == messages[i + 1]["role"]:
             if messages[i]["role"] == "user":
-                new_messages.append({"role": "assistant", "content": ""})
+                new_messages.append({"role": "assistant", "content": " "})
             else:
-                new_messages.append({"role": "user", "content": ""})
+                new_messages.append({"role": "user", "content": " "})
 
         if messages[i]["role"] == "assistant":
             last_assistant_message_idx = i
