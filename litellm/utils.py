@@ -8288,8 +8288,10 @@ def get_secret(
     default_value: Optional[Union[str, bool]] = None,
 ):
     key_management_system = litellm._key_management_system
+    key_management_settings = litellm._key_management_settings
     if secret_name.startswith("os.environ/"):
         secret_name = secret_name.replace("os.environ/", "")
+
     try:
         if litellm.secret_manager_client is not None:
             try:
@@ -8297,6 +8299,13 @@ def get_secret(
                 key_manager = "local"
                 if key_management_system is not None:
                     key_manager = key_management_system.value
+
+                if key_management_settings is not None:
+                    if (
+                        secret_name not in key_management_settings.hosted_keys
+                    ):  # allow user to specify which keys to check in hosted key manager
+                        key_manager = "local"
+
                 if (
                     key_manager == KeyManagementSystem.AZURE_KEY_VAULT
                     or type(client).__module__ + "." + type(client).__name__
@@ -8332,9 +8341,30 @@ def get_secret(
                     secret = response.plaintext.decode(
                         "utf-8"
                     )  # assumes the original value was encoded with utf-8
+                elif key_manager == KeyManagementSystem.AWS_SECRET_MANAGER.value:
+                    try:
+                        get_secret_value_response = client.get_secret_value(
+                            SecretId=secret_name
+                        )
+                        print_verbose(
+                            f"get_secret_value_response: {get_secret_value_response}"
+                        )
+                    except Exception as e:
+                        print_verbose(f"An error occurred - {str(e)}")
+                        # For a list of exceptions thrown, see
+                        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+                        raise e
+
+                    # assume there is 1 secret per secret_name
+                    secret_dict = json.loads(get_secret_value_response["SecretString"])
+                    print_verbose(f"secret_dict: {secret_dict}")
+                    for k, v in secret_dict.items():
+                        secret = v
+                    print_verbose(f"secret: {secret}")
                 else:  # assume the default is infisicial client
                     secret = client.get_secret(secret_name).secret_value
             except Exception as e:  # check if it's in os.environ
+                print_verbose(f"An exception occurred - {str(e)}")
                 secret = os.getenv(secret_name)
             try:
                 secret_value_as_bool = ast.literal_eval(secret)
