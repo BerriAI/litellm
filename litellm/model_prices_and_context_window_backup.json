@@ -603,6 +603,13 @@
         "litellm_provider": "mistral",
         "mode": "chat"
     },
+    "mistral/mistral-medium-latest": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.00000273,
+        "output_cost_per_token": 0.00000820,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
     "mistral/mistral-large-latest": {
         "max_tokens": 32000,
         "input_cost_per_token": 0.000008,
