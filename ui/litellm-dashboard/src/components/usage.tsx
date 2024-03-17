@@ -25,28 +25,6 @@ type CustomTooltipTypeBar = {
   label: any;
 };
 
-const chartData = [
-  {
-    date: 'Jan 23',
-    proj1: 167,
-    proj2: 145,
-    proj3: 135,
-  },
-  {
-    date: 'Jan 24',
-    proj1: 170,
-    proj2: 150,
-    proj3: 140,
-  },
-  {
-    date: 'Jan 25',
-    proj1: 160,
-    proj2: 140,
-    proj3: 130,
-  },
-  // Add more data for additional days as needed
-];
-
 
 const customTooltip = (props: CustomTooltipTypeBar) => {
   const { payload, active } = props;
@@ -160,6 +138,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topUsers, setTopUsers] = useState<any[]>([]);
   const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
+  const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -225,6 +204,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             console.log("teamSpend", teamSpend);
             setTeamSpendData(teamSpend.daily_spend);
             setUniqueTeamIds(teamSpend.teams)
+            setTotalSpendPerTeam(teamSpend.total_spend_per_team);
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -351,7 +331,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
               <Col numColSpan={2}>
               <Card>
-              <Title>Monthly Team Spend</Title>
+              <Title>Daily Spend Per Team</Title>
                 <BarChart
                   className="h-72"
                   data={teamSpendData}
@@ -359,6 +339,18 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   categories={uniqueTeamIds}
                   yAxisWidth={30}
                   stack={true}
+                />
+              </Card>
+              </Col>
+              <Col numColSpan={2}>
+              <Card>
+              <Title>Total Spend Per Team</Title>
+                <BarChart
+                  className="h-72"
+                  data={totalSpendPerTeam}
+                  index="team_id"
+                  categories={["total_spend"]}
+                  yAxisWidth={30}
                 />
               </Card>
               </Col>
