@@ -4569,6 +4569,71 @@ async def global_spend_keys(
     return response
 
 
+@router.get(
+    "/global/spend/teams",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_per_tea():
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to get daily spend, grouped by `team_id` and `date`
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    sql_query = """
+        SELECT
+            team_id,
+            DATE("startTime") AS spend_date,
+            SUM(spend) AS total_spend
+        FROM
+            "LiteLLM_SpendLogs"
+        WHERE
+            "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY
+            team_id,
+            DATE("startTime")
+        ORDER BY
+            spend_date;
+    """
+    response = await prisma_client.db.query_raw(query=sql_query)
+    # print("spend_per_day", response)
+
+    # transform the response for the Admin UI
+    spend_by_date = {}
+    team_ids = set()
+    for row in response:
+        row_date = row["spend_date"]
+        if row_date is None:
+            continue
+        team_id = row["team_id"]
+        team_ids.add(team_id)
+        if row_date in spend_by_date:
+            # get the team_id for this entry
+            # get the spend for this entry
+            spend = row["total_spend"]
+            current_date_entries = spend_by_date[row_date]
+            current_date_entries[team_id] = spend
+        else:
+            spend = row["total_spend"]
+            spend_by_date[row_date] = {team_id: spend}
+
+    # sort spend_by_date by it's key (which is a date)
+
+    response_data = []
+    for key in spend_by_date:
+        value = spend_by_date[key]
+        response_data.append({"date": key, **value})
+
+    return {
+        "daily_spend": response_data,
+        "teams": list(team_ids),
+    }
+
+
 @router.post(
     "/global/spend/end_users",
     tags=["Budget & Spend Tracking"],
