@@ -4605,6 +4605,7 @@ async def global_spend_per_tea():
     # transform the response for the Admin UI
     spend_by_date = {}
     team_ids = set()
+    total_spend_per_team = {}
     for row in response:
         row_date = row["spend_date"]
         if row_date is None:
@@ -4621,6 +4622,17 @@ async def global_spend_per_tea():
             spend = row["total_spend"]
             spend_by_date[row_date] = {team_id: spend}
 
+        if team_id in total_spend_per_team:
+            total_spend_per_team[team_id] += spend
+        else:
+            total_spend_per_team[team_id] = spend
+
+        total_spend_per_team_ui = []
+        for team_id in total_spend_per_team:
+            total_spend_per_team_ui.append(
+                {"team_id": team_id, "total_spend": total_spend_per_team[team_id]}
+            )
+
     # sort spend_by_date by it's key (which is a date)
 
     response_data = []
@@ -4631,6 +4643,7 @@ async def global_spend_per_tea():
     return {
         "daily_spend": response_data,
         "teams": list(team_ids),
+        "total_spend_per_team": total_spend_per_team_ui,
     }
 
 
