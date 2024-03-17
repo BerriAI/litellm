@@ -24,6 +24,29 @@ type CustomTooltipTypeBar = {
   label: any;
 };
 
+const chartData = [
+  {
+    date: 'Jan 23',
+    proj1: 167,
+    proj2: 145,
+    proj3: 135,
+  },
+  {
+    date: 'Jan 24',
+    proj1: 170,
+    proj2: 150,
+    proj3: 140,
+  },
+  {
+    date: 'Jan 25',
+    proj1: 160,
+    proj2: 140,
+    proj3: 130,
+  },
+  // Add more data for additional days as needed
+];
+
+
 const customTooltip = (props: CustomTooltipTypeBar) => {
   const { payload, active } = props;
   if (!active || !payload) return null;
@@ -317,7 +340,21 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
-              <Title>Coming Soon</Title>
+            <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
+              <Col numColSpan={2}>
+              <Card>
+              <Title>Monthly Team Spend</Title>
+                <BarChart
+                  className="h-72"
+                  data={chartData}
+                  index="date"
+                  categories={['proj1', 'proj2', 'proj3']}
+                  yAxisWidth={30}
+                  stack={true}
+                />
+              </Card>
+              </Col>
+            </Grid>
             </TabPanel>
         </TabPanels>
       </TabGroup>
