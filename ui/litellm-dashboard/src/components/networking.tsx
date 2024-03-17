@@ -341,6 +341,35 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
   }
 };
 
+
+export const teamSpendLogsCall = async (accessToken: String) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/spend/teams`
+      : `/global/spend/teams`;
+    console.log("in teamSpendLogsCall:", url);
+    const response = await fetch(`${url}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const userSpendLogsCall = async (
   accessToken: String,
   token: String,
