@@ -96,6 +96,8 @@ from litellm.proxy.utils import (
     _is_user_proxy_admin,
     _is_projected_spend_over_limit,
     _get_projected_spend_over_limit,
+    update_spend,
+    monitor_spend_list,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
@@ -1102,108 +1104,112 @@ async def update_database(
             try:
                 if prisma_client is not None:  # update
                     user_ids = [user_id, litellm_proxy_budget_name]
+                    ### KEY CHANGE ###
+                    for _id in user_ids:
+                        prisma_client.user_list_transactons.append((_id, response_cost))
+                    ######
                     ## do a group update for the user-id of the key + global proxy budget
-                    await prisma_client.db.litellm_usertable.update_many(
-                        where={"user_id": {"in": user_ids}},
-                        data={"spend": {"increment": response_cost}},
-                    )
-                    if end_user_id is not None:
-                        if existing_user_obj is None:
-                            # if user does not exist in LiteLLM_UserTable, create a new user
-                            existing_spend = 0
-                            max_user_budget = None
-                            if litellm.max_user_budget is not None:
-                                max_user_budget = litellm.max_user_budget
-                            existing_user_obj = LiteLLM_UserTable(
-                                user_id=end_user_id,
-                                spend=0,
-                                max_budget=max_user_budget,
-                                user_email=None,
-                            )
+                    # await prisma_client.db.litellm_usertable.update_many(
+                    #     where={"user_id": {"in": user_ids}},
+                    #     data={"spend": {"increment": response_cost}},
+                    # )
+                    # if end_user_id is not None:
+                    #     if existing_user_obj is None:
+                    #         # if user does not exist in LiteLLM_UserTable, create a new user
+                    #         existing_spend = 0
+                    #         max_user_budget = None
+                    #         if litellm.max_user_budget is not None:
+                    #             max_user_budget = litellm.max_user_budget
+                    #         existing_user_obj = LiteLLM_UserTable(
+                    #             user_id=end_user_id,
+                    #             spend=0,
+                    #             max_budget=max_user_budget,
+                    #             user_email=None,
+                    #         )
 
-                        else:
-                            existing_user_obj.spend = (
-                                existing_user_obj.spend + response_cost
-                            )
+                    #     else:
+                    #         existing_user_obj.spend = (
+                    #             existing_user_obj.spend + response_cost
+                    #         )
 
-                        user_object_json = {**existing_user_obj.json(exclude_none=True)}
+                    #     user_object_json = {**existing_user_obj.json(exclude_none=True)}
 
-                        user_object_json["model_max_budget"] = json.dumps(
-                            user_object_json["model_max_budget"]
-                        )
-                        user_object_json["model_spend"] = json.dumps(
-                            user_object_json["model_spend"]
-                        )
+                    #     user_object_json["model_max_budget"] = json.dumps(
+                    #         user_object_json["model_max_budget"]
+                    #     )
+                    #     user_object_json["model_spend"] = json.dumps(
+                    #         user_object_json["model_spend"]
+                    #     )
 
-                        await prisma_client.db.litellm_usertable.upsert(
-                            where={"user_id": end_user_id},
-                            data={
-                                "create": user_object_json,
-                                "update": {"spend": {"increment": response_cost}},
-                            },
-                        )
+                    #     await prisma_client.db.litellm_usertable.upsert(
+                    #         where={"user_id": end_user_id},
+                    #         data={
+                    #             "create": user_object_json,
+                    #             "update": {"spend": {"increment": response_cost}},
+                    #         },
+                    #     )
 
-                elif custom_db_client is not None:
-                    for id in user_ids:
-                        if id is None:
-                            continue
-                        if (
-                            custom_db_client is not None
-                            and id != litellm_proxy_budget_name
-                        ):
-                            existing_spend_obj = await custom_db_client.get_data(
-                                key=id, table_name="user"
-                            )
-                        verbose_proxy_logger.debug(
-                            f"Updating existing_spend_obj: {existing_spend_obj}"
-                        )
-                        if existing_spend_obj is None:
-                            # if user does not exist in LiteLLM_UserTable, create a new user
-                            existing_spend = 0
-                            max_user_budget = None
-                            if litellm.max_user_budget is not None:
-                                max_user_budget = litellm.max_user_budget
-                            existing_spend_obj = LiteLLM_UserTable(
-                                user_id=id,
-                                spend=0,
-                                max_budget=max_user_budget,
-                                user_email=None,
-                            )
-                        else:
-                            existing_spend = existing_spend_obj.spend
+                    # elif custom_db_client is not None:
+                    # for id in user_ids:
+                    #     if id is None:
+                    #         continue
+                    #     if (
+                    #         custom_db_client is not None
+                    #         and id != litellm_proxy_budget_name
+                    #     ):
+                    #         existing_spend_obj = await custom_db_client.get_data(
+                    #             key=id, table_name="user"
+                    #         )
+                    #     verbose_proxy_logger.debug(
+                    #         f"Updating existing_spend_obj: {existing_spend_obj}"
+                    #     )
+                    #     if existing_spend_obj is None:
+                    #         # if user does not exist in LiteLLM_UserTable, create a new user
+                    #         existing_spend = 0
+                    #         max_user_budget = None
+                    #         if litellm.max_user_budget is not None:
+                    #             max_user_budget = litellm.max_user_budget
+                    #         existing_spend_obj = LiteLLM_UserTable(
+                    #             user_id=id,
+                    #             spend=0,
+                    #             max_budget=max_user_budget,
+                    #             user_email=None,
+                    #         )
+                    #     else:
+                    #         existing_spend = existing_spend_obj.spend
 
-                        # Calculate the new cost by adding the existing cost and response_cost
-                        existing_spend_obj.spend = existing_spend + response_cost
+                    #     # Calculate the new cost by adding the existing cost and response_cost
+                    #     existing_spend_obj.spend = existing_spend + response_cost
 
-                        # track cost per model, for the given user
-                        spend_per_model = existing_spend_obj.model_spend or {}
-                        current_model = kwargs.get("model")
+                    #     # track cost per model, for the given user
+                    #     spend_per_model = existing_spend_obj.model_spend or {}
+                    #     current_model = kwargs.get("model")
 
-                        if current_model is not None and spend_per_model is not None:
-                            if spend_per_model.get(current_model) is None:
-                                spend_per_model[current_model] = response_cost
-                            else:
-                                spend_per_model[current_model] += response_cost
-                        existing_spend_obj.model_spend = spend_per_model
+                    #     if current_model is not None and spend_per_model is not None:
+                    #         if spend_per_model.get(current_model) is None:
+                    #             spend_per_model[current_model] = response_cost
+                    #         else:
+                    #             spend_per_model[current_model] += response_cost
+                    #     existing_spend_obj.model_spend = spend_per_model
 
-                        valid_token = user_api_key_cache.get_cache(key=id)
-                        if valid_token is not None and isinstance(valid_token, dict):
-                            user_api_key_cache.set_cache(
-                                key=id, value=existing_spend_obj.json()
-                            )
+                    #     valid_token = user_api_key_cache.get_cache(key=id)
+                    #     if valid_token is not None and isinstance(valid_token, dict):
+                    #         user_api_key_cache.set_cache(
+                    #             key=id, value=existing_spend_obj.json()
+                    #         )
 
-                        verbose_proxy_logger.debug(
-                            f"user - new cost: {existing_spend_obj.spend}, user_id: {id}"
-                        )
-                        data_list.append(existing_spend_obj)
+                    #     verbose_proxy_logger.debug(
+                    #         f"user - new cost: {existing_spend_obj.spend}, user_id: {id}"
+                    #     )
+                    #     data_list.append(existing_spend_obj)
 
-                        if custom_db_client is not None and user_id is not None:
-                            new_spend = data_list[0].spend
-                            await custom_db_client.update_data(
-                                key=user_id,
-                                value={"spend": new_spend},
-                                table_name="user",
-                            )
+                    #     if custom_db_client is not None and user_id is not None:
+                    #         new_spend = data_list[0].spend
+                    #         await custom_db_client.update_data(
+                    #             key=user_id,
+                    #             value={"spend": new_spend},
+                    #             table_name="user",
+                    #         )
             except Exception as e:
                 verbose_proxy_logger.info(
                     "\033[91m"
@@ -1323,10 +1329,12 @@ async def update_database(
                 )
                 raise e
 
-        asyncio.create_task(_update_user_db())
-        asyncio.create_task(_update_key_db())
-        asyncio.create_task(_update_team_db())
-        asyncio.create_task(_insert_spend_log_to_db())
+        # asyncio.create_task(_update_user_db())
+        await _update_user_db()
+
+        # asyncio.create_task(_update_key_db())
+        # asyncio.create_task(_update_team_db())
+        # asyncio.create_task(_insert_spend_log_to_db())
 
         verbose_proxy_logger.debug("Runs spend update on all tables")
     except Exception as e:
@@ -2632,6 +2640,10 @@ async def startup_event():
         scheduler.add_job(
             reset_budget, "interval", seconds=interval, args=[prisma_client]
         )
+        # scheduler.add_job(
+        #     monitor_spend_list, "interval", seconds=10, args=[prisma_client]
+        # )
+        scheduler.add_job(update_spend, "interval", seconds=60, args=[prisma_client])
         scheduler.start()
 
 
