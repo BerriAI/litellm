@@ -98,6 +98,7 @@ from litellm.proxy.utils import (
     _get_projected_spend_over_limit,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
+from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
 import pydantic
 from litellm.proxy._types import *
 from litellm.caching import DualCache
@@ -1089,6 +1090,8 @@ async def update_database(
             existing_token_obj = await user_api_key_cache.async_get_cache(
                 key=hashed_token
             )
+            if existing_token_obj is None:
+                return
             existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
             if existing_user_obj is not None and isinstance(existing_user_obj, dict):
                 existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
@@ -1417,7 +1420,8 @@ async def update_cache(
         else:
             hashed_token = token
         existing_token_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
-        existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+        if existing_token_obj is None:
+            return
         if existing_token_obj.user_id != user_id:  # an end-user id was passed in
             end_user_id = user_id
         user_ids = [existing_token_obj.user_id, litellm_proxy_budget_name, end_user_id]
@@ -1905,8 +1909,21 @@ class ProxyConfig:
                 elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
                     ### LOAD FROM GOOGLE KMS ###
                     load_google_kms(use_google_kms=True)
+                elif (
+                    key_management_system
+                    == KeyManagementSystem.AWS_SECRET_MANAGER.value
+                ):
+                    ### LOAD FROM AWS SECRET MANAGER ###
+                    load_aws_secret_manager(use_aws_secret_manager=True)
                 else:
                     raise ValueError("Invalid Key Management System selected")
+            key_management_settings = general_settings.get(
+                "key_management_settings", None
+            )
+            if key_management_settings is not None:
+                litellm._key_management_settings = KeyManagementSettings(
+                    **key_management_settings
+                )
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms = general_settings.get("use_google_kms", False)
             load_google_kms(use_google_kms=use_google_kms)

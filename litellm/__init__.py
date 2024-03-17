@@ -3,7 +3,7 @@ import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
 from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
-from litellm.proxy._types import KeyManagementSystem
+from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
 import httpx
 import dotenv
 
@@ -187,6 +187,7 @@ secret_manager_client: Optional[Any] = (
 )
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional[KeyManagementSystem] = None
+_key_management_settings: Optional[KeyManagementSettings] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
