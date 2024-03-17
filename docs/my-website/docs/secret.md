@@ -6,6 +6,34 @@ LiteLLM supports reading secrets from Azure Key Vault and Infisical
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)
 
+## AWS Secret Manager
+
+Store your proxy keys in AWS Secret Manager.
+
+### Proxy Usage
+
+1. Save AWS Credentials in your environment
+```bash
+os.environ["AWS_ACCESS_KEY_ID"] = ""  # Access key
+os.environ["AWS_SECRET_ACCESS_KEY"] = "" # Secret access key
+os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
+```
+
+2. Enable AWS Secret Manager in config. 
+```yaml
+general_settings:
+  master_key: os.environ/litellm_master_key 
+  key_management_system: "aws_secret_manager" # 👈 KEY CHANGE
+  key_management_settings: 
+    hosted_keys: ["litellm_master_key"] # 👈 Specify which env keys you stored on AWS 
+```
+
+3. Run proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
 ## Azure Key Vault
 
 ### Quick Start
@@ -61,7 +89,7 @@ model_list:
             api_base: "os.environ/AZURE-API-BASE" # reads from key vault - get_secret("AZURE_API_BASE")
 
 general_settings:
-  use_azure_key_vault: True
+  key_management_system: "azure_key_vault"
 ```
 
 You can now test this by starting your proxy: 
@@ -88,7 +116,7 @@ export PROXY_DATABASE_URL_ENCRYPTED=b'\n$\x00D\xac\xb4/\x8e\xc...'
 
 ```yaml
 general_settings:
-  use_google_kms: true
+  key_management_system: "google_kms"
   database_url: "os.environ/PROXY_DATABASE_URL_ENCRYPTED"
   master_key: sk-1234
 ```
