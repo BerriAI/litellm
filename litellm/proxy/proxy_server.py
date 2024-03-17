@@ -1842,7 +1842,7 @@ class ProxyConfig:
                 elif key == "success_callback":
                     litellm.success_callback = []
 
-                    # intialize success callbacks
+                    # initialize success callbacks
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
@@ -1858,7 +1858,7 @@ class ProxyConfig:
                 elif key == "failure_callback":
                     litellm.failure_callback = []
 
-                    # intialize success callbacks
+                    # initialize success callbacks
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
