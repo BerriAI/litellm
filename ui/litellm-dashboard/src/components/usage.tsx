@@ -1,7 +1,7 @@
 import { BarChart, Card, Title } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
-import { Grid, Col, Text, LineChart } from "@tremor/react";
+import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -242,72 +242,85 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
-        <Col numColSpan={2}>
-          <Card>
-            <Title>Monthly Spend</Title>
-            <BarChart
-              data={keySpendData}
-              index="date"
-              categories={["spend"]}
-              colors={["blue"]}
-              valueFormatter={valueFormatter}
-              yAxisWidth={100}
-              tickGap={5}
-              // customTooltip={customTooltip}
-            />
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top API Keys</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={topKeys}
-              index="key"
-              categories={["spend"]}
-              colors={["blue"]}
-              yAxisWidth={80}
-              tickGap={5}
-              layout="vertical"
-              showXAxis={false}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top Users</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={topUsers}
-              index="user_id"
-              categories={["spend"]}
-              colors={["blue"]}
-              yAxisWidth={200}
-              layout="vertical"
-              showXAxis={false}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top Models</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={topModels}
-              index="key"
-              categories={["spend"]}
-              colors={["blue"]}
-              yAxisWidth={200}
-              layout="vertical"
-              showXAxis={false}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-      </Grid>
+      <TabGroup>
+        <TabList className="mt-4">
+          <Tab>All Up</Tab>
+          <Tab>Team Based Usage</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Monthly Spend</Title>
+                  <BarChart
+                    data={keySpendData}
+                    index="date"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    valueFormatter={valueFormatter}
+                    yAxisWidth={100}
+                    tickGap={5}
+                    // customTooltip={customTooltip}
+                  />
+                </Card>
+              </Col>
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top API Keys</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={topKeys}
+                    index="key"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    yAxisWidth={80}
+                    tickGap={5}
+                    layout="vertical"
+                    showXAxis={false}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top Users</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={topUsers}
+                    index="user_id"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    yAxisWidth={200}
+                    layout="vertical"
+                    showXAxis={false}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top Models</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={topModels}
+                    index="key"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    yAxisWidth={200}
+                    layout="vertical"
+                    showXAxis={false}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+            </Grid>
+            </TabPanel>
+            <TabPanel>
+              <Title>Coming Soon</Title>
+            </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };
