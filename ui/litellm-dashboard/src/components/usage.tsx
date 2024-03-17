@@ -8,6 +8,7 @@ import {
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
+  teamSpendLogsCall,
 } from "./networking";
 import { start } from "repl";
 
@@ -157,6 +158,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topKeys, setTopKeys] = useState<any[]>([]);
   const [topModels, setTopModels] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
+  const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
+  const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -217,6 +220,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
               spend: k["total_spend"],
             }));
             setTopModels(filtered_models);
+
+            const teamSpend = await teamSpendLogsCall(accessToken);
+            console.log("teamSpend", teamSpend);
+            setTeamSpendData(teamSpend.daily_spend);
+            setUniqueTeamIds(teamSpend.teams)
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -346,9 +354,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Title>Monthly Team Spend</Title>
                 <BarChart
                   className="h-72"
-                  data={chartData}
+                  data={teamSpendData}
                   index="date"
-                  categories={['proj1', 'proj2', 'proj3']}
+                  categories={uniqueTeamIds}
                   yAxisWidth={30}
                   stack={true}
                 />
