@@ -387,7 +387,12 @@ class BudgetRequest(LiteLLMBase):
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
+    AWS_SECRET_MANAGER = "aws_secret_manager"
     LOCAL = "local"
+
+
+class KeyManagementSettings(LiteLLMBase):
+    hosted_keys: List
 
 
 class TeamDefaultSettings(LiteLLMBase):
