@@ -1686,19 +1686,25 @@ class ProxyConfig:
 
                     verbose_proxy_logger.debug(f"passed cache type={cache_type}")
 
-                    if cache_type == "redis" or cache_type == "redis-semantic":
+                    if (
+                        cache_type == "redis" or cache_type == "redis-semantic"
+                    ) and len(cache_params.keys()) == 0:
                         cache_host = litellm.get_secret("REDIS_HOST", None)
                         cache_port = litellm.get_secret("REDIS_PORT", None)
-                        cache_password = litellm.get_secret("REDIS_PASSWORD", None)
-
                         cache_params.update(
                             {
                                 "type": cache_type,
                                 "host": cache_host,
                                 "port": cache_port,
-                                "password": cache_password,
                             }
                         )
+                        if litellm.get_secret("REDIS_PASSWORD", None) is not None:
+                            cache_password = litellm.get_secret("REDIS_PASSWORD", None)
+                            cache_params.update(
+                                {
+                                    "password": cache_password,
+                                }
+                            )
                         # Assuming cache_type, cache_host, cache_port, and cache_password are strings
                         print(  # noqa
                             f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}"
