@@ -9,16 +9,6 @@ import traceback
 import datetime, subprocess, sys
 import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
-from datadog_api_client.v2 import ApiClient, Configuration
-from datadog import statsd, api as datadog_api, initialize as datadog_initialize
-
-# Define DataDog client
-
-from datadog_api_client import ApiClient, Configuration
-from datadog_api_client.v2.api.logs_api import LogsApi
-from datadog_api_client.v2.model.log import Log
-from datadog_api_client.v2.model import *
-from datadog_api_client.v2.models import *
 
 
 class DataDogLogger:
@@ -27,6 +17,14 @@ class DataDogLogger:
         self,
         **kwargs,
     ):
+        from datadog_api_client import ApiClient, Configuration
+
+        # check if the correct env variables are set
+        if os.getenv("DD_API_KEY", None) is None:
+            raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
+        if os.getenv("DD_SITE", None) is None:
+            raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+        self.configuration = Configuration()
 
         try:
             verbose_logger.debug(f"in init datadog logger")
@@ -45,6 +43,11 @@ class DataDogLogger:
         self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
     ):
         try:
+            # Define DataDog client
+            from datadog_api_client.v2.api.logs_api import LogsApi
+            from datadog_api_client.v2 import ApiClient
+            from datadog_api_client.v2.models import HTTPLogItem, HTTPLog
+
             verbose_logger.debug(
                 f"datadog Logging - Enters logging function for model {kwargs}"
             )
@@ -116,8 +119,7 @@ class DataDogLogger:
 
             print_verbose(f"\ndd Logger - Logging payload = {payload}")
 
-            configuration = Configuration()
-            with ApiClient(configuration) as api_client:
+            with ApiClient(self.configuration) as api_client:
                 api_instance = LogsApi(api_client)
                 body = HTTPLog(
                     [
