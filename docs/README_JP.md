@@ -6,10 +6,24 @@
         <br>
     </p>
 
-
-
-
-<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAIプロキシサーバー（OpenAI Proxy Server）</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">エンタープライズ層（Enterprise Tier）</a></h4>
+<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
+<h4 align="center">
+    <a href="https://pypi.org/project/litellm/" target="_blank">
+        <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
+    </a>
+    <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main" target="_blank">
+        <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
+    </a>
+    <a href="https://www.ycombinator.com/companies/berriai">
+        <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
+    </a>
+    <a href="https://wa.link/huol9n">
+        <img src="https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square" alt="Whatsapp">
+    </a>
+    <a href="https://discord.gg/wuPM9dRgDw">
+        <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square" alt="Discord">
+    </a>
+</h4>
 
 LiteLLMが管理するもの:
 - プロバイダーの`completion`、`embedding`、`image_generation`エンドポイントへの入力の変換
@@ -25,7 +39,7 @@ LiteLLMが管理するもの:
 より多くのプロバイダーをサポート。プロバイダーやLLMプラットフォームが不足している場合は、[機能リクエスト（feature request）](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+)を上げてください。
 
 # 使用方法（Usage） ([**ドキュメント（Docs）**](https://docs.litellm.ai/docs/))
-> [!重要（IMPORTANT）]
+> [!IMPORTANT]
 > LiteLLM v1.0.0では、`openai>=1.0.0`が必要になりました。移行ガイド（migration guide）は[こちら](https://docs.litellm.ai/docs/migration)
 
 
