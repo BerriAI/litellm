@@ -2,6 +2,12 @@
 
 LiteLLM Proxyは、100以上のLLMを統一されたインターフェースで呼び出し、仮想キーやユーザーごとに支出を追跡し、予算を設定できるプロキシサーバーです。
 
+<div align="center">
+
+ | [日本語](README.Proxy.JP.md) | [English](README.Proxy.md) |
+
+</div>
+
 ## 主な機能
 
 - **統一されたインターフェース**: Huggingface、Bedrock、TogetherAIなど、100以上のLLMをOpenAIの`ChatCompletions`および`Completions`形式で呼び出すことができます。
