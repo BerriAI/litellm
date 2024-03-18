@@ -17,3 +17,5 @@ services:
     tty: true
     env_file:
       - ../.env
+
+# docker-compose -f docker\docker-compose.gemi.yml up --build
