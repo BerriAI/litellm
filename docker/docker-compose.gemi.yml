@@ -1,0 +1,19 @@
+version: "3.9"
+services:
+  litellm:
+    # image: ghcr.io/berriai/litellm:main-latest
+    build: 
+      context: .
+      dockerfile: Dockerfile.gemi
+
+    volumes:
+      - ../proxy_server_config.yaml:/app/proxy_server_config.yaml # mount your litellm config.yaml
+      - ../demo:/demo
+    ports:
+      - "4000:4000"
+    environment:
+      - AZURE_API_KEY=sk-123
+    command: --model  gemini/gemini-pro
+    tty: true
+    env_file:
+      - ../.env
