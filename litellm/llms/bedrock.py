@@ -720,14 +720,13 @@ def completion(
         if provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
                 # Separate system prompt from rest of message
-                system_prompt_idx: Optional[int] = None
+                system_prompt_idx: list[int] = []
                 for idx, message in enumerate(messages):
                     if message["role"] == "system":
                         inference_params["system"] = message["content"]
-                        system_prompt_idx = idx
-                        break
-                if system_prompt_idx is not None:
-                    messages.pop(system_prompt_idx)
+                        system_prompt_idx.append(idx)
+                if len(system_prompt_idx) > 0:
+                    messages = [i for j, i in enumerate(messages) if j not in system_prompt_idx]
                 # Format rest of message according to anthropic guidelines
                 messages = prompt_factory(
                     model=model, messages=messages, custom_llm_provider="anthropic"
