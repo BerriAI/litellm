@@ -33,6 +33,41 @@ def generate_random_word(length=4):
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
 
 
+# @pytest.mark.skip(reason="")
+def test_caching_dynamic_args():  # test in memory cache
+    try:
+        litellm.set_verbose = True
+        _redis_host_env = os.environ.pop("REDIS_HOST")
+        _redis_port_env = os.environ.pop("REDIS_PORT")
+        _redis_password_env = os.environ.pop("REDIS_PASSWORD")
+        litellm.cache = Cache(
+            type="redis",
+            host=_redis_host_env,
+            port=_redis_port_env,
+            password=_redis_password_env,
+        )
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        litellm.cache = None  # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        if (
+            response2["choices"][0]["message"]["content"]
+            != response1["choices"][0]["message"]["content"]
+        ):
+            print(f"response1: {response1}")
+            print(f"response2: {response2}")
+            pytest.fail(f"Error occurred:")
+        os.environ["REDIS_HOST"] = _redis_host_env
+        os.environ["REDIS_PORT"] = _redis_port_env
+        os.environ["REDIS_PASSWORD"] = _redis_password_env
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_caching_v2():  # test in memory cache
     try:
         litellm.set_verbose = True
@@ -549,12 +584,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
                 "content": f"write a one sentence poem about: {random_word}",
             }
         ]
-        litellm.cache = Cache(
-            type="redis",
-            host=os.environ["REDIS_HOST"],
-            port=os.environ["REDIS_PORT"],
-            password=os.environ["REDIS_PASSWORD"],
-        )
+        litellm.cache = Cache(type="redis")
         print("test for caching, streaming + completion")
         response_1_content = ""
         response_2_content = ""
