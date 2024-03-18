@@ -35,8 +35,12 @@
    これにより、LiteLLMコンテナ内のbashシェルにアクセスできます。
 
 5. コンテナ内で必要な操作を実行します。例えば、LiteLLMの設定ファイルを編集したり、追加のパッケージをインストールしたりできます。
+   ```bash
 
-6. 終了するには、コンテナ内でexitコマンドを実行してシェルを終了し、Ctrl+Cを押してDocker Composeを停止します。
+   python /demo/demo_gemini.py 
+   ```
+
+1. 終了するには、コンテナ内でexitコマンドを実行してシェルを終了し、Ctrl+Cを押してDocker Composeを停止します。
 
    ```
    exit
