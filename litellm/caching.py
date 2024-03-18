@@ -109,7 +109,7 @@ class RedisCache(BaseCache):
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
-        self.async_redis_conn_pool = get_redis_connection_pool()
+        self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
