@@ -228,7 +228,6 @@ try:
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 except:
     pass
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -236,7 +235,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 from typing import Dict
 
 api_key_header = APIKeyHeader(
