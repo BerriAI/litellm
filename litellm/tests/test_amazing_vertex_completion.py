@@ -453,8 +453,6 @@ def test_gemini_pro_function_calling_streaming():
     for chunk in completion:
         print(f"chunk: {chunk}")
 
-    raise Exception("it worked!")
-
 
 @pytest.mark.asyncio
 async def test_gemini_pro_async_function_calling():
