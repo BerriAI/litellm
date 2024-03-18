@@ -693,12 +693,12 @@ def anthropic_messages_pt(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if len(new_messages) > 0 and new_messages[0]["role"] != "user":
         new_messages.insert(
             0, {"role": "user", "content": [{"type": "text", "text": "."}]}
         )
 
-    if new_messages[-1]["role"] == "assistant":
+    if len(new_messages) > 0 and new_messages[-1]["role"] == "assistant":
         for content in new_messages[-1]["content"]:
             if isinstance(content, dict) and content["type"] == "text":
                 content["text"] = content[
