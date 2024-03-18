@@ -416,6 +416,46 @@ def test_gemini_pro_function_calling():
 # gemini_pro_function_calling()
 
 
+def test_gemini_pro_function_calling_streaming():
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    completion = litellm.completion(
+        model="gemini-pro",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+        stream=True,
+    )
+    print(f"completion: {completion}")
+    # assert completion.choices[0].message.content is None
+    # assert len(completion.choices[0].message.tool_calls) == 1
+    for chunk in completion:
+        print(f"chunk: {chunk}")
+
+    raise Exception("it worked!")
+
+
 @pytest.mark.asyncio
 async def test_gemini_pro_async_function_calling():
     load_vertex_ai_credentials()
