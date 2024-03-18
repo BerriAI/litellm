@@ -9193,7 +9193,41 @@ class CustomStreamWrapper:
                 try:
                     if hasattr(chunk, "candidates") == True:
                         try:
-                            completion_obj["content"] = chunk.text
+                            try:
+                                completion_obj["content"] = chunk.text
+                            except Exception as e:
+                                if "Part has no text." in str(e):
+                                    ## check for function calling
+                                    function_call = (
+                                        chunk.candidates[0]
+                                        .content.parts[0]
+                                        .function_call
+                                    )
+                                    args_dict = {}
+                                    for k, v in function_call.args.items():
+                                        args_dict[k] = v
+                                    args_str = json.dumps(args_dict)
+                                    _delta_obj = litellm.utils.Delta(
+                                        content=None,
+                                        tool_calls=[
+                                            {
+                                                "id": f"call_{str(uuid.uuid4())}",
+                                                "function": {
+                                                    "arguments": args_str,
+                                                    "name": function_call.name,
+                                                },
+                                                "type": "function",
+                                            }
+                                        ],
+                                    )
+                                    _streaming_response = StreamingChoices(
+                                        delta=_delta_obj
+                                    )
+                                    _model_response = ModelResponse(stream=True)
+                                    _model_response.choices = [_streaming_response]
+                                    response_obj = {"original_chunk": _model_response}
+                                else:
+                                    raise e
                             if (
                                 hasattr(chunk.candidates[0], "finish_reason")
                                 and chunk.candidates[0].finish_reason.name
@@ -9204,7 +9238,7 @@ class CustomStreamWrapper:
                                         chunk.candidates[0].finish_reason.name
                                     )
                                 )
-                        except:
+                        except Exception as e:
                             if chunk.candidates[0].finish_reason.name == "SAFETY":
                                 raise Exception(
                                     f"The response was blocked by VertexAI. {str(chunk)}"
