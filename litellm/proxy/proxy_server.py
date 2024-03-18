@@ -9,6 +9,14 @@ import warnings
 import importlib
 import warnings
 
+from datadog import statsd, initialize as datadog_initialize
+
+# Define DataDog client
+
+options = {"statsd_host": "127.0.0.1", "statsd_port": 8125}
+
+datadog_initialize(**options)  # type: ignore
+
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
     traceback_info = f"{filename}:{lineno}: {category.__name__}: {message}\n"
@@ -228,6 +236,31 @@ try:
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 except:
     pass
+
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class DatadogMetricsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+
+        # Request Count
+        statsd.increment("litellm.proxy.requests")
+
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            # Error Count
+            statsd.increment("litellm.proxy.errors")
+            raise e
+
+        # Calculate response time
+        response_time = (time.time() - start_time) * 1000  # in milliseconds
+        statsd.distribution("litellm.proxy.response_time", response_time)
+
+        return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -235,6 +268,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(DatadogMetricsMiddleware)
 
 
 from typing import Dict
