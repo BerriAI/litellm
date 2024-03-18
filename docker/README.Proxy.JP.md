@@ -30,7 +30,7 @@ docker-compose -f docker\docker-compose.gemi.yml up --build
 
 コンテナが正常に起動すると、以下のようなログが表示されます。
 
-```
+```bash
 litellm-1  | INFO:     Started server process [1]
 litellm-1  | INFO:     Waiting for application startup.
 litellm-1  |
@@ -60,7 +60,7 @@ python docker\demo\demo_openai.py
 
 デモスクリプトの実行結果が以下のように表示されます。
 
-```
+```bash
 ChatCompletion(id='chatcmpl-7ef51102-505c-4c54-9e5a-783f6d4d0401', choices=[Choice(finish_reason='stop', index=1, logprobs=None, message=ChatCompletionMessage(content="In realms of words, a dance takes place,\nA symphony of rhythm, grace.\nEach syllable a note so fine,\nWeaving stories, making hearts entwine.\n\nFrom whispers soft to thunder's roar,\nWords paint worlds, forevermore.\nThey evoke emotions, deep and true,\nGuiding us through life's every hue.", role='assistant', function_call=None, tool_calls=None))], created=1710775833, model='gemini/gemini-pro', object='chat.completion', system_fingerprint=None, usage=CompletionUsage(completion_tokens=67, prompt_tokens=10, total_tokens=77))
 -------------
 In realms of words, a dance takes place,
