@@ -65,14 +65,8 @@ const sidebars = {
             "proxy/streaming_logging",
           ]
         },
-        {
-          "type": "category",
-          "label": "Content Moderation",
-          "items": [
-            "proxy/call_hooks",
-            "proxy/rules",
-          ]
-        },
+        "proxy/call_hooks",
+        "proxy/rules",
         "proxy/deploy", 
         "proxy/cli", 
       ]
