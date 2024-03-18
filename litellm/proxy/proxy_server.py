@@ -1727,6 +1727,8 @@ class ProxyConfig:
                     print(  # noqa
                         f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                     )
+                elif key == "cache" and value == False:
+                    pass
                 elif key == "callbacks":
                     if isinstance(value, list):
                         imported_list: List[Any] = []
