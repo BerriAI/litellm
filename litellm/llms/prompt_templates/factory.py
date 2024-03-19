@@ -957,7 +957,7 @@ def azure_text_pt(messages: list):
 # Function call template
 def function_call_prompt(messages: list, functions: list):
     function_prompt = (
-        "Produce JSON OUTPUT ONLY! The following functions are available to you:"
+        """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
     )
     for function in functions:
         function_prompt += f"""\n{function}\n"""
@@ -965,7 +965,7 @@ def function_call_prompt(messages: list, functions: list):
     function_added_to_prompt = False
     for message in messages:
         if "system" in message["role"]:
-            message["content"] += f"""{function_prompt}"""
+            message["content"] += f""" {function_prompt}"""
             function_added_to_prompt = True
 
     if function_added_to_prompt == False:
