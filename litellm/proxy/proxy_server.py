@@ -983,42 +983,6 @@ def cost_tracking():
                 litellm.success_callback.append(_PROXY_track_cost_callback)  # type: ignore
 
 
-from prometheus_client import Counter, REGISTRY
-from prometheus_client import make_asgi_app
-
-# Add prometheus asgi middleware to route /metrics requests
-metrics_app = make_asgi_app()
-app.mount("/metrics", metrics_app)
-try:
-    calls_metric = Counter("calls_metric", "Measure of calls")
-    tokens_metric = Counter("tokens_metric", "Measure of tokens")
-    spend_metric = Counter("spend_metric", "Measure of spend")
-except:
-    pass
-
-# # Define Prometheus counters for metrics
-# Register metrics with the default registry
-
-
-def track_prometheus_metrics(
-    kwargs,  # kwargs to completion
-    completion_response,  # response from completion
-    start_time,
-    end_time,  # start/end time
-):
-    global calls_metric
-    user: str = ("issues",)
-    key: str = ("sk-02Wr4IAlN3NvPXvL5JVvDA",)
-    model: str = ("gpt-3.5-turbo",)
-    budgets = 1
-    tokens = 20
-    # print("incrementing prometheus metrics")
-    calls_metric.labels(user, key, model).inc()
-
-
-litellm.callbacks.append(track_prometheus_metrics)
-
-
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion
@@ -1867,6 +1831,15 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.success_callback.append(callback)
+                            if "prometheus" in callback:
+                                verbose_proxy_logger.debug(
+                                    "Starting Prometheus Metrics on /metrics"
+                                )
+                                from prometheus_client import make_asgi_app
+
+                                # Add prometheus asgi middleware to route /metrics requests
+                                metrics_app = make_asgi_app()
+                                app.mount("/metrics", metrics_app)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
