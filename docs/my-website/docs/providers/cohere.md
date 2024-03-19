@@ -17,7 +17,7 @@ os.environ["COHERE_API_KEY"] = "cohere key"
 
 # cohere call
 response = completion(
-    model="command-nightly", 
+    model="command-r", 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -32,7 +32,7 @@ os.environ["COHERE_API_KEY"] = "cohere key"
 
 # cohere call
 response = completion(
-    model="command-nightly", 
+    model="command-r", 
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
@@ -41,7 +41,17 @@ for chunk in response:
     print(chunk)
 ```
 
-LiteLLM supports 'command', 'command-light', 'command-medium', 'command-medium-beta', 'command-xlarge-beta', 'command-nightly' models from [Cohere](https://cohere.com/). 
+
+## Supported Models
+| Model Name | Function Call |
+|------------|----------------|
+| command-r | `completion('command-r', messages)` |
+| command-light | `completion('command-light', messages)` |  
+| command-medium | `completion('command-medium', messages)` |
+| command-medium-beta | `completion('command-medium-beta', messages)` |
+| command-xlarge-nightly | `completion('command-xlarge-nightly', messages)` |
+| command-nightly | `completion('command-nightly', messages)` |
+
 
 ## Embedding
 

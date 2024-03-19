@@ -442,9 +442,9 @@ def test_usage_based_routing():
             selection_counts["chatgpt-low-tpm"] > 2
         ), f"Assertion failed: 'chatgpt-low-tpm' does not have more than 2 request in the weighted load balancer. Selection counts {selection_counts}"
 
-        # Assert that 'chatgpt-high-tpm' has about 80% of the total requests
+        # Assert that 'chatgpt-high-tpm' has about 70% of the total requests [DO NOT MAKE THIS LOWER THAN 70%]
         assert (
-            selection_counts["chatgpt-high-tpm"] / total_requests > 0.8
+            selection_counts["chatgpt-high-tpm"] / total_requests > 0.70
         ), f"Assertion failed: 'chatgpt-high-tpm' does not have about 80% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

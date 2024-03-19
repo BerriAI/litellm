@@ -29,7 +29,7 @@ If you want a server to load balance across different LLM APIs, use our [OpenAI 
 from litellm import Router
 
 model_list = [{ # list of model deployments 
-	"model_name": "gpt-3.5-turbo", # model alias 
+	"model_name": "gpt-3.5-turbo", # model alias -> loadbalance between models with same `model_name`
 	"litellm_params": { # params for litellm completion/embedding call 
 		"model": "azure/chatgpt-v-2", # actual model name
 		"api_key": os.getenv("AZURE_API_KEY"),
@@ -50,12 +50,36 @@ model_list = [{ # list of model deployments
 		"model": "gpt-3.5-turbo", 
 		"api_key": os.getenv("OPENAI_API_KEY"),
 	}
-}]
+}, {
+    "model_name": "gpt-4", 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "azure/gpt-4", 
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_base": os.getenv("AZURE_API_BASE"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+	}
+}, {
+    "model_name": "gpt-4", 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "gpt-4", 
+		"api_key": os.getenv("OPENAI_API_KEY"),
+	}
+},
+
+]
 
 router = Router(model_list=model_list)
 
 # openai.ChatCompletion.create replacement
+# requests with model="gpt-3.5-turbo" will pick a deployment where model_name="gpt-3.5-turbo"
 response = await router.acompletion(model="gpt-3.5-turbo", 
+				messages=[{"role": "user", "content": "Hey, how's it going?"}])
+
+print(response)
+
+# openai.ChatCompletion.create replacement
+# requests with model="gpt-4" will pick a deployment where model_name="gpt-4"
+response = await router.acompletion(model="gpt-4", 
 				messages=[{"role": "user", "content": "Hey, how's it going?"}])
 
 print(response)

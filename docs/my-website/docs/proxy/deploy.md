@@ -19,7 +19,7 @@ docker pull ghcr.io/berriai/litellm:main-latest
 ```
 
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest
+docker run --env-file=.env -v {pwd}/path/to/config.yaml:/app/config.yaml -p 4000:4000 ghcr.io/berriai/litellm:main-latest --config config.yaml
 ```
 
 </TabItem>
@@ -135,6 +135,50 @@ To avoid issues with predictability, difficulties in rollback, and inconsistent 
 
 </TabItem>
 
+<TabItem value="helm-" label="Helm Chart">
+
+
+
+:::info
+
+[BETA] Helm Chart is BETA. If you run into an issues/have feedback please let us know [https://github.com/BerriAI/litellm/issues](https://github.com/BerriAI/litellm/issues)
+
+:::
+
+Use this when you want to use litellm helm chart as a dependency for other charts. The `litellm-helm` OCI is hosted here [https://github.com/BerriAI/litellm/pkgs/container/litellm-helm](https://github.com/BerriAI/litellm/pkgs/container/litellm-helm)
+
+#### Step 1. Pull the litellm helm chart
+
+```bash
+helm pull oci://ghcr.io/berriai/litellm-helm
+
+# Pulled: ghcr.io/berriai/litellm-helm:0.1.2
+# Digest: sha256:7d3ded1c99c1597f9ad4dc49d84327cf1db6e0faa0eeea0c614be5526ae94e2a
+```
+
+#### Step 2. Unzip litellm helm
+Unzip the specific version that was pulled in Step 1
+
+```bash
+tar -zxvf litellm-helm-0.1.2.tgz
+```
+
+#### Step 3. Install litellm helm
+
+```bash
+helm install lite-helm ./litellm-helm
+```
+
+#### Step 4. Expose the service to localhost
+
+```bash
+kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
+```
+
+Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+
+</TabItem>
+
 </Tabs>
 
 **That's it ! That's the quick start to deploy litellm**
@@ -150,17 +194,20 @@ To avoid issues with predictability, difficulties in rollback, and inconsistent 
 
 
 ## Deploy with Database
+### Docker, Kubernetes, Helm Chart
+
+
+<Tabs>
+
+<TabItem value="docker-deploy" label="Dockerfile">
 
 We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
 
-<Tabs>
-<TabItem value="docker-deploy" label="Dockerfile">
-
-```
+```shell
 docker pull docker pull ghcr.io/berriai/litellm-database:main-latest
 ```
 
-```
+```shell
 docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
@@ -233,6 +280,16 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 </TabItem>
 <TabItem value="helm-deploy" label="Helm">
 
+
+
+:::info
+
+[BETA] Helm Chart is BETA. If you run into an issues/have feedback please let us know [https://github.com/BerriAI/litellm/issues](https://github.com/BerriAI/litellm/issues)
+
+:::
+
+Use this to deploy litellm using a helm chart. Link to [the LiteLLM Helm Chart](https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm-helm)
+
 #### Step 1. Clone the repository
 
 ```bash
@@ -241,11 +298,13 @@ git clone https://github.com/BerriAI/litellm.git
 
 #### Step 2. Deploy with Helm
 
+Run the following command in the root of your `litellm` repo. This will set the litellm proxy master key as `sk-1234`
+
 ```bash
 helm install \
-  --set masterkey=SuPeRsEcReT \
+  --set masterkey=sk-1234 \
   mydeploy \
-  deploy/charts/litellm
+  deploy/charts/litellm-helm
 ```
 
 #### Step 3. Expose the service to localhost
@@ -253,8 +312,54 @@ helm install \
 ```bash
 kubectl \
   port-forward \
-  service/mydeploy-litellm \
+  service/mydeploy-litellm-helm \
   4000:4000
+```
+
+Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+
+
+If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/values.yaml)
+
+</TabItem>
+
+
+<TabItem value="helm-oci" label="Helm OCI Registry (GHCR)">
+
+:::info
+
+[BETA] Helm Chart is BETA. If you run into an issues/have feedback please let us know [https://github.com/BerriAI/litellm/issues](https://github.com/BerriAI/litellm/issues)
+
+:::
+
+Use this when you want to use litellm helm chart as a dependency for other charts. The `litellm-helm` OCI is hosted here [https://github.com/BerriAI/litellm/pkgs/container/litellm-helm](https://github.com/BerriAI/litellm/pkgs/container/litellm-helm)
+
+#### Step 1. Pull the litellm helm chart
+
+```bash
+helm pull oci://ghcr.io/berriai/litellm-helm
+
+# Pulled: ghcr.io/berriai/litellm-helm:0.1.2
+# Digest: sha256:7d3ded1c99c1597f9ad4dc49d84327cf1db6e0faa0eeea0c614be5526ae94e2a
+```
+
+#### Step 2. Unzip litellm helm
+Unzip the specific version that was pulled in Step 1
+
+```bash
+tar -zxvf litellm-helm-0.1.2.tgz
+```
+
+#### Step 3. Install litellm helm
+
+```bash
+helm install lite-helm ./litellm-helm
+```
+
+#### Step 4. Expose the service to localhost
+
+```bash
+kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
 Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.

@@ -19,9 +19,9 @@ Requirements:
 
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
 - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
-- Set a `master key`, this is your Proxy Admin key - you can use this to create other keys
+- Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
   - ** Set on config.yaml** set your master key under `general_settings:master_key`, example below
-  - ** Set env variable** set `LITELLM_MASTER_KEY` (**Note: either set this on the config.yaml or in your env** whatever is more convenient for you)
+  - ** Set env variable** set `LITELLM_MASTER_KEY`
 
 (the proxy Dockerfile checks if the `DATABASE_URL` is set and then intializes the DB connection)
 
@@ -737,42 +737,4 @@ litellm_settings:
 
 general_settings:
   custom_key_generate: custom_auth.custom_generate_key_fn
-```
-
-
-
-
-### [BETA] Dynamo DB 
-
-#### Step 1. Save keys to env
-
-```shell
-AWS_ACCESS_KEY_ID = "your-aws-access-key-id"
-AWS_SECRET_ACCESS_KEY = "your-aws-secret-access-key"
-```
-
-#### Step 2. Add details to config 
-
-```yaml
-general_settings: 
-  master_key: sk-1234
-  database_type: "dynamo_db" 
-  database_args: { # 👈  all args - https://github.com/BerriAI/litellm/blob/befbcbb7ac8f59835ce47415c128decf37aac328/litellm/proxy/_types.py#L190
-    "billing_mode": "PAY_PER_REQUEST", 
-    "region_name": "us-west-2" 
-    "user_table_name": "your-user-table",
-    "key_table_name": "your-token-table",
-    "config_table_name": "your-config-table",
-    "aws_role_name": "your-aws_role_name",
-    "aws_session_name": "your-aws_session_name",
-  }
-```
-
-#### Step 3. Generate Key
-
-```bash
-curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
---header 'Content-Type: application/json' \
---data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
 ```

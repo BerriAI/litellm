@@ -9,8 +9,9 @@
 
 from typing import Optional, Literal
 import litellm
+from litellm.proxy.utils import PrismaClient
 from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException
@@ -19,13 +20,13 @@ import json, traceback
 
 class _ENTERPRISE_BlockedUserList(CustomLogger):
     # Class variables or attributes
-    def __init__(self):
-        blocked_user_list = litellm.blocked_user_list
+    def __init__(self, prisma_client: Optional[PrismaClient]):
+        self.prisma_client = prisma_client
 
+        blocked_user_list = litellm.blocked_user_list
         if blocked_user_list is None:
-            raise Exception(
-                "`blocked_user_list` can either be a list or filepath. None set."
-            )
+            self.blocked_user_list = None
+            return
 
         if isinstance(blocked_user_list, list):
             self.blocked_user_list = blocked_user_list
@@ -64,16 +65,56 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
             """
             - check if user id part of call
             - check if user id part of blocked list
+                - if blocked list is none or user not in blocked list
+                - check if end-user in cache
+                - check if end-user in db
             """
             self.print_verbose(f"Inside Blocked User List Pre-Call Hook")
-            if "user_id" in data:
-                if data["user_id"] in self.blocked_user_list:
+            if "user_id" in data or "user" in data:
+                user = data.get("user_id", data.get("user", ""))
+                if (
+                    self.blocked_user_list is not None
+                    and user in self.blocked_user_list
+                ):
                     raise HTTPException(
                         status_code=400,
                         detail={
-                            "error": f"User blocked from making LLM API Calls. User={data['user_id']}"
+                            "error": f"User blocked from making LLM API Calls. User={user}"
                         },
                     )
+
+                cache_key = f"litellm:end_user_id:{user}"
+                end_user_cache_obj: LiteLLM_EndUserTable = cache.get_cache(
+                    key=cache_key
+                )
+                if end_user_cache_obj is None and self.prisma_client is not None:
+                    # check db
+                    end_user_obj = (
+                        await self.prisma_client.db.litellm_endusertable.find_unique(
+                            where={"user_id": user}
+                        )
+                    )
+                    if end_user_obj is None:  # user not in db - assume not blocked
+                        end_user_obj = LiteLLM_EndUserTable(user_id=user, blocked=False)
+                    cache.set_cache(key=cache_key, value=end_user_obj, ttl=60)
+                    if end_user_obj is not None and end_user_obj.blocked == True:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"User blocked from making LLM API Calls. User={user}"
+                            },
+                        )
+                elif (
+                    end_user_cache_obj is not None
+                    and end_user_cache_obj.blocked == True
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"User blocked from making LLM API Calls. User={user}"
+                        },
+                    )
+
         except HTTPException as e:
             raise e
         except Exception as e:

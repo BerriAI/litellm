@@ -8,7 +8,7 @@ handler.setLevel(logging.DEBUG)
 
 # Create a formatter and set it for the handler
 formatter = logging.Formatter(
-    "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(message)s",
+    "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
     datefmt="%H:%M:%S",
 )
 

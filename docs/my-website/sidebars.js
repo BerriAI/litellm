@@ -42,6 +42,7 @@ const sidebars = {
         "proxy/team_based_routing",
         "proxy/ui",
         "proxy/budget_alerts",
+        "proxy/cost_tracking",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
@@ -64,14 +65,8 @@ const sidebars = {
             "proxy/streaming_logging",
           ]
         },
-        {
-          "type": "category",
-          "label": "Content Moderation",
-          "items": [
-            "proxy/call_hooks",
-            "proxy/rules",
-          ]
-        },
+        "proxy/call_hooks",
+        "proxy/rules",
         "proxy/deploy", 
         "proxy/cli", 
       ]
@@ -131,11 +126,13 @@ const sidebars = {
         "providers/anthropic", 
         "providers/aws_sagemaker",
         "providers/bedrock", 
+        "providers/cohere", 
         "providers/anyscale",
         "providers/huggingface", 
         "providers/ollama", 
         "providers/perplexity", 
         "providers/groq", 
+        "providers/fireworks_ai", 
         "providers/vllm", 
         "providers/xinference", 
         "providers/cloudflare_workers", 
@@ -143,7 +140,6 @@ const sidebars = {
         "providers/ai21", 
         "providers/nlp_cloud",
         "providers/replicate", 
-        "providers/cohere", 
         "providers/togetherai", 
         "providers/voyage", 
         "providers/aleph_alpha", 

@@ -3,7 +3,7 @@ import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
 from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
-from litellm.proxy._types import KeyManagementSystem
+from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
 import httpx
 import dotenv
 
@@ -36,6 +36,7 @@ token: Optional[str] = (
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
+modify_params = False
 retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
@@ -186,6 +187,7 @@ secret_manager_client: Optional[Any] = (
 )
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional[KeyManagementSystem] = None
+_key_management_settings: Optional[KeyManagementSettings] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -252,6 +254,7 @@ config_path = None
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
+cohere_chat_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
@@ -274,6 +277,8 @@ for key, value in model_cost.items():
         open_ai_text_completion_models.append(key)
     elif value.get("litellm_provider") == "cohere":
         cohere_models.append(key)
+    elif value.get("litellm_provider") == "cohere_chat":
+        cohere_chat_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
@@ -324,6 +329,7 @@ openai_compatible_providers: List = [
     "perplexity",
     "xinference",
     "together_ai",
+    "fireworks_ai",
 ]
 
 
@@ -421,6 +427,7 @@ model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
     + cohere_models
+    + cohere_chat_models
     + anthropic_models
     + replicate_models
     + openrouter_models
@@ -444,6 +451,7 @@ provider_list: List = [
     "custom_openai",
     "text-completion-openai",
     "cohere",
+    "cohere_chat",
     "anthropic",
     "replicate",
     "huggingface",
@@ -455,6 +463,7 @@ provider_list: List = [
     "ai21",
     "baseten",
     "azure",
+    "azure_text",
     "sagemaker",
     "bedrock",
     "vllm",
@@ -472,12 +481,14 @@ provider_list: List = [
     "voyage",
     "cloudflare",
     "xinference",
+    "fireworks_ai",
     "custom",  # custom apis
 ]
 
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "cohere": cohere_models,
+    "cohere_chat": cohere_chat_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
     "huggingface": huggingface_models,

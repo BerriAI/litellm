@@ -37,6 +37,24 @@ litellm_settings:
   cache: True # set cache responses to True, litellm defaults to using a redis cache
 ```
 
+#### [OPTIONAL] Step 1.5: Add redis namespaces 
+
+If you want to create some folder for your keys, you can set a namespace, like this:
+
+```yaml
+litellm_settings:
+  cache: true 
+  cache_params:        # set cache params for redis
+    type: redis
+    namespace: "litellm_caching"
+```
+
+and keys will be stored like:
+
+```
+litellm_caching:<hash>
+```
+
 #### Step 2: Add Redis Credentials to .env
 
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
@@ -275,7 +293,32 @@ litellm_settings:
       ] # defaults to all litellm call types
 ```
 
-### Turn on / off caching per request.
+### Turn on `batch_redis_requests` 
+
+**What it does?**
+When a request is made:
+
+- Check if a key starting with `litellm:<hashed_api_key>:<call_type>:` exists in-memory, if no - get the last 100 cached requests for this key and store it
+
+- New requests are stored with this `litellm:..` as the namespace
+
+**Why?**
+Reduce number of redis GET requests. This improved latency by 46% in prod load tests. 
+
+**Usage**
+
+```yaml
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    ... # remaining redis args (host, port, etc.)
+  callbacks: ["batch_redis_requests"] # 👈 KEY CHANGE!
+```
+
+[**SEE CODE**](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/batch_redis_get.py)
+
+### Turn on / off caching per request.  
 
 The proxy support 3 cache-controls:
 

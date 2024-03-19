@@ -715,6 +715,16 @@ class AzureChatCompletion(BaseLLM):
                 model = model
             else:
                 model = None
+
+            ## BASE MODEL CHECK
+            if (
+                model_response is not None
+                and optional_params.get("base_model", None) is not None
+            ):
+                model_response._hidden_params["model"] = optional_params.pop(
+                    "base_model"
+                )
+
             data = {"model": model, "prompt": prompt, **optional_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):

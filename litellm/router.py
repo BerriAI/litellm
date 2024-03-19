@@ -210,9 +210,6 @@ class Router:
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
-        self.model_exception_map: dict = (
-            {}
-        )  # dict to store model: list exceptions. self.exceptions = {"gpt-3.5": ["API KEY Error", "Rate Limit Error", "good morning error"]}
         self.total_calls: defaultdict = defaultdict(
             int
         )  # dict to store total calls made to each model
@@ -970,44 +967,81 @@ class Router:
         is_async: Optional[bool] = False,
         **kwargs,
     ) -> Union[List[float], None]:
-        # pick the one that is available (lowest TPM/RPM)
-        deployment = self.get_available_deployment(
-            model=model,
-            input=input,
-            specific_deployment=kwargs.pop("specific_deployment", None),
-        )
-        kwargs.setdefault("model_info", {})
-        kwargs.setdefault("metadata", {}).update(
-            {"model_group": model, "deployment": deployment["litellm_params"]["model"]}
-        )  # [TODO]: move to using async_function_with_fallbacks
-        data = deployment["litellm_params"].copy()
-        for k, v in self.default_litellm_params.items():
+        try:
+            kwargs["model"] = model
+            kwargs["input"] = input
+            kwargs["original_function"] = self._embedding
+            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            timeout = kwargs.get("request_timeout", self.timeout)
+            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            response = self.function_with_fallbacks(**kwargs)
+            return response
+        except Exception as e:
+            raise e
+
+    def _embedding(self, input: Union[str, List], model: str, **kwargs):
+        try:
+            verbose_router_logger.debug(
+                f"Inside embedding()- model: {model}; kwargs: {kwargs}"
+            )
+            deployment = self.get_available_deployment(
+                model=model,
+                input=input,
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            kwargs.setdefault("metadata", {}).update(
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
+            )
+            kwargs["model_info"] = deployment.get("model_info", {})
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            for k, v in self.default_litellm_params.items():
+                if (
+                    k not in kwargs
+                ):  # prioritize model-specific params > default router params
+                    kwargs[k] = v
+                elif k == "metadata":
+                    kwargs[k].update(v)
+
+            potential_model_client = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="sync"
+            )
+            # check if provided keys == client keys #
+            dynamic_api_key = kwargs.get("api_key", None)
             if (
-                k not in kwargs
-            ):  # prioritize model-specific params > default router params
-                kwargs[k] = v
-            elif k == "metadata":
-                kwargs[k].update(v)
-        potential_model_client = self._get_client(deployment=deployment, kwargs=kwargs)
-        # check if provided keys == client keys #
-        dynamic_api_key = kwargs.get("api_key", None)
-        if (
-            dynamic_api_key is not None
-            and potential_model_client is not None
-            and dynamic_api_key != potential_model_client.api_key
-        ):
-            model_client = None
-        else:
-            model_client = potential_model_client
-        return litellm.embedding(
-            **{
-                **data,
-                "input": input,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
-        )
+                dynamic_api_key is not None
+                and potential_model_client is not None
+                and dynamic_api_key != potential_model_client.api_key
+            ):
+                model_client = None
+            else:
+                model_client = potential_model_client
+
+            self.total_calls[model_name] += 1
+            response = litellm.embedding(
+                **{
+                    **data,
+                    "input": input,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.embedding(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.embedding(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model_name is not None:
+                self.fail_calls[model_name] += 1
+            raise e
 
     async def aembedding(
         self,
@@ -1487,17 +1521,6 @@ class Router:
                 self._set_cooldown_deployments(
                     deployment_id
                 )  # setting deployment_id in cooldown deployments
-            if metadata:
-                deployment = metadata.get("deployment", None)
-                deployment_exceptions = self.model_exception_map.get(deployment, [])
-                deployment_exceptions.append(exception_str)
-                self.model_exception_map[deployment] = deployment_exceptions
-                verbose_router_logger.debug("\nEXCEPTION FOR DEPLOYMENTS\n")
-                verbose_router_logger.debug(self.model_exception_map)
-                for model in self.model_exception_map:
-                    verbose_router_logger.debug(
-                        f"Model {model} had {len(self.model_exception_map[model])} exception"
-                    )
             if custom_llm_provider:
                 model_name = f"{custom_llm_provider}/{model_name}"
 
@@ -1520,13 +1543,18 @@ class Router:
             ) in (
                 kwargs.items()
             ):  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k != "metadata":
+                if k not in ["metadata", "messages", "original_function"]:
                     previous_model[k] = v
                 elif k == "metadata" and isinstance(v, dict):
                     previous_model["metadata"] = {}  # type: ignore
                     for metadata_k, metadata_v in kwargs["metadata"].items():
                         if metadata_k != "previous_models":
                             previous_model[k][metadata_k] = metadata_v  # type: ignore
+
+            # check current size of self.previous_models, if it's larger than 3, remove the first element
+            if len(self.previous_models) > 3:
+                self.previous_models.pop(0)
+
             self.previous_models.append(previous_model)
             kwargs["metadata"]["previous_models"] = self.previous_models
             return kwargs
@@ -1676,6 +1704,7 @@ class Router:
             # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
             http_proxy = os.getenv("HTTP_PROXY", None)
             https_proxy = os.getenv("HTTPS_PROXY", None)
+            no_proxy = os.getenv("NO_PROXY", None)
 
             # Create the proxies dictionary only if the environment variables are set.
             sync_proxy_mounts = None
@@ -1693,6 +1722,14 @@ class Router:
                         proxy=httpx.Proxy(url=https_proxy)
                     ),
                 }
+
+                # assume no_proxy is a list of comma separated urls
+                if no_proxy is not None and isinstance(no_proxy, str):
+                    no_proxy_urls = no_proxy.split(",")
+
+                    for url in no_proxy_urls:  # set no-proxy support for specific urls
+                        sync_proxy_mounts[url] = None  # type: ignore
+                        async_proxy_mounts[url] = None  # type: ignore
 
             organization = litellm_params.get("organization", None)
             if isinstance(organization, str) and organization.startswith("os.environ/"):
@@ -2176,7 +2213,7 @@ class Router:
             f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}"
         )
         if len(healthy_deployments) == 0:
-            raise ValueError("No models available")
+            raise ValueError(f"No healthy deployment available, passed model={model}")
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -2247,7 +2284,9 @@ class Router:
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, No deployment available"
             )
-            raise ValueError("No models available.")
+            raise ValueError(
+                f"No deployments available for selected model, passed model={model}"
+            )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
         )

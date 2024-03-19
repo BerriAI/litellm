@@ -56,6 +56,8 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+# Generate prisma client
+RUN prisma generate
 RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
@@ -64,4 +66,4 @@ ENTRYPOINT ["litellm"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs 
 # CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--detailed_debug"]
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--num_workers", "4"]
