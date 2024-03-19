@@ -19,7 +19,7 @@ docker pull ghcr.io/berriai/litellm:main-latest
 ```
 
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest
+docker run --env-file=.env -v {pwd}/path/to/config.yaml:/app/config.yaml -p 4000:4000 ghcr.io/berriai/litellm:main-latest --config config.yaml
 ```
 
 </TabItem>
