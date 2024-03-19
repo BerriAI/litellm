@@ -387,7 +387,12 @@ class BudgetRequest(LiteLLMBase):
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
+    AWS_SECRET_MANAGER = "aws_secret_manager"
     LOCAL = "local"
+
+
+class KeyManagementSettings(LiteLLMBase):
+    hosted_keys: List
 
 
 class TeamDefaultSettings(LiteLLMBase):
@@ -535,6 +540,8 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     permissions: Dict = {}
     model_spend: Dict = {}
     model_max_budget: Dict = {}
+    soft_budget_cooldown: bool = False
+    litellm_budget_table: Optional[dict] = None
 
     # hidden params used for parallel request limiting, not required to create a token
     user_id_rate_limits: Optional[dict] = None
@@ -594,6 +601,22 @@ class LiteLLM_UserTable(LiteLLMBase):
             values.update({"spend": 0.0})
         if values.get("models") is None:
             values.update({"models": []})
+        return values
+
+    class Config:
+        protected_namespaces = ()
+
+
+class LiteLLM_EndUserTable(LiteLLMBase):
+    user_id: str
+    blocked: bool
+    alias: Optional[str] = None
+    spend: float = 0.0
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("spend") is None:
+            values.update({"spend": 0.0})
         return values
 
     class Config:

@@ -82,12 +82,22 @@ class AmazonAnthropicClaude3Config:
 
     Supported Params for the Amazon / Anthropic Claude 3 models:
 
-    - `max_tokens` (integer) max tokens,
-    - `anthropic_version` (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
+    - `max_tokens` Required (integer) max tokens,
+    - `anthropic_version` Required (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
+    - `system` Optional (string) the system prompt, conversion from openai format to this is handled in factory.py
+    - `temperature` Optional (float) The amount of randomness injected into the response
+    - `top_p` Optional (float) Use nucleus sampling.
+    - `top_k` Optional (int) Only sample from the top K options for each subsequent token
+    - `stop_sequences` Optional (List[str]) Custom text sequences that cause the model to stop generating
     """
 
     max_tokens: Optional[int] = litellm.max_tokens
     anthropic_version: Optional[str] = "bedrock-2023-05-31"
+    system: Optional[str] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    stop_sequences: Optional[List[str]] = None
 
     def __init__(
         self,
@@ -128,6 +138,12 @@ class AmazonAnthropicClaude3Config:
                 optional_params["tools"] = value
             if param == "stream":
                 optional_params["stream"] = value
+            if param == "stop":
+                optional_params["stop_sequences"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
         return optional_params
 
 
@@ -704,14 +720,15 @@ def completion(
         if provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
                 # Separate system prompt from rest of message
-                system_prompt_idx: Optional[int] = None
+                system_prompt_idx: list[int] = []
+                system_messages: list[str] = []
                 for idx, message in enumerate(messages):
                     if message["role"] == "system":
-                        inference_params["system"] = message["content"]
-                        system_prompt_idx = idx
-                        break
-                if system_prompt_idx is not None:
-                    messages.pop(system_prompt_idx)
+                        system_messages.append(message["content"])
+                        system_prompt_idx.append(idx)
+                if len(system_prompt_idx) > 0:
+                    inference_params["system"] = '\n'.join(system_messages)
+                    messages = [i for j, i in enumerate(messages) if j not in system_prompt_idx]
                 # Format rest of message according to anthropic guidelines
                 messages = prompt_factory(
                     model=model, messages=messages, custom_llm_provider="anthropic"

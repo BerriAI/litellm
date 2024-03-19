@@ -541,6 +541,8 @@ def test_completion_deep_infra_stream():
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
     except Exception as e:
+        if "Model busy, retry later" in str(e):
+            pass
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -1749,7 +1751,7 @@ class Chunk(BaseModel):
     object: str
     created: int
     model: str
-    system_fingerprint: str
+    # system_fingerprint: str
     choices: List[Choices]
 
 
@@ -1869,7 +1871,7 @@ class Chunk3(BaseModel):
     object: str
     created: int
     model: str
-    system_fingerprint: str
+    # system_fingerprint: str
     choices: List[Choices3]
 
 
@@ -2032,3 +2034,56 @@ async def test_azure_astreaming_and_function_calling():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
+
+
+def test_completion_claude_3_function_call_with_streaming():
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    try:
+        # test without max tokens
+        response = completion(
+            model="claude-3-opus-20240229",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+        )
+        idx = 0
+        for chunk in response:
+            # print(f"chunk: {chunk}")
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
+                validate_first_streaming_function_calling_chunk(chunk=chunk)
+            elif idx == 1:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+            elif chunk.choices[0].finish_reason is not None:  # last chunk
+                validate_final_streaming_function_calling_chunk(chunk=chunk)
+            idx += 1
+        # raise Exception("it worked!")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

@@ -8,7 +8,7 @@ Set `MISTRAL_AZURE_API_KEY` and `MISTRAL_AZURE_API_BASE` in your env
 
 ```shell
 MISTRAL_AZURE_API_KEY = "zE************""
-MISTRAL_AZURE_API_BASE = "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com"
+MISTRAL_AZURE_API_BASE = "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1"
 ```
 
 ```python

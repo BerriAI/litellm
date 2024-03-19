@@ -152,6 +152,52 @@ def test_completion_claude_3_function_call():
         assert isinstance(
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
+
+        messages.append(
+            response.choices[0].message.model_dump()
+        )  # Add assistant tool invokes
+        tool_result = (
+            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+        )
+        # Add user submitted tool results in OpenAI format
+        messages.append(
+            {
+                "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                "role": "tool",
+                "name": response.choices[0].message.tool_calls[0].function.name,
+                "content": tool_result,
+            }
+        )
+        # In the second response, Claude should deduce answer from tool results
+        second_response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(second_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_claude_3_multi_turn_conversations():
+    litellm.set_verbose = True
+    messages = [
+        {"role": "assistant", "content": "?"},  # test first user message auto injection
+        {"role": "user", "content": "Hi!"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "What is the weather like today?"}],
+        },
+        {"role": "assistant", "content": "Hi! I am Claude. "},
+        {"role": "assistant", "content": "Today is a sunny "},
+    ]
+    try:
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+        )
+        print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -289,6 +335,7 @@ def test_completion_mistral_api():
         cost = litellm.completion_cost(completion_response=response)
         print("cost to make mistral completion=", cost)
         assert cost > 0.0
+        assert response.model == "mistral/mistral-tiny"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -311,7 +358,7 @@ def test_completion_mistral_azure():
                 }
             ],
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check, the response
         print(response)
 
     except Exception as e:
@@ -528,6 +575,25 @@ def test_completion_azure_gpt4_vision():
 # test_completion_azure_gpt4_vision()
 
 
+def test_completion_fireworks_ai():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
+            messages=messages,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
@@ -579,7 +645,7 @@ def test_completion_perplexity_api_2():
 
 # test_completion_perplexity_api_2()
 
-# commenting out as this is a flaky test on circle ci
+# commenting out as this is a flaky test on circle-ci
 # def test_completion_nlp_cloud():
 #     try:
 #         messages = [
@@ -1150,6 +1216,30 @@ def test_completion_azure_key_completion_arg():
 
 
 # test_completion_azure_key_completion_arg()
+
+
+def test_azure_instruct():
+    litellm.set_verbose = True
+    response = completion(
+        model="azure_text/instruct-model",
+        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+        max_tokens=10,
+    )
+    print("response", response)
+
+
+@pytest.mark.asyncio
+async def test_azure_instruct_stream():
+    litellm.set_verbose = False
+    response = await litellm.acompletion(
+        model="azure_text/instruct-model",
+        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+        max_tokens=10,
+        stream=True,
+    )
+    print("response", response)
+    async for chunk in response:
+        print(chunk)
 
 
 async def test_re_use_azure_async_client():
@@ -1956,6 +2046,50 @@ def test_completion_cohere():
             messages=messages,
         )
         print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# FYI - cohere_chat looks quite unstable, even when testing locally
+def test_chat_completion_cohere():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="cohere_chat/command-r",
+            messages=messages,
+            max_tokens=10,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_chat_completion_cohere_stream():
+    try:
+        litellm.set_verbose = False
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="cohere_chat/command-r",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        print(response)
+        for chunk in response:
+            print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

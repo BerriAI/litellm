@@ -31,6 +31,8 @@ LiteLLM manages:
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 - Set Budgets & Rate limits per project, api key, model [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
+**Stable Release**: v`1.30.2` 👈 Recommended stable version of proxy. 
+
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
 
@@ -110,15 +112,15 @@ LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, DynamoDB
 from litellm import completion
 
 ## set env variables for logging tools
+os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
-os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
 
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["langfuse", "lunary", "athina"] # log input/output to langfuse, lunary, supabase, athina etc
+litellm.success_callback = ["lunary", "langfuse", "athina"] # log input/output to lunary, langfuse, supabase, athina etc
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
