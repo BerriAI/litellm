@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall } from "./networking";
+import { keyDeleteCall, getTotalSpendCall } from "./networking";
 import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import { DonutChart } from "@tremor/react";
 import {
@@ -33,13 +33,28 @@ interface ViewUserSpendProps {
     accessToken: string;
 }
 const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, userRole, accessToken }) => {
-    console.log("User SpendData:", userSpendData);
     const [spend, setSpend] = useState(userSpendData?.spend);
     const [maxBudget, setMaxBudget] = useState(userSpendData?.max_budget || null);
 
-    const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
-    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
+    useEffect(() => {
+      const fetchData = async () => {
+        if (userRole === "Admin") {
+          try {
+            const globalSpend = await getTotalSpendCall(accessToken);
+            setSpend(globalSpend.spend);
+            setMaxBudget(globalSpend.max_budget || null);
+          } catch (error) {
+            console.error("Error fetching global spend data:", error);
+          }
+        }
+      };
+    
+      fetchData();
+    }, [userRole, accessToken]);
 
+    const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
+
+    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
 
     return (
         <>
