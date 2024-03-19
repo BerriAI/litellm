@@ -37,31 +37,15 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, us
     const [spend, setSpend] = useState(userSpendData?.spend);
     const [maxBudget, setMaxBudget] = useState(userSpendData?.max_budget || null);
 
-    useEffect(() => {
-        const fetchData = async () => {
-            if (userRole === "Admin") {
-                try {
-                    const data = await spendUsersCall(accessToken, "litellm-proxy-budget");
-                    console.log("Result from callSpendUsers:", data);
-                    const total_budget = data[0]
-                    setSpend(total_budget?.spend);
-                    setMaxBudget(total_budget?.max_budget || null);
-                } catch (error) {
-                    console.error("Failed to get spend for user", error);
-                }
-            }
-        };
-
-        fetchData();
-    }, [userRole, accessToken, userID]);
-
     const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
+    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
+
 
     return (
         <>
       <Card className="mx-auto mb-4">
         <Metric>
-          ${spend}
+          ${roundedSpend}
         </Metric>
         <Title>
             / {displayMaxBudget}
