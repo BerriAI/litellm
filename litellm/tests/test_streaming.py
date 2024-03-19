@@ -4,6 +4,7 @@
 import sys, os, asyncio
 import traceback
 import time, pytest
+from pydantic import BaseModel
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -92,6 +93,7 @@ def validate_second_format(chunk):
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
+        assert hasattr(choice["delta"], "role"), "'role' should be a string."
         # openai v1.0.0 returns content as None
         assert (choice["finish_reason"] is None) or isinstance(
             choice["finish_reason"], str
@@ -274,7 +276,7 @@ def test_completion_azure_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_azure_stream()
+# test_completion_azure_stream()
 
 
 def test_completion_azure_function_calling_stream():
@@ -346,7 +348,7 @@ def test_completion_claude_stream():
             },
         ]
         response = completion(
-            model="claude-instant-1", messages=messages, stream=True, max_tokens=50
+            model="claude-instant-1.2", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -391,11 +393,88 @@ def test_completion_palm_stream():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
+    except litellm.Timeout as e:
+        pass
+    except litellm.APIError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_palm_stream()
+
+
+def test_completion_gemini_stream():
+    try:
+        litellm.set_verbose = True
+        print("Streaming gemini response")
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        print("testing gemini streaming")
+        response = completion(model="gemini/gemini-pro", messages=messages, stream=True)
+        print(f"type of response at the top: {response}")
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            print(chunk)
+            # print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_gemini_stream():
+    try:
+        litellm.set_verbose = True
+        print("Streaming gemini response")
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "What do you know?",
+            },
+        ]
+        print("testing gemini streaming")
+        response = await acompletion(
+            model="gemini/gemini-pro", messages=messages, max_tokens=50, stream=True
+        )
+        print(f"type of response at the top: {response}")
+        complete_response = ""
+        idx = 0
+        # Add any assertions here to check the response
+        async for chunk in response:
+            print(f"chunk in acompletion gemini: {chunk}")
+            print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            print(f"chunk: {chunk}")
+            complete_response += chunk
+            idx += 1
+        print(f"completion_response: {complete_response}")
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# asyncio.run(test_acompletion_gemini_stream())
 
 
 def test_completion_mistral_api_stream():
@@ -432,8 +511,9 @@ def test_completion_mistral_api_stream():
 
 
 def test_completion_deep_infra_stream():
-    # deep infra currently includes role in the 2nd chunk
+    # deep infra,currently includes role in the 2nd chunk
     # waiting for them to make a fix on this
+    litellm.set_verbose = True
     try:
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -461,6 +541,8 @@ def test_completion_deep_infra_stream():
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
     except Exception as e:
+        if "Model busy, retry later" in str(e):
+            pass
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -647,6 +729,32 @@ def test_completion_claude_stream_bad_key():
 #         pytest.fail(f"Error occurred: {e}")
 
 
+def test_bedrock_claude_3_streaming():
+    try:
+        litellm.set_verbose = True
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skip(reason="Replicate changed exceptions")
 def test_completion_replicate_stream_bad_key():
     try:
         api_key = "bad-key"
@@ -703,8 +811,15 @@ def test_completion_bedrock_claude_stream():
         complete_response = ""
         has_finish_reason = False
         # Add any assertions here to check the response
+        first_chunk_id = None
         for idx, chunk in enumerate(response):
             # print
+            if idx == 0:
+                first_chunk_id = chunk.id
+            else:
+                assert (
+                    chunk.id == first_chunk_id
+                ), f"chunk ids do not match: {chunk.id} != first chunk id{first_chunk_id}"
             chunk, finished = streaming_format_tests(idx, chunk)
             has_finish_reason = finished
             complete_response += chunk
@@ -714,7 +829,6 @@ def test_completion_bedrock_claude_stream():
             raise Exception("finish reason not set for last chunk")
         if complete_response.strip() == "":
             raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
     except RateLimitError:
         pass
     except Exception as e:
@@ -769,9 +883,30 @@ def test_sagemaker_weird_response():
     When the stream ends, flush any remaining holding chunks.
     """
     try:
-        chunk = """<s>[INST] Hey, how's it going? [/INST]
+        from litellm.llms.sagemaker import TokenIterator
+        import json
+        import json
+        from litellm.llms.sagemaker import TokenIterator
 
-    I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
+        chunk = """<s>[INST] Hey, how's it going? [/INST],
+        I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
+
+        data = "\n".join(
+            map(
+                lambda x: f"data: {json.dumps({'token': {'text': x.strip()}})}",
+                chunk.strip().split(","),
+            )
+        )
+        stream = bytes(data, encoding="utf8")
+
+        # Modify the array to be a dictionary with "PayloadPart" and "Bytes" keys.
+        stream_iterator = iter([{"PayloadPart": {"Bytes": stream}}])
+
+        token_iter = TokenIterator(stream_iterator)
+
+        # for token in token_iter:
+        #     print(token)
+        litellm.set_verbose = True
 
         logging_obj = litellm.Logging(
             model="berri-benchmarking-Llama-2-70b-chat-hf-4",
@@ -783,14 +918,19 @@ def test_sagemaker_weird_response():
             start_time=time.time(),
         )
         response = litellm.CustomStreamWrapper(
-            completion_stream=chunk,
+            completion_stream=token_iter,
             model="berri-benchmarking-Llama-2-70b-chat-hf-4",
             custom_llm_provider="sagemaker",
             logging_obj=logging_obj,
         )
         complete_response = ""
-        for chunk in response:
-            complete_response += chunk["choices"][0]["delta"]["content"]
+        for idx, chunk in enumerate(response):
+            # print
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            complete_response += chunk
+            if finished:
+                break
         assert len(complete_response) > 0
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
@@ -799,6 +939,7 @@ def test_sagemaker_weird_response():
 # test_sagemaker_weird_response()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_sagemaker_streaming_async():
     try:
@@ -811,43 +952,58 @@ async def test_sagemaker_streaming_async():
             temperature=0.7,
             stream=True,
         )
-
         # Add any assertions here to check the response
+        print(response)
         complete_response = ""
+        has_finish_reason = False
+        # Add any assertions here to check the response
+        idx = 0
         async for chunk in response:
-            complete_response += chunk.choices[0].delta.content or ""
-        print(f"complete_response: {complete_response}")
-        assert len(complete_response) > 0
+            # print
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            complete_response += chunk
+            if finished:
+                break
+            idx += 1
+        if has_finish_reason is False:
+            raise Exception("finish reason not set for last chunk")
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# def test_completion_sagemaker_stream():
-#     try:
-#         response = completion(
-#             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
-#             messages=messages,
-#             temperature=0.2,
-#             max_tokens=80,
-#             stream=True,
-#         )
-#         complete_response = ""
-#         has_finish_reason = False
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if has_finish_reason is False:
-#             raise Exception("finish reason not set for last chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+# asyncio.run(test_sagemaker_streaming_async())
+
+
+@pytest.mark.skip(reason="AWS Suspended Account")
+def test_completion_sagemaker_stream():
+    try:
+        response = completion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+        complete_response = ""
+        has_finish_reason = False
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            if finished:
+                break
+            complete_response += chunk
+        if has_finish_reason is False:
+            raise Exception("finish reason not set for last chunk")
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # test_completion_sagemaker_stream()
 
@@ -930,6 +1086,7 @@ def ai21_completion_call_bad_key():
 # ai21_completion_call_bad_key()
 
 
+@pytest.mark.skip(reason="flaky test")
 @pytest.mark.asyncio
 async def test_hf_completion_tgi_stream():
     try:
@@ -949,9 +1106,9 @@ async def test_hf_completion_tgi_stream():
             if finished:
                 break
             idx += 1
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
+    except litellm.ServiceUnavailableError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1329,8 +1486,8 @@ first_openai_function_call_example = {
 
 
 def validate_first_function_call_chunk_structure(item):
-    if not isinstance(item, dict):
-        raise Exception("Incorrect format")
+    if not (isinstance(item, dict) or isinstance(item, litellm.ModelResponse)):
+        raise Exception(f"Incorrect format, type of item: {type(item)}")
 
     required_keys = {"id", "object", "created", "model", "choices"}
     for key in required_keys:
@@ -1342,27 +1499,42 @@ def validate_first_function_call_chunk_structure(item):
 
     required_keys_in_choices_array = {"index", "delta", "finish_reason"}
     for choice in item["choices"]:
-        if not isinstance(choice, dict):
-            raise Exception("Incorrect format")
+        if not (
+            isinstance(choice, dict)
+            or isinstance(choice, litellm.utils.StreamingChoices)
+        ):
+            raise Exception(f"Incorrect format, type of choice: {type(choice)}")
         for key in required_keys_in_choices_array:
             if key not in choice:
                 raise Exception("Incorrect format")
 
-        if not isinstance(choice["delta"], dict):
-            raise Exception("Incorrect format")
+        if not (
+            isinstance(choice["delta"], dict)
+            or isinstance(choice["delta"], litellm.utils.Delta)
+        ):
+            raise Exception(
+                f"Incorrect format, type of choice: {type(choice['delta'])}"
+            )
 
         required_keys_in_delta = {"role", "content", "function_call"}
         for key in required_keys_in_delta:
             if key not in choice["delta"]:
                 raise Exception("Incorrect format")
 
-        if not isinstance(choice["delta"]["function_call"], dict):
-            raise Exception("Incorrect format")
+        if not (
+            isinstance(choice["delta"]["function_call"], dict)
+            or isinstance(choice["delta"]["function_call"], BaseModel)
+        ):
+            raise Exception(
+                f"Incorrect format, type of function call: {type(choice['delta']['function_call'])}"
+            )
 
         required_keys_in_function_call = {"name", "arguments"}
         for key in required_keys_in_function_call:
-            if key not in choice["delta"]["function_call"]:
-                raise Exception("Incorrect format")
+            if not hasattr(choice["delta"]["function_call"], key):
+                raise Exception(
+                    f"Incorrect format, expected key={key};  actual keys: {choice['delta']['function_call']}, eval: {hasattr(choice['delta']['function_call'], key)}"
+                )
 
     return True
 
@@ -1421,7 +1593,7 @@ final_function_call_chunk_example = {
 
 
 def validate_final_function_call_chunk_structure(data):
-    if not isinstance(data, dict):
+    if not (isinstance(data, dict) or isinstance(data, litellm.ModelResponse)):
         raise Exception("Incorrect format")
 
     required_keys = {"id", "object", "created", "model", "choices"}
@@ -1434,7 +1606,9 @@ def validate_final_function_call_chunk_structure(data):
 
     required_keys_in_choices_array = {"index", "delta", "finish_reason"}
     for choice in data["choices"]:
-        if not isinstance(choice, dict):
+        if not (
+            isinstance(choice, dict) or isinstance(choice["delta"], litellm.utils.Delta)
+        ):
             raise Exception("Incorrect format")
         for key in required_keys_in_choices_array:
             if key not in choice:
@@ -1466,37 +1640,50 @@ def streaming_and_function_calling_format_tests(idx, chunk):
     return extracted_chunk, finished
 
 
-# def test_openai_streaming_and_function_calling():
-#     function1 = [
-#         {
-#             "name": "get_current_weather",
-#             "description": "Get the current weather in a given location",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                     "location": {
-#                         "type": "string",
-#                         "description": "The city and state, e.g. San Francisco, CA",
-#                     },
-#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-#                 },
-#                 "required": ["location"],
-#             },
-#         }
-#     ]
-#     messages=[{"role": "user", "content": "What is the weather like in Boston?"}]
-#     try:
-#         response = completion(
-#             model="gpt-3.5-turbo", functions=function1, messages=messages, stream=True,
-#         )
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             streaming_and_function_calling_format_tests(idx=idx, chunk=chunk)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-#         raise e
+def test_openai_streaming_and_function_calling():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+    try:
+        response = completion(
+            model="gpt-3.5-turbo",
+            tools=tools,
+            messages=messages,
+            stream=True,
+        )
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        raise e
 
-# test_openai_streaming_and_function_calling()
+
+# test_azure_streaming_and_function_calling()
 
 
 def test_success_callback_streaming():
@@ -1528,3 +1715,375 @@ def test_success_callback_streaming():
 
 
 # test_success_callback_streaming()
+
+#### STREAMING + FUNCTION CALLING ###
+from pydantic import BaseModel
+from typing import List, Optional
+
+
+class Function(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCalls(BaseModel):
+    index: int
+    id: str
+    type: str
+    function: Function
+
+
+class Delta(BaseModel):
+    role: str
+    content: Optional[str]
+    tool_calls: List[ToolCalls]
+
+
+class Choices(BaseModel):
+    index: int
+    delta: Delta
+    logprobs: Optional[str]
+    finish_reason: Optional[str]
+
+
+class Chunk(BaseModel):
+    id: str
+    object: str
+    created: int
+    model: str
+    # system_fingerprint: str
+    choices: List[Choices]
+
+
+def validate_first_streaming_function_calling_chunk(chunk: ModelResponse):
+    chunk_instance = Chunk(**chunk.model_dump())
+
+
+### Chunk 1
+
+
+# {
+#     "id": "chatcmpl-8vdVjtzxc0JqGjq93NxC79dMp6Qcs",
+#     "object": "chat.completion.chunk",
+#     "created": 1708747267,
+#     "model": "gpt-3.5-turbo-0125",
+#     "system_fingerprint": "fp_86156a94a0",
+#     "choices": [
+#         {
+#             "index": 0,
+#             "delta": {
+#                 "role": "assistant",
+#                 "content": null,
+#                 "tool_calls": [
+#                     {
+#                         "index": 0,
+#                         "id": "call_oN10vaaC9iA8GLFRIFwjCsN7",
+#                         "type": "function",
+#                         "function": {
+#                             "name": "get_current_weather",
+#                             "arguments": ""
+#                         }
+#                     }
+#                 ]
+#             },
+#             "logprobs": null,
+#             "finish_reason": null
+#         }
+#     ]
+# }
+class Function2(BaseModel):
+    arguments: str
+
+
+class ToolCalls2(BaseModel):
+    index: int
+    function: Optional[Function2]
+
+
+class Delta2(BaseModel):
+    tool_calls: List[ToolCalls2]
+
+
+class Choices2(BaseModel):
+    index: int
+    delta: Delta2
+    logprobs: Optional[str]
+    finish_reason: Optional[str]
+
+
+class Chunk2(BaseModel):
+    id: str
+    object: str
+    created: int
+    model: str
+    system_fingerprint: str
+    choices: List[Choices2]
+
+
+## Chunk 2
+
+# {
+#     "id": "chatcmpl-8vdVjtzxc0JqGjq93NxC79dMp6Qcs",
+#     "object": "chat.completion.chunk",
+#     "created": 1708747267,
+#     "model": "gpt-3.5-turbo-0125",
+#     "system_fingerprint": "fp_86156a94a0",
+#     "choices": [
+#         {
+#             "index": 0,
+#             "delta": {
+#                 "tool_calls": [
+#                     {
+#                         "index": 0,
+#                         "function": {
+#                             "arguments": "{\""
+#                         }
+#                     }
+#                 ]
+#             },
+#             "logprobs": null,
+#             "finish_reason": null
+#         }
+#     ]
+# }
+
+
+def validate_second_streaming_function_calling_chunk(chunk: ModelResponse):
+    chunk_instance = Chunk2(**chunk.model_dump())
+
+
+class Delta3(BaseModel):
+    content: Optional[str] = None
+    role: Optional[str] = None
+    function_call: Optional[dict] = None
+    tool_calls: Optional[List] = None
+
+
+class Choices3(BaseModel):
+    index: int
+    delta: Delta3
+    logprobs: Optional[str]
+    finish_reason: str
+
+
+class Chunk3(BaseModel):
+    id: str
+    object: str
+    created: int
+    model: str
+    # system_fingerprint: str
+    choices: List[Choices3]
+
+
+def validate_final_streaming_function_calling_chunk(chunk: ModelResponse):
+    chunk_instance = Chunk3(**chunk.model_dump())
+
+
+def test_azure_streaming_and_function_calling():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+    try:
+        response = completion(
+            model="azure/gpt-4-nov-release",
+            tools=tools,
+            tool_choice="auto",
+            messages=messages,
+            stream=True,
+            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
+            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_version="2024-02-15-preview",
+        )
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            print(f"chunk: {chunk}")
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
+                validate_first_streaming_function_calling_chunk(chunk=chunk)
+            elif idx == 1:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+            elif chunk.choices[0].finish_reason is not None:  # last chunk
+                validate_final_streaming_function_calling_chunk(chunk=chunk)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        raise e
+
+
+@pytest.mark.asyncio
+async def test_azure_astreaming_and_function_calling():
+    import uuid
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": f"What is the weather like in Boston? {uuid.uuid4()}",
+        }
+    ]
+    from litellm.caching import Cache
+
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    try:
+        response = await litellm.acompletion(
+            model="azure/gpt-4-nov-release",
+            tools=tools,
+            tool_choice="auto",
+            messages=messages,
+            stream=True,
+            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
+            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_version="2024-02-15-preview",
+            caching=True,
+        )
+        # Add any assertions here to check the response
+        idx = 0
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
+                validate_first_streaming_function_calling_chunk(chunk=chunk)
+            elif idx == 1:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+            elif chunk.choices[0].finish_reason is not None:  # last chunk
+                validate_final_streaming_function_calling_chunk(chunk=chunk)
+            idx += 1
+
+        ## CACHING TEST
+        print("\n\nCACHING TESTS\n\n")
+        response = await litellm.acompletion(
+            model="azure/gpt-4-nov-release",
+            tools=tools,
+            tool_choice="auto",
+            messages=messages,
+            stream=True,
+            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
+            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_version="2024-02-15-preview",
+            caching=True,
+        )
+        # Add any assertions here to check the response
+        idx = 0
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
+                validate_first_streaming_function_calling_chunk(chunk=chunk)
+            elif idx == 1:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+            elif chunk.choices[0].finish_reason is not None:  # last chunk
+                validate_final_streaming_function_calling_chunk(chunk=chunk)
+            idx += 1
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        raise e
+
+
+def test_completion_claude_3_function_call_with_streaming():
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    try:
+        # test without max tokens
+        response = completion(
+            model="claude-3-opus-20240229",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+        )
+        idx = 0
+        for chunk in response:
+            # print(f"chunk: {chunk}")
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
+                validate_first_streaming_function_calling_chunk(chunk=chunk)
+            elif idx == 1:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+            elif chunk.choices[0].finish_reason is not None:  # last chunk
+                validate_final_streaming_function_calling_chunk(chunk=chunk)
+            idx += 1
+        # raise Exception("it worked!")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

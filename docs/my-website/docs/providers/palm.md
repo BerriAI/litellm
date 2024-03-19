@@ -5,7 +5,7 @@
 
 ## Sample Usage
 ```python
-import litellm
+from litellm import completion
 import os
 
 os.environ['PALM_API_KEY'] = ""
@@ -17,7 +17,7 @@ response = completion(
 
 ## Sample Usage - Streaming
 ```python
-import litellm
+from litellm import completion
 import os
 
 os.environ['PALM_API_KEY'] = ""

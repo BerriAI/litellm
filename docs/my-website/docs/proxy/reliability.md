@@ -45,7 +45,7 @@ litellm_settings:
 **Set dynamically**
 
 ```bash
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "zephyr-beta",
@@ -101,7 +101,7 @@ LiteLLM Proxy supports setting a `timeout` per request
 <TabItem value="Curl" label="Curl Request">
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
      --header 'Content-Type: application/json' \
      --data-raw '{
         "model": "gpt-3.5-turbo",
@@ -121,7 +121,7 @@ import openai
 
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 response = client.chat.completions.create(

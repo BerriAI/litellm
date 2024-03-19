@@ -87,6 +87,7 @@ async def test_azure_img_gen_health_check():
 # asyncio.run(test_azure_img_gen_health_check())
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_sagemaker_embedding_health_check():
     response = await litellm.ahealth_check(

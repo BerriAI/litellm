@@ -277,7 +277,24 @@ def test_langfuse_logging_custom_generation_name():
         print(e)
 
 
-test_langfuse_logging_custom_generation_name()
+# test_langfuse_logging_custom_generation_name()
+
+
+@pytest.mark.skip(reason="beta test - checking langfuse output")
+def test_langfuse_logging_embedding():
+    try:
+        litellm.set_verbose = True
+        litellm.success_callback = ["langfuse"]
+        response = litellm.embedding(
+            model="text-embedding-ada-002",
+            input=["gm", "ishaan"],
+        )
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
+        print(e)
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")

@@ -77,9 +77,9 @@ class AlephAlphaConfig:
     - `control_log_additive` (boolean; default value: true): Method of applying control to attention scores.
     """
 
-    maximum_tokens: Optional[
-        int
-    ] = litellm.max_tokens  # aleph alpha requires max tokens
+    maximum_tokens: Optional[int] = (
+        litellm.max_tokens
+    )  # aleph alpha requires max tokens
     minimum_tokens: Optional[int] = None
     echo: Optional[bool] = None
     temperature: Optional[int] = None
@@ -285,7 +285,10 @@ def completion(
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"]["content"])
+            encoding.encode(
+                model_response["choices"][0]["message"]["content"],
+                disallowed_special=(),
+            )
         )
 
         model_response["created"] = int(time.time())

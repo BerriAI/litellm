@@ -5,6 +5,12 @@ LiteLLM supports all models from [Ollama](https://github.com/jmorganca/ollama)
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
+:::info 
+
+We recommend using [ollama_chat](#using-ollama-apichat) for better responses.
+
+:::
+
 ## Pre-requisites
 Ensure you have your ollama server running
 
@@ -177,7 +183,7 @@ On the docker container run the `test.py` file using `python3 test.py`
 ```python
 import openai
 
-api_base = f"http://0.0.0.0:8000" # base url for server
+api_base = f"http://0.0.0.0:4000" # base url for server
 
 openai.api_base = api_base
 openai.api_key = "temp-key"

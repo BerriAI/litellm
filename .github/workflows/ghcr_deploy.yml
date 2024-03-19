@@ -10,10 +10,12 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  CHART_NAME: litellm-helm
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
   docker-hub-deploy:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       -
@@ -41,6 +43,7 @@ jobs:
           push: true
           file: Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
+      
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
@@ -64,46 +67,23 @@ jobs:
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      # Configure multi platform Docker builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
       # This step uses the `docker/build-push-action` action to build the image, based on your repository's `Dockerfile`. If the build succeeds, it pushes the image to GitHub Packages.
       # It uses the `context` parameter to define the build's context as the set of files located in the specified path. For more information, see "[Usage](https://github.com/docker/build-push-action#usage)" in the README of the `docker/build-push-action` repository.
       # It uses the `tags` and `labels` parameters to tag and label the image with the output from the "meta" step.
       - name: Build and push Docker image
-        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
-  build-and-push-image-alpine:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Log in to the Container registry
-        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Alpine Dockerfile
-        id: meta-alpine
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-alpine
-
-      - name: Build and push Alpine Docker image
-        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
-        with:
-          context: .
-          file: Dockerfile.alpine
-          push: true
-          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-alpine.outputs.tags }}-latest
-          labels: ${{ steps.meta-alpine.outputs.labels }}
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+          
   build-and-push-image-database:
     runs-on: ubuntu-latest
     permissions:
@@ -125,6 +105,11 @@ jobs:
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-database
+      # Configure multi platform Docker builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
 
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
@@ -134,6 +119,60 @@ jobs:
           push: true
           tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-latest 
           labels: ${{ steps.meta-database.outputs.labels }} 
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+  build-and-push-helm-chart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: lowercase github.repository_owner
+        run: |
+          echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
+      - name: Get LiteLLM Latest Tag
+        id: current_app_tag
+        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+
+      - name: Get last published chart version
+        id: current_version
+        shell: bash
+        run: |
+          CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} 2>/dev/null || true)
+          if [ -z "${CHART_LIST}" ]; then
+            echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
+          else
+            printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
+          fi
+        env:
+          HELM_EXPERIMENTAL_OCI: '1'
+
+      # Automatically update the helm chart version one "patch" level
+      - name: Bump release version
+        id: bump_version
+        uses: christian-draeger/increment-semantic-version@1.1.0
+        with:
+          current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
+          version-fragment: 'bug'
+
+      - uses: ./.github/actions/helm-oci-chart-releaser
+        with:
+          name: ${{ env.CHART_NAME }}
+          repository: ${{ env.REPO_OWNER }}
+          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
+          app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
+          path: deploy/charts/${{ env.CHART_NAME }}
+          registry: ${{ env.REGISTRY }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
+          update_dependencies: true
+
   release:
     name: "New LiteLLM Release"
     needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
@@ -168,3 +207,40 @@ jobs:
             } catch (error) {
               core.setFailed(error.message);
             }
+      - name: Fetch Release Notes
+        id: release-notes
+        uses: actions/github-script@v6
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          script: |
+            try {
+              const response = await github.rest.repos.getRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: process.env.RELEASE_ID,
+              });
+              return response.data.body;
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+        env:
+          RELEASE_ID: ${{ env.RELEASE_ID }}
+      - name: Github Releases To Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          REALEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_NOTES: ${{ steps.release-notes.outputs.result }}
+        run: |
+          curl -H "Content-Type: application/json" -X POST -d '{
+            "content": "New LiteLLM release ${{ env.RELEASE_TAG }}",
+            "username": "Release Changelog",
+            "avatar_url": "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png",
+            "embeds": [
+              {
+                "title": "Changelog for LiteLLM ${{ env.RELEASE_TAG }}",
+                "description": "${{ env.RELEASE_NOTES }}",
+                "color": 2105893
+              }
+            ]
+          }' $WEBHOOK_URL
+

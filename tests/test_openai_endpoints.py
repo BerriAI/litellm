@@ -68,6 +68,7 @@ async def chat_completion(session, key):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
 
 
 @pytest.mark.asyncio
@@ -85,6 +86,22 @@ async def test_chat_completion():
         key_gen = await new_user(session=session)
         key_2 = key_gen["key"]
         await chat_completion(session=session, key=key_2)
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_old_key():
+    """
+    Production test for backwards compatibility. Test db against a pre-generated (old key)
+    - Create key
+    Make chat completion call
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            key = "sk-ecMXHujzUtKCvHcwacdaTw"
+            await chat_completion(session=session, key=key)
+        except Exception as e:
+            key = "sk-ecMXHujzUtKCvHcwacdaTw"  # try diff db key (in case db url is for the other db)
+            await chat_completion(session=session, key=key)
 
 
 async def completion(session, key):

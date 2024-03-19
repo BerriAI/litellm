@@ -21,9 +21,17 @@ def setup_and_teardown():
     import litellm
 
     importlib.reload(litellm)
+    import asyncio
+
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    asyncio.set_event_loop(loop)
     print(litellm)
     # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
+
+    # Teardown code (executes after the yield point)
+    loop.close()  # Close the loop created earlier
+    asyncio.set_event_loop(None)  # Remove the reference to the loop
 
 
 def pytest_collection_modifyitems(config, items):
