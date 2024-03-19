@@ -195,10 +195,10 @@ async def acompletion(
         api_version (str, optional): API version (default is None).
         api_key (str, optional): API key (default is None).
         model_list (list, optional): List of api base, version, keys
+        timeout (float, optional): The maximum execution time in seconds for the completion request.
 
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
-        force_timeout (int, optional): The maximum execution time in seconds for the completion request (default is 600).
         custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
     Returns:
         ModelResponse: A response object containing the generated completion and associated metadata.
