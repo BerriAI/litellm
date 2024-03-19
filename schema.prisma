@@ -24,6 +24,7 @@ model LiteLLM_BudgetTable {
   updated_by String
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
+  end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
 }
 
 model LiteLLM_OrganizationTable {
@@ -125,6 +126,15 @@ model LiteLLM_VerificationToken {
     model_max_budget Json @default("{}")
     budget_id String?
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+}
+
+model LiteLLM_EndUserTable {
+  user_id String @id
+  alias    String? // admin-facing alias
+  spend      Float    @default(0.0)
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  blocked Boolean @default(false)
 }
 
 // store proxy config.yaml

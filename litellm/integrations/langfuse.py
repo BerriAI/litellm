@@ -1,11 +1,9 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import dotenv, os
-import requests
-import requests
-from datetime import datetime
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
+import copy
 import traceback
 from packaging.version import Version
 from litellm._logging import verbose_logger
@@ -33,6 +31,7 @@ class LangFuseLogger:
             host=self.langfuse_host,
             release=self.langfuse_release,
             debug=self.langfuse_debug,
+            flush_interval=1,  # flush interval in seconds
         )
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
@@ -81,11 +80,15 @@ class LangFuseLogger:
             metadata = (
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
-            prompt = [kwargs.get("messages")]
-            optional_params = kwargs.get("optional_params", {})
+            optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
-            optional_params.pop("functions", None)
-            optional_params.pop("tools", None)
+            prompt = {"messages": kwargs.get("messages")}
+            functions = optional_params.pop("functions", None)
+            tools = optional_params.pop("tools", None)
+            if functions is not None:
+                prompt["functions"] = functions
+            if tools is not None:
+                prompt["tools"] = tools
 
             # langfuse only accepts str, int, bool, float for logging
             for param, value in optional_params.items():
@@ -147,8 +150,6 @@ class LangFuseLogger:
                     input,
                     response_obj,
                 )
-
-            self.Langfuse.flush()
             print_verbose(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
@@ -204,8 +205,8 @@ class LangFuseLogger:
                 endTime=end_time,
                 model=kwargs["model"],
                 modelParameters=optional_params,
-                input=input,
-                output=output,
+                prompt=input,
+                completion=output,
                 usage={
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],

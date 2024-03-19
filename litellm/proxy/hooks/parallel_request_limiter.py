@@ -324,7 +324,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self.print_verbose(f"Inside Max Parallel Request Failure Hook")
-            user_api_key = kwargs["litellm_params"]["metadata"]["user_api_key"]
+            user_api_key = (
+                kwargs["litellm_params"].get("metadata", {}).get("user_api_key", None)
+            )
+            self.print_verbose(f"user_api_key: {user_api_key}")
             if user_api_key is None:
                 return
 
@@ -355,7 +358,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-
                 current = self.user_api_key_cache.get_cache(
                     key=request_count_api_key
                 ) or {
@@ -375,4 +377,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     request_count_api_key, new_val, ttl=60
                 )  # save in cache for up to 1 min.
         except Exception as e:
-            print(f"An exception occurred - {str(e)}")  # noqa
+            verbose_proxy_logger.info(
+                f"Inside Parallel Request Limiter: An exception occurred - {str(e)}."
+            )
