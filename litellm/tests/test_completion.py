@@ -159,7 +159,7 @@ def test_completion_claude_3_function_call():
         tool_result = (
             '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
         )
-        # Add user submitted tool results in OpenAI format
+        # Add user submitted tool results in the OpenAI format
         messages.append(
             {
                 "tool_call_id": response.choices[0].message.tool_calls[0].id,
