@@ -5,7 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a></h4>
+<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -28,9 +28,14 @@ LiteLLM manages:
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
+- Set Budgets & Rate limits per project, api key, model [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
+
+**Stable Release**: v`1.30.2` 👈 Recommended stable version of proxy. 
 
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
+
+Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 > [!IMPORTANT]
@@ -64,6 +69,8 @@ response = completion(model="command-nightly", messages=messages)
 print(response)
 ```
 
+Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
+
 ## Async ([Docs](https://docs.litellm.ai/docs/completion/stream#async-completion))
 
 ```python
@@ -96,7 +103,7 @@ for part in response:
 ```
 
 ## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-LiteLLM exposes pre defined callbacks to send data to Langfuse, DynamoDB, s3 Buckets, LLMonitor, Helicone, Promptlayer, Traceloop, Slack
+LiteLLM exposes pre defined callbacks to send data to Langfuse, DynamoDB, s3 Buckets, LLMonitor, Helicone, Promptlayer, Traceloop, Athina, Slack
 ```python
 from litellm import completion
 
@@ -104,11 +111,12 @@ from litellm import completion
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LLMONITOR_APP_ID"] = "your-llmonitor-app-id"
+os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
 
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["langfuse", "llmonitor"] # log input/output to langfuse, llmonitor, supabase
+litellm.success_callback = ["langfuse", "llmonitor", "athina"] # log input/output to langfuse, llmonitor, supabase, athina etc
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
@@ -116,7 +124,7 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 
 # OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 
-Track spend across multiple projects/people 
+Set Budgets & Rate limits across multiple projects
 
 The proxy provides: 
 1. [Hooks for auth](https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth)
@@ -136,13 +144,13 @@ pip install 'litellm[proxy]'
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 ### Step 2: Make ChatCompletions Request to Proxy
 ```python
 import openai # openai v1.0.0+
-client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
     {
@@ -155,12 +163,15 @@ print(response)
 ```
 
 ## Proxy Key Management ([Docs](https://docs.litellm.ai/docs/proxy/virtual_keys))
-Track Spend, Set budgets and create virtual keys for the proxy
+UI on `/ui` on your proxy server 
+![ui_3](https://github.com/BerriAI/litellm/assets/29436595/47c97d5e-b9be-4839-b28c-43d7f4f10033)
+
+Set budgets and rate limits across multiple projects
 `POST /key/generate`
 
 ### Request
 ```shell
-curl 'http://0.0.0.0:8000/key/generate' \
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
@@ -173,17 +184,6 @@ curl 'http://0.0.0.0:8000/key/generate' \
     "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
 }
 ```
-
-### [Beta] Proxy UI
-
-A simple UI to add new models and let your users create keys. 
-
-Live here: https://dashboard.litellm.ai/
-
-Code: https://github.com/BerriAI/litellm/tree/main/ui  
-
-  
-<img width="1672" alt="Screenshot 2023-12-26 at 8 33 53 AM" src="https://github.com/BerriAI/litellm/assets/17561003/274254d8-c5fe-4645-9123-100045a7fb21">
 
 ## Supported Providers ([Docs](https://docs.litellm.ai/docs/providers))
 | Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  | [Async Embedding](https://docs.litellm.ai/docs/embedding/supported_embedding)  | [Async Image Generation](https://docs.litellm.ai/docs/image_generation)  | 
@@ -212,6 +212,7 @@ Code: https://github.com/BerriAI/litellm/tree/main/ui
 | [ollama](https://docs.litellm.ai/docs/providers/ollama)  | ✅ | ✅ | ✅ | ✅ |
 | [deepinfra](https://docs.litellm.ai/docs/providers/deepinfra)  | ✅ | ✅ | ✅ | ✅ |
 | [perplexity-ai](https://docs.litellm.ai/docs/providers/perplexity)  | ✅ | ✅ | ✅ | ✅ |
+| [Groq AI](https://docs.litellm.ai/docs/providers/groq)  | ✅ | ✅ | ✅ | ✅ |
 | [anyscale](https://docs.litellm.ai/docs/providers/anyscale)  | ✅ | ✅ | ✅ | ✅ |
 | [voyage ai](https://docs.litellm.ai/docs/providers/voyage)  |  |  |  |  | ✅ |
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference)  |  |  |  |  | ✅ |
@@ -244,6 +245,19 @@ poetry run pytest .
 Step 4: Submit a PR with your changes! 🚀
 - push your fork to your GitHub repo 
 - submit a PR from there 
+
+# Enterprise
+For companies that need better security, user management and professional support
+
+[Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+This covers: 
+- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Feature Prioritization**
+- ✅ **Custom Integrations**
+- ✅ **Professional Support - Dedicated discord + slack**
+- ✅ **Custom SLAs**
+- ✅ **Secure access with Single Sign-On**
 
 # Support / talk with founders
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)

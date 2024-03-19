@@ -104,7 +104,8 @@ def start_prediction(
         version_id = version_id.replace("deployments/", "")
         base_url = f"https://api.replicate.com/v1/deployments/{version_id}"
         print_verbose(f"Deployment base URL: {base_url}\n")
-
+    else:  # assume it's a model
+        base_url = f"https://api.replicate.com/v1/models/{version_id}"
     headers = {
         "Authorization": f"Token {api_token}",
         "Content-Type": "application/json",
@@ -306,9 +307,9 @@ def completion(
         result, logs = handle_prediction_response(
             prediction_url, api_key, print_verbose
         )
-        model_response[
-            "ended"
-        ] = time.time()  # for pricing this must remain right after calling api
+        model_response["ended"] = (
+            time.time()
+        )  # for pricing this must remain right after calling api
         ## LOGGING
         logging_obj.post_call(
             input=prompt,

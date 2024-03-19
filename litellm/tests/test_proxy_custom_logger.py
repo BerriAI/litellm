@@ -274,7 +274,7 @@ def test_chat_completion_stream(client):
                 print("\n\n decode_data", data)
 
                 # Access the content of choices[0]['message']['content']
-                content = data["choices"][0]["delta"]["content"] or ""
+                content = data["choices"][0]["delta"].get("content", None) or ""
 
                 # Process the content as needed
                 print("Content:", content)

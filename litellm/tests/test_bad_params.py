@@ -70,16 +70,14 @@ def test_completion_with_empty_model():
 
 def test_completion_invalid_param_cohere():
     try:
-        response = completion(model="command-nightly", messages=messages, top_p=1)
-        print(f"response: {response}")
+        litellm.set_verbose = True
+        response = completion(model="command-nightly", messages=messages, seed=12)
+        pytest.fail(f"This should have failed cohere does not support `seed` parameter")
     except Exception as e:
-        if "Unsupported parameters passed: top_p" in str(e):
+        if " cohere does not support parameters: {'seed': 12}" in str(e):
             pass
         else:
             pytest.fail(f"An error occurred {e}")
-
-
-# test_completion_invalid_param_cohere()
 
 
 def test_completion_function_call_cohere():

@@ -18,7 +18,7 @@ class OllamaError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class OllamaConfig:
+class OllamaChatConfig:
     """
     Reference: https://github.com/jmorganca/ollama/blob/main/docs/api.md#parameters
 
@@ -68,9 +68,9 @@ class OllamaConfig:
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
-    stop: Optional[
-        list
-    ] = None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    stop: Optional[list] = (
+        None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -108,6 +108,7 @@ class OllamaConfig:
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and k != "function_name"  # special param for function calling
             and not isinstance(
                 v,
                 (
@@ -119,6 +120,61 @@ class OllamaConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(
+        self,
+    ):
+        return [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "frequency_penalty",
+            "stop",
+            "tools",
+            "tool_choice",
+            "functions",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["num_predict"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "frequency_penalty":
+                optional_params["repeat_penalty"] = param
+            if param == "stop":
+                optional_params["stop"] = value
+            ### FUNCTION CALLING LOGIC ###
+            if param == "tools":
+                # ollama actually supports json output
+                optional_params["format"] = "json"
+                litellm.add_function_to_prompt = (
+                    True  # so that main.py adds the function call to the prompt
+                )
+                optional_params["functions_unsupported_model"] = value
+
+                if len(optional_params["functions_unsupported_model"]) == 1:
+                    optional_params["function_name"] = optional_params[
+                        "functions_unsupported_model"
+                    ][0]["function"]["name"]
+
+            if param == "functions":
+                # ollama actually supports json output
+                optional_params["format"] = "json"
+                litellm.add_function_to_prompt = (
+                    True  # so that main.py adds the function call to the prompt
+                )
+                optional_params["functions_unsupported_model"] = non_default_params.pop(
+                    "functions"
+                )
+        non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
+        return optional_params
 
 
 # ollama implementation
@@ -138,15 +194,29 @@ def get_ollama_response(
         url = f"{api_base}/api/chat"
 
     ## Load Config
-    config = litellm.OllamaConfig.get_config()
+    config = litellm.OllamaChatConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    optional_params["stream"] = optional_params.get("stream", False)
-    data = {"model": model, "messages": messages, **optional_params}
+    stream = optional_params.pop("stream", False)
+    format = optional_params.pop("format", None)
+    function_name = optional_params.pop("function_name", None)
+
+    for m in messages:
+        if "role" in m and m["role"] == "tool":
+            m["role"] = "assistant"
+
+    data = {
+        "model": model,
+        "messages": messages,
+        "options": optional_params,
+        "stream": stream,
+    }
+    if format is not None:
+        data["format"] = format
     ## LOGGING
     logging_obj.pre_call(
         input=None,
@@ -159,7 +229,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if optional_params.get("stream", False) == True:
+        if stream == True:
             response = ollama_async_streaming(
                 url=url,
                 data=data,
@@ -174,9 +244,10 @@ def get_ollama_response(
                 model_response=model_response,
                 encoding=encoding,
                 logging_obj=logging_obj,
+                function_name=function_name,
             )
         return response
-    elif optional_params.get("stream", False) == True:
+    elif stream == True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
     response = requests.post(
@@ -220,8 +291,10 @@ def get_ollama_response(
         model_response["choices"][0]["message"] = response_json["message"]
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
-    prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-    completion_tokens = response_json["eval_count"]
+    prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
+    completion_tokens = response_json.get(
+        "eval_count", litellm.token_counter(text=response_json["message"]["content"])
+    )
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -275,7 +348,9 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
         traceback.print_exc()
 
 
-async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
+async def ollama_acompletion(
+    url, data, model_response, encoding, logging_obj, function_name
+):
     data["stream"] = False
     try:
         timeout = aiohttp.ClientTimeout(total=litellm.request_timeout)  # 10 minutes
@@ -309,7 +384,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                             "id": f"call_{str(uuid.uuid4())}",
                             "function": {
                                 "arguments": response_json["message"]["content"],
-                                "name": "",
+                                "name": function_name or "",
                             },
                             "type": "function",
                         }
@@ -318,10 +393,16 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 model_response["choices"][0]["message"] = message
             else:
                 model_response["choices"][0]["message"] = response_json["message"]
+
             model_response["created"] = int(time.time())
-            model_response["model"] = "ollama/" + data["model"]
-            prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-            completion_tokens = response_json["eval_count"]
+            model_response["model"] = "ollama_chat/" + data["model"]
+            prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=data["messages"]))  # type: ignore
+            completion_tokens = response_json.get(
+                "eval_count",
+                litellm.token_counter(
+                    text=response_json["message"]["content"], count_response_tokens=True
+                ),
+            )
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

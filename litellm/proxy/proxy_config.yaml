@@ -5,75 +5,13 @@ model_list:
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
-    model_info:
-      mode: chat
-      input_cost_per_token: 0.0.00006
-      output_cost_per_token: 0.00003
-      max_tokens: 4096
-      base_model: gpt-3.5-turbo
-  - model_name: gpt-vision
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: azure/gpt-4-vision
-      base_url: https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions
-      api_key: os.environ/AZURE_VISION_API_KEY
-      api_version: "2023-09-01-preview"
-      dataSources:
-        - type: AzureComputerVision
-          parameters:
-            endpoint: os.environ/AZURE_VISION_ENHANCE_ENDPOINT
-            key: os.environ/AZURE_VISION_ENHANCE_KEY
-  - model_name: BEDROCK_GROUP
-    litellm_params:
-      model: bedrock/cohere.command-text-v14
-  - model_name: sagemaker
-    litellm_params:
-      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
-  - model_name: openai-gpt-3.5
-    litellm_params:
-      model: gpt-3.5-turbo
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      mode: chat
-  - model_name: azure-cloudflare
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-  - model_name: azure-embedding-model
-    litellm_params:
-      model: azure/azure-embedding-model
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-    model_info:
-      mode: embedding
-      base_model: text-embedding-ada-002
-  - model_name: text-embedding-ada-002
-    litellm_params:
-      model: text-embedding-ada-002
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      mode: embedding
-litellm_settings:
-  fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
-  success_callback: ['langfuse']
-  # cache: True     
-  # setting callback class
-  # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
-
-# general_settings: 
-#   master_key: sk-1234
-  # database_type: "dynamo_db" 
-  # database_args: { # 👈  all args - https://github.com/BerriAI/litellm/blob/befbcbb7ac8f59835ce47415c128decf37aac328/litellm/proxy/_types.py#L190
-  #   "billing_mode": "PAY_PER_REQUEST", 
-  #   "region_name": "us-west-2",
-  #   "ssl_verify": False
-  # }
-
-
-
-
-environment_variables: 
-  # otel: True          # OpenTelemetry Logger
-  # master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+general_settings:
+  master_key: sk-1234
+router_settings:
+  set_verbose: True
+  debug_level: "DEBUG"

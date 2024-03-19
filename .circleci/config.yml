@@ -31,6 +31,7 @@ jobs:
             pip install "google-generativeai>=0.3.2"
             pip install "google-cloud-aiplatform>=1.38.0"
             pip install "boto3>=1.28.57"
+            pip install "aioboto3>=12.3.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install numpydoc
@@ -42,7 +43,10 @@ jobs:
             pip install "anyio==3.7.1"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
             pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install python-multipart
       - save_cache:
           paths:
             - ./venv
@@ -86,6 +90,32 @@ jobs:
       - store_test_results:
           path: test-results
 
+  installing_litellm_on_python:
+    docker:
+      - image: circleci/python:3.8
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install python-dotenv
+            pip install pytest
+            pip install tiktoken
+            pip install aiohttp
+            pip install click
+            pip install jinja2
+            pip install tokenizers
+            pip install openai
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv litellm/tests/test_python_38.py
+
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -114,6 +144,27 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
+            pip install openai
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "google-generativeai>=0.3.2"
+            pip install "google-cloud-aiplatform>=1.38.0"
+            pip install "boto3>=1.28.57"
+            pip install "aioboto3>=12.3.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -124,15 +175,21 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DOCKER_DB_URL \
-              -e AZURE_API_KEY=$AZURE_FRANCE_API_KEY \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
-              --num_workers 8
+              --num_workers 8 \
+              --detailed_debug \
+              --run_gunicorn \
       - run:
           name: Install curl and dockerize
           command: |
@@ -143,11 +200,7 @@ jobs:
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
           name: Start outputting logs
-          command: |
-            while true; do
-              docker logs my-app
-              sleep 10
-            done
+          command: docker logs -f my-app
           background: true
       - run: 
           name: Wait for app to be ready
@@ -246,6 +299,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - build_and_test:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - installing_litellm_on_python:
           filters:
             branches:
               only:

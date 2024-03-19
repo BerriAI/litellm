@@ -1,3 +1,4 @@
+# @pytest.mark.skip(reason="AWS Suspended Account")
 import sys, os
 import traceback
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
+from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
 from litellm import RateLimitError
 
 # litellm.num_retries = 3
@@ -149,6 +150,7 @@ def test_completion_bedrock_claude_external_client_auth():
 # test_completion_bedrock_claude_external_client_auth()
 
 
+@pytest.mark.skip(reason="Expired token, need to renew")
 def test_completion_bedrock_claude_sts_client_auth():
     print("\ncalling bedrock claude external client auth")
     import os
@@ -202,7 +204,115 @@ def test_completion_bedrock_claude_sts_client_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_claude_sts_client_auth()
+# test_completion_bedrock_claude_sts_client_auth()
+
+
+def test_bedrock_claude_3():
+    try:
+        litellm.set_verbose = True
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=messages,
+            max_tokens=10,
+        )
+        # Add any assertions here to check the response
+        assert len(response.choices) > 0
+        assert len(response.choices[0].message.content) > 0
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_bedrock_claude_3_tool_calling():
+    try:
+        litellm.set_verbose = True
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        messages = [
+            {"role": "user", "content": "What's the weather like in Boston today?"}
+        ]
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(f"response: {response}")
+        # Add any assertions here to check the response
+        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+@pytest.mark.skip(
+    reason="we already test claude-3, this is just another way to pass images"
+)
+def test_completion_claude_3_base64():
+    try:
+        litellm.set_verbose = True
+        litellm.num_retries = 3
+        image_path = "../proxy/cached_logo.jpg"
+        # Getting the base64 string
+        base64_image = encode_image(image_path)
+        resp = litellm.completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + base64_image
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        prompt_tokens = resp.usage.prompt_tokens
+        raise Exception("it worked!")
+    except Exception as e:
+        if "500 Internal error encountered.'" in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 def test_provisioned_throughput():
@@ -255,3 +365,37 @@ def test_provisioned_throughput():
 
 
 # test_provisioned_throughput()
+
+
+def test_completion_bedrock_mistral_completion_auth():
+    print("calling bedrock mistral completion params auth")
+    import os
+
+    # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+    # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+    # aws_region_name = os.environ["AWS_REGION_NAME"]
+
+    # os.environ.pop("AWS_ACCESS_KEY_ID", None)
+    # os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+    # os.environ.pop("AWS_REGION_NAME", None)
+    try:
+        response: ModelResponse = completion(
+            model="bedrock/mistral.mistral-7b-instruct-v0:2",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+        )
+        # Add any assertions here to check the response
+        assert len(response.choices) > 0
+        assert len(response.choices[0].message.content) > 0
+
+        # os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+        # os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+        # os.environ["AWS_REGION_NAME"] = aws_region_name
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_completion_bedrock_mistral_completion_auth()

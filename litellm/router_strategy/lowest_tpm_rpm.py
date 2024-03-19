@@ -10,6 +10,7 @@ import traceback
 from litellm import token_counter
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm._logging import verbose_router_logger
 
 
 class LowestTPMLoggingHandler(CustomLogger):
@@ -130,6 +131,9 @@ class LowestTPMLoggingHandler(CustomLogger):
         Returns a deployment with the lowest TPM/RPM usage.
         """
         # get list of potential deployments
+        verbose_router_logger.debug(
+            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
+        )
         current_minute = datetime.now().strftime("%H-%M")
         tpm_key = f"{model_group}:tpm:{current_minute}"
         rpm_key = f"{model_group}:rpm:{current_minute}"
@@ -137,25 +141,38 @@ class LowestTPMLoggingHandler(CustomLogger):
         tpm_dict = self.router_cache.get_cache(key=tpm_key)
         rpm_dict = self.router_cache.get_cache(key=rpm_key)
 
+        verbose_router_logger.debug(
+            f"tpm_key={tpm_key}, tpm_dict: {tpm_dict}, rpm_dict: {rpm_dict}"
+        )
+        try:
+            input_tokens = token_counter(messages=messages, text=input)
+        except:
+            input_tokens = 0
+        verbose_router_logger.debug(f"input_tokens={input_tokens}")
         # -----------------------
         # Find lowest used model
         # ----------------------
         lowest_tpm = float("inf")
         deployment = None
-        if tpm_dict is None:  # base case
-            item = random.choice(healthy_deployments)
-            return item
+        if tpm_dict is None:  # base case - none of the deployments have been used
+            # Return the 1st deployment where deployment["tpm"] >= input_tokens
+            for deployment in healthy_deployments:
+                _deployment_tpm = (
+                    deployment.get("tpm", None)
+                    or deployment.get("litellm_params", {}).get("tpm", None)
+                    or deployment.get("model_info", {}).get("tpm", None)
+                    or float("inf")
+                )
+
+                if _deployment_tpm >= input_tokens:
+                    return deployment
+            return None
 
         all_deployments = tpm_dict
         for d in healthy_deployments:
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
                 all_deployments[d["model_info"]["id"]] = 0
-
-        try:
-            input_tokens = token_counter(messages=messages, text=input)
-        except:
-            input_tokens = 0
 
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
@@ -184,12 +201,14 @@ class LowestTPMLoggingHandler(CustomLogger):
             if item_tpm == 0:
                 deployment = _deployment
                 break
-            elif (
-                item_tpm + input_tokens > _deployment_tpm
-                or rpm_dict[item] + 1 > _deployment_rpm
-            ):  # if user passed in tpm / rpm in the model_list
+            elif item_tpm + input_tokens > _deployment_tpm:
+                continue
+            elif (rpm_dict is not None and item in rpm_dict) and (
+                rpm_dict[item] + 1 > _deployment_rpm
+            ):
                 continue
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 deployment = _deployment
+        verbose_router_logger.info(f"returning picked lowest tpm/rpm deployment.")
         return deployment

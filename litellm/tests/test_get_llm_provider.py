@@ -18,4 +18,17 @@ def test_get_llm_provider():
     assert response == "bedrock"
 
 
-test_get_llm_provider()
+# test_get_llm_provider()
+
+
+def test_get_llm_provider_mistral_custom_api_base():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="mistral/mistral-large-fr",
+        api_base="https://mistral-large-fr-ishaan.francecentral.inference.ai.azure.com/v1",
+    )
+    assert custom_llm_provider == "mistral"
+    assert model == "mistral-large-fr"
+    assert (
+        api_base
+        == "https://mistral-large-fr-ishaan.francecentral.inference.ai.azure.com/v1"
+    )

@@ -5,6 +5,15 @@ from datetime import datetime
 import uuid, json, sys, os
 
 
+def hash_token(token: str):
+    import hashlib
+
+    # Hash the string using SHA-256
+    hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+    return hashed_token
+
+
 class LiteLLMBase(BaseModel):
     """
     Implements default functions, all pydantic objects should have.
@@ -12,10 +21,10 @@ class LiteLLMBase(BaseModel):
 
     def json(self, **kwargs):
         try:
-            return self.model_dump()  # noqa
+            return self.model_dump(**kwargs)  # noqa
         except Exception as e:
             # if using pydantic v1
-            return self.dict()
+            return self.dict(**kwargs)
 
     def fields_set(self):
         try:
@@ -23,6 +32,9 @@ class LiteLLMBase(BaseModel):
         except:
             # if using pydantic v1
             return self.__fields_set__
+
+    class Config:
+        protected_namespaces = ()
 
 
 ######### Request Class Definition ######
@@ -107,6 +119,10 @@ class ModelInfo(LiteLLMBase):
         return values
 
 
+class BlockUsers(LiteLLMBase):
+    user_ids: List[str]  # required
+
+
 class ModelParams(LiteLLMBase):
     model_name: str
     litellm_params: dict
@@ -122,76 +138,268 @@ class ModelParams(LiteLLMBase):
         return values
 
 
-class GenerateKeyRequest(LiteLLMBase):
-    duration: Optional[str] = "1h"
+class GenerateRequestBase(LiteLLMBase):
+    """
+    Overlapping schema between key and user generate/update requests
+    """
+
     models: Optional[list] = []
-    aliases: Optional[dict] = {}
-    config: Optional[dict] = {}
     spend: Optional[float] = 0
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
+    allowed_cache_controls: Optional[list] = []
+    soft_budget: Optional[float] = None
 
 
-class UpdateKeyRequest(LiteLLMBase):
+class GenerateKeyRequest(GenerateRequestBase):
+    key_alias: Optional[str] = None
+    duration: Optional[str] = None
+    aliases: Optional[dict] = {}
+    config: Optional[dict] = {}
+    permissions: Optional[dict] = {}
+    model_max_budget: Optional[dict] = (
+        {}
+    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+
+    class Config:
+        protected_namespaces = ()
+
+
+class GenerateKeyResponse(GenerateKeyRequest):
+    key: str
+    key_name: Optional[str] = None
+    expires: Optional[datetime]
+    user_id: str
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("token") is not None:
+            values.update({"key": values.get("token")})
+        dict_fields = [
+            "metadata",
+            "aliases",
+            "config",
+            "permissions",
+            "model_max_budget",
+        ]
+        for field in dict_fields:
+            value = values.get(field)
+            if value is not None and isinstance(value, str):
+                try:
+                    values[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Field {field} should be a valid dictionary")
+
+        return values
+
+
+class UpdateKeyRequest(GenerateKeyRequest):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     key: str
     duration: Optional[str] = None
-    models: Optional[list] = None
-    aliases: Optional[dict] = None
-    config: Optional[dict] = None
     spend: Optional[float] = None
-    user_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
 
 
-class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api key auth
-    """
-    Return the row in the db
-    """
-
-    api_key: Optional[str] = None
-    models: list = []
-    aliases: dict = {}
-    config: dict = {}
-    spend: Optional[float] = 0
-    user_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    duration: str = "1h"
-    metadata: dict = {}
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
+class KeyRequest(LiteLLMBase):
+    keys: List[str]
 
 
-class GenerateKeyResponse(LiteLLMBase):
-    key: str
-    expires: Optional[datetime]
-    user_id: str
-
-
-class DeleteKeyRequest(LiteLLMBase):
-    keys: List
+class LiteLLM_ModelTable(LiteLLMBase):
+    model_aliases: Optional[str] = None  # json dump the dict
+    created_by: str
+    updated_by: str
 
 
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
+    user_email: Optional[str] = None
+    user_role: Optional[str] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
 
 
+class UpdateUserRequest(GenerateRequestBase):
+    # Note: the defaults of all Params here MUST BE NONE
+    # else they will get overwritten
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+    user_role: Optional[str] = None
+    max_budget: Optional[float] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
+
+
+class Member(LiteLLMBase):
+    role: Literal["admin", "user"]
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
+
+
+class TeamBase(LiteLLMBase):
+    team_alias: Optional[str] = None
+    team_id: Optional[str] = None
+    organization_id: Optional[str] = None
+    admins: list = []
+    members: list = []
+    members_with_roles: List[Member] = []
+    metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: list = []
+
+
+class NewTeamRequest(TeamBase):
+    model_aliases: Optional[dict] = None
+
+
+class GlobalEndUsersSpend(LiteLLMBase):
+    api_key: Optional[str] = None
+
+
+class TeamMemberAddRequest(LiteLLMBase):
+    team_id: str
+    member: Member
+
+
+class TeamMemberDeleteRequest(LiteLLMBase):
+    team_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
+
+
+class UpdateTeamRequest(LiteLLMBase):
+    team_id: str  # required
+    team_alias: Optional[str] = None
+    admins: Optional[list] = None
+    members: Optional[list] = None
+    members_with_roles: Optional[List[Member]] = None
+    metadata: Optional[dict] = None
+
+
+class DeleteTeamRequest(LiteLLMBase):
+    team_ids: List[str]  # required
+
+
+class LiteLLM_TeamTable(TeamBase):
+    spend: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+    model_id: Optional[int] = None
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        dict_fields = [
+            "metadata",
+            "aliases",
+            "config",
+            "permissions",
+            "model_max_budget",
+            "model_aliases",
+        ]
+        for field in dict_fields:
+            value = values.get(field)
+            if value is not None and isinstance(value, str):
+                try:
+                    values[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Field {field} should be a valid dictionary")
+
+        return values
+
+
+class TeamRequest(LiteLLMBase):
+    teams: List[str]
+
+
+class LiteLLM_BudgetTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_BudgetTable record"""
+
+    soft_budget: Optional[float] = None
+    max_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    model_max_budget: Optional[dict] = None
+    budget_duration: Optional[str] = None
+
+
+class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_alias: str
+    models: List = []
+    budget_id: Optional[str] = None
+
+
+class LiteLLM_OrganizationTable(LiteLLMBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
+    created_by: str
+    updated_by: str
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class OrganizationRequest(LiteLLMBase):
+    organizations: List[str]
+
+
+class BudgetRequest(LiteLLMBase):
+    budgets: List[str]
+
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
+    AWS_SECRET_MANAGER = "aws_secret_manager"
     LOCAL = "local"
+
+
+class KeyManagementSettings(LiteLLMBase):
+    hosted_keys: List
+
+
+class TeamDefaultSettings(LiteLLMBase):
+    team_id: str
+
+    class Config:
+        extra = "allow"  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class DynamoDBArgs(LiteLLMBase):
@@ -204,6 +412,15 @@ class DynamoDBArgs(LiteLLMBase):
     key_table_name: str = "LiteLLM_VerificationToken"
     config_table_name: str = "LiteLLM_Config"
     spend_table_name: str = "LiteLLM_SpendLogs"
+    aws_role_name: Optional[str] = None
+    aws_session_name: Optional[str] = None
+    aws_web_identity_token: Optional[str] = None
+    aws_provider_id: Optional[str] = None
+    aws_policy_arns: Optional[List[str]] = None
+    aws_policy: Optional[str] = None
+    aws_duration_seconds: Optional[int] = None
+    assume_role_aws_role_name: Optional[str] = None
+    assume_role_aws_session_name: Optional[str] = None
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -229,6 +446,13 @@ class ConfigGeneralSettings(LiteLLMBase):
     database_url: Optional[str] = Field(
         None,
         description="connect to a postgres db - needed for generating temporary keys + tracking spend / key",
+    )
+    database_connection_pool_limit: Optional[int] = Field(
+        100,
+        description="default connection pool for prisma client connecting to postgres db",
+    )
+    database_connection_timeout: Optional[float] = Field(
+        60, description="default timeout for a connection to the database"
     )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
@@ -266,6 +490,9 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="sends alerts if requests hang for 5min+",
     )
+    ui_access_mode: Optional[Literal["admin_only", "all"]] = Field(
+        "all", description="Control access to the Proxy UI"
+    )
 
 
 class ConfigYAML(LiteLLMBase):
@@ -292,15 +519,66 @@ class ConfigYAML(LiteLLMBase):
 
 
 class LiteLLM_VerificationToken(LiteLLMBase):
-    token: str
+    token: Optional[str] = None
+    key_name: Optional[str] = None
+    key_alias: Optional[str] = None
     spend: float = 0.0
-    expires: Union[str, None]
-    models: List[str]
-    aliases: Dict[str, str] = {}
-    config: Dict[str, str] = {}
-    user_id: Union[str, None]
-    max_parallel_requests: Union[int, None]
-    metadata: Dict[str, str] = {}
+    max_budget: Optional[float] = None
+    expires: Optional[str] = None
+    models: List = []
+    aliases: Dict = {}
+    config: Dict = {}
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+    metadata: Dict = {}
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+    allowed_cache_controls: Optional[list] = []
+    permissions: Dict = {}
+    model_spend: Dict = {}
+    model_max_budget: Dict = {}
+    soft_budget_cooldown: bool = False
+    litellm_budget_table: Optional[dict] = None
+
+    # hidden params used for parallel request limiting, not required to create a token
+    user_id_rate_limits: Optional[dict] = None
+    team_id_rate_limits: Optional[dict] = None
+
+    class Config:
+        protected_namespaces = ()
+
+
+class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
+    """
+    Combined view of litellm verification token + litellm team table (select values)
+    """
+
+    team_spend: Optional[float] = None
+    team_tpm_limit: Optional[int] = None
+    team_rpm_limit: Optional[int] = None
+    team_max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
+    team_model_aliases: Optional[Dict] = None
+
+
+class UserAPIKeyAuth(
+    LiteLLM_VerificationTokenView
+):  # the expected response object for user api key auth
+    """
+    Return the row in the db
+    """
+
+    api_key: Optional[str] = None
+    user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
+
+    @root_validator(pre=True)
+    def check_api_key(cls, values):
+        if values.get("api_key") is not None:
+            values.update({"token": hash_token(values.get("api_key"))})
+        return values
 
 
 class LiteLLM_Config(LiteLLMBase):
@@ -312,6 +590,8 @@ class LiteLLM_UserTable(LiteLLMBase):
     user_id: str
     max_budget: Optional[float]
     spend: float = 0.0
+    model_max_budget: Optional[Dict] = {}
+    model_spend: Optional[Dict] = {}
     user_email: Optional[str]
     models: list = []
 
@@ -320,22 +600,47 @@ class LiteLLM_UserTable(LiteLLMBase):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
         if values.get("models") is None:
-            values.update({"models", []})
+            values.update({"models": []})
         return values
+
+    class Config:
+        protected_namespaces = ()
+
+
+class LiteLLM_EndUserTable(LiteLLMBase):
+    user_id: str
+    blocked: bool
+    alias: Optional[str] = None
+    spend: float = 0.0
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("spend") is None:
+            values.update({"spend": 0.0})
+        return values
+
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
     api_key: str
     model: Optional[str] = ""
+    api_base: Optional[str] = ""
     call_type: str
     spend: Optional[float] = 0.0
+    total_tokens: Optional[int] = 0
+    prompt_tokens: Optional[int] = 0
+    completion_tokens: Optional[int] = 0
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    modelParameters: Optional[Json] = {}
-    messages: Optional[Json] = []
-    response: Optional[Json] = {}
-    usage: Optional[Json] = {}
-    metadata: Optional[Json] = {}
+    metadata: Optional[dict] = {}
     cache_hit: Optional[str] = "False"
+    cache_key: Optional[str] = None
+    request_tags: Optional[Json] = None
+
+
+class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
+    response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None

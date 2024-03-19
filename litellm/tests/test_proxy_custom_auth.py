@@ -55,12 +55,40 @@ def test_custom_auth(client):
         }
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
-
+        print(f"token: {token}")
         headers = {"Authorization": f"Bearer {token}"}
         response = client.post("/chat/completions", json=test_data, headers=headers)
-        print(f"response: {response.text}")
-        assert response.status_code == 401
-        result = response.json()
-        print(f"Received response: {result}")
+        pytest.fail("LiteLLM Proxy test failed. This request should have been rejected")
     except Exception as e:
-        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+        print(vars(e))
+        print("got an exception")
+        assert e.code == 401
+        assert e.message == "Authentication Error, Failed custom auth"
+        pass
+
+
+def test_custom_auth_bearer(client):
+    try:
+        # Your test data
+        test_data = {
+            "model": "openai-model",
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 10,
+        }
+        # Your bearer token
+        token = os.getenv("PROXY_MASTER_KEY")
+
+        headers = {"Authorization": f"WITHOUT BEAR Er  {token}"}
+        response = client.post("/chat/completions", json=test_data, headers=headers)
+        pytest.fail("LiteLLM Proxy test failed. This request should have been rejected")
+    except Exception as e:
+        print(vars(e))
+        print("got an exception")
+        assert e.code == 401
+        assert (
+            e.message
+            == "Authentication Error, CustomAuth - Malformed API Key passed in. Ensure Key has `Bearer` prefix"
+        )
+        pass

@@ -7,16 +7,17 @@ Cache LLM Responses
 LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
+- Redis Semantic Cache
 - s3 Bucket Cache 
 
-## Quick Start - Redis, s3 Cache
+## Quick Start - Redis, s3 Cache, Semantic Cache
 <Tabs>
 
 <TabItem value="redis" label="redis cache">
 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 
-### Step 1: Add `cache` to the config.yaml
+#### Step 1: Add `cache` to the config.yaml
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -31,7 +32,25 @@ litellm_settings:
   cache: True          # set cache responses to True, litellm defaults to using a redis cache
 ```
 
-### Step 2: Add Redis Credentials to .env
+#### [OPTIONAL] Step 1.5: Add redis namespaces 
+
+If you want to create some folder for your keys, you can set a namespace, like this:
+
+```yaml
+litellm_settings:
+  cache: true 
+  cache_params:        # set cache params for redis
+    type: redis
+    namespace: "litellm_caching"
+```
+
+and keys will be stored like:
+
+```
+litellm_caching:<hash>
+```
+
+#### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
   ```shell
@@ -49,7 +68,7 @@ REDIS_<redis-kwarg-name> = ""
 ``` 
 
 [**See how it's read from the environment**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/_redis.py#L40)
-### Step 3: Run proxy with config
+#### Step 3: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
@@ -57,7 +76,7 @@ $ litellm --config /path/to/config.yaml
 
 <TabItem value="s3" label="s3 cache">
 
-### Step 1: Add `cache` to the config.yaml
+#### Step 1: Add `cache` to the config.yaml
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -79,7 +98,57 @@ litellm_settings:
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
 ```
 
-### Step 2: Run proxy with config
+#### Step 2: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+</TabItem>
+
+
+<TabItem value="redis-sem" label="redis semantic cache">
+
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: azure-embedding-model
+    litellm_params:
+      model: azure/azure-embedding-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache_params:
+    type: "redis-semantic"  
+    similarity_threshold: 0.8   # similarity threshold for semantic cache
+    redis_semantic_cache_embedding_model: azure-embedding-model # set this to a model_name set in model_list
+```
+
+#### Step 2: Add Redis Credentials to .env
+Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
+
+  ```shell
+  REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
+  ## OR ## 
+  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+  REDIS_PORT = ""       # REDIS_PORT='18841'
+  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  ```
+
+**Additional kwargs**  
+You can pass in any additional redis.Redis arg, by storing the variable + value in your os environment, like this: 
+```shell
+REDIS_<redis-kwarg-name> = ""
+``` 
+
+#### Step 3: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
@@ -94,7 +163,7 @@ $ litellm --config /path/to/config.yaml
 
 Send the same request twice:
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
+curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -102,7 +171,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
      "temperature": 0.7
    }'
 
-curl http://0.0.0.0:8000/v1/chat/completions \
+curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
      "model": "gpt-3.5-turbo",
@@ -115,14 +184,14 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 
 Send the same request twice:
 ```shell
-curl --location 'http://0.0.0.0:8000/embeddings' \
+curl --location 'http://0.0.0.0:4000/embeddings' \
   --header 'Content-Type: application/json' \
   --data ' {
   "model": "text-embedding-ada-002",
   "input": ["write a litellm poem"]
   }'
 
-curl --location 'http://0.0.0.0:8000/embeddings' \
+curl --location 'http://0.0.0.0:4000/embeddings' \
   --header 'Content-Type: application/json' \
   --data ' {
   "model": "text-embedding-ada-002",
@@ -156,13 +225,40 @@ litellm_settings:
     supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
 ```
 
+
+### Turn on `batch_redis_requests` 
+
+**What it does?**
+When a request is made:
+
+- Check if a key starting with `litellm:<hashed_api_key>:<call_type>:` exists in-memory, if no - get the last 100 cached requests for this key and store it
+
+- New requests are stored with this `litellm:..` as the namespace
+
+**Why?**
+Reduce number of redis GET requests. This improved latency by 46% in prod load tests. 
+
+**Usage**
+
+```yaml
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    ... # remaining redis args (host, port, etc.)
+  callbacks: ["batch_redis_requests"] # 👈 KEY CHANGE!
+```
+
+[**SEE CODE**](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/batch_redis_get.py)
+
 ### Turn on / off caching per request.  
 
 The proxy support 3 cache-controls:
 
-- `ttl`: Will cache the response for the user-defined amount of time (in seconds).
-- `s-maxage`: Will only accept cached responses that are within user-defined range (in seconds).
-- `no-cache`: Will not return a cached response, but instead call the actual endpoint. 
+- `ttl`: *Optional(int)* - Will cache the response for the user-defined amount of time (in seconds).
+- `s-maxage`: *Optional(int)* Will only accept cached responses that are within user-defined range (in seconds).
+- `no-cache`: *Optional(bool)* Will not return a cached response, but instead call the actual endpoint. 
+- `no-store`: *Optional(bool)* Will not cache the response. 
 
 [Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
 
@@ -175,7 +271,7 @@ from openai import OpenAI
 client = OpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:8000"
+		base_url="http://0.0.0.0:4000"
 )
 
 chat_completion = client.chat.completions.create(
@@ -186,9 +282,11 @@ chat_completion = client.chat.completions.create(
         }
     ],
     model="gpt-3.5-turbo",
-    cache={
-			"no-cache": True # will not return a cached response 
-		}
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        cache: {
+          "no-cache": True # will not return a cached response 
+      }
+    }
 )
 ```
 
@@ -201,7 +299,7 @@ from openai import OpenAI
 client = OpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:8000"
+		base_url="http://0.0.0.0:4000"
 )
 
 chat_completion = client.chat.completions.create(
@@ -212,9 +310,11 @@ chat_completion = client.chat.completions.create(
         }
     ],
     model="gpt-3.5-turbo",
-    cache={
-			"ttl": 600 # caches response for 10 minutes 
-		}
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        cache: {
+          "ttl": 600 # caches response for 10 minutes 
+      }
+    }
 )
 ```
 
@@ -225,7 +325,7 @@ from openai import OpenAI
 client = OpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:8000"
+		base_url="http://0.0.0.0:4000"
 )
 
 chat_completion = client.chat.completions.create(
@@ -236,13 +336,15 @@ chat_completion = client.chat.completions.create(
         }
     ],
     model="gpt-3.5-turbo",
-    cache={
-			"s-maxage": 600 # only get responses cached within last 10 minutes 
-		}
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        cache: {
+          "s-maxage": 600 # only get responses cached within last 10 minutes 
+      }
+    }
 )
 ```
 
-## Supported `cache_params`
+## Supported `cache_params` on proxy config.yaml
 
 ```yaml
 cache_params:

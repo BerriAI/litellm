@@ -1,4 +1,6 @@
-import sys, os
+import sys
+from unittest import mock
+
 from dotenv import load_dotenv
 import copy
 
@@ -214,8 +216,19 @@ def test_validate_environment_empty_model():
         raise Exception()
 
 
-# test_validate_environment_empty_model()
+@mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
+def test_validate_environment_ollama():
+    for provider in ["ollama", "ollama_chat"]:
+        kv = validate_environment(provider+"/mistral")
+        assert kv["keys_in_environment"]
+        assert kv["missing_keys"] == []
 
+@mock.patch.dict(os.environ, {}, clear=True)
+def test_validate_environment_ollama_failed():
+    for provider in ["ollama", "ollama_chat"]:
+        kv = validate_environment(provider+"/mistral")
+        assert not kv["keys_in_environment"]
+        assert kv["missing_keys"] == ["OLLAMA_API_BASE"]
 
 def test_function_to_dict():
     print("testing function to dict for get current weather")
@@ -317,3 +330,24 @@ def test_token_counter():
 
 
 # test_token_counter()
+
+
+def test_supports_function_calling():
+    try:
+        assert litellm.supports_function_calling(model="gpt-3.5-turbo") == True
+        assert (
+            litellm.supports_function_calling(model="azure/gpt-4-1106-preview") == True
+        )
+        assert (
+            litellm.supports_function_calling(model="anthropic.claude-instant-v1")
+            == False
+        )
+        assert litellm.supports_function_calling(model="palm/chat-bison") == False
+        assert litellm.supports_function_calling(model="ollama/llama2") == False
+        assert (
+            litellm.supports_function_calling(model="anthropic.claude-instant-v1")
+            == False
+        )
+        assert litellm.supports_function_calling(model="claude-2") == False
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

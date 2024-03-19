@@ -11,18 +11,10 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
-  - model_name: gpt-4
+  - model_name: sagemaker-completion-model
     litellm_params:
-      model: azure/gpt-turbo
-      api_key: os.environ/AZURE_FRANCE_API_KEY
-      api_base: https://openai-france-1234.openai.azure.com/
-      rpm: 100
-  - model_name: gpt-4
-    litellm_params:
-      model: azure/gpt-35-turbo
-      api_key: os.environ/AZURE_EUROPE_API_KEY
-      api_base: https://my-endpoint-europe-berri-992.openai.azure.com
-      rpm: 10
+      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
+      input_cost_per_second: 0.000420  
   - model_name: text-embedding-ada-002
     litellm_params: 
       model: azure/azure-embedding-model
@@ -38,16 +30,29 @@ model_list:
       api_version: 2023-06-01-preview
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_key: os.environ/AZURE_API_KEY
+  - model_name: openai-dall-e-3
+    litellm_params:
+      model: dall-e-3
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
   drop_params: True
-  set_verbose: True
+  max_budget: 100 
+  budget_duration: 30d
+  num_retries: 5
+  request_timeout: 600
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  proxy_budget_rescheduler_min_time: 60
+  proxy_budget_rescheduler_max_time: 64
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
-environment_variables:
+# environment_variables:
   # settings for using redis caching
   # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
   # REDIS_PORT: "16337"
