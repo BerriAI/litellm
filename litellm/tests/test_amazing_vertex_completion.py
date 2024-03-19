@@ -374,7 +374,8 @@ def test_gemini_pro_vision_base64():
         print(resp)
 
         prompt_tokens = resp.usage.prompt_tokens
-
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass
@@ -419,33 +420,43 @@ def test_gemini_pro_function_calling():
 @pytest.mark.asyncio
 async def test_gemini_pro_async_function_calling():
     load_vertex_ai_credentials()
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
+    try:
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
                         },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                        "required": ["location"],
                     },
-                    "required": ["location"],
                 },
-            },
-        }
-    ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
-    completion = await litellm.acompletion(
-        model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
-    )
-    print(f"completion: {completion}")
-    assert completion.choices[0].message.content is None
-    assert len(completion.choices[0].message.tool_calls) == 1
+            }
+        ]
+        messages = [
+            {"role": "user", "content": "What's the weather like in Boston today?"}
+        ]
+        completion = await litellm.acompletion(
+            model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
+        )
+        print(f"completion: {completion}")
+        assert completion.choices[0].message.content is None
+        assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
     # raise Exception("it worked!")
 
 
@@ -461,6 +472,8 @@ def test_vertexai_embedding():
             input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -475,6 +488,8 @@ async def test_vertexai_aembedding():
             input=["good morning from litellm", "this is another item"],
         )
         print(f"response: {response}")
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
