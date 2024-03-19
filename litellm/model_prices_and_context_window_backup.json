@@ -591,26 +591,48 @@
     },
     "mistral/mistral-small": {
         "max_tokens": 8192,
-        "input_cost_per_token": 0.00000066,
-        "output_cost_per_token": 0.00000197,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
+    "mistral/mistral-latest": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
         "litellm_provider": "mistral",
         "mode": "chat"
     },
     "mistral/mistral-medium": {
         "max_tokens": 8192,
-        "input_cost_per_token": 0.00000273,
-        "output_cost_per_token": 0.00000820,
+        "input_cost_per_token": 0.0000027,
+        "output_cost_per_token": 0.0000081,
         "litellm_provider": "mistral",
         "mode": "chat"
     },
     "mistral/mistral-medium-latest": {
         "max_tokens": 8192,
-        "input_cost_per_token": 0.00000273,
-        "output_cost_per_token": 0.00000820,
+        "input_cost_per_token": 0.0000027,
+        "output_cost_per_token": 0.0000081,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
+    "mistral/mistral-medium-2312": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.0000027,
+        "output_cost_per_token": 0.0000081,
         "litellm_provider": "mistral",
         "mode": "chat"
     },
     "mistral/mistral-large-latest": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "mistral/mistral-large-2402": {
         "max_tokens": 32000,
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
