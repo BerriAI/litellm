@@ -605,6 +605,7 @@ general_settings:
   "litellm_settings": {}, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
   "general_settings": {
     "completion_model": "string",
+    "disable_spend_logs": "boolean", # turn off writing each transaction to the db
     "key_management_system": "google_kms", # either google_kms or azure_kms
     "master_key": "string",
     "database_url": "string",
