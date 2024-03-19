@@ -8,16 +8,8 @@ Quick start CLI, Config, Docker
 LiteLLM Server manages:
 
 * **Unified Interface**: Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
+* **Cost tracking**: Authentication, Spend Tracking & Budgets [Virtual Keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
 * **Load Balancing**: between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model) - LiteLLM proxy can handle 1.5k+ requests/second during load tests.
-* **Cost tracking**: Authentication & Spend Tracking [Virtual Keys](#managing-auth---virtual-keys)
-
-[**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
-
-
-#### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
-
-
-View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
 $ pip install 'litellm[proxy]'
@@ -29,7 +21,7 @@ Run the following command to start the litellm proxy
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 ### Test
@@ -39,115 +31,6 @@ litellm --test
 ```
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
-
-### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
-
-<Tabs>
-<TabItem value="Curl" label="Curl Request">
-
-```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
---header 'Content-Type: application/json' \
---data ' {
-      "model": "gpt-3.5-turbo",
-      "messages": [
-        {
-          "role": "user",
-          "content": "what llm are you"
-        }
-      ]
-    }
-'
-```
-</TabItem>
-<TabItem value="openai" label="OpenAI v1.0.0+">
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:8000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-])
-
-print(response)
-
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo",
-    temperature=0.1
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
-<TabItem value="langchain-embedding" label="Langchain Embeddings">
-
-```python
-from langchain.embeddings import OpenAIEmbeddings
-
-embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
-
-
-text = "This is a test document."
-
-query_result = embeddings.embed_query(text)
-
-print(f"SAGEMAKER EMBEDDINGS")
-print(query_result[:5])
-
-embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
-
-text = "This is a test document."
-
-query_result = embeddings.embed_query(text)
-
-print(f"BEDROCK EMBEDDINGS")
-print(query_result[:5])
-
-embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
-
-text = "This is a test document."
-
-query_result = embeddings.embed_query(text)
-
-print(f"TITAN EMBEDDINGS")
-print(query_result[:5])
-```
-</TabItem>
-</Tabs>
-
 
 ### Supported LLMs
 All LiteLLM supported LLMs are supported on the Proxy. Seel all [supported llms](https://docs.litellm.ai/docs/providers)
@@ -330,9 +213,6 @@ $ litellm --model command-nightly
 
 </Tabs>
 
-
-
-
 ## Quick Start - LiteLLM Proxy + Config.yaml
 The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
 
@@ -363,6 +243,115 @@ model_list:
 litellm --config your_config.yaml
 ```
 
+
+## Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="langchain-embedding" label="Langchain Embeddings">
+
+```python
+from langchain.embeddings import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:4000", openai_api_key="temp-key")
+
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"SAGEMAKER EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:4000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"BEDROCK EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:4000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"TITAN EMBEDDINGS")
+print(query_result[:5])
+```
+</TabItem>
+</Tabs>
+
 [**More Info**](./configs.md)
 
 
@@ -381,12 +370,12 @@ See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
 ```shell
-docker pull ghcr.io/berriai/litellm:main-v1.16.13
+docker pull ghcr.io/berriai/litellm:main-latest
 ```
 
 ### Run the Docker Image
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.16.13
+docker run ghcr.io/berriai/litellm:main-latest
 ```
 
 #### Run the Docker Image with LiteLLM CLI args
@@ -395,12 +384,12 @@ See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli):
 
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.16.13 --config your_config.yaml
+docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
 ```
 
 Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.16.13 --port 8002 --num_workers 8
+docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
   
 #### Run the Docker Image using docker compose
@@ -418,11 +407,11 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main
     ports:
-      - "8000:8000" # Map the container port to the host, change the host port if necessary
+      - "4000:4000" # Map the container port to the host, change the host port if necessary
     volumes:
       - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
     # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
-    command: [ "--config", "/app/config.yaml", "--port", "8000", "--num_workers", "8" ]
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
 
 # ...rest of your docker-compose config if any
 ```
@@ -440,7 +429,7 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 > Use `-d` flag to run the container in detached mode (background) e.g. `docker compose up -d`
 
 
-Your LiteLLM container should be running now on the defined port e.g. `8000`.
+Your LiteLLM container should be running now on the defined port e.g. `4000`.
 
 
 ## Using with OpenAI compatible projects
@@ -453,7 +442,7 @@ Set `base_url` to the LiteLLM Proxy server
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -474,7 +463,7 @@ print(response)
 ```shell
 litellm --model gpt-3.5-turbo
 
-#INFO: Proxy running on http://0.0.0.0:8000
+#INFO: Proxy running on http://0.0.0.0:4000
 ```
 
 #### 1. Clone the repo
@@ -485,9 +474,9 @@ git clone https://github.com/danny-avila/LibreChat.git
 
 
 #### 2. Modify Librechat's `docker-compose.yml`
-LiteLLM Proxy is running on port `8000`, set `8000` as the proxy below
+LiteLLM Proxy is running on port `4000`, set `4000` as the proxy below
 ```yaml
-OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
+OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
 ```
 
 #### 3. Save fake OpenAI key in Librechat's `.env` 
@@ -513,7 +502,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
       api_key="IGNORED",
       model="fake-model-name",
       context_length=2048, # customize if needed for your model
-      api_base="http://localhost:8000" # your proxy server url
+      api_base="http://localhost:4000" # your proxy server url
   ),
 ```
 
@@ -525,7 +514,7 @@ Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-
 ```shell
 $ pip install aider 
 
-$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
+$ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
 ```
 </TabItem>
 <TabItem value="autogen" label="AutoGen">
@@ -539,7 +528,7 @@ from autogen import AssistantAgent, UserProxyAgent, oai
 config_list=[
     {
         "model": "my-fake-model",
-        "api_base": "http://localhost:8000",  #litellm compatible endpoint
+        "api_base": "http://localhost:4000",  #litellm compatible endpoint
         "api_type": "open_ai",
         "api_key": "NULL", # just a placeholder
     }
@@ -577,7 +566,7 @@ import guidance
 
 # set api_base to your proxy
 # set api_key to anything
-gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:8000", api_key="anything")
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:4000", api_key="anything")
 
 experts = guidance('''
 {{#system~}}

@@ -49,7 +49,7 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 | mistral-tiny | `completion(model="mistral/mistral-tiny", messages)` | 
 | mistral-small | `completion(model="mistral/mistral-small", messages)` | 
 | mistral-medium | `completion(model="mistral/mistral-medium", messages)` | 
-
+| mistral-large-latest | `completion(model="mistral/mistral-large-latest", messages)` | 
 
 
 ## Sample Usage - Embedding

@@ -7,22 +7,31 @@ backoff==2.2.1 # server dep
 pyyaml>=6.0.1 # server dep
 uvicorn==0.22.0 # server dep
 gunicorn==21.2.0 # server dep
-boto3==1.28.58 # aws bedrock/sagemaker calls
-redis==4.6.0 # caching
+boto3==1.34.34 # aws bedrock/sagemaker calls
+redis==5.0.0 # caching
+numpy==1.24.3 # semantic caching
+pandas==2.1.1 # for viewing clickhouse spend analytics
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
-google-generativeai==0.1.0 # for vertex ai calls
+google-cloud-aiplatform==1.43.0 # for vertex ai calls
+google-generativeai==0.3.2 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 traceloop-sdk==0.5.3 # for open telemetry logging
 langfuse>=2.6.3 # for langfuse self-hosted logging
-orjson==3.9.7 # fast /embedding responses
+datadog-api-client==2.23.0 # for datadog logging
+orjson==3.9.15 # fast /embedding responses
+apscheduler==3.10.4 # for resetting budget in background 
+fastapi-sso==0.10.0 # admin UI, SSO
+PyJWT==2.8.0 # admin UI, jwts 
+python-multipart==0.0.6 # admin UI
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage
 importlib-metadata>=6.8.0 # for random utils
 tokenizers==0.14.0 # for calculating usage
 click==8.1.7 # for proxy cli 
-jinja2==3.1.2 # for prompt templates
+jinja2==3.1.3 # for prompt templates
 certifi>=2023.7.22 # [TODO] clean up 
 aiohttp==3.9.0 # for network calls
+aioboto3==12.3.0 # for async sagemaker calls
 ####

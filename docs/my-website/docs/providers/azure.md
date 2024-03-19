@@ -3,9 +3,9 @@
 api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
 import os
-os.environ["AZURE_API_KEY"] = ""
-os.environ["AZURE_API_BASE"] = ""
-os.environ["AZURE_API_VERSION"] = ""
+os.environ["AZURE_API_KEY"] = "" # "my-azure-api-key"
+os.environ["AZURE_API_BASE"] = "" # "https://example-endpoint.openai.azure.com"
+os.environ["AZURE_API_VERSION"] = "" # "2023-05-15"
 
 # optional
 os.environ["AZURE_AD_TOKEN"] = ""
@@ -74,6 +74,8 @@ response = litellm.completion(
 | gpt-4-32k            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-4-32k-0314            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4-32k-0613            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-1106-preview            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-0125-preview            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-3.5-turbo    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-0301    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-0613    | `completion('azure/<your deployment name>', messages)` |
@@ -116,7 +118,7 @@ response = completion(
 
 ```
 
-### Usage - with Azure Vision enhancements
+#### Usage - with Azure Vision enhancements
 
 Note: **Azure requires the `base_url` to be set with `/extensions`** 
 
@@ -166,6 +168,31 @@ response = completion(
 )
 ```
 
+## Azure Instruct Models
+
+Use `model="azure_text/<your-deployment>"`
+
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| gpt-3.5-turbo-instruct | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
+
+
+```python
+import litellm
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+response = litellm.completion(
+    model="azure_text/<your-deployment-name",
+    messages=[{"role": "user", "content": "What is the weather like in Boston?"}]
+)
+
+print(response)
+```
 
 ## Advanced
 ### Azure API Load-Balancing

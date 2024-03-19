@@ -98,7 +98,7 @@ def list_models():
             st.error(f"An error occurred while requesting models: {e}")
     else:
         st.warning(
-            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
         )
 
 
@@ -151,7 +151,7 @@ def create_key():
                 raise e
     else:
         st.warning(
-            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
         )
 
 

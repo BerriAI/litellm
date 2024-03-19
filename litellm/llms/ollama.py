@@ -145,8 +145,20 @@ def get_ollama_response(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    optional_params["stream"] = optional_params.get("stream", False)
-    data = {"model": model, "prompt": prompt, **optional_params}
+    stream = optional_params.pop("stream", False)
+    format = optional_params.pop("format", None)
+    images = optional_params.pop("images", None)
+    data = {
+        "model": model,
+        "prompt": prompt,
+        "options": optional_params,
+        "stream": stream,
+    }
+    if format is not None:
+        data["format"] = format
+    if images is not None:
+        data["images"] = images
+
     ## LOGGING
     logging_obj.pre_call(
         input=None,
@@ -159,7 +171,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if optional_params.get("stream", False) == True:
+        if stream == True:
             response = ollama_async_streaming(
                 url=url,
                 data=data,
@@ -176,10 +188,12 @@ def get_ollama_response(
                 logging_obj=logging_obj,
             )
         return response
-    elif optional_params.get("stream", False) == True:
+    elif stream == True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
-    response = requests.post(url=f"{url}", json=data, timeout=litellm.request_timeout)
+    response = requests.post(
+        url=f"{url}", json={**data, "stream": stream}, timeout=litellm.request_timeout
+    )
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 
@@ -254,7 +268,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
         ) as response:
             if response.status_code != 200:
                 raise OllamaError(
-                    status_code=response.status_code, message=response.text
+                    status_code=response.status_code, message=await response.aread()
                 )
 
             streamwrapper = litellm.CustomStreamWrapper(
@@ -267,6 +281,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 yield transformed_chunk
     except Exception as e:
         traceback.print_exc()
+        raise e
 
 
 async def ollama_acompletion(url, data, model_response, encoding, logging_obj):

@@ -139,7 +139,7 @@ def test_exception_openai_bad_model(client):
             response=response
         )
         print("Type of exception=", type(openai_exception))
-        assert isinstance(openai_exception, openai.NotFoundError)
+        assert isinstance(openai_exception, openai.BadRequestError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -160,7 +160,6 @@ def test_chat_completion_exception_any_model(client):
         response = client.post("/chat/completions", json=test_data)
 
         json_response = response.json()
-        print("keys in json response", json_response.keys())
         assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response

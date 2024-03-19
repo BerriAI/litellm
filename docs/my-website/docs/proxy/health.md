@@ -12,10 +12,10 @@ The proxy exposes:
 #### Request
 Make a GET Request to `/health` on the proxy
 ```shell
-curl --location 'http://0.0.0.0:8000/health'
+curl --location 'http://0.0.0.0:4000/health' -H "Authorization: Bearer sk-1234"
 ```
 
-You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
+You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:4000/health` for you
 ```
 litellm --health
 ```
@@ -60,7 +60,7 @@ $ litellm /path/to/config.yaml
 
 3. Query health endpoint: 
 ```
-curl --location 'http://0.0.0.0:8000/health'
+curl --location 'http://0.0.0.0:4000/health'
 ```
 
 ### Embedding Models 
@@ -78,6 +78,23 @@ model_list:
     model_info:
       mode: embedding # 👈 ADD THIS
 ```
+
+### Image Generation Models 
+
+We need some way to know if the model is an image generation model when running checks, if you have this in your config, specifying mode it makes an image generation health check
+
+```yaml
+model_list:
+  - model_name: dall-e-3
+    litellm_params:
+      model: azure/dall-e-3
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      mode: image_generation # 👈 ADD THIS
+```
+
 
 ### Text Completion Models 
 
@@ -102,7 +119,7 @@ Unprotected endpoint for checking if proxy is ready to accept requests
 Example Request: 
 
 ```bash 
-curl --location 'http://0.0.0.0:8000/health/readiness'
+curl --location 'http://0.0.0.0:4000/health/readiness'
 ```
 
 Example Response:  
@@ -112,7 +129,8 @@ Example Response:
 ```json
 {
     "status": "healthy",
-    "db": "connected"
+    "db": "connected",
+    "litellm_version":"1.19.2",
 }
 ```
 
@@ -121,7 +139,8 @@ Example Response:
 ```json
 {
     "status": "healthy",
-    "db": "Not connected"
+    "db": "Not connected",
+    "litellm_version":"1.19.2",
 }
 ```
 
@@ -134,7 +153,7 @@ Example Request:
 
 ```
 curl -X 'GET' \
-  'http://0.0.0.0:8000/health/liveliness' \
+  'http://0.0.0.0:4000/health/liveliness' \
   -H 'accept: application/json'
 ```
 

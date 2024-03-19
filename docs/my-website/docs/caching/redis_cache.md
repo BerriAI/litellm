@@ -1,11 +1,17 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Caching - In-Memory, Redis, s3
+# Caching - In-Memory, Redis, s3,  Redis Semantic Cache
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching.py)
 
-## Initialize Cache - In Memory, Redis, s3 Bucket
+:::info
+
+Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+
+:::
+
+## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic Cache
 
 
 <Tabs>
@@ -18,7 +24,7 @@ pip install redis
 ```
 
 For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
-### Quick Start
+
 ```python
 import litellm
 from litellm import completion
@@ -55,7 +61,7 @@ Set AWS environment variables
 AWS_ACCESS_KEY_ID = "AKI*******"
 AWS_SECRET_ACCESS_KEY = "WOl*****"
 ```
-### Quick Start
+
 ```python
 import litellm
 from litellm import completion
@@ -78,6 +84,66 @@ response2 = completion(
 ```
 
 </TabItem>
+
+
+<TabItem value="redis-sem" label="redis-semantic cache">
+
+Install redis
+```shell
+pip install redisvl==0.0.7
+```
+
+For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching import Cache
+
+random_number = random.randint(
+    1, 100000
+)  # add a random number to ensure it's always adding / reading from cache
+
+print("testing semantic caching")
+litellm.cache = Cache(
+    type="redis-semantic",
+    host=os.environ["REDIS_HOST"],
+    port=os.environ["REDIS_PORT"],
+    password=os.environ["REDIS_PASSWORD"],
+    similarity_threshold=0.8, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
+    redis_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
+)
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {
+            "role": "user",
+            "content": f"write a one sentence poem about: {random_number}",
+        }
+    ],
+    max_tokens=20,
+)
+print(f"response1: {response1}")
+
+random_number = random.randint(1, 100000)
+
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {
+            "role": "user",
+            "content": f"write a one sentence poem about: {random_number}",
+        }
+    ],
+    max_tokens=20,
+)
+print(f"response2: {response1}")
+assert response1.id == response2.id
+# response1 == response2, response 1 is cached
+```
+
+</TabItem>
+
 
 
 <TabItem value="in-mem" label="in memory cache">
@@ -182,6 +248,27 @@ cache.get_cache_key = custom_get_cache_key # set get_cache_key function for your
 
 litellm.cache = cache # set litellm.cache to your cache 
 
+```
+## How to write custom add/get cache functions 
+### 1. Init Cache 
+```python
+from litellm.caching import Cache
+cache = Cache()
+``` 
+
+### 2. Define custom add/get cache functions 
+```python
+def add_cache(self, result, *args, **kwargs):
+  your logic
+  
+def get_cache(self, *args, **kwargs):
+  your logic
+```
+
+### 3. Point cache add/get functions to your add/get functions 
+```python
+cache.add_cache = add_cache
+cache.get_cache = get_cache
 ```
 
 ## Cache Initialization Parameters

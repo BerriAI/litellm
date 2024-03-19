@@ -37,8 +37,32 @@ def test_timeout():
 # test_timeout()
 
 
+def test_bedrock_timeout():
+    # this Will Raise a timeout
+    litellm.set_verbose = True
+    try:
+        response = litellm.completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            timeout=0.01,
+            messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
+        )
+        pytest.fail("Did not raise error `openai.APITimeoutError`")
+    except openai.APITimeoutError as e:
+        print(
+            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
+        )
+        print(type(e))
+        pass
+    except Exception as e:
+        pytest.fail(
+            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
+        )
+
+
 def test_hanging_request_azure():
     litellm.set_verbose = True
+    import asyncio
+
     try:
         router = litellm.Router(
             model_list=[
@@ -58,13 +82,20 @@ def test_hanging_request_azure():
         )
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
-        response = router.completion(
-            model="azure-gpt",
-            messages=[{"role": "user", "content": f"what color is red {uuid.uuid4()}"}],
-            logit_bias={encoded: 100},
-            timeout=0.01,
-        )
-        print(response)
+
+        async def _test():
+            response = await router.acompletion(
+                model="azure-gpt",
+                messages=[
+                    {"role": "user", "content": f"what color is red {uuid.uuid4()}"}
+                ],
+                logit_bias={encoded: 100},
+                timeout=0.01,
+            )
+            print(response)
+            return response
+
+        response = asyncio.run(_test())
 
         if response.choices[0].message.content is not None:
             pytest.fail("Got a response, expected a timeout")

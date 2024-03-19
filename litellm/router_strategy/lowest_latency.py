@@ -86,7 +86,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if isinstance(response_obj, ModelResponse):
                     completion_tokens = response_obj.usage.completion_tokens
                     total_tokens = response_obj.usage.total_tokens
-                    final_value = float(completion_tokens / response_ms.total_seconds())
+                    final_value = float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
@@ -168,7 +168,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if isinstance(response_obj, ModelResponse):
                     completion_tokens = response_obj.usage.completion_tokens
                     total_tokens = response_obj.usage.total_tokens
-                    final_value = float(completion_tokens / response_ms.total_seconds())
+                    final_value = float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
