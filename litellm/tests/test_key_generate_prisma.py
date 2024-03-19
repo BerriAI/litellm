@@ -158,7 +158,7 @@ def test_call_with_invalid_key(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
-            generated_key = "bad-key"
+            generated_key = "sk-126666"
             bearer_token = "Bearer " + generated_key
 
             request = Request(scope={"type": "http"}, receive=None)
@@ -173,7 +173,7 @@ def test_call_with_invalid_key(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         print(e.message)
-        assert "Authentication Error" in e.message
+        assert "Authentication Error, Invalid token passed" in e.message
         pass
 
 
@@ -318,7 +318,7 @@ def test_call_with_user_over_budget(prisma_client):
 
 
 def test_call_with_end_user_over_budget(prisma_client):
-    # Test if a user passed to /chat/completions is tracked & fails whe they cross their budget
+    # Test if a user passed to /chat/completions is tracked & fails when they cross their budget
     # we only check this when litellm.max_user_budget is set
     import random
 
@@ -338,6 +338,8 @@ def test_call_with_end_user_over_budget(prisma_client):
             user = f"ishaan {random.randint(0, 10000)}"
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
+
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
 
             async def return_body():
                 return_string = f'{{"model": "gemini-pro-vision", "user": "{user}"}}'
@@ -722,6 +724,7 @@ def test_delete_key(prisma_client):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
     try:
 
         async def test():
@@ -737,8 +740,19 @@ def test_delete_key(prisma_client):
 
             delete_key_request = KeyRequest(keys=[generated_key])
 
+            bearer_token = "Bearer sk-1234"
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/key/delete")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print(f"result: {result}")
+            result.user_role = "proxy_admin"
             # delete the key
-            result_delete_key = await delete_key_fn(data=delete_key_request)
+            result_delete_key = await delete_key_fn(
+                data=delete_key_request, user_api_key_dict=result
+            )
             print("result from delete key", result_delete_key)
             assert result_delete_key == {"deleted_keys": [generated_key]}
 
@@ -776,7 +790,19 @@ def test_delete_key_auth(prisma_client):
             delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
-            result_delete_key = await delete_key_fn(data=delete_key_request)
+            bearer_token = "Bearer sk-1234"
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/key/delete")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print(f"result: {result}")
+            result.user_role = "proxy_admin"
+
+            result_delete_key = await delete_key_fn(
+                data=delete_key_request, user_api_key_dict=result
+            )
 
             print("result from delete key", result_delete_key)
             assert result_delete_key == {"deleted_keys": [generated_key]}
@@ -791,6 +817,7 @@ def test_delete_key_auth(prisma_client):
             )
 
             # use generated key to auth in
+            bearer_token = "Bearer " + generated_key
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("got result", result)
             pytest.fail(f"This should have failed!. IT's an invalid key")
@@ -835,9 +862,19 @@ def test_generate_and_call_key_info(prisma_client):
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
+            bearer_token = "Bearer sk-1234"
 
-            # delete the key
-            await delete_key_fn(data=delete_key_request)
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/key/delete")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print(f"result: {result}")
+            result.user_role = "proxy_admin"
+
+            result_delete_key = await delete_key_fn(
+                data=delete_key_request, user_api_key_dict=result
+            )
 
         asyncio.run(test())
     except Exception as e:
@@ -916,7 +953,19 @@ def test_generate_and_update_key(prisma_client):
             delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
-            await delete_key_fn(data=delete_key_request)
+            bearer_token = "Bearer sk-1234"
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/key/delete")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print(f"result: {result}")
+            result.user_role = "proxy_admin"
+
+            result_delete_key = await delete_key_fn(
+                data=delete_key_request, user_api_key_dict=result
+            )
 
         asyncio.run(test())
     except Exception as e:
