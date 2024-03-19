@@ -31,14 +31,18 @@ interface TeamProps {
   searchParams: any;
   accessToken: string | null;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  userID: string | null;
+  userRole: string | null;
 }
-import { teamCreateCall, teamMemberAddCall, Member } from "./networking";
+import { teamCreateCall, teamMemberAddCall, Member, modelAvailableCall } from "./networking";
 
 const Team: React.FC<TeamProps> = ({
   teams,
   searchParams,
   accessToken,
   setTeams,
+  userID,
+  userRole,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -50,6 +54,8 @@ const Team: React.FC<TeamProps> = ({
   );
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
+  const [userModels, setUserModels] = useState([]);
+
   const handleOk = () => {
     setIsTeamModalVisible(false);
     form.resetFields();
@@ -70,10 +76,33 @@ const Team: React.FC<TeamProps> = ({
     memberForm.resetFields();
   };
 
+  useEffect(() => {
+    const fetchUserModels = async () => {
+      try {
+        if (userID === null || userRole === null) {
+          return;
+        }
+
+        if (accessToken !== null) {
+          const model_available = await modelAvailableCall(accessToken, userID, userRole);
+          let available_model_names = model_available["data"].map(
+            (element: { id: string }) => element.id
+          );
+          console.log("available_model_names:", available_model_names);
+          setUserModels(available_model_names);
+        }
+      } catch (error) {
+        console.error("Error fetching user models:", error);
+      }
+    };
+  
+    fetchUserModels();
+  }, [accessToken, userID, userRole]);
+
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null) {
-        message.info("Making API Call");
+        //message.info("Making API Call");
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -81,10 +110,12 @@ const Team: React.FC<TeamProps> = ({
           setTeams([response]);
         }
         console.log(`response for team create call: ${response}`);
+        message.success("Team created");
         setIsTeamModalVisible(false);
       }
     } catch (error) {
       console.error("Error creating the key:", error);
+      message.error("Error creating the team: " + error);
     }
   };
 
@@ -200,11 +231,11 @@ const Team: React.FC<TeamProps> = ({
                     placeholder="Select models"
                     style={{ width: "100%" }}
                   >
-                    {/* {userModels.map((model) => (
-                      <Option key={model} value={model}>
+                    {userModels.map((model) => (
+                      <Select2.Option key={model} value={model}>
                         {model}
-                      </Option>
-                    ))} */}
+                      </Select2.Option>
+                    ))}
                   </Select2>
                 </Form.Item>
                 <Form.Item label="Max Budget (USD)" name="max_budget">
