@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { userInfoCall, modelAvailableCall } from "./networking";
+import { userInfoCall, modelAvailableCall, getTotalSpendCall } from "./networking";
 import { Grid, Col, Card, Text } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
@@ -129,7 +129,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
                 response
               )}; team values: ${Object.entries(response.teams)}`
             );
-            setUserSpendData(response["user_info"]);
+            if (userRole == "Admin") {
+              const globalSpend = await getTotalSpendCall(accessToken);
+              setUserSpendData(globalSpend);
+              console.log("globalSpend:", globalSpend);
+            } else {
+              setUserSpendData(response["user_info"]);
+            }
             setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
             setSelectedTeam(response["teams"] ? response["teams"][0] : null);

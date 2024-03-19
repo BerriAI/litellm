@@ -863,6 +863,7 @@ async def user_api_key_auth(
                 "/v2/key/info",
                 "/models",
                 "/v1/models",
+                "/global/spend",
                 "/global/spend/logs",
                 "/global/spend/keys",
                 "/global/spend/models",
@@ -4565,6 +4566,56 @@ async def global_spend_logs(
 
         return response
     return
+
+
+@router.get(
+    "/global/spend",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend():
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    View total spend across all proxy keys
+    """
+    global prisma_client
+    total_spend = 0.0
+    total_proxy_budget = 0.0
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    sql_query = f"""
+        SELECT SUM(spend) AS total_spend
+        FROM "LiteLLM_VerificationToken";
+        ;
+    """
+    response = await prisma_client.db.query_raw(query=sql_query)
+    if response is not None:
+        if isinstance(response, list) and len(response) > 0:
+            total_spend = response[0].get("total_spend", 0.0)
+
+    sql_query = f"""
+        SELECT 
+            *
+        FROM 
+            "LiteLLM_UserTable"
+        WHERE 
+            user_id = 'litellm-proxy-budget';
+    """
+    user_response = await prisma_client.db.query_raw(query=sql_query)
+
+    if user_response is not None:
+        if isinstance(user_response, list) and len(user_response) > 0:
+            total_proxy_budget = user_response[0].get("max_budget", 0.0)
+            litellm_proxy_budget_spend = user_response[0].get("spend", None)
+            if (
+                litellm_proxy_budget_spend is not None
+                and litellm_proxy_budget_spend > 0.0
+            ):
+                # if the user has spend on litellm-proxy-budget, use that to show $spend/max budget
+                total_spend = litellm_proxy_budget_spend
+    return {"spend": total_spend, "max_budget": total_proxy_budget}
 
 
 @router.get(

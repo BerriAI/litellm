@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall } from "./networking";
+import { keyDeleteCall, getTotalSpendCall } from "./networking";
 import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import { DonutChart } from "@tremor/react";
 import {
@@ -33,35 +33,34 @@ interface ViewUserSpendProps {
     accessToken: string;
 }
 const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, userRole, accessToken }) => {
-    console.log("User SpendData:", userSpendData);
     const [spend, setSpend] = useState(userSpendData?.spend);
     const [maxBudget, setMaxBudget] = useState(userSpendData?.max_budget || null);
 
     useEffect(() => {
-        const fetchData = async () => {
-            if (userRole === "Admin") {
-                try {
-                    const data = await spendUsersCall(accessToken, "litellm-proxy-budget");
-                    console.log("Result from callSpendUsers:", data);
-                    const total_budget = data[0]
-                    setSpend(total_budget?.spend);
-                    setMaxBudget(total_budget?.max_budget || null);
-                } catch (error) {
-                    console.error("Failed to get spend for user", error);
-                }
-            }
-        };
-
-        fetchData();
-    }, [userRole, accessToken, userID]);
+      const fetchData = async () => {
+        if (userRole === "Admin") {
+          try {
+            const globalSpend = await getTotalSpendCall(accessToken);
+            setSpend(globalSpend.spend);
+            setMaxBudget(globalSpend.max_budget || null);
+          } catch (error) {
+            console.error("Error fetching global spend data:", error);
+          }
+        }
+      };
+    
+      fetchData();
+    }, [userRole, accessToken]);
 
     const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
+
+    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
 
     return (
         <>
       <Card className="mx-auto mb-4">
         <Metric>
-          ${spend}
+          ${roundedSpend}
         </Metric>
         <Title>
             / {displayMaxBudget}
