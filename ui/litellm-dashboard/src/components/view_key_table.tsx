@@ -144,7 +144,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Text>{item.team_id}</Text>
                 </TableCell>
                 <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{JSON.stringify(item.metadata)}</Text>
+                  <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
+                  
                 </TableCell>
                 <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{JSON.stringify(item.models)}</Text>
