@@ -8,8 +8,8 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import httpx
 import jwt
-import json
 from jwt.algorithms import RSAAlgorithm
+import json
 import os
 from litellm.proxy._types import LiteLLMProxyRoles
 from typing import Optional
