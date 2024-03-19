@@ -281,6 +281,7 @@ proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
 proxy_batch_write_at = 60  # in seconds
 litellm_master_key_hash = None
+disable_spend_logs = False
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -1295,7 +1296,8 @@ async def update_database(
         asyncio.create_task(_update_key_db())
         asyncio.create_task(_update_team_db())
         # asyncio.create_task(_insert_spend_log_to_db())
-        await _insert_spend_log_to_db()
+        if disable_spend_logs == False:
+            await _insert_spend_log_to_db()
 
         verbose_proxy_logger.debug("Runs spend update on all tables")
     except Exception as e:
@@ -1614,7 +1616,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1981,6 +1983,10 @@ class ProxyConfig:
             ## BATCH WRITER ##
             proxy_batch_write_at = general_settings.get(
                 "proxy_batch_write_at", proxy_batch_write_at
+            )
+            ## DISABLE SPEND LOGS ## - gives a perf improvement
+            disable_spend_logs = general_settings.get(
+                "disable_spend_logs", disable_spend_logs
             )
             ### BACKGROUND HEALTH CHECKS ###
             # Enable background health checks
