@@ -88,10 +88,8 @@ def prisma_client():
 
 @pytest.mark.asyncio
 async def test_batch_update_spend(prisma_client):
-    prisma_client.user_list_transactons.append(("test-litellm-user-5", 23))
+    prisma_client.user_list_transactons["test-litellm-user-5"] = 23
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
     await update_spend(prisma_client=litellm.proxy.proxy_server.prisma_client)
-
-    raise Exception("it worked!")
