@@ -1865,9 +1865,6 @@ async def update_spend(
     team_list: list,
     spend_logs: list,
     """
-    verbose_proxy_logger.debug(
-        f"ENTERS UPDATE SPEND -  len(prisma_client.user_list_transactons.keys()): {len(prisma_client.user_list_transactons.keys())}"
-    )
     n_retry_times = 3
     ### UPDATE USER TABLE ###
     if len(prisma_client.user_list_transactons.keys()) > 0:
