@@ -111,4 +111,4 @@ class JWTHandler:
                 except Exception as e:
                     raise Exception(f"Validation fails: {str(e)}")
 
-        raise jwt.InvalidKeyError
+        raise Exception("Invalid JWT Submitted")

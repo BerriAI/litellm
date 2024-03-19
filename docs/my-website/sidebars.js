@@ -43,6 +43,7 @@ const sidebars = {
         "proxy/ui",
         "proxy/budget_alerts",
         "proxy/cost_tracking",
+        "proxy/token_auth",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
