@@ -26,8 +26,6 @@ except:
 
 
 def append_query_params(url, params):
-    print(f"url: {url}")
-    print(f"params: {params}")
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
     parsed_query.update(params)
