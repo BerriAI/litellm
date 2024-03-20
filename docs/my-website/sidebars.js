@@ -29,6 +29,7 @@ const sidebars = {
       },
       items: [
         "proxy/quick_start", 
+        "proxy/deploy", 
         "proxy/configs",
         {
           type: 'link',
@@ -67,7 +68,6 @@ const sidebars = {
         },
         "proxy/call_hooks",
         "proxy/rules",
-        "proxy/deploy", 
         "proxy/cli", 
       ]
     },
