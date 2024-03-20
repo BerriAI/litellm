@@ -7561,6 +7561,71 @@ async def health_liveliness():
     return "I'm alive!"
 
 
+@router.get(
+    "/cache/ping",
+    tags=["caching"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def cache_ping():
+    """
+    Endpoint for checking if cache can be pinged
+    """
+    try:
+        if litellm.cache is None:
+            raise HTTPException(
+                status_code=503, detail="Cache not initialized. litellm.cache is None"
+            )
+
+        litellm_cache_params = {}
+        specific_cache_params = {}
+        for k, v in vars(litellm.cache).items():
+            try:
+                if k == "cache":
+                    continue
+                litellm_cache_params[k] = str(copy.deepcopy(v))
+            except Exception:
+                litellm_cache_params[k] = "<unable to copy or convert>"
+        for k, v in vars(litellm.cache.cache).items():
+            try:
+                specific_cache_params[k] = str(v)
+            except Exception:
+                specific_cache_params[k] = "<unable to copy or convert>"
+        if litellm.cache.type == "redis":
+            # ping the redis cache
+            ping_response = await litellm.cache.ping()
+            verbose_proxy_logger.debug(
+                "/cache/ping: ping_response: " + str(ping_response)
+            )
+            # making a set cache call
+            # add cache does not return anything
+            await litellm.cache.async_add_cache(
+                result="test_key",
+                model="test-model",
+                messages=[{"role": "user", "content": "test from litellm"}],
+            )
+            verbose_proxy_logger.debug("/cache/ping: done with set_cache()")
+            return {
+                "status": "healthy",
+                "cache_type": litellm.cache.type,
+                "ping_response": True,
+                "set_cache_response": "success",
+                "litellm_cache_params": litellm_cache_params,
+                "redis_cache_params": specific_cache_params,
+            }
+        else:
+            return {
+                "status": "healthy",
+                "cache_type": litellm.cache.type,
+                "litellm_cache_params": litellm_cache_params,
+            }
+        return None
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service Unhealthy ({str(e)}).Cache parameters: {litellm_cache_params}.specific_cache_params: {specific_cache_params}",
+        )
+
+
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
