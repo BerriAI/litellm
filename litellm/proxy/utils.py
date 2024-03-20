@@ -1820,22 +1820,35 @@ async def reset_budget(prisma_client: PrismaClient):
     if prisma_client is not None:
         ### RESET KEY BUDGET ###
         now = datetime.utcnow()
-        asyncio.create_task(
-            prisma_client.db.litellm_verificationtoken.update_many(
-                where={"budget_reset_at": {"lt": now}},
-                data={"spend": 0, "budget_reset_at": now},
-            )
+        keys_to_reset = await prisma_client.get_data(
+            table_name="key", query_type="find_all", expires=now, reset_at=now
         )
 
-        ### RESET USER BUDGET ###
-        try:
-            await prisma_client.db.litellm_usertable.update_many(
-                where={"budget_reset_at": {"lt": now}},
-                data={"spend": 0, "budget_reset_at": now},
+        if keys_to_reset is not None and len(keys_to_reset) > 0:
+            for key in keys_to_reset:
+                key.spend = 0.0
+                duration_s = _duration_in_seconds(duration=key.budget_duration)
+                key.budget_reset_at = now + timedelta(seconds=duration_s)
+
+            await prisma_client.update_data(
+                query_type="update_many", data_list=keys_to_reset, table_name="key"
             )
-        except Exception as e:
-            verbose_proxy_logger.debug(f"An exception occurs - {str(e)}")
-            raise e
+
+        ### RESET USER BUDGET ###
+        now = datetime.utcnow()
+        users_to_reset = await prisma_client.get_data(
+            table_name="user", query_type="find_all", reset_at=now
+        )
+
+        if users_to_reset is not None and len(users_to_reset) > 0:
+            for user in users_to_reset:
+                user.spend = 0.0
+                duration_s = _duration_in_seconds(duration=user.budget_duration)
+                user.budget_reset_at = now + timedelta(seconds=duration_s)
+
+            await prisma_client.update_data(
+                query_type="update_many", data_list=users_to_reset, table_name="user"
+            )
 
 
 async def update_spend(
