@@ -57,6 +57,7 @@ const sidebars = {
         "proxy/health",
         "proxy/debugging",
         "proxy/pii_masking",
+        "proxy/prompt_injection",
         "proxy/caching",
         {
           "type": "category",
