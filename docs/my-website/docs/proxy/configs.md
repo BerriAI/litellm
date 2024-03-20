@@ -246,6 +246,10 @@ $ litellm --config /path/to/config.yaml
 
 ## Load Balancing 
 
+:::info
+For more on this, go to [this page](./load_balancing.md)
+:::
+
 Use this to call multiple instances of the same model and configure things like [routing strategy](../routing.md#advanced). 
 
 For optimal performance:
@@ -304,25 +308,6 @@ router_settings: # router_settings are optional
   redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
   redis_password: <your redis password>
   redis_port: 1992
-```
-
-## Set Azure `base_model` for cost tracking
-
-**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
-
-**Solution** ✅ :  Set `base_model` on your config so litellm uses the correct model for calculating azure cost
-
-Example config with `base_model`
-```yaml
-model_list:
-  - model_name: azure-gpt-3.5
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-    model_info:
-      base_model: azure/gpt-4-1106-preview
 ```
 
 You can view your cost once you set up [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys) or [custom_callbacks](https://docs.litellm.ai/docs/proxy/logging)
