@@ -1817,7 +1817,6 @@ async def reset_budget(prisma_client: PrismaClient):
 
     Updates db
     """
-    verbose_proxy_logger.debug("ENTERS RESET BUDGET")
     if prisma_client is not None:
         ### RESET KEY BUDGET ###
         now = datetime.utcnow()
@@ -1829,7 +1828,6 @@ async def reset_budget(prisma_client: PrismaClient):
         )
 
         ### RESET USER BUDGET ###
-        verbose_proxy_logger.debug("STARTS RESETTING USER BUDGET")
         try:
             await prisma_client.db.litellm_usertable.update_many(
                 where={"budget_reset_at": {"lt": now}},
