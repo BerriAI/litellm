@@ -4860,6 +4860,8 @@ def get_optional_params(
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
             optional_params["stop"] = stop
+        if response_format is not None and response_format["type"] == "json_object":
+            optional_params["format"] = "json"
     elif custom_llm_provider == "ollama_chat":
         supported_params = litellm.OllamaChatConfig().get_supported_openai_params()
 
@@ -5320,6 +5322,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "temperature",
             "frequency_penalty",
             "stop",
+            "response_format",
         ]
     elif custom_llm_provider == "nlp_cloud":
         return [
