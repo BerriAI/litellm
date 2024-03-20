@@ -2658,7 +2658,7 @@ async def startup_event():
     if prisma_client is not None:
         create_view_response = await prisma_client.check_view_exists()
 
-    ### START BUDGET SCHEDULER ###
+    ### START BATCH WRITING DB ###
     if prisma_client is not None:
         scheduler = AsyncIOScheduler()
         interval = random.randint(
@@ -2667,9 +2667,14 @@ async def startup_event():
         batch_writing_interval = random.randint(
             proxy_batch_write_at - 3, proxy_batch_write_at + 3
         )  # random interval, so multiple workers avoid batch writing at the same time
-        scheduler.add_job(
-            reset_budget, "interval", seconds=interval, args=[prisma_client]
-        )
+
+        ### RESET BUDGET ###
+        if general_settings.get("disable_reset_budget", False) == False:
+            scheduler.add_job(
+                reset_budget, "interval", seconds=interval, args=[prisma_client]
+            )
+
+        ### UPDATE SPEND ###
         scheduler.add_job(
             update_spend,
             "interval",
