@@ -7571,13 +7571,14 @@ async def cache_ping():
     Endpoint for checking if cache can be pinged
     """
     try:
+        litellm_cache_params = {}
+        specific_cache_params = {}
+
         if litellm.cache is None:
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
 
-        litellm_cache_params = {}
-        specific_cache_params = {}
         for k, v in vars(litellm.cache).items():
             try:
                 if k == "cache":
@@ -7618,7 +7619,6 @@ async def cache_ping():
                 "cache_type": litellm.cache.type,
                 "litellm_cache_params": litellm_cache_params,
             }
-        return None
     except Exception as e:
         raise HTTPException(
             status_code=503,
