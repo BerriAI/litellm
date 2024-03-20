@@ -114,6 +114,16 @@ async def test_users_budgets_reset():
     - Check if value updated
     """
     get_user = f"krrish_{time.time()}@berri.ai"
+
+    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+        for attempt in range(_max_attempts):
+            try:
+                return await func(*args, **kwargs)
+            except aiohttp.client_exceptions.ClientOSError as e:
+                if attempt + 1 == _max_attempts:
+                    raise  # re-raise the last ClientOSError if all attempts failed
+                print(f"Attempt {attempt+1} failed, retrying...")
+
     async with aiohttp.ClientSession() as session:
         key_gen = await new_user(
             session, 0, user_id=get_user, budget=10, budget_duration="5s"
@@ -126,8 +136,8 @@ async def test_users_budgets_reset():
         i = 0
         reset_at_new_value = None
         while i < 3:
-            user_info = await get_user_info(
-                session=session, get_user=get_user, call_user=key
+            user_info = await retry_request(
+                get_user_info, session=session, get_user=get_user, call_user=key
             )
             reset_at_new_value = user_info["user_info"]["budget_reset_at"]
             try:
