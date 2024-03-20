@@ -16,13 +16,6 @@ from importlib import resources
 import shutil
 
 telemetry = None
-default_num_workers = 1
-try:
-    default_num_workers = os.cpu_count() or 1
-    if default_num_workers is not None and default_num_workers > 0:
-        default_num_workers -= 1
-except:
-    pass
 
 
 def append_query_params(url, params):
@@ -64,7 +57,7 @@ def is_port_in_use(port):
 @click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
-    default=default_num_workers,
+    default=1,
     help="Number of gunicorn workers to spin up",
     envvar="NUM_WORKERS",
 )
