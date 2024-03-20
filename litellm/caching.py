@@ -13,6 +13,7 @@ import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any, BinaryIO
 from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
+import traceback
 
 
 def print_verbose(print_statement):
@@ -158,6 +159,7 @@ class RedisCache(BaseCache):
                 print_verbose(
                     f"LiteLLM Redis Caching: async set() - Got exception from REDIS : {str(e)}"
                 )
+                traceback.print_exc()
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         """
@@ -261,6 +263,21 @@ class RedisCache(BaseCache):
         except Exception as e:
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
             return key_value_dict
+
+    async def ping(self):
+        _redis_client = self.init_async_client()
+        async with _redis_client as redis_client:
+            print_verbose(f"Pinging Async Redis Cache")
+            try:
+                response = await redis_client.ping()
+                print_verbose(f"Redis Cache PING: {response}")
+            except Exception as e:
+                # NON blocking - notify users Redis is throwing an exception
+                print_verbose(
+                    f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
+                )
+                traceback.print_exc()
+                raise e
 
     def flush_cache(self):
         self.redis_client.flushall()
@@ -1253,6 +1270,11 @@ class Cache:
         except Exception as e:
             print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             traceback.print_exc()
+
+    async def ping(self):
+        if hasattr(self.cache, "ping"):
+            return await self.cache.ping()
+        return None
 
     async def disconnect(self):
         if hasattr(self.cache, "disconnect"):
