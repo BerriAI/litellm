@@ -111,7 +111,11 @@ class RedisCache(BaseCache):
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
-        self.redis_version = self.redis_client.info()["redis_version"]
+        self.redis_version = "Unknown"
+        try:
+            self.redis_version = self.redis_client.info()["redis_version"]
+        except Exception as e:
+            pass
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
