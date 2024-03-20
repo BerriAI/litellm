@@ -134,6 +134,7 @@ class OllamaChatConfig:
             "tools",
             "tool_choice",
             "functions",
+            "response_format",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -150,6 +151,8 @@ class OllamaChatConfig:
                 optional_params["repeat_penalty"] = param
             if param == "stop":
                 optional_params["stop"] = value
+            if param == "response_format" and value["type"] == "json_object":
+                optional_params["format"] = "json"
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 # ollama actually supports json output

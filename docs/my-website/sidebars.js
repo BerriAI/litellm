@@ -29,6 +29,7 @@ const sidebars = {
       },
       items: [
         "proxy/quick_start", 
+        "proxy/deploy", 
         "proxy/configs",
         {
           type: 'link',
@@ -43,6 +44,7 @@ const sidebars = {
         "proxy/ui",
         "proxy/budget_alerts",
         "proxy/cost_tracking",
+        "proxy/token_auth",
         {
           "type": "category",
           "label": "🔥 Load Balancing",
@@ -55,6 +57,7 @@ const sidebars = {
         "proxy/health",
         "proxy/debugging",
         "proxy/pii_masking",
+        "proxy/prompt_injection",
         "proxy/caching",
         {
           "type": "category",
@@ -67,7 +70,6 @@ const sidebars = {
         },
         "proxy/call_hooks",
         "proxy/rules",
-        "proxy/deploy", 
         "proxy/cli", 
       ]
     },

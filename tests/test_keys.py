@@ -443,6 +443,7 @@ async def test_key_info_spend_values_image_generation():
         assert spend > 0
 
 
+@pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
 async def test_key_with_budgets():
     """

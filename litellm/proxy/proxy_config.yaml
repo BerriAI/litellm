@@ -15,3 +15,5 @@ general_settings:
 router_settings:
   set_verbose: True
   debug_level: "DEBUG"
+litellm_settings:
+  success_callback: ["prometheus"]
