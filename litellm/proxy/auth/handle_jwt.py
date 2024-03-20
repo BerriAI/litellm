@@ -8,6 +8,8 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import httpx
 import jwt
+
+print(jwt.__version__)  # noqa
 from jwt.algorithms import RSAAlgorithm
 import json
 import os
@@ -74,7 +76,7 @@ class JWTHandler:
         return scopes
 
     async def auth_jwt(self, token: str) -> dict:
-        keys_url = os.getenv("OPENID_PUBLIC_KEY_URL")
+        keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         async with self.http_handler as http:
             response = await http.get(keys_url)
