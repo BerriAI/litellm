@@ -604,13 +604,13 @@ def convert_to_anthropic_tool_result(message: dict) -> str:
 def convert_to_anthropic_tool_invoke(tool_calls: list) -> str:
     invokes = ""
     for tool in tool_calls:
-        if tool["type"] != "function":
+        if tool.type != "function":
             continue
 
-        tool_name = tool["function"]["name"]
+        tool_name = tool.function.name
         parameters = "".join(
             f"<{param}>{val}</{param}>\n"
-            for param, val in json.loads(tool["function"]["arguments"]).items()
+            for param, val in json.loads(tool.function.arguments).items()
         )
         invokes += (
             "<invoke>\n"
