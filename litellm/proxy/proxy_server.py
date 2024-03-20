@@ -2661,12 +2661,6 @@ async def startup_event():
     ### START BUDGET SCHEDULER ###
     if prisma_client is not None:
         scheduler = AsyncIOScheduler()
-        verbose_proxy_logger.debug(
-            f"proxy_budget_rescheduler_max_time: {proxy_budget_rescheduler_max_time}"
-        )
-        verbose_proxy_logger.debug(
-            f"proxy_budget_rescheduler_min_time: {proxy_budget_rescheduler_min_time}"
-        )
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
         )  # random interval, so multiple workers avoid resetting budget at the same time
@@ -4999,7 +4993,6 @@ async def user_info(
     ```
     """
     global prisma_client
-    verbose_proxy_logger.debug(f"Received `/user/info` call for user_id={user_id}")
     try:
         if prisma_client is None:
             raise Exception(
@@ -5007,9 +5000,7 @@ async def user_info(
             )
         ## GET USER ROW ##
         if user_id is not None:
-            verbose_proxy_logger.debug(f"Making get_data call for user_id={user_id}")
             user_info = await prisma_client.get_data(user_id=user_id)
-            verbose_proxy_logger.debug(f"Received get_data for user_id={user_id}")
         elif view_all == True:
             if page is None:
                 page = 0
@@ -5090,7 +5081,6 @@ async def user_info(
                 key = key.dict()
             key.pop("token", None)
 
-        verbose_proxy_logger.debug(f"RETURNING RESPONSE FOR /USER/INFO call ")
         response_data = {
             "user_id": user_id,
             "user_info": user_info,
