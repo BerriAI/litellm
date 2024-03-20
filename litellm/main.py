@@ -1037,6 +1037,8 @@ def completion(
                     additional_args={"headers": headers},
                 )
             response = model_response
+        elif custom_llm_provider == "openai_compatible_provider":
+            pass
         elif (
             "replicate" in model
             or custom_llm_provider == "replicate"
@@ -3111,10 +3113,10 @@ def text_completion(
     # else:
     # check if non default values passed in for best_of, echo, logprobs, suffix
     # these are the params supported by Completion() but not ChatCompletion
-
     # default case, non OpenAI requests go through here
     messages = [{"role": "system", "content": prompt}]
     kwargs.pop("prompt", None)
+
     response = completion(
         model=model,
         messages=messages,
