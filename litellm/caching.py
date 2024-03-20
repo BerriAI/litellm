@@ -111,6 +111,7 @@ class RedisCache(BaseCache):
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
+        self.redis_version = self.redis_client.info()["redis_version"]
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
@@ -121,7 +122,9 @@ class RedisCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
-        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+        print_verbose(
+            f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
+        )
         try:
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
@@ -148,9 +151,7 @@ class RedisCache(BaseCache):
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
             try:
-                await redis_client.set(
-                    name=key, value=json.dumps(value), ex=ttl, get=True
-                )
+                await redis_client.set(name=key, value=json.dumps(value), ex=ttl)
                 print_verbose(
                     f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
                 )
