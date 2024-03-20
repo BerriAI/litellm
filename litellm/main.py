@@ -61,13 +61,13 @@ from .llms import (
     openrouter,
     palm,
     gemini,
-    vertex_ai,
     maritalk,
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.huggingface_restapi import Huggingface
+from .llms.vertex_ai import VertexAi
 from .llms.prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -101,6 +101,7 @@ openai_text_completions = OpenAITextCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
+vertexai = VertexAi()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -1627,7 +1628,7 @@ def completion(
                 or get_secret("VERTEXAI_LOCATION")
             )
 
-            model_response = vertex_ai.completion(
+            model_response = vertexai.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -2732,7 +2733,7 @@ def embedding(
                 or get_secret("VERTEXAI_LOCATION")
             )
 
-            response = vertex_ai.embedding(
+            response = vertexai.embedding(
                 model=model,
                 input=input,
                 encoding=encoding,
