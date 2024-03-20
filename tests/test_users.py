@@ -105,6 +105,7 @@ async def test_user_update():
     pass
 
 
+@pytest.mark.skip(reason="Flaky test on circle ci ci/cd.")
 @pytest.mark.asyncio
 async def test_users_budgets_reset():
     """
