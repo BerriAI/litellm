@@ -2652,6 +2652,12 @@ async def startup_event():
     ### START BUDGET SCHEDULER ###
     if prisma_client is not None:
         scheduler = AsyncIOScheduler()
+        verbose_proxy_logger.debug(
+            f"proxy_budget_rescheduler_max_time: {proxy_budget_rescheduler_max_time}"
+        )
+        verbose_proxy_logger.debug(
+            f"proxy_budget_rescheduler_min_time: {proxy_budget_rescheduler_min_time}"
+        )
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
         )  # random interval, so multiple workers avoid resetting budget at the same time
