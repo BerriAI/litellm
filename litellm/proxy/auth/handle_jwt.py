@@ -103,7 +103,6 @@ class JWTHandler:
                         public_key,  # type: ignore
                         algorithms=["RS256"],
                         audience="account",
-                        issuer=os.getenv("JWT_ISSUER"),
                     )
                     return payload
 
