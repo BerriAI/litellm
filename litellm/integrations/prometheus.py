@@ -12,7 +12,7 @@ import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
-class prometheusLogger:
+class PrometheusLogger:
     # Class variables or attributes
     def __init__(
         self,
@@ -42,7 +42,7 @@ class prometheusLogger:
                 labelnames=["user", "key", "model"],
             )
         except Exception as e:
-            print_verbose(f"Got exception on init s3 client {str(e)}")
+            print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
 
     async def _async_log_event(
@@ -65,7 +65,7 @@ class prometheusLogger:
             litellm_params = kwargs.get("litellm_params", {}) or {}
             proxy_server_request = litellm_params.get("proxy_server_request") or {}
             end_user_id = proxy_server_request.get("body", {}).get("user", None)
-            user_api_key = litellm_params.get("metadata", {}).get("api_key", None)
+            user_api_key = litellm_params.get("metadata", {}).get("user_api_key", None)
             tokens_used = response_obj.get("usage", {}).get("total_tokens", 0)
 
             print_verbose(
