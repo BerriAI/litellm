@@ -1703,6 +1703,7 @@ class ProxyConfig:
                     ) and len(cache_params.keys()) == 0:
                         cache_host = litellm.get_secret("REDIS_HOST", None)
                         cache_port = litellm.get_secret("REDIS_PORT", None)
+                        cache_password = None
                         cache_params.update(
                             {
                                 "type": cache_type,
@@ -1710,6 +1711,7 @@ class ProxyConfig:
                                 "port": cache_port,
                             }
                         )
+
                         if litellm.get_secret("REDIS_PASSWORD", None) is not None:
                             cache_password = litellm.get_secret("REDIS_PASSWORD", None)
                             cache_params.update(
