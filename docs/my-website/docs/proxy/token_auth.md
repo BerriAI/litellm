@@ -10,9 +10,10 @@ This is a new feature, and subject to changes based on feedback.
 
 ## Step 1. Set env's 
 
+- `JWT_PUBLIC_KEY_URL`: This is the public keys endpoint of your OpenID provider. Typically it's `{openid-provider-base-url}/.well-known/openid-configuration/jwks`. For Keycloak it's `{keycloak_base_url}/realms/{your-realm}/protocol/openid-connect/certs`.
+
 ```bash
-export JWT_PUBLIC_KEY_URL="" # "http://localhost:8080/realms/test-litellm-proxy/protocol/openid-connect/certs"
-export JWT_ISSUER="" # http://localhost:8080/realms/test-litellm-proxy
+export JWT_PUBLIC_KEY_URL="" # "https://demo.duendesoftware.com/.well-known/openid-configuration/jwks"
 ```
 
 ## Step 2. Create JWT with scopes 
@@ -22,7 +23,7 @@ Create a client scope called `litellm_proxy_admin` in your OpenID provider (e.g.
 Grant your user, `litellm_proxy_admin` scope when generating a JWT. 
 
 ```bash
-curl --location 'http://{base_url}/realms/{your-realm}/protocol/openid-connect/token' \
+curl --location ' 'https://demo.duendesoftware.com/connect/token'' \
 --header 'Content-Type: application/x-www-form-urlencoded' \
 --data-urlencode 'client_id={CLIENT_ID}' \
 --data-urlencode 'client_secret={CLIENT_SECRET}' \
