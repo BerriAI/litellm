@@ -212,18 +212,23 @@ def get_ollama_response(
 
     ## RESPONSE OBJECT
     model_response["choices"][0]["finish_reason"] = "stop"
-    if optional_params.get("format", "") == "json":
+    if data.get("format", "") == "json":
+        response_obj = json.loads(response_json["response"])
         message = litellm.Message(
             content=None,
             tool_calls=[
                 {
                     "id": f"call_{str(uuid.uuid4())}",
-                    "function": {"arguments": response_json["response"], "name": ""},
+                    "function": {
+                        "arguments": json.dumps(response_obj["arguments"]),
+                        "name": response_obj["name"],
+                    },
                     "type": "function",
                 }
             ],
         )
         model_response["choices"][0]["message"] = message
+        model_response["choices"][0]["finish_reason"] = "tool_calls"
     else:
         model_response["choices"][0]["message"]["content"] = response_json["response"]
     model_response["created"] = int(time.time())
@@ -310,20 +315,22 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             ## RESPONSE OBJECT
             model_response["choices"][0]["finish_reason"] = "stop"
             if data.get("format", "") == "json":
+                response_obj = json.loads(response_json["response"])
                 message = litellm.Message(
                     content=None,
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
                             "function": {
-                                "arguments": response_json["response"],
-                                "name": "",
+                                "arguments": json.dumps(response_obj["arguments"]),
+                                "name": response_obj["name"],
                             },
                             "type": "function",
                         }
                     ],
                 )
                 model_response["choices"][0]["message"] = message
+                model_response["choices"][0]["finish_reason"] = "tool_calls"
             else:
                 model_response["choices"][0]["message"]["content"] = response_json[
                     "response"
