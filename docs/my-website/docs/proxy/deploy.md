@@ -14,12 +14,19 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
-```shell
-docker pull ghcr.io/berriai/litellm:main-latest
-```
+Your litellm config.yaml should be called `litellm_config.yaml` in the directory you run this command. 
+The `-v` command will mount that file
+
+`AZURE_API_KEY` and `AZURE_API_BASE` are not required to start, just examples on how to pass .env vars
 
 ```shell
-docker run --env-file=.env -v $(pwd)/path/to/config.yaml:/app/config.yaml -p 4000:4000 ghcr.io/berriai/litellm:main-latest --config config.yaml
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e AZURE_API_KEY=d6*********** \
+    -e AZURE_API_BASE=https://openai-***********/ \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
 ```
 
 </TabItem>
@@ -437,6 +444,21 @@ ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 ## Best Practices for Deploying to Production
 ### 1. Switch of debug logs in production 
 don't use [`--detailed-debug`, `--debug`](https://docs.litellm.ai/docs/proxy/debugging#detailed-debug) or `litellm.set_verbose=True`. We found using debug logs can add 5-10% latency per LLM API call
+
+### 2. Use `run_gunicorn` and `num_workers`
+
+Example setting `--run_gunicorn` and `--num_workers`
+```shell
+docker run ghcr.io/berriai/litellm-database:main-latest --run_gunicorn --num_workers 4
+```
+
+Why `Gunicorn`?
+- Gunicorn takes care of running multiple instances of your web application
+- Gunicorn is ideal for running litellm proxy on cluster of machines with Kubernetes
+
+Why `num_workers`? 
+Setting `num_workers` to the number of CPUs available ensures optimal utilization of system resources by matching the number of worker processes to the available CPU cores.
+
 
 ## Advanced Deployment Settings
 
