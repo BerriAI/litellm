@@ -1749,6 +1749,7 @@ def completion(
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging,
+                extra_headers=extra_headers,
                 timeout=timeout,
             )
 
