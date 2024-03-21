@@ -99,7 +99,10 @@ async def test_prompt_injection_llm_eval():
     )
     prompt_injection_detection = _OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=_prompt_injection_params,
-        llm_router=Router(
+    )
+
+    prompt_injection_detection.update_environment(
+        router=Router(
             model_list=[
                 {
                     "model_name": "gpt-3.5-turbo",  # openai model name

@@ -82,7 +82,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     "PromptInjectionDetection: Model List not set. Required for Prompt Injection detection."
                 )
 
-            verbose_proxy_logger.debug(
+            self.print_verbose(
                 f"model_names: {self.llm_router.model_names}; self.prompt_injection_params.llm_api_name: {self.prompt_injection_params.llm_api_name}"
             )
             if (
@@ -201,7 +201,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         data: dict,
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
-        verbose_proxy_logger.debug(
+        self.print_verbose(
             f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
         )
 
@@ -235,10 +235,12 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 ],
             )
 
-            verbose_proxy_logger.debug(f"Received LLM Moderation response: {response}")
-
+            self.print_verbose(f"Received LLM Moderation response: {response}")
+            self.print_verbose(
+                f"llm_api_fail_call_string: {self.prompt_injection_params.llm_api_fail_call_string}"
+            )
             if isinstance(response, litellm.ModelResponse) and isinstance(
-                response.choices, litellm.Choices
+                response.choices[0], litellm.Choices
             ):
                 if self.prompt_injection_params.llm_api_fail_call_string in response.choices[0].message.content:  # type: ignore
                     is_prompt_attack = True
