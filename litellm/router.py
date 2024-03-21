@@ -17,6 +17,8 @@ from litellm.caching import RedisCache, InMemoryCache, DualCache
 import logging, asyncio
 import inspect, concurrent
 from openai import AsyncOpenAI
+import vertexai.preview.generative_models as vertexai_generative_models
+import vertexai.language_models as vertexai_language_models
 from collections import defaultdict
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
@@ -25,7 +27,7 @@ from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
 )
-from litellm.utils import ModelResponse, CustomStreamWrapper
+from litellm.utils import ModelResponse, CustomStreamWrapper, get_secret
 import copy
 from litellm._logging import verbose_router_logger
 import logging
@@ -1641,6 +1643,66 @@ class Router:
             )
             default_api_base = api_base
             default_api_key = api_key
+        if (
+            model_name in litellm.vertex_language_models
+            or model_name in litellm.vertex_vision_models
+            or model_name in litellm.vertex_chat_models
+            or model_name in litellm.vertex_text_models
+            or model_name in litellm.vertex_code_text_models
+            or model_name in litellm.vertex_code_chat_models
+            or model_name.replace('vertex_ai/', '') in litellm.vertex_embedding_models
+        ):
+            import vertexai
+            import google.auth
+
+            vertex_ai_project = (
+                litellm_params.get("vertex_project")
+                or litellm_params.get("vertex_ai_project")
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                litellm_params.get("vertex_location")
+                or litellm_params.get("vertex_ai_location")
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+
+            ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
+            creds, _ = google.auth.default(quota_project_id=vertex_ai_project)
+            vertexai.init(
+                project=vertex_ai_project, location=vertex_ai_location, credentials=creds
+            )
+
+            client = None
+
+            if (
+                model_name in litellm.vertex_language_models
+                or model_name in litellm.vertex_vision_models
+            ):
+                client = vertexai_generative_models.GenerativeModel(model_name)
+            elif model_name in litellm.vertex_chat_models:
+                client = vertexai_language_models.ChatModel.from_pretrained(model_name)
+            elif model_name in litellm.vertex_text_models:
+                client = vertexai_language_models.TextGenerationModel.from_pretrained(model_name)
+            elif model_name in litellm.vertex_code_text_models:
+                client = vertexai_language_models.CodeGenerationModel.from_pretrained(model_name)
+            elif model_name in litellm.vertex_code_chat_models:
+                client = vertexai_language_models.CodeChatModel.from_pretrained(model_name)
+            elif model_name.replace('vertex_ai/', '') in litellm.vertex_embedding_models:
+                client = vertexai_language_models.TextEmbeddingModel.from_pretrained(model_name.replace('vertex_ai/', ''))
+
+            if client:
+                suffixes = ["stream_async_client", "async_client", "stream_client",  "client"]
+                for suffix in suffixes:
+                    cache_key = f"{model_id}_{suffix}"
+                    self.cache.set_cache(
+                        key=cache_key,
+                        value=client,
+                        ttl=client_ttl,
+                        local_only=True,
+                    )
+
         if (
             model_name in litellm.open_ai_chat_completion_models
             or custom_llm_provider in litellm.openai_compatible_providers
