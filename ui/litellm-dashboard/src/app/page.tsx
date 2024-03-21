@@ -148,6 +148,8 @@ const CreateKeyPage = () => {
               setTeams={setTeams}
               searchParams={searchParams}
               accessToken={accessToken}
+              userID={userID}
+              userRole={userRole}
             />
           ) : page == "admin-panel" ? (
             <AdminPanel

@@ -13,6 +13,7 @@ import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any, BinaryIO
 from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
+import traceback
 
 
 def print_verbose(print_statement):
@@ -110,6 +111,11 @@ class RedisCache(BaseCache):
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
+        self.redis_version = "Unknown"
+        try:
+            self.redis_version = self.redis_client.info()["redis_version"]
+        except Exception as e:
+            pass
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
@@ -120,7 +126,9 @@ class RedisCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
-        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+        print_verbose(
+            f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
+        )
         try:
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
@@ -147,9 +155,7 @@ class RedisCache(BaseCache):
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
             try:
-                await redis_client.set(
-                    name=key, value=json.dumps(value), ex=ttl, get=True
-                )
+                await redis_client.set(name=key, value=json.dumps(value), ex=ttl)
                 print_verbose(
                     f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
                 )
@@ -158,6 +164,7 @@ class RedisCache(BaseCache):
                 print_verbose(
                     f"LiteLLM Redis Caching: async set() - Got exception from REDIS : {str(e)}"
                 )
+                traceback.print_exc()
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         """
@@ -261,6 +268,21 @@ class RedisCache(BaseCache):
         except Exception as e:
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
             return key_value_dict
+
+    async def ping(self):
+        _redis_client = self.init_async_client()
+        async with _redis_client as redis_client:
+            print_verbose(f"Pinging Async Redis Cache")
+            try:
+                response = await redis_client.ping()
+                print_verbose(f"Redis Cache PING: {response}")
+            except Exception as e:
+                # NON blocking - notify users Redis is throwing an exception
+                print_verbose(
+                    f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
+                )
+                traceback.print_exc()
+                raise e
 
     def flush_cache(self):
         self.redis_client.flushall()
@@ -819,6 +841,17 @@ class DualCache(BaseCache):
         except Exception as e:
             traceback.print_exc()
 
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+        try:
+            if self.in_memory_cache is not None:
+                await self.in_memory_cache.async_set_cache(key, value, **kwargs)
+
+            if self.redis_cache is not None and local_only == False:
+                await self.redis_cache.async_set_cache(key, value, **kwargs)
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
+            traceback.print_exc()
+
     def flush_cache(self):
         if self.in_memory_cache is not None:
             self.in_memory_cache.flush_cache()
@@ -1253,6 +1286,11 @@ class Cache:
         except Exception as e:
             print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             traceback.print_exc()
+
+    async def ping(self):
+        if hasattr(self.cache, "ping"):
+            return await self.cache.ping()
+        return None
 
     async def disconnect(self):
         if hasattr(self.cache, "disconnect"):
