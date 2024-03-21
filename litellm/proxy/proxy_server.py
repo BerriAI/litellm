@@ -409,8 +409,6 @@ async def user_api_key_auth(
                         models=user_object.models,
                         user_role="app_owner",
                     )
-            else:
-                raise Exception("Invalid key error!")
         #### ELSE ####
         if master_key is None:
             if isinstance(api_key, str):
