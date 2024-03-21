@@ -23,58 +23,105 @@ litellm.vertex_location = "us-central1"  # proj location
 response = litellm.completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
 ```
 
-## OpenAI Proxy Usage 
+## Usage with LiteLLM Proxy Server
 
 Here's how to use Vertex AI with the LiteLLM Proxy Server
 
 1. Modify the config.yaml 
 
-<Tabs>
+  <Tabs>
 
-<TabItem value="completion_param" label="Different location per model">
+  <TabItem value="completion_param" label="Different location per model">
 
-Use this when you need to set a different location for each vertex model
+  Use this when you need to set a different location for each vertex model
 
-```yaml
-model_list:
-  - model_name: gemini-vision
-    litellm_params:
-      model: vertex_ai/gemini-1.0-pro-vision-001
-      vertex_project: "project-id"
-      vertex_location: "us-central1"
-  - model_name: gemini-vision
-    litellm_params:
-      model: vertex_ai/gemini-1.0-pro-vision-001
-      vertex_project: "project-id2"
-      vertex_location: "us-east"
-```
+  ```yaml
+  model_list:
+    - model_name: gemini-vision
+      litellm_params:
+        model: vertex_ai/gemini-1.0-pro-vision-001
+        vertex_project: "project-id"
+        vertex_location: "us-central1"
+    - model_name: gemini-vision
+      litellm_params:
+        model: vertex_ai/gemini-1.0-pro-vision-001
+        vertex_project: "project-id2"
+        vertex_location: "us-east"
+  ```
 
-</TabItem>
+  </TabItem>
 
-<TabItem value="litellm_param" label="One location all vertex models">
+  <TabItem value="litellm_param" label="One location all vertex models">
 
-Use this when you have one vertex location for all models
+  Use this when you have one vertex location for all models
 
-```yaml
-litellm_settings: 
-  vertex_project: "hardy-device-38811" # Your Project ID
-  vertex_location: "us-central1" # proj location
+  ```yaml
+  litellm_settings: 
+    vertex_project: "hardy-device-38811" # Your Project ID
+    vertex_location: "us-central1" # proj location
 
-model_list: 
-  -model_name: team1-gemini-pro
-   litellm_params: 
-     model: gemini-pro
-```
+  model_list: 
+    -model_name: team1-gemini-pro
+    litellm_params: 
+      model: gemini-pro
+  ```
 
-</TabItem>
+  </TabItem>
 
-</Tabs>
+  </Tabs>
 
 2. Start the proxy 
 
-```bash
-$ litellm --config /path/to/config.yaml
-```
+  ```bash
+  $ litellm --config /path/to/config.yaml
+  ```
+
+3. Send Request to LiteLLM Proxy Server
+
+  <Tabs>
+
+  <TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+  ```python
+  import openai
+  client = openai.OpenAI(
+      api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
+      base_url="http://0.0.0.0:4000" # litellm-proxy-base url
+  )
+
+  response = client.chat.completions.create(
+      model="team1-gemini-pro",
+      messages = [
+          {
+              "role": "user",
+              "content": "what llm are you"
+          }
+      ],
+  )
+
+  print(response)
+  ```
+  </TabItem>
+
+  <TabItem value="curl" label="curl">
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "team1-gemini-pro",
+      "messages": [
+          {
+          "role": "user",
+          "content": "what llm are you"
+          }
+      ],
+  }'
+  ```
+  </TabItem>
+
+  </Tabs>
 
 ## Set Vertex Project & Vertex Location
 All calls using Vertex AI require the following parameters:
