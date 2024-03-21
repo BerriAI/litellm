@@ -138,7 +138,17 @@ class ProxyLogging:
         except Exception as e:
             raise e
 
-    async def during_call_hook(self, data: dict):
+    async def during_call_hook(
+        self,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
+    ):
         """
         Runs the CustomLogger's async_moderation_hook()
         """
@@ -146,7 +156,9 @@ class ProxyLogging:
             new_data = copy.deepcopy(data)
             try:
                 if isinstance(callback, CustomLogger):
-                    await callback.async_moderation_hook(data=new_data)
+                    await callback.async_moderation_hook(
+                        data=new_data, call_type=call_type
+                    )
             except Exception as e:
                 raise e
         return data

@@ -54,6 +54,7 @@ async def test_llm_guard_valid_response():
                     }
                 ]
             },
+            call_type="completion",
         )
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
@@ -89,6 +90,7 @@ async def test_llm_guard_error_raising():
                     }
                 ]
             },
+            call_type="completion",
         )
         pytest.fail(f"Should have failed - {str(e)}")
     except Exception as e:
