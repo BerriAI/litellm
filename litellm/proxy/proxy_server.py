@@ -1818,12 +1818,12 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "detect_prompt_injection"
                             ):
-                                from enterprise.enterprise_hooks.prompt_injection_detection import (
-                                    _ENTERPRISE_PromptInjectionDetection,
+                                from litellm.proxy.hooks.prompt_injection_detection import (
+                                    _OPTIONAL_PromptInjectionDetection,
                                 )
 
                                 prompt_injection_detection_obj = (
-                                    _ENTERPRISE_PromptInjectionDetection()
+                                    _OPTIONAL_PromptInjectionDetection()
                                 )
                                 imported_list.append(prompt_injection_detection_obj)
                             elif (
