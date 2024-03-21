@@ -11,23 +11,56 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 
 <TabItem value="basic" label="Basic">
 
-See the latest available ghcr docker image here:
-https://github.com/berriai/litellm/pkgs/container/litellm
+**Step 1. Create a file called `litellm_config.yaml`**
 
-Your litellm config.yaml should be called `litellm_config.yaml` in the directory you run this command. 
-The `-v` command will mount that file
+  Example `litellm_config.yaml` (the `os.environ/` prefix means litellm will read `AZURE_API_BASE` from the env)
+  ```yaml
+  model_list:
+    - model_name: azure-gpt-3.5
+      litellm_params:
+        model: azure/<your-azure-model-deployment>
+        api_base: os.environ/AZURE_API_BASE
+        api_key: os.environ/AZURE_API_KEY
+        api_version: "2023-07-01-preview"
+  ```
 
-`AZURE_API_KEY` and `AZURE_API_BASE` are not required to start, just examples on how to pass .env vars
+**Step 2. Run litellm docker image**
 
-```shell
-docker run \
-    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
-    -e AZURE_API_KEY=d6*********** \
-    -e AZURE_API_BASE=https://openai-***********/ \
-    -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
-    --config /app/config.yaml --detailed_debug
-```
+  See the latest available ghcr docker image here:
+  https://github.com/berriai/litellm/pkgs/container/litellm
+
+  Your litellm config.yaml should be called `litellm_config.yaml` in the directory you run this command. 
+  The `-v` command will mount that file
+
+  Pass `AZURE_API_KEY` and `AZURE_API_BASE` since we set them in step 1
+
+  ```shell
+  docker run \
+      -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+      -e AZURE_API_KEY=d6*********** \
+      -e AZURE_API_BASE=https://openai-***********/ \
+      -p 4000:4000 \
+      ghcr.io/berriai/litellm:main-latest \
+      --config /app/config.yaml --detailed_debug
+  ```
+
+**Step 3. Send a Test Request**
+
+  Pass `model=azure-gpt-3.5` this was set on step 1
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "azure-gpt-3.5",
+      "messages": [
+          {
+          "role": "user",
+          "content": "what llm are you"
+          }
+      ]
+  }'
+  ```
 
 </TabItem>
 
