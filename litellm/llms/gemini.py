@@ -118,7 +118,7 @@ def completion(
     logger_fn=None,
 ):
     try:
-        import google.generativeai as genai
+        import google.generativeai as genai  # type: ignore
     except:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
@@ -308,7 +308,7 @@ async def async_completion(
     messages,
     encoding,
 ):
-    import google.generativeai as genai
+    import google.generativeai as genai  # type: ignore
 
     response = await _model.generate_content_async(
         contents=prompt,
