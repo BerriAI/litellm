@@ -66,6 +66,7 @@ from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.datadog import DataDogLogger
+from .integrations.prometheus import PrometheusLogger
 from .integrations.dynamodb import DyanmoDBLogger
 from .integrations.s3 import S3Logger
 from .integrations.clickhouse import ClickhouseLogger
@@ -123,6 +124,7 @@ weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
 dataDogLogger = None
+prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
 genericAPILogger = None
@@ -1505,6 +1507,35 @@ class Logging:
                                 print_verbose("reaches datadog for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
                         dataDogLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "prometheus":
+                        global prometheusLogger
+                        verbose_logger.debug("reaches prometheus for success logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            verbose_logger.debug(
+                                f"prometheus: is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
+                            if complete_streaming_response is None:
+                                continue
+                            else:
+                                print_verbose(
+                                    "reaches prometheus for streaming logging!"
+                                )
+                                result = kwargs["complete_streaming_response"]
+                        prometheusLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
@@ -4841,6 +4872,8 @@ def get_optional_params(
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
             optional_params["stop"] = stop
+        if response_format is not None and response_format["type"] == "json_object":
+            optional_params["format"] = "json"
     elif custom_llm_provider == "ollama_chat":
         supported_params = litellm.OllamaChatConfig().get_supported_openai_params()
 
@@ -5301,6 +5334,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "temperature",
             "frequency_penalty",
             "stop",
+            "response_format",
         ]
     elif custom_llm_provider == "nlp_cloud":
         return [
@@ -6124,7 +6158,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
   
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger
     
     try:
         for callback in callback_list:
@@ -6193,6 +6227,8 @@ def set_callbacks(callback_list, function_id=None):
                 langFuseLogger = LangFuseLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
+            elif callback == "prometheus":
+                prometheusLogger = PrometheusLogger()
             elif callback == "dynamodb":
                 dynamoLogger = DyanmoDBLogger()
             elif callback == "s3":

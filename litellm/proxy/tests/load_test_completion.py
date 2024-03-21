@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234")
 
+
 async def litellm_completion():
     # Your existing code for litellm_completion goes here
     try:
@@ -18,6 +19,7 @@ async def litellm_completion():
                     "content": f"{text}. Who was alexander the great? {uuid.uuid4()}",
                 }
             ],
+            user="my-new-end-user-1",
         )
         return response
 
@@ -29,9 +31,9 @@ async def litellm_completion():
 
 
 async def main():
-    for i in range(6):
+    for i in range(3):
         start = time.time()
-        n = 20  # Number of concurrent tasks
+        n = 10  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)

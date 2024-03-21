@@ -7,6 +7,7 @@ from typing import Callable, Optional
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
 import litellm
 from .prompt_templates.factory import (
+    contains_tag,
     prompt_factory,
     custom_prompt,
     construct_tool_use_system_prompt,
@@ -235,7 +236,7 @@ def completion(
         else:
             text_content = completion_response["content"][0].get("text", None)
             ## TOOL CALLING - OUTPUT PARSE
-            if text_content is not None and "invoke" in text_content:
+            if text_content is not None and contains_tag("invoke", text_content):
                 function_name = extract_between_tags("tool_name", text_content)[0]
                 function_arguments_str = extract_between_tags("invoke", text_content)[
                     0
