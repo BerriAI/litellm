@@ -201,6 +201,35 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
 </TabItem>
 </Tabs>
 
+## Debugging Caching - `/cache/ping`
+LiteLLM Proxy exposes a `/cache/ping` endpoint to test if the cache is working as expected
+
+**Usage**
+```shell
+curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1234"
+```
+
+**Expected Response - when cache healthy**
+```shell
+{
+    "status": "healthy",
+    "cache_type": "redis",
+    "ping_response": true,
+    "set_cache_response": "success",
+    "litellm_cache_params": {
+        "supported_call_types": "['completion', 'acompletion', 'embedding', 'aembedding', 'atranscription', 'transcription']",
+        "type": "redis",
+        "namespace": "None"
+    },
+    "redis_cache_params": {
+        "redis_client": "Redis<ConnectionPool<Connection<host=redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com,port=16337,db=0>>>",
+        "redis_kwargs": "{'url': 'redis://:******@redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com:16337'}",
+        "async_redis_conn_pool": "BlockingConnectionPool<Connection<host=redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com,port=16337,db=0>>",
+        "redis_version": "7.2.0"
+    }
+}
+```
+
 ## Advanced
 ### Set Cache Params on config.yaml
 ```yaml
