@@ -96,9 +96,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
     async def async_moderation_hook(
         self,
         data: dict,
-        call_type: (
-            Literal["completion"] | Literal["embeddings"] | Literal["image_generation"]
-        ),
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         """
         - Calls Google's Text Moderation API
