@@ -96,6 +96,8 @@ from litellm.proxy.utils import (
     _is_user_proxy_admin,
     _is_projected_spend_over_limit,
     _get_projected_spend_over_limit,
+    update_spend,
+    monitor_spend_list,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
@@ -104,6 +106,8 @@ from litellm.proxy._types import *
 from litellm.caching import DualCache
 from litellm.proxy.health_check import perform_health_check
 from litellm._logging import verbose_router_logger, verbose_proxy_logger
+from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.auth_checks import common_checks, get_end_user_object
 
 try:
     from litellm._version import version
@@ -277,7 +281,10 @@ litellm_proxy_admin_name = "default_user_id"
 ui_access_mode: Literal["admin", "all"] = "all"
 proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
+proxy_batch_write_at = 60  # in seconds
 litellm_master_key_hash = None
+disable_spend_logs = False
+jwt_handler = JWTHandler()
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -330,6 +337,79 @@ async def user_api_key_auth(
             return UserAPIKeyAuth.model_validate(response)
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
+        #### IF JWT ####
+        """
+        LiteLLM supports using JWTs. 
+
+        Enable this in proxy config, by setting 
+        ```
+        general_settings:
+            enable_jwt_auth: true
+        ```
+        """
+        if general_settings.get("enable_jwt_auth", False) == True:
+            is_jwt = jwt_handler.is_jwt(token=api_key)
+            verbose_proxy_logger.debug(f"is_jwt: {is_jwt}")
+            if is_jwt:
+                # check if valid token
+                valid_token = await jwt_handler.auth_jwt(token=api_key)
+                # get scopes
+                scopes = jwt_handler.get_scopes(token=valid_token)
+                # check if admin
+                is_admin = jwt_handler.is_admin(scopes=scopes)
+                # get user id
+                user_id = jwt_handler.get_user_id(
+                    token=valid_token, default_value=litellm_proxy_admin_name
+                )
+
+                end_user_object = None
+                # get the request body
+                request_data = await _read_request_body(request=request)
+                # get user obj from cache/db -> run for admin too. Ensures, admin client id in db.
+                user_object = await jwt_handler.get_user_object(user_id=user_id)
+                if (
+                    request_data.get("user", None)
+                    and request_data["user"] != user_object.user_id
+                ):
+                    # get the end-user object
+                    end_user_object = await get_end_user_object(
+                        end_user_id=request_data["user"],
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                    # save the end-user object to cache
+                    await user_api_key_cache.async_set_cache(
+                        key=request_data["user"], value=end_user_object
+                    )
+
+                # run through common checks
+                _ = common_checks(
+                    request_body=request_data,
+                    user_object=user_object,
+                    end_user_object=end_user_object,
+                )
+                # save user object in cache
+                await user_api_key_cache.async_set_cache(
+                    key=user_object.user_id, value=user_object
+                )
+                # if admin return
+                if is_admin:
+                    return UserAPIKeyAuth(
+                        api_key=api_key,
+                        user_role="proxy_admin",
+                        user_id=user_id,
+                    )
+                else:
+                    # return UserAPIKeyAuth object
+                    return UserAPIKeyAuth(
+                        api_key=None,
+                        user_id=user_object.user_id,
+                        tpm_limit=user_object.tpm_limit,
+                        rpm_limit=user_object.rpm_limit,
+                        models=user_object.models,
+                        user_role="app_owner",
+                    )
+        #### ELSE ####
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(api_key=api_key)
@@ -393,7 +473,7 @@ async def user_api_key_auth(
                 user_role="proxy_admin",
                 user_id=litellm_proxy_admin_name,
             )
-            user_api_key_cache.set_cache(
+            await user_api_key_cache.async_set_cache(
                 key=hash_token(master_key), value=_user_api_key_obj
             )
 
@@ -558,7 +638,7 @@ async def user_api_key_auth(
                             query_type="find_all",
                         )
                         for _id in user_id_information:
-                            user_api_key_cache.set_cache(
+                            await user_api_key_cache.async_set_cache(
                                 key=_id["user_id"], value=_id, ttl=600
                             )
                     if custom_db_client is not None:
@@ -746,7 +826,9 @@ async def user_api_key_auth(
             api_key = valid_token.token
 
             # Add hashed token to cache
-            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=600)
+            await user_api_key_cache.async_set_cache(
+                key=api_key, value=valid_token, ttl=600
+            )
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
             """
@@ -995,10 +1077,8 @@ async def _PROXY_track_cost_callback(
         )
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
-        user_id = proxy_server_request.get("body", {}).get("user", None)
-        user_id = user_id or kwargs["litellm_params"]["metadata"].get(
-            "user_api_key_user_id", None
-        )
+        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+        user_id = kwargs["litellm_params"]["metadata"].get("user_api_key_user_id", None)
         team_id = kwargs["litellm_params"]["metadata"].get("user_api_key_team_id", None)
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
@@ -1012,9 +1092,6 @@ async def _PROXY_track_cost_callback(
                     f"Cache Hit: response_cost {response_cost}, for user_id {user_id}"
                 )
 
-            verbose_proxy_logger.info(
-                f"response_cost {response_cost}, for user_id {user_id}"
-            )
             verbose_proxy_logger.debug(
                 f"user_api_key {user_api_key}, prisma_client: {prisma_client}, custom_db_client: {custom_db_client}"
             )
@@ -1024,6 +1101,7 @@ async def _PROXY_track_cost_callback(
                     token=user_api_key,
                     response_cost=response_cost,
                     user_id=user_id,
+                    end_user_id=end_user_id,
                     team_id=team_id,
                     kwargs=kwargs,
                     completion_response=completion_response,
@@ -1032,7 +1110,10 @@ async def _PROXY_track_cost_callback(
                 )
 
                 await update_cache(
-                    token=user_api_key, user_id=user_id, response_cost=response_cost
+                    token=user_api_key,
+                    user_id=user_id,
+                    end_user_id=end_user_id,
+                    response_cost=response_cost,
                 )
             else:
                 raise Exception("User API key missing from custom callback.")
@@ -1065,6 +1146,7 @@ async def update_database(
     token,
     response_cost,
     user_id=None,
+    end_user_id=None,
     team_id=None,
     kwargs=None,
     completion_response=None,
@@ -1075,6 +1157,10 @@ async def update_database(
         verbose_proxy_logger.info(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
         )
+        if isinstance(token, str) and token.startswith("sk-"):
+            hashed_token = hash_token(token=token)
+        else:
+            hashed_token = token
 
         ### UPDATE USER SPEND ###
         async def _update_user_db():
@@ -1083,11 +1169,6 @@ async def update_database(
             - Update litellm-proxy-budget row (global proxy spend)
             """
             ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
-            end_user_id = None
-            if isinstance(token, str) and token.startswith("sk-"):
-                hashed_token = hash_token(token=token)
-            else:
-                hashed_token = token
             existing_token_obj = await user_api_key_cache.async_get_cache(
                 key=hashed_token
             )
@@ -1096,54 +1177,25 @@ async def update_database(
             existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
             if existing_user_obj is not None and isinstance(existing_user_obj, dict):
                 existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
-            if existing_token_obj.user_id != user_id:  # an end-user id was passed in
-                end_user_id = user_id
-            user_ids = [existing_token_obj.user_id, litellm_proxy_budget_name]
             data_list = []
             try:
                 if prisma_client is not None:  # update
-                    user_ids = [user_id, litellm_proxy_budget_name]
-                    ## do a group update for the user-id of the key + global proxy budget
-                    await prisma_client.db.litellm_usertable.update_many(
-                        where={"user_id": {"in": user_ids}},
-                        data={"spend": {"increment": response_cost}},
-                    )
+                    user_ids = [user_id]
+                    if (
+                        litellm.max_budget > 0
+                    ):  # track global proxy budget, if user set max budget
+                        user_ids.append(litellm_proxy_budget_name)
+                    ### KEY CHANGE ###
+                    for _id in user_ids:
+                        prisma_client.user_list_transactons[_id] = (
+                            response_cost
+                            + prisma_client.user_list_transactons.get(_id, 0)
+                        )
                     if end_user_id is not None:
-                        if existing_user_obj is None:
-                            # if user does not exist in LiteLLM_UserTable, create a new user
-                            existing_spend = 0
-                            max_user_budget = None
-                            if litellm.max_user_budget is not None:
-                                max_user_budget = litellm.max_user_budget
-                            existing_user_obj = LiteLLM_UserTable(
-                                user_id=end_user_id,
-                                spend=0,
-                                max_budget=max_user_budget,
-                                user_email=None,
-                            )
-
-                        else:
-                            existing_user_obj.spend = (
-                                existing_user_obj.spend + response_cost
-                            )
-
-                        user_object_json = {**existing_user_obj.json(exclude_none=True)}
-
-                        user_object_json["model_max_budget"] = json.dumps(
-                            user_object_json["model_max_budget"]
+                        prisma_client.end_user_list_transactons[end_user_id] = (
+                            response_cost
+                            + prisma_client.user_list_transactons.get(end_user_id, 0)
                         )
-                        user_object_json["model_spend"] = json.dumps(
-                            user_object_json["model_spend"]
-                        )
-
-                        await prisma_client.db.litellm_usertable.upsert(
-                            where={"user_id": end_user_id},
-                            data={
-                                "create": user_object_json,
-                                "update": {"spend": {"increment": response_cost}},
-                            },
-                        )
-
                 elif custom_db_client is not None:
                     for id in user_ids:
                         if id is None:
@@ -1205,6 +1257,7 @@ async def update_database(
                                 value={"spend": new_spend},
                                 table_name="user",
                             )
+
             except Exception as e:
                 verbose_proxy_logger.info(
                     "\033[91m"
@@ -1215,12 +1268,12 @@ async def update_database(
         async def _update_key_db():
             try:
                 verbose_proxy_logger.debug(
-                    f"adding spend to key db. Response cost: {response_cost}. Token: {token}."
+                    f"adding spend to key db. Response cost: {response_cost}. Token: {hashed_token}."
                 )
                 if prisma_client is not None:
-                    await prisma_client.db.litellm_verificationtoken.update(
-                        where={"token": token},
-                        data={"spend": {"increment": response_cost}},
+                    prisma_client.key_list_transactons[hashed_token] = (
+                        response_cost
+                        + prisma_client.key_list_transactons.get(hashed_token, 0)
                     )
                 elif custom_db_client is not None:
                     # Fetch the existing cost for the given token
@@ -1257,7 +1310,6 @@ async def update_database(
         async def _insert_spend_log_to_db():
             try:
                 # Helper to generate payload to log
-                verbose_proxy_logger.debug("inserting spend log to db")
                 payload = get_logging_payload(
                     kwargs=kwargs,
                     response_obj=completion_response,
@@ -1268,16 +1320,13 @@ async def update_database(
                 payload["spend"] = response_cost
                 if prisma_client is not None:
                     await prisma_client.insert_data(data=payload, table_name="spend")
-                elif custom_db_client is not None:
-                    await custom_db_client.insert_data(payload, table_name="spend")
-
             except Exception as e:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     f"Update Spend Logs DB failed to execute - {str(e)}\n{traceback.format_exc()}"
                 )
                 raise e
 
-        ### UPDATE KEY SPEND ###
+        ### UPDATE TEAM SPEND ###
         async def _update_team_db():
             try:
                 verbose_proxy_logger.debug(
@@ -1289,9 +1338,9 @@ async def update_database(
                     )
                     return
                 if prisma_client is not None:
-                    await prisma_client.db.litellm_teamtable.update(
-                        where={"team_id": team_id},
-                        data={"spend": {"increment": response_cost}},
+                    prisma_client.team_list_transactons[team_id] = (
+                        response_cost
+                        + prisma_client.team_list_transactons.get(team_id, 0)
                     )
                 elif custom_db_client is not None:
                     # Fetch the existing cost for the given token
@@ -1327,7 +1376,9 @@ async def update_database(
         asyncio.create_task(_update_user_db())
         asyncio.create_task(_update_key_db())
         asyncio.create_task(_update_team_db())
-        asyncio.create_task(_insert_spend_log_to_db())
+        # asyncio.create_task(_insert_spend_log_to_db())
+        if disable_spend_logs == False:
+            await _insert_spend_log_to_db()
 
         verbose_proxy_logger.debug("Runs spend update on all tables")
     except Exception as e:
@@ -1337,9 +1388,10 @@ async def update_database(
 
 
 async def update_cache(
-    token,
-    user_id,
-    response_cost,
+    token: Optional[str],
+    user_id: Optional[str],
+    end_user_id: Optional[str],
+    response_cost: Optional[float],
 ):
     """
     Use this to update the cache with new user spend.
@@ -1354,12 +1406,17 @@ async def update_cache(
             hashed_token = hash_token(token=token)
         else:
             hashed_token = token
+        verbose_proxy_logger.debug(f"_update_key_cache: hashed_token={hashed_token}")
         existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
         verbose_proxy_logger.debug(
-            f"_update_key_db: existing spend: {existing_spend_obj}"
+            f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
+        )
+        verbose_proxy_logger.debug(
+            f"_update_key_cache: existing spend: {existing_spend_obj}"
         )
         if existing_spend_obj is None:
             existing_spend = 0
+            existing_spend_obj = LiteLLM_VerificationTokenView()
         else:
             existing_spend = existing_spend_obj.spend
         # Calculate the new cost by adding the existing cost and response_cost
@@ -1415,18 +1472,7 @@ async def update_cache(
 
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        end_user_id = None
-        if isinstance(token, str) and token.startswith("sk-"):
-            hashed_token = hash_token(token=token)
-        else:
-            hashed_token = token
-        existing_token_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
-        if existing_token_obj is None:
-            return
-        if existing_token_obj.user_id != user_id:  # an end-user id was passed in
-            end_user_id = user_id
-        user_ids = [existing_token_obj.user_id, litellm_proxy_budget_name, end_user_id]
-
+        user_ids = [user_id, litellm_proxy_budget_name, end_user_id]
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
@@ -1472,8 +1518,58 @@ async def update_cache(
                 f"An error occurred updating user cache: {str(e)}\n\n{traceback.format_exc()}"
             )
 
-    asyncio.create_task(_update_key_cache())
+    async def _update_end_user_cache():
+        ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
+        _id = end_user_id
+        try:
+            # Fetch the existing cost for the given user
+            existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
+            if existing_spend_obj is None:
+                # if user does not exist in LiteLLM_UserTable, create a new user
+                existing_spend = 0
+                max_user_budget = None
+                if litellm.max_user_budget is not None:
+                    max_user_budget = litellm.max_user_budget
+                existing_spend_obj = LiteLLM_EndUserTable(
+                    user_id=_id,
+                    spend=0,
+                    blocked=False,
+                    litellm_budget_table=LiteLLM_BudgetTable(
+                        max_budget=max_user_budget
+                    ),
+                )
+            verbose_proxy_logger.debug(
+                f"_update_end_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
+            )
+            if existing_spend_obj is None:
+                existing_spend = 0
+            else:
+                if isinstance(existing_spend_obj, dict):
+                    existing_spend = existing_spend_obj["spend"]
+                else:
+                    existing_spend = existing_spend_obj.spend
+            # Calculate the new cost by adding the existing cost and response_cost
+            new_spend = existing_spend + response_cost
+
+            # Update the cost column for the given user
+            if isinstance(existing_spend_obj, dict):
+                existing_spend_obj["spend"] = new_spend
+                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+            else:
+                existing_spend_obj.spend = new_spend
+                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj.json())
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"An error occurred updating end user cache: {str(e)}\n\n{traceback.format_exc()}"
+            )
+
+    if token is not None:
+        asyncio.create_task(_update_key_cache())
+
     asyncio.create_task(_update_user_cache())
+
+    if end_user_id is not None:
+        asyncio.create_task(_update_end_user_cache())
 
 
 def run_ollama_serve():
@@ -1646,7 +1742,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1692,6 +1788,7 @@ class ProxyConfig:
                     ) and len(cache_params.keys()) == 0:
                         cache_host = litellm.get_secret("REDIS_HOST", None)
                         cache_port = litellm.get_secret("REDIS_PORT", None)
+                        cache_password = None
                         cache_params.update(
                             {
                                 "type": cache_type,
@@ -1699,6 +1796,7 @@ class ProxyConfig:
                                 "port": cache_port,
                             }
                         )
+
                         if litellm.get_secret("REDIS_PASSWORD", None) is not None:
                             cache_password = litellm.get_secret("REDIS_PASSWORD", None)
                             cache_params.update(
@@ -1805,12 +1903,12 @@ class ProxyConfig:
                                 isinstance(callback, str)
                                 and callback == "detect_prompt_injection"
                             ):
-                                from enterprise.enterprise_hooks.prompt_injection_detection import (
-                                    _ENTERPRISE_PromptInjectionDetection,
+                                from litellm.proxy.hooks.prompt_injection_detection import (
+                                    _OPTIONAL_PromptInjectionDetection,
                                 )
 
                                 prompt_injection_detection_obj = (
-                                    _ENTERPRISE_PromptInjectionDetection()
+                                    _OPTIONAL_PromptInjectionDetection()
                                 )
                                 imported_list.append(prompt_injection_detection_obj)
                             elif (
@@ -1851,7 +1949,7 @@ class ProxyConfig:
                 elif key == "success_callback":
                     litellm.success_callback = []
 
-                    # intialize success callbacks
+                    # initialize success callbacks
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
@@ -1861,13 +1959,22 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.success_callback.append(callback)
+                            if "prometheus" in callback:
+                                verbose_proxy_logger.debug(
+                                    "Starting Prometheus Metrics on /metrics"
+                                )
+                                from prometheus_client import make_asgi_app
+
+                                # Add prometheus asgi middleware to route /metrics requests
+                                metrics_app = make_asgi_app()
+                                app.mount("/metrics", metrics_app)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
                 elif key == "failure_callback":
                     litellm.failure_callback = []
 
-                    # intialize success callbacks
+                    # initialize success callbacks
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
@@ -2009,6 +2116,14 @@ class ProxyConfig:
             )
             proxy_budget_rescheduler_max_time = general_settings.get(
                 "proxy_budget_rescheduler_max_time", proxy_budget_rescheduler_max_time
+            )
+            ## BATCH WRITER ##
+            proxy_batch_write_at = general_settings.get(
+                "proxy_batch_write_at", proxy_batch_write_at
+            )
+            ## DISABLE SPEND LOGS ## - gives a perf improvement
+            disable_spend_logs = general_settings.get(
+                "disable_spend_logs", disable_spend_logs
             )
             ### BACKGROUND HEALTH CHECKS ###
             # Enable background health checks
@@ -2238,7 +2353,6 @@ async def generate_key_helper_fn(
             saved_token["expires"] = saved_token["expires"].isoformat()
         if prisma_client is not None:
             ## CREATE USER (If necessary)
-            verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
             if query_type == "insert_data":
                 user_row = await prisma_client.insert_data(
                     data=user_data, table_name="user"
@@ -2558,6 +2672,11 @@ async def startup_event():
 
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
+    ## JWT AUTH ##
+    jwt_handler.update_environment(
+        prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+    )
+
     if use_background_health_checks:
         asyncio.create_task(
             _run_background_health_check()
@@ -2576,7 +2695,6 @@ async def startup_event():
         # add master key to db
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
             litellm_proxy_admin_name = os.getenv("PROXY_ADMIN_ID")
-
         asyncio.create_task(
             generate_key_helper_fn(
                 duration=None,
@@ -2632,14 +2750,28 @@ async def startup_event():
     if prisma_client is not None:
         create_view_response = await prisma_client.check_view_exists()
 
-    ### START BUDGET SCHEDULER ###
+    ### START BATCH WRITING DB ###
     if prisma_client is not None:
         scheduler = AsyncIOScheduler()
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
         )  # random interval, so multiple workers avoid resetting budget at the same time
+        batch_writing_interval = random.randint(
+            proxy_batch_write_at - 3, proxy_batch_write_at + 3
+        )  # random interval, so multiple workers avoid batch writing at the same time
+
+        ### RESET BUDGET ###
+        if general_settings.get("disable_reset_budget", False) == False:
+            scheduler.add_job(
+                reset_budget, "interval", seconds=interval, args=[prisma_client]
+            )
+
+        ### UPDATE SPEND ###
         scheduler.add_job(
-            reset_budget, "interval", seconds=interval, args=[prisma_client]
+            update_spend,
+            "interval",
+            seconds=batch_writing_interval,
+            args=[prisma_client],
         )
         scheduler.start()
 
@@ -7519,6 +7651,71 @@ async def health_liveliness():
     return "I'm alive!"
 
 
+@router.get(
+    "/cache/ping",
+    tags=["caching"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def cache_ping():
+    """
+    Endpoint for checking if cache can be pinged
+    """
+    try:
+        litellm_cache_params = {}
+        specific_cache_params = {}
+
+        if litellm.cache is None:
+            raise HTTPException(
+                status_code=503, detail="Cache not initialized. litellm.cache is None"
+            )
+
+        for k, v in vars(litellm.cache).items():
+            try:
+                if k == "cache":
+                    continue
+                litellm_cache_params[k] = str(copy.deepcopy(v))
+            except Exception:
+                litellm_cache_params[k] = "<unable to copy or convert>"
+        for k, v in vars(litellm.cache.cache).items():
+            try:
+                specific_cache_params[k] = str(v)
+            except Exception:
+                specific_cache_params[k] = "<unable to copy or convert>"
+        if litellm.cache.type == "redis":
+            # ping the redis cache
+            ping_response = await litellm.cache.ping()
+            verbose_proxy_logger.debug(
+                "/cache/ping: ping_response: " + str(ping_response)
+            )
+            # making a set cache call
+            # add cache does not return anything
+            await litellm.cache.async_add_cache(
+                result="test_key",
+                model="test-model",
+                messages=[{"role": "user", "content": "test from litellm"}],
+            )
+            verbose_proxy_logger.debug("/cache/ping: done with set_cache()")
+            return {
+                "status": "healthy",
+                "cache_type": litellm.cache.type,
+                "ping_response": True,
+                "set_cache_response": "success",
+                "litellm_cache_params": litellm_cache_params,
+                "redis_cache_params": specific_cache_params,
+            }
+        else:
+            return {
+                "status": "healthy",
+                "cache_type": litellm.cache.type,
+                "litellm_cache_params": litellm_cache_params,
+            }
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service Unhealthy ({str(e)}).Cache parameters: {litellm_cache_params}.specific_cache_params: {specific_cache_params}",
+        )
+
+
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
@@ -7546,7 +7743,27 @@ async def get_routes():
     return {"routes": routes}
 
 
-## TEST ENDPOINT
+#### TEST ENDPOINTS ####
+@router.get("/token/generate", dependencies=[Depends(user_api_key_auth)])
+async def token_generate():
+    """
+    Test endpoint. Meant for generating admin tokens with specific claims and testing if they work for creating keys, etc.
+    """
+    # Initialize AuthJWTSSO with your OpenID Provider configuration
+    from fastapi_sso import AuthJWTSSO
+
+    auth_jwt_sso = AuthJWTSSO(
+        issuer=os.getenv("OPENID_BASE_URL"),
+        client_id=os.getenv("OPENID_CLIENT_ID"),
+        client_secret=os.getenv("OPENID_CLIENT_SECRET"),
+        scopes=["litellm_proxy_admin"],
+    )
+
+    token = auth_jwt_sso.create_access_token()
+
+    return {"token": token}
+
+
 # @router.post("/update_database", dependencies=[Depends(user_api_key_auth)])
 # async def update_database_endpoint(
 #     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -7622,6 +7839,8 @@ async def shutdown_event():
 
     if litellm.cache is not None:
         await litellm.cache.disconnect()
+
+    await jwt_handler.close()
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()

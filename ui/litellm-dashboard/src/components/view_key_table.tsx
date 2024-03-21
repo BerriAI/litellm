@@ -103,27 +103,35 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             }
             return (
               <TableRow key={item.token}>
-                <TableCell>
+                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   {item.key_alias != null ? (
                     <Text>{item.key_alias}</Text>
                   ) : (
                     <Text>Not Set</Text>
                   )}
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{item.key_name}</Text>
                 </TableCell>
-                <TableCell>
-                  <Text>{item.spend}</Text>
+                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                  <Text>
+                    {(() => {
+                      try {
+                        return parseFloat(item.spend).toFixed(4);
+                      } catch (error) {
+                        return item.spend;
+                      }
+                    })()}
+                  </Text>
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   {item.max_budget != null ? (
                     <Text>{item.max_budget}</Text>
                   ) : (
                     <Text>Unlimited Budget</Text>
                   )}
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: '2px' }}>
                   <ViewKeySpendReport
                     token={item.token}
                     accessToken={accessToken}
@@ -132,30 +140,31 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     keyName={item.key_name}
                   />
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{item.team_id}</Text>
                 </TableCell>
-                <TableCell>
-                  <Text>{JSON.stringify(item.metadata)}</Text>
+                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                  <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
+                  
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{JSON.stringify(item.models)}</Text>
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: "2px", overflowWrap: "break-word" }}>
                   <Text>
                     TPM Limit: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
                     <br></br> RPM Limit:{" "}
                     {item.rpm_limit ? item.rpm_limit : "Unlimited"}
                   </Text>
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
                   {item.expires != null ? (
                     <Text>{item.expires}</Text>
                   ) : (
-                    <Text>Never expires</Text>
+                    <Text>Never</Text>
                   )}
                 </TableCell>
-                <TableCell>
+                <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
                   <Icon
                     onClick={() => handleDelete(item.token)}
                     icon={TrashIcon}
