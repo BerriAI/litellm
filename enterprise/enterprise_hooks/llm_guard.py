@@ -22,6 +22,7 @@ from litellm.utils import (
 )
 from datetime import datetime
 import aiohttp, asyncio
+from litellm.utils import get_formatted_prompt
 
 litellm.set_verbose = True
 
@@ -94,6 +95,9 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
     async def async_moderation_hook(
         self,
         data: dict,
+        call_type: (
+            Literal["completion"] | Literal["embeddings"] | Literal["image_generation"]
+        ),
     ):
         """
         - Calls the LLM Guard Endpoint

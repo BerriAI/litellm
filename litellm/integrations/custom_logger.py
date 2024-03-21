@@ -72,7 +72,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
-    async def async_moderation_hook(self, data: dict):
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        call_type: Literal["completion", "embeddings", "image_generation"],
+    ):
         pass
 
     async def async_post_call_streaming_hook(
