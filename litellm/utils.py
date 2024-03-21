@@ -5146,7 +5146,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
     """
     if custom_llm_provider == "bedrock":
         if model.startswith("anthropic.claude-3"):
-            return litellm.AmazonAnthropicClaude3Config().get_supported_openai_params()
+            return litellm.AmazonAnthropicClaude3Config().get_supported_openai_params() + ["extra_headers"]
         elif model.startswith("anthropic"):
             return litellm.AmazonAnthropicConfig().get_supported_openai_params()
         elif model.startswith("ai21"):
