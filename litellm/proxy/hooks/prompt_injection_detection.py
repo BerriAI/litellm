@@ -20,7 +20,7 @@ from difflib import SequenceMatcher
 from typing import List
 
 
-class _ENTERPRISE_PromptInjectionDetection(CustomLogger):
+class _OPTIONAL_PromptInjectionDetection(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         self.verbs = [
@@ -69,7 +69,10 @@ class _ENTERPRISE_PromptInjectionDetection(CustomLogger):
             for adj in self.adjectives:
                 for prep in self.prepositions:
                     phrase = " ".join(filter(None, [verb, adj, prep])).strip()
-                    combinations.append(phrase.lower())
+                    if (
+                        len(phrase.split()) > 1
+                    ):  # additional check to ensure more than 1 word
+                        combinations.append(phrase.lower())
         return combinations
 
     def check_user_input_similarity(
