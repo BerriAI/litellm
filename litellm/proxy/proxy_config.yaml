@@ -17,3 +17,4 @@ router_settings:
   debug_level: "DEBUG"
 litellm_settings:
   success_callback: ["prometheus"]
+  num_retries: 2
