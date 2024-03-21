@@ -632,6 +632,8 @@ class LiteLLM_UserTable(LiteLLMBase):
     model_spend: Optional[Dict] = {}
     user_email: Optional[str]
     models: list = []
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
     @root_validator(pre=True)
     def set_model_info(cls, values):
@@ -650,6 +652,7 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     @root_validator(pre=True)
     def set_model_info(cls, values):
