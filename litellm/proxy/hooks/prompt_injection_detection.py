@@ -70,8 +70,8 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 for prep in self.prepositions:
                     phrase = " ".join(filter(None, [verb, adj, prep])).strip()
                     if (
-                        len(phrase.split()) > 1
-                    ):  # additional check to ensure more than 1 word
+                        len(phrase.split()) > 2
+                    ):  # additional check to ensure more than 2 words
                         combinations.append(phrase.lower())
         return combinations
 
