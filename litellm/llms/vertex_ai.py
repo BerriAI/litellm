@@ -289,11 +289,11 @@ def completion(
             Part,
             GenerationConfig,
         )
-        from google.cloud import aiplatform
+        from google.cloud import aiplatform  # type: ignore
         from google.protobuf import json_format  # type: ignore
         from google.protobuf.struct_pb2 import Value  # type: ignore
-        from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types
-        import google.auth
+        from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
+        import google.auth  # type: ignore
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
@@ -783,7 +783,7 @@ async def async_completion(
             """
             Vertex AI Model Garden
             """
-            from google.cloud import aiplatform
+            from google.cloud import aiplatform  # type: ignore
 
             ## LOGGING
             logging_obj.pre_call(
@@ -969,7 +969,7 @@ async def async_streaming(
         )
         response = llm_model.predict_streaming_async(prompt, **optional_params)
     elif mode == "custom":
-        from google.cloud import aiplatform
+        from google.cloud import aiplatform  # type: ignore
 
         stream = optional_params.pop("stream", None)
 
@@ -1059,7 +1059,7 @@ def embedding(
         )
 
     from vertexai.language_models import TextEmbeddingModel
-    import google.auth
+    import google.auth  # type: ignore
 
     ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
     try:

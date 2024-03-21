@@ -923,7 +923,7 @@ def gemini_text_image_pt(messages: list):
     }
     """
     try:
-        import google.generativeai as genai
+        import google.generativeai as genai  # type: ignore
     except:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
