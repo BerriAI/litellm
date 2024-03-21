@@ -73,7 +73,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                 if redacted_text is not None:
                     if (
                         redacted_text.get("is_valid", None) is not None
-                        and redacted_text["is_valid"] == "True"
+                        and redacted_text["is_valid"] != True
                     ):
                         raise HTTPException(
                             status_code=400,
@@ -120,7 +120,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
 
         formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
         self.print_verbose(f"LLM Guard, formatted_prompt: {formatted_prompt}")
-        return self.moderation_check(text=formatted_prompt)
+        return await self.moderation_check(text=formatted_prompt)
 
     async def async_post_call_streaming_hook(
         self, user_api_key_dict: UserAPIKeyAuth, response: str
