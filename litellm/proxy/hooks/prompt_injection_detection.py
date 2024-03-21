@@ -199,9 +199,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
     async def async_moderation_hook(
         self,
         data: dict,
-        call_type: (
-            Literal["completion"] | Literal["embeddings"] | Literal["image_generation"]
-        ),
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         verbose_proxy_logger.debug(
             f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
