@@ -2,7 +2,7 @@
 
 LiteLLM supports similarity checking against a pre-generated list of prompt injection attacks, to identify if a request contains an attack. 
 
-[**See Code**](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_hooks/prompt_injection_detection.py)
+[**See Code**](https://github.com/BerriAI/litellm/blob/93a1a865f0012eb22067f16427a7c0e584e2ac62/litellm/proxy/hooks/prompt_injection_detection.py#L4)
 
 ## Usage 
 
