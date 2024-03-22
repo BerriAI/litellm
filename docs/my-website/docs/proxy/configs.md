@@ -558,6 +558,16 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+## Disable Swagger UI 
+
+To disable the Swagger docs from the base url, set 
+
+```env
+NO_DOCS="True"
+```
+
+in your environment, and restart the proxy. 
+
 
 ## Configure DB Pool Limits + Connection Timeouts 
 
