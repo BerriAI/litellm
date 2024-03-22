@@ -8,7 +8,6 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import httpx
 import jwt
-from jwt.algorithms import RSAAlgorithm
 import json
 import os
 from litellm.caching import DualCache
@@ -137,6 +136,8 @@ class JWTHandler:
         return scopes
 
     async def auth_jwt(self, token: str) -> dict:
+        from jwt.algorithms import RSAAlgorithm
+
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
