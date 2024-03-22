@@ -2752,7 +2752,12 @@ def client(original_function):
                     "context_window_fallback_dict", {}
                 )
 
-                if num_retries:
+                _is_litellm_router_call = "model_group" in kwargs.get(
+                    "metadata", {}
+                )  # check if call from litellm.router/proxy
+                if (
+                    num_retries and not _is_litellm_router_call
+                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
                         or isinstance(e, openai.Timeout)
@@ -3222,7 +3227,12 @@ def client(original_function):
                     "context_window_fallback_dict", {}
                 )
 
-                if num_retries:
+                _is_litellm_router_call = "model_group" in kwargs.get(
+                    "metadata", {}
+                )  # check if call from litellm.router/proxy
+                if (
+                    num_retries and not _is_litellm_router_call
+                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         kwargs["num_retries"] = num_retries
                         kwargs["original_function"] = original_function
