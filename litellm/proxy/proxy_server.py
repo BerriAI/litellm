@@ -162,8 +162,11 @@ ui_link = f"/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
+
+_docs_url = None if os.getenv("NO_DOCS", "False") == "True" else "/"
+
 app = FastAPI(
-    docs_url="/",
+    docs_url=_docs_url,
     title="LiteLLM API",
     description=f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}",
     version=version,
