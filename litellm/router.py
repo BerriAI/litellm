@@ -17,8 +17,6 @@ from litellm.caching import RedisCache, InMemoryCache, DualCache
 import logging, asyncio
 import inspect, concurrent
 from openai import AsyncOpenAI
-import vertexai.preview.generative_models as vertexai_generative_models
-import vertexai.language_models as vertexai_language_models
 from collections import defaultdict
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
@@ -1652,8 +1650,10 @@ class Router:
             or model_name in litellm.vertex_code_chat_models
             or model_name.replace('vertex_ai/', '') in litellm.vertex_embedding_models
         ):
-            import vertexai
             import google.auth
+            import vertexai
+            import vertexai.preview.generative_models as vertexai_generative_models
+            import vertexai.language_models as vertexai_language_models
 
             vertex_ai_project = (
                 litellm_params.get("vertex_project")
