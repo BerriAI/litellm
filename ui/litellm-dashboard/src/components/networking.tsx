@@ -178,7 +178,7 @@ export const userInfoCall = async (
     }
     console.log("in userInfoCall viewAll=", viewAll);
     if (viewAll) {
-      url = `${url}/?view_all=true`;
+      url = `${url}?view_all=true`;
     }
     //message.info("Requesting user data");
     const response = await fetch(url, {
