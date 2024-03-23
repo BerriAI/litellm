@@ -569,7 +569,7 @@ def convert_to_anthropic_tool_result(message: dict) -> str:
 
     """
     Anthropic tool_results look like:
-    
+
     [Successful results]
     <function_results>
     <result>
@@ -643,62 +643,65 @@ def anthropic_messages_pt(messages: list):
     """
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool"}
-    # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages = []
-    msg_i = 0
-    while msg_i < len(messages):
-        user_content = []
-        ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
-            if isinstance(messages[msg_i]["content"], list):
-                for m in messages[msg_i]["content"]:
-                    if m.get("type", "") == "image_url":
-                        user_content.append(
-                            {
-                                "type": "image",
-                                "source": convert_to_anthropic_image_obj(
-                                    m["image_url"]["url"]
-                                ),
-                            }
-                        )
-                    elif m.get("type", "") == "text":
-                        user_content.append({"type": "text", "text": m["text"]})
-            else:
-                # Tool message content will always be a string
-                user_content.append(
-                    {
-                        "type": "text",
-                        "text": (
-                            convert_to_anthropic_tool_result(messages[msg_i])
-                            if messages[msg_i]["role"] == "tool"
-                            else messages[msg_i]["content"]
-                        ),
-                    }
-                )
 
-            msg_i += 1
+    if litellm.modify_params:
+        # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
+        new_messages = []
+        msg_i = 0
+        while msg_i < len(messages):
+            user_content = []
+            # MERGE CONSECUTIVE USER CONTENT ##
+            while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
+                if isinstance(messages[msg_i]["content"], list):
+                    for m in messages[msg_i]["content"]:
+                        if m.get("type", "") == "image_url":
+                            user_content.append(
+                                {
+                                    "type": "image",
+                                    "source": convert_to_anthropic_image_obj(
+                                        m["image_url"]["url"]
+                                    ),
+                                }
+                            )
+                        elif m.get("type", "") == "text":
+                            user_content.append({"type": "text", "text": m["text"]})
+                else:
+                    # Tool message content will always be a string
+                    user_content.append(
+                        {
+                            "type": "text",
+                            "text": (
+                                convert_to_anthropic_tool_result(messages[msg_i])
+                                if messages[msg_i]["role"] == "tool"
+                                else messages[msg_i]["content"]
+                            ),
+                        }
+                    )
 
-        if user_content:
-            new_messages.append({"role": "user", "content": user_content})
+                msg_i += 1
 
-        assistant_content = []
-        ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
-            if messages[msg_i].get(
-                "tool_calls", []
-            ):  # support assistant tool invoke convertion
-                assistant_text += convert_to_anthropic_tool_invoke(
-                    messages[msg_i]["tool_calls"]
-                )
+            if user_content:
+                new_messages.append({"role": "user", "content": user_content})
 
-            assistant_content.append({"type": "text", "text": assistant_text})
-            msg_i += 1
+            assistant_content = []
+            ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+                assistant_text = (
+                    messages[msg_i].get("content") or ""
+                )  # either string or none
+                if messages[msg_i].get(
+                    "tool_calls", []
+                ):  # support assistant tool invoke convertion
+                    assistant_text += convert_to_anthropic_tool_invoke(
+                        messages[msg_i]["tool_calls"]
+                    )
 
-        if assistant_content:
-            new_messages.append({"role": "assistant", "content": assistant_content})
+                assistant_content.append({"type": "text", "text": assistant_text})
+                msg_i += 1
+            if assistant_content:
+                new_messages.append({"role": "assistant", "content": assistant_content})
+    else:
+        new_messages = messages
 
     if new_messages[0]["role"] != "user":
         if litellm.modify_params:
