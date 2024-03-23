@@ -2358,8 +2358,6 @@ def client(original_function):
                 )
             if "logger_fn" in kwargs:
                 user_logger_fn = kwargs["logger_fn"]
-            # CRASH REPORTING TELEMETRY
-            crash_reporting(*args, **kwargs)
             # INIT LOGGER - for user-specified integrations
             model = args[0] if len(args) > 0 else kwargs.get("model", None)
             call_type = original_function.__name__
@@ -2463,25 +2461,6 @@ def client(original_function):
                     rules_obj.post_call_rules(input=model_response, model=model)
         except Exception as e:
             raise e
-
-    def crash_reporting(*args, **kwargs):
-        if litellm.telemetry:
-            try:
-                model = args[0] if len(args) > 0 else kwargs["model"]
-                exception = kwargs["exception"] if "exception" in kwargs else None
-                custom_llm_provider = (
-                    kwargs["custom_llm_provider"]
-                    if "custom_llm_provider" in kwargs
-                    else None
-                )
-                safe_crash_reporting(
-                    model=model,
-                    exception=exception,
-                    custom_llm_provider=custom_llm_provider,
-                )  # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
-            except:
-                # [Non-Blocking Error]
-                pass
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):
@@ -2777,7 +2756,6 @@ def client(original_function):
                         kwargs["model"] = context_window_fallback_dict[model]
                     return original_function(*args, **kwargs)
             traceback_exception = traceback.format_exc()
-            crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
@@ -3199,7 +3177,6 @@ def client(original_function):
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
-            crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
             if logging_obj:
                 try:
@@ -8285,17 +8262,6 @@ def exception_type(
             raise e
         else:
             raise original_exception
-
-
-####### CRASH REPORTING ################
-def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
-    data = {
-        "model": model,
-        "exception": str(exception),
-        "custom_llm_provider": custom_llm_provider,
-    }
-    executor.submit(litellm_telemetry, data)
-    # threading.Thread(target=litellm_telemetry, args=(data,), daemon=True).start()
 
 
 def get_or_generate_uuid():
