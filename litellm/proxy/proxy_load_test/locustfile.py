@@ -6,11 +6,11 @@ import time
 class MyUser(HttpUser):
     wait_time = between(1, 5)
 
-    @task(3)
+    @task
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer sk-mh3YNUDs1d_f6fMXfvEqBA",
+            "Authorization": f"Bearer sk-1234",
             # Include any additional headers you may need for authentication, etc.
         }
 
@@ -28,11 +28,3 @@ class MyUser(HttpUser):
         response = self.client.post("chat/completions", json=payload, headers=headers)
 
         # Print or log the response if needed
-
-    @task(10)
-    def health_readiness(self):
-        response = self.client.get("health/readiness")
-
-    @task(10)
-    def health_liveliness(self):
-        response = self.client.get("health/liveliness")
