@@ -182,6 +182,7 @@ def test_completion_claude_3_function_call():
 
 def test_completion_claude_3_multi_turn_conversations():
     litellm.set_verbose = True
+    litellm.modify_params = True
     messages = [
         {"role": "assistant", "content": "?"},  # test first user message auto injection
         {"role": "user", "content": "Hi!"},
