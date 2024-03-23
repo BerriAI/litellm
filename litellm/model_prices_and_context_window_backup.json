@@ -904,6 +904,22 @@
         "litellm_provider": "vertex_ai-vision-models",
         "mode": "chat"
     },
+    "vertex_ai/claude-3-sonnet@20240229": {
+        "max_tokens": 200000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "vertex_ai",
+        "mode": "chat"
+    },
+    "vertex_ai/claude-3-haiku@20240307": {
+        "max_tokens": 200000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000025,
+        "output_cost_per_token": 0.00000125,
+        "litellm_provider": "vertex_ai",
+        "mode": "chat"
+    },
     "textembedding-gecko": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
