@@ -497,7 +497,10 @@ class ModelResponse(OpenAIObject):
                 object = "embedding"
             else:
                 object = "chat.completion"
-            choices = [Choices(*choices)]
+            if choices:
+                choices = [Choices(*choices)]
+            else:
+                choices = [Choices()]
         if id is None:
             id = _generate_id()
         else:
