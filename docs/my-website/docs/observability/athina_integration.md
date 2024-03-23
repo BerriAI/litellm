@@ -42,7 +42,7 @@ response = completion(
 ```
 
 ## Additional information in metadata
-You can send some additional information to Athina by using the `metadata` field in completion. This can be useful for sending metadata about the request, such as the user ID, the request ID, or any other information you want to track.
+You can send some additional information to Athina by using the `metadata` field in completion. This can be useful for sending metadata about the request, such as the customer_id, prompt_slug, or any other information you want to track.
 
 ```python
 #openai call with additional metadata
@@ -56,7 +56,6 @@ response = completion(
     "prompt_slug": "my_prompt_slug/v1"
   }
 )
-
 ```
 
 Following are the allowed fields in metadata, their types, and their descriptions:
