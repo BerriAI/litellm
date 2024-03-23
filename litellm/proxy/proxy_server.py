@@ -110,7 +110,11 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
-from litellm.proxy.auth.auth_checks import common_checks, get_end_user_object
+from litellm.proxy.auth.auth_checks import (
+    common_checks,
+    get_end_user_object,
+    allowed_routes_check,
+)
 
 try:
     from litellm._version import version
@@ -332,7 +336,7 @@ def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
 async def user_api_key_auth(
     request: Request, api_key: str = fastapi.Security(api_key_header)
 ) -> UserAPIKeyAuth:
-    global master_key, prisma_client, llm_model_list, user_custom_auth, custom_db_client
+    global master_key, prisma_client, llm_model_list, user_custom_auth, custom_db_client, general_settings
     try:
         if isinstance(api_key, str):
             passed_in_key = api_key
@@ -354,6 +358,7 @@ async def user_api_key_auth(
             enable_jwt_auth: true
         ```
         """
+        route: str = request.url.path
         if general_settings.get("enable_jwt_auth", False) == True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug(f"is_jwt: {is_jwt}")
@@ -407,15 +412,28 @@ async def user_api_key_auth(
                         user_id=user_id,
                     )
                 else:
-                    # return UserAPIKeyAuth object
-                    return UserAPIKeyAuth(
-                        api_key=None,
-                        user_id=user_object.user_id,
-                        tpm_limit=user_object.tpm_limit,
-                        rpm_limit=user_object.rpm_limit,
-                        models=user_object.models,
+                    is_allowed = allowed_routes_check(
                         user_role="app_owner",
+                        route=route,
+                        allowed_routes=general_settings.get("allowed_routes", None),
                     )
+                    if is_allowed:
+                        # return UserAPIKeyAuth object
+                        return UserAPIKeyAuth(
+                            api_key=None,
+                            user_id=user_object.user_id,
+                            tpm_limit=user_object.tpm_limit,
+                            rpm_limit=user_object.rpm_limit,
+                            models=user_object.models,
+                            user_role="app_owner",
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=401,
+                            detail={
+                                "error": f"User={user_object.user_id} not allowed to access this route={route}."
+                            },
+                        )
         #### ELSE ####
         if master_key is None:
             if isinstance(api_key, str):
@@ -423,7 +441,6 @@ async def user_api_key_auth(
             else:
                 return UserAPIKeyAuth()
 
-        route: str = request.url.path
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) == True:
                 return UserAPIKeyAuth()
