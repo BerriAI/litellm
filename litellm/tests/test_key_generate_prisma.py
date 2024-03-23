@@ -49,6 +49,7 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
     user_info,
+    model_info_v1,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 from litellm._logging import verbose_proxy_logger

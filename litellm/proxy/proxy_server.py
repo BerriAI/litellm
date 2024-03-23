@@ -6392,6 +6392,9 @@ async def add_new_model(model_params: ModelParams):
 async def model_info_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
+    """
     global llm_model_list, general_settings, user_config_file_path, proxy_config
 
     # Load existing config
@@ -6533,7 +6536,7 @@ async def model_info_v1(
 
     if len(user_api_key_dict.models) > 0:
         model_names = user_api_key_dict.models
-        all_models = [m for m in config["model_list"] if m in model_names]
+        all_models = [m for m in config["model_list"] if m["model_name"] in model_names]
     else:
         all_models = config["model_list"]
     for model in all_models:
