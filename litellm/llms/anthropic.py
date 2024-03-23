@@ -131,18 +131,24 @@ def completion(
         )
     else:
         # Separate system prompt from rest of message
-        system_prompt_idx: Optional[int] = None
+        system_prompt_indices = []
+        system_prompt = ""
         for idx, message in enumerate(messages):
             if message["role"] == "system":
-                optional_params["system"] = message["content"]
-                system_prompt_idx = idx
-                break
-        if system_prompt_idx is not None:
-            messages.pop(system_prompt_idx)
+                system_prompt += message["content"]
+                system_prompt_indices.append(idx)
+        if len(system_prompt_indices) > 0:
+            for idx in reversed(system_prompt_indices):
+                messages.pop(idx)
+        if len(system_prompt) > 0:
+            optional_params["system"] = system_prompt
         # Format rest of message according to anthropic guidelines
-        messages = prompt_factory(
-            model=model, messages=messages, custom_llm_provider="anthropic"
-        )
+        try:
+            messages = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="anthropic"
+            )
+        except Exception as e:
+            raise AnthropicError(status_code=400, message=str(e))
 
     ## Load Config
     config = litellm.AnthropicConfig.get_config()
