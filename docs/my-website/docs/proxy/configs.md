@@ -602,7 +602,8 @@ general_settings:
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
     "disable_reset_budget": "boolean", # turn off reset budget scheduled task
-    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims 
+    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
+    "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
     "key_management_system": "google_kms", # either google_kms or azure_kms
     "master_key": "string",
     "database_url": "string",
