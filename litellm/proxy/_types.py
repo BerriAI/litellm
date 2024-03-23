@@ -531,6 +531,9 @@ class ConfigGeneralSettings(LiteLLMBase):
     ui_access_mode: Optional[Literal["admin_only", "all"]] = Field(
         "all", description="Control access to the Proxy UI"
     )
+    allowed_routes: Optional[List] = Field(
+        None, description="Proxy API Endpoints you want users to be able to access"
+    )
 
 
 class ConfigYAML(LiteLLMBase):
