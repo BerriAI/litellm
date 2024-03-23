@@ -7223,7 +7223,17 @@ def exception_type(
                             message=f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
                             model=model,
-                            response=original_exception.response,
+                            response=(
+                                original_exception.response
+                                if hasattr(original_exception, "response")
+                                else httpx.Response(
+                                    status_code=500,
+                                    request=httpx.Request(
+                                        method="POST",
+                                        url="https://docs.anthropic.com/claude/reference/messages_post",
+                                    ),
+                                )
+                            ),
                         )
                     else:
                         exception_mapping_worked = True
