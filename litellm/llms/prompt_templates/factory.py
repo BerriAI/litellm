@@ -700,13 +700,6 @@ def anthropic_messages_pt(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-        if (
-            msg_i < len(messages)
-            and messages[msg_i]["role"] != user_message_types
-            and messages[msg_i]["role"] != "assistant"
-        ):
-            raise Exception(f"Invalid role passed in - {messages[msg_i]}")
-
     if new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
