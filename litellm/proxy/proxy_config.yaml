@@ -12,9 +12,6 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 general_settings:
   master_key: sk-1234
-router_settings:
-  set_verbose: True
-  debug_level: "DEBUG"
-litellm_settings:
-  success_callback: ["prometheus"]
+  disable_spend_logs: true
+  disable_reset_budget: true
   num_retries: 2
