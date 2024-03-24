@@ -319,6 +319,7 @@ def test_router_context_window_check():
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
+                    "base_model": "azure/gpt-35-turbo",
                 },
             },
             {
@@ -330,7 +331,7 @@ def test_router_context_window_check():
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True)  # type: ignore
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
 
         response = router.completion(
             model="gpt-3.5-turbo",
@@ -341,7 +342,6 @@ def test_router_context_window_check():
         )
 
         print(f"response: {response}")
-        raise Exception("it worked!")
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
