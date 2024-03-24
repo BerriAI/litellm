@@ -103,7 +103,10 @@ RUN chmod +x entrypoint.sh
 EXPOSE 4000/tcp
 
 # Override the CMD instruction with your desired command and arguments
-CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug", "--run_gunicorn"]
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 ```
 
 </TabItem>
@@ -477,20 +480,6 @@ ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 ## Best Practices for Deploying to Production
 ### 1. Switch of debug logs in production 
 don't use [`--detailed-debug`, `--debug`](https://docs.litellm.ai/docs/proxy/debugging#detailed-debug) or `litellm.set_verbose=True`. We found using debug logs can add 5-10% latency per LLM API call
-
-### 2. Use `run_gunicorn` and `num_workers`
-
-Example setting `--run_gunicorn` and `--num_workers`
-```shell
-docker run ghcr.io/berriai/litellm-database:main-latest --run_gunicorn --num_workers 4
-```
-
-Why `Gunicorn`?
-- Gunicorn takes care of running multiple instances of your web application
-- Gunicorn is ideal for running litellm proxy on cluster of machines with Kubernetes
-
-Why `num_workers`? 
-Setting `num_workers` to the number of CPUs available ensures optimal utilization of system resources by matching the number of worker processes to the available CPU cores.
 
 
 ## Advanced Deployment Settings
