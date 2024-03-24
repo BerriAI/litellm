@@ -301,7 +301,7 @@ def test_router_azure_acompletion():
 def test_router_context_window_check():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
-    - Send a 10k prompt
+    - Send a 5k prompt
     - Assert it works
     """
     from large_text import text
