@@ -235,15 +235,6 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 | [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
 | [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
 
-
-
-## Machine Specifications to Deploy LiteLLM
-
-| Service | Spec | CPUs | Memory | Performance | Architecture | Version|
-| --- | --- | --- | --- | --- | --- | --- | 
-| Server | `t2.small`. | `1vCPUs` | `8GB` | avg latency=`57ms`,  median latency=`50ms`, Requests per second=`33` | | |
-| Redis Cache | - | - | - | - | | 7.0+ Redis Engine|
-
 ## Deploy with Database
 ### Docker, Kubernetes, Helm Chart
 
@@ -484,11 +475,6 @@ docker run --name litellm-proxy \
 -p 4000:4000 \
 ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 ```
-
-## Best Practices for Deploying to Production
-### 1. Switch of debug logs in production 
-don't use [`--detailed-debug`, `--debug`](https://docs.litellm.ai/docs/proxy/debugging#detailed-debug) or `litellm.set_verbose=True`. We found using debug logs can add 5-10% latency per LLM API call
-
 
 ## Advanced Deployment Settings
 
