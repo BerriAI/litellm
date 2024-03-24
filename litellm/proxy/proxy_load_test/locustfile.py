@@ -18,7 +18,10 @@ class MyUser(HttpUser):
         payload = {
             "model": "fake-openai-endpoint",
             "messages": [
-                {"role": "system", "content": "You are a chat bot."},
+                {
+                    "role": "system",
+                    "content": "this is a very sweet test message from ishaan",
+                },
                 {"role": "user", "content": "Hello, how are you?"},
             ],
             # Add more data as necessary
