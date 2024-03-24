@@ -551,6 +551,156 @@ router = Router(model_list: Optional[list] = None,
 				 cache_responses=True)
 ```
 
+## Pre-Call Checks (Context Window)
+
+Enable pre-call checks to filter out deployments with context window limit < messages for a call.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**1. Enable pre-call checks**
+```python 
+from litellm import Router 
+# ...
+router = Router(model_list=model_list, enable_pre_call_checks=True) # 👈 Set to True
+```
+
+**2. (Azure-only) Set base model**
+
+For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with `azure/`. 
+
+```python
+model_list = [
+            {
+                "model_name": "gpt-3.5-turbo", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+				"model_info": {
+					"base_model": "azure/gpt-35-turbo", # 👈 SET BASE MODEL
+				}
+            },
+            {
+                "model_name": "gpt-3.5-turbo", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo-1106",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ]
+```
+
+**3. Test it!**
+
+```python
+"""
+- Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
+- Send a 5k prompt
+- Assert it works
+"""
+from litellm import Router
+import os
+
+try:
+model_list = [
+	{
+		"model_name": "gpt-3.5-turbo",  # model group name
+		"litellm_params": {  # params for litellm completion/embedding call
+			"model": "azure/chatgpt-v-2",
+			"api_key": os.getenv("AZURE_API_KEY"),
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE"),
+		},
+		"model_info": {
+			"base_model": "azure/gpt-35-turbo", 
+		}
+	},
+	{
+		"model_name": "gpt-3.5-turbo",  # model group name
+		"litellm_params": {  # params for litellm completion/embedding call
+			"model": "gpt-3.5-turbo-1106",
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+	},
+]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True) 
+
+text = "What is the meaning of 42?" * 5000
+
+response = router.completion(
+	model="gpt-3.5-turbo",
+	messages=[
+		{"role": "system", "content": text},
+		{"role": "user", "content": "Who was Alexander?"},
+	],
+)
+
+print(f"response: {response}")
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Setup config**
+
+For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with azure/.
+
+```yaml
+router_settings:
+	enable_pre_call_checks: true # 1. Enable pre-call checks
+
+model_list:
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+		model: azure/chatgpt-v-2
+		api_base: os.environ/AZURE_API_BASE
+		api_key: os.environ/AZURE_API_KEY
+		api_version: "2023-07-01-preview"
+	  model_info:
+		base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
+	
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+		model: gpt-3.5-turbo-1106
+		api_key: os.environ/OPENAI_API_KEY
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+text = "What is the meaning of 42?" * 5000
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {"role": "system", "content": text},
+		{"role": "user", "content": "Who was Alexander?"},
+    ],
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
 ## Caching across model groups
 
 If you want to cache across 2 different model groups (e.g. azure deployments, and openai), use caching groups. 

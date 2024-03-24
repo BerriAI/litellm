@@ -102,7 +102,20 @@ def test_completion_claude_3_empty_response():
 
 def test_completion_claude_3():
     litellm.set_verbose = True
-    messages = [{"role": "user", "content": "Hello, world"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.log` => `console.error`\n",
+        },
+        {
+            "role": "assistant",
+            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
+        },
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
+        },
+    ]
     try:
         # test without max tokens
         response = completion(

@@ -3605,7 +3605,7 @@ def token_counter(
                     count_response_tokens=count_response_tokens,
                 )
     else:
-        num_tokens = len(encoding.encode(text))  # type: ignore
+        num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
     return num_tokens
 
 
