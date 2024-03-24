@@ -233,6 +233,14 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 | [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
 
 
+
+## Machine Specifications to Deploy LiteLLM
+
+| Service | Spec | CPUs | Memory | Performance | Architecture | Version|
+| --- | --- | --- | --- | --- | --- | --- | 
+| Server | `t2.small`. | `1vCPUs` | `8GB` | avg latency=`57ms`,  median latency=`50ms`, Requests per second=`33` | | |
+| Redis Cache | - | - | - | - | | 7.0+ Redis Engine|
+
 ## Deploy with Database
 ### Docker, Kubernetes, Helm Chart
 
@@ -525,6 +533,57 @@ Provide an ssl certificate when starting litellm proxy server
 ## Platform-specific Guide
 
 <Tabs>
+<TabItem value="AWS EKS" label="AWS EKS - Kubernetes">
+
+### Kubernetes - Deploy on EKS
+
+Step1. Create an EKS Cluster with the following spec
+
+```shell
+eksctl create cluster --name=litellm-cluster --region=us-west-2 --node-type=t2.small
+```
+
+Step 2. Mount litellm proxy config on kub cluster 
+
+This will mount your local file called `proxy_config.yaml` on kubernetes cluster
+
+```shell
+kubectl create configmap litellm-config --from-file=proxy_config.yaml
+```
+
+Step 3. Apply `kub.yaml` and `service.yaml`
+Clone the following `kub.yaml` and `service.yaml` files and apply locally
+
+- Use this `kub.yaml` file - [litellm kub.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/kubernetes/kub.yaml)
+
+- Use this `service.yaml` file - [litellm service.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/kubernetes/service.yaml)
+
+Apply `kub.yaml`
+```
+kubectl apply -f kub.yaml
+```
+
+Apply `service.yaml` - creates an AWS load balancer to expose the proxy
+```
+kubectl apply -f service.yaml
+
+# service/litellm-service created
+```
+
+Step 4. Get Proxy Base URL
+
+```shell
+kubectl get services
+
+# litellm-service   LoadBalancer   10.100.6.31   a472dc7c273fd47fd******.us-west-2.elb.amazonaws.com   4000:30374/TCP   63m
+```
+
+Proxy Base URL =  `a472dc7c273fd47fd******.us-west-2.elb.amazonaws.com:4000`
+
+That's it, now you can start using LiteLLM Proxy
+
+</TabItem>
+
 
 <TabItem value="aws-stack" label="AWS Cloud Formation Stack">
 
