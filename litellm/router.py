@@ -2175,13 +2175,19 @@ class Router:
 
         try:
             input_tokens = litellm.token_counter(messages=messages)
-        except:
+        except Exception as e:
             return _returned_deployments
 
         for idx, deployment in enumerate(_returned_deployments):
             # see if we have the info for this model
             try:
-                model_info = litellm.get_model_info(model=deployment["model_name"])
+                base_model = deployment.get("litellm_params", {}).get(
+                    "base_model", None
+                )
+                model = base_model or deployment.get("litellm_params", {}).get(
+                    "model", None
+                )
+                model_info = litellm.get_model_info(model=model)
             except:
                 continue
 
