@@ -572,6 +572,7 @@ def completion(
         "ttl",
         "cache",
         "no-log",
+        "base_model",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
