@@ -645,6 +645,9 @@ print(f"response: {response}")
 <TabItem value="proxy" label="Proxy">
 
 **1. Setup config**
+
+For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with azure/.
+
 ```yaml
 router_settings:
 	enable_pre_call_checks: true # 1. Enable pre-call checks
