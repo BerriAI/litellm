@@ -2181,9 +2181,11 @@ class Router:
         for idx, deployment in enumerate(_returned_deployments):
             # see if we have the info for this model
             try:
-                base_model = deployment.get("litellm_params", {}).get(
-                    "base_model", None
-                )
+                base_model = deployment.get("model_info", {}).get("base_model", None)
+                if base_model is None:
+                    base_model = deployment.get("litellm_params", {}).get(
+                        "base_model", None
+                    )
                 model = base_model or deployment.get("litellm_params", {}).get(
                     "model", None
                 )
