@@ -24,6 +24,13 @@ litellm_settings:
   set_verbose: True
 ```
 
+You should only see the following level of details in logs on the proxy server
+```shell
+# INFO:     192.168.2.205:11774 - "POST /chat/completions HTTP/1.1" 200 OK
+# INFO:     192.168.2.205:34717 - "POST /chat/completions HTTP/1.1" 200 OK
+# INFO:     192.168.2.205:29734 - "POST /chat/completions HTTP/1.1" 200 OK
+```
+
 ## 2. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
 
 Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
