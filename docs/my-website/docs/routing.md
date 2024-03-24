@@ -555,6 +555,9 @@ router = Router(model_list: Optional[list] = None,
 
 Enable pre-call checks to filter out deployments with context window limit < messages for a call.
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 **1. Enable pre-call checks**
 ```python 
 from litellm import Router 
@@ -638,6 +641,62 @@ response = router.completion(
 
 print(f"response: {response}")
 ```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Setup config**
+```yaml
+router_settings:
+	enable_pre_call_checks: true # 1. Enable pre-call checks
+
+model_list:
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+		model: azure/chatgpt-v-2
+		api_base: os.environ/AZURE_API_BASE
+		api_key: os.environ/AZURE_API_KEY
+		api_version: "2023-07-01-preview"
+	  model_info:
+		base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
+	
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+		model: gpt-3.5-turbo-1106
+		api_key: os.environ/OPENAI_API_KEY
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+text = "What is the meaning of 42?" * 5000
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {"role": "system", "content": text},
+		{"role": "user", "content": "Who was Alexander?"},
+    ],
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
 
 ## Caching across model groups
 
