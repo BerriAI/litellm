@@ -442,6 +442,8 @@ If a call fails after num_retries, fall back to another model group.
 
 If the error is a context window exceeded error, fall back to a larger model group (if given). 
 
+Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
+
 ```python
 from litellm import Router
 
