@@ -188,6 +188,7 @@ const sidebars = {
       label: 'Tutorials',
       items: [
         'tutorials/azure_openai',
+        'tutorials/instructor',
         'tutorials/oobabooga',
         "tutorials/gradio_integration",
         'tutorials/huggingface_codellama',
