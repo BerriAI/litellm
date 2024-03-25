@@ -14,11 +14,6 @@ def hash_token(token: str):
     return hashed_token
 
 
-class LiteLLMProxyRoles(enum.Enum):
-    PROXY_ADMIN = "litellm_proxy_admin"
-    USER = "litellm_user"
-
-
 class LiteLLMBase(BaseModel):
     """
     Implements default functions, all pydantic objects should have.
@@ -40,6 +35,11 @@ class LiteLLMBase(BaseModel):
 
     class Config:
         protected_namespaces = ()
+
+
+class LiteLLMProxyRoles(LiteLLMBase):
+    PROXY_ADMIN: str = "litellm_proxy_admin"
+    PROXY_USER: str = "litellm_user"
 
 
 class LiteLLMPromptInjectionParams(LiteLLMBase):
