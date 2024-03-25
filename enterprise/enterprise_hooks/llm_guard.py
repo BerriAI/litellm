@@ -60,7 +60,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                 else:
                     # Make the first request to /analyze
                     analyze_url = f"{self.llm_guard_api_base}analyze/prompt"
-                    verbose_proxy_logger.debug(f"Making request to: {analyze_url}")
+                    verbose_proxy_logger.debug("Making request to: %s", analyze_url)
                     analyze_payload = {"prompt": text}
                     redacted_text = None
                     async with session.post(
