@@ -134,8 +134,15 @@ class JWTHandler:
 
     def get_scopes(self, token: dict) -> list:
         try:
-            # Assuming the scopes are stored in 'scope' claim and are space-separated
-            scopes = token["scope"].split()
+            if isinstance(token["scope"], str):
+                # Assuming the scopes are stored in 'scope' claim and are space-separated
+                scopes = token["scope"].split()
+            elif isinstance(token["scope"], list):
+                scopes = token["scope"]
+            else:
+                raise Exception(
+                    f"Unmapped scope type - {type(token['scope'])}. Supported types - list, str."
+                )
         except KeyError:
             scopes = []
         return scopes
