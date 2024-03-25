@@ -2711,7 +2711,11 @@ async def startup_event():
 
     ## JWT AUTH ##
     jwt_handler.update_environment(
-        prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        litellm_proxy_roles=LiteLLMProxyRoles(
+            **general_settings.get("litellm_proxy_roles", {})
+        ),
     )
 
     if use_background_health_checks:

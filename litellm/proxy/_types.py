@@ -38,8 +38,8 @@ class LiteLLMBase(BaseModel):
 
 
 class LiteLLMProxyRoles(LiteLLMBase):
-    PROXY_ADMIN: str = "litellm_proxy_admin"
-    PROXY_USER: str = "litellm_user"
+    proxy_admin: str = "litellm_proxy_admin"
+    proxy_user: str = "litellm_user"
 
 
 class LiteLLMPromptInjectionParams(LiteLLMBase):
