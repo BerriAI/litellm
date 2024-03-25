@@ -150,7 +150,7 @@ class JWTHandler:
 
         header = jwt.get_unverified_header(token)
 
-        verbose_proxy_logger.debug(f"header: {header}")
+        verbose_proxy_logger.debug("header: %s", header)
 
         if "kid" in header:
             kid = header["kid"]

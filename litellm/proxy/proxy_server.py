@@ -361,7 +361,7 @@ async def user_api_key_auth(
         route: str = request.url.path
         if general_settings.get("enable_jwt_auth", False) == True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
-            verbose_proxy_logger.debug(f"is_jwt: {is_jwt}")
+            verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
                 # check if valid token
                 valid_token = await jwt_handler.auth_jwt(token=api_key)
@@ -2138,7 +2138,7 @@ class ProxyConfig:
                             verbose_proxy_logger.info(
                                 f"DynamoDB Loading - {value} is not a valid file path"
                             )
-                verbose_proxy_logger.debug(f"database_args: {database_args}")
+                verbose_proxy_logger.debug("database_args: %s", database_args)
                 custom_db_client = DBClient(
                     custom_db_args=database_args, custom_db_type=database_type
                 )
@@ -2429,7 +2429,7 @@ async def generate_key_helper_fn(
             if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
                 key_data["models"] = user_row.models
             ## CREATE KEY
-            verbose_proxy_logger.debug(f"CustomDBClient: Creating Key={key_data}")
+            verbose_proxy_logger.debug("CustomDBClient: Creating Key= %s", key_data)
             await custom_db_client.insert_data(value=key_data, table_name="key")
     except Exception as e:
         traceback.print_exc()
@@ -2668,7 +2668,7 @@ def parse_cache_control(cache_control):
 
 def on_backoff(details):
     # The 'tries' key in the details dictionary contains the number of completed tries
-    verbose_proxy_logger.debug(f"Backing off... this was attempt #{details['tries']}")
+    verbose_proxy_logger.debug("Backing off... this was attempt # %s", details["tries"])
 
 
 @router.on_event("startup")
@@ -2839,7 +2839,7 @@ def model_list(
             )
         if user_model is not None:
             all_models += [user_model]
-    verbose_proxy_logger.debug(f"all_models: {all_models}")
+    verbose_proxy_logger.debug("all_models: %s", all_models)
     return dict(
         data=[
             {
@@ -3063,7 +3063,7 @@ async def chat_completion(
 
         ## Cache Controls
         headers = request.headers
-        verbose_proxy_logger.debug(f"Request Headers: {headers}")
+        verbose_proxy_logger.debug("Request Headers: %s", headers)
         cache_control_header = headers.get("Cache-Control", None)
         if cache_control_header:
             cache_dict = parse_cache_control(cache_control_header)
@@ -5259,10 +5259,10 @@ async def user_update(data: UpdateUserRequest):
                 non_default_values[k] = v
 
         ## ADD USER, IF NEW ##
-        verbose_proxy_logger.debug(f"/user/update: Received data = {data}")
+        verbose_proxy_logger.debug("/user/update: Received data = %s", data)
         if data.user_id is not None and len(data.user_id) > 0:
             non_default_values["user_id"] = data.user_id  # type: ignore
-            verbose_proxy_logger.debug(f"In update user, user_id condition block.")
+            verbose_proxy_logger.debug("In update user, user_id condition block.")
             response = await prisma_client.update_data(
                 user_id=data.user_id,
                 data=non_default_values,
@@ -6352,7 +6352,7 @@ async def add_new_model(model_params: ModelParams):
 
         verbose_proxy_logger.debug("User config path: %s", user_config_file_path)
 
-        verbose_proxy_logger.debug(f"Loaded config: %s", config)
+        verbose_proxy_logger.debug("Loaded config: %s", config)
         # Add the new model to the config
         model_info = model_params.model_info.json()
         model_info = {k: v for k, v in model_info.items() if v is not None}
@@ -6364,7 +6364,7 @@ async def add_new_model(model_params: ModelParams):
             }
         )
 
-        verbose_proxy_logger.debug(f"updated model list: %s", config["model_list"])
+        verbose_proxy_logger.debug("updated model list: %s", config["model_list"])
 
         # Save new config
         await proxy_config.save_config(new_config=config)
@@ -6581,7 +6581,7 @@ async def model_info_v1(
         # don't return the api key
         model["litellm_params"].pop("api_key", None)
 
-    verbose_proxy_logger.debug(f"all_models: {all_models}")
+    verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
 
 
@@ -6733,7 +6733,7 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug(f"receiving data: {data}")
+        verbose_proxy_logger.debug("receiving data: %s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -7369,7 +7369,7 @@ async def update_config(config_info: ConfigYAML):
         config = await proxy_config.get_config()
 
         backup_config = copy.deepcopy(config)
-        verbose_proxy_logger.debug(f"Loaded config: {config}")
+        verbose_proxy_logger.debug("Loaded config: %s", config)
 
         # update the general settings
         if config_info.general_settings is not None:
