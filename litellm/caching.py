@@ -899,6 +899,7 @@ class Cache:
         port: Optional[str] = None,
         password: Optional[str] = None,
         namespace: Optional[str] = None,
+        ttl: Optional[float] = None,
         similarity_threshold: Optional[float] = None,
         supported_call_types: Optional[
             List[
@@ -996,6 +997,7 @@ class Cache:
         self.type = type
         self.namespace = namespace
         self.redis_flush_size = redis_flush_size
+        self.ttl = ttl
 
     def get_cache_key(self, *args, **kwargs):
         """
@@ -1235,6 +1237,9 @@ class Cache:
                 if isinstance(result, OpenAIObject):
                     result = result.model_dump_json()
 
+                ## DEFAULT TTL ##
+                if self.ttl is not None:
+                    kwargs["ttl"] = self.ttl
                 ## Get Cache-Controls ##
                 if kwargs.get("cache", None) is not None and isinstance(
                     kwargs.get("cache"), dict
@@ -1242,6 +1247,7 @@ class Cache:
                     for k, v in kwargs.get("cache").items():
                         if k == "ttl":
                             kwargs["ttl"] = v
+
                 cached_data = {"timestamp": time.time(), "response": result}
                 return cache_key, cached_data, kwargs
             else:
