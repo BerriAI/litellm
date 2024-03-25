@@ -156,36 +156,43 @@ class JWTHandler:
 
         verbose_proxy_logger.debug(f"header: {header}")
 
-        if "kid" in header:
-            kid = header["kid"]
-        else:
-            raise Exception(f"Expected 'kid' in header. header={header}.")
+        kid = header.get("kid", None)
 
-        for key in keys:
-            if key["kid"] == kid:
-                jwk = {
-                    "kty": key["kty"],
-                    "kid": key["kid"],
-                    "n": key["n"],
-                    "e": key["e"],
-                }
-                public_key = RSAAlgorithm.from_jwk(json.dumps(jwk))
+        public_key = None
+        if len(keys) == 1:
+            public_key = public_key
+        elif len(keys) > 1:
+            for key in keys:
+                if key["kid"] == kid:
+                    public_key = key
+        if public_key is not None and isinstance(public_key, dict):
+            jwk = {}
+            if "kty" in public_key:
+                jwk["kty"] = public_key["kty"]
+            if "kid" in public_key:
+                jwk["kid"] = public_key["kid"]
+            if "n" in public_key:
+                jwk["n"] = public_key["n"]
+            if "e" in public_key:
+                jwk["e"] = public_key["e"]
 
-                try:
-                    # decode the token using the public key
-                    payload = jwt.decode(
-                        token,
-                        public_key,  # type: ignore
-                        algorithms=["RS256"],
-                        audience="account",
-                    )
-                    return payload
+            public_key = RSAAlgorithm.from_jwk(json.dumps(jwk))
 
-                except jwt.ExpiredSignatureError:
-                    # the token is expired, do something to refresh it
-                    raise Exception("Token Expired")
-                except Exception as e:
-                    raise Exception(f"Validation fails: {str(e)}")
+            try:
+                # decode the token using the public key
+                payload = jwt.decode(
+                    token,
+                    public_key,  # type: ignore
+                    algorithms=["RS256"],
+                    options={"verify_aud": False},
+                )
+                return payload
+
+            except jwt.ExpiredSignatureError:
+                # the token is expired, do something to refresh it
+                raise Exception("Token Expired")
+            except Exception as e:
+                raise Exception(f"Validation fails: {str(e)}")
 
         raise Exception("Invalid JWT Submitted")
 
