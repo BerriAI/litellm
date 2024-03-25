@@ -128,7 +128,7 @@ class AmazonAnthropicClaude3Config:
         }
 
     def get_supported_openai_params(self):
-        return ["max_tokens", "tools", "tool_choice", "stream"]
+        return ["max_tokens", "tools", "tool_choice", "stream", "extra_headers"]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
