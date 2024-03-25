@@ -306,7 +306,7 @@ class ProxyLogging:
 
         # check if crossed budget
         if user_current_spend >= user_max_budget:
-            verbose_proxy_logger.debug(f"Budget Crossed for {user_info}")
+            verbose_proxy_logger.debug("Budget Crossed for %s", user_info)
             message = "Budget Crossed for" + user_info
             await self.alerting_handler(
                 message=message,
@@ -1061,7 +1061,7 @@ class PrismaClient:
         Add a key to the database. If it already exists, do nothing.
         """
         try:
-            verbose_proxy_logger.debug(f"PrismaClient: insert_data: {data}")
+            verbose_proxy_logger.debug("PrismaClient: insert_data: %s", data)
             if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
@@ -1405,7 +1405,7 @@ class PrismaClient:
                 deleted_tokens = await self.db.litellm_verificationtoken.delete_many(
                     where=filter_query  # type: ignore
                 )
-                verbose_proxy_logger.debug(f"deleted_tokens: {deleted_tokens}")
+                verbose_proxy_logger.debug("deleted_tokens: %s", deleted_tokens)
                 return {"deleted_keys": deleted_tokens}
             elif (
                 table_name == "team"
@@ -1768,7 +1768,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "api_base": litellm_params.get("api_base", ""),
     }
 
-    verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
+    verbose_proxy_logger.debug("SpendTable: created payload - payload: %s\n\n", payload)
     json_fields = [
         field
         for field, field_type in LiteLLM_SpendLogs.__annotations__.items()
