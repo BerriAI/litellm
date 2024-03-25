@@ -1,6 +1,7 @@
 from locust import HttpUser, task, between, events
 import json
 import time
+import uuid
 
 
 class MyUser(HttpUser):
@@ -20,7 +21,8 @@ class MyUser(HttpUser):
             "messages": [
                 {
                     "role": "system",
-                    "content": "this is a very sweet test message from ishaan",
+                    "content": f"{uuid.uuid4()} this is a very sweet test message from ishaan"
+                    * 100,
                 },
                 {"role": "user", "content": "Hello, how are you?"},
             ],
