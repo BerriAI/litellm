@@ -2759,6 +2759,12 @@ def embedding(
                 model_response=EmbeddingResponse(),
             )
         elif custom_llm_provider == "ollama":
+            api_base = (
+                litellm.api_base
+                or api_base
+                or get_secret("OLLAMA_API_BASE")
+                or "http://localhost:11434"
+            )
             ollama_input = None
             if isinstance(input, list) and len(input) > 1:
                 raise litellm.BadRequestError(
@@ -2779,6 +2785,7 @@ def embedding(
 
             if aembedding == True:
                 response = ollama.ollama_aembeddings(
+                    api_base=api_base,
                     model=model,
                     prompt=ollama_input,
                     encoding=encoding,
