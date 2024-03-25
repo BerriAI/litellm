@@ -67,17 +67,21 @@ class JWTHandler:
         self.http_handler = HTTPHandler()
 
     def update_environment(
-        self, prisma_client: Optional[PrismaClient], user_api_key_cache: DualCache
+        self,
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: DualCache,
+        litellm_proxy_roles: LiteLLMProxyRoles,
     ) -> None:
         self.prisma_client = prisma_client
         self.user_api_key_cache = user_api_key_cache
+        self.litellm_proxy_roles = litellm_proxy_roles
 
     def is_jwt(self, token: str):
         parts = token.split(".")
         return len(parts) == 3
 
     def is_admin(self, scopes: list) -> bool:
-        if LiteLLMProxyRoles.PROXY_ADMIN.value in scopes:
+        if self.litellm_proxy_roles.PROXY_ADMIN in scopes:
             return True
         return False
 
