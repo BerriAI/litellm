@@ -841,6 +841,17 @@ class DualCache(BaseCache):
         except Exception as e:
             traceback.print_exc()
 
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+        try:
+            if self.in_memory_cache is not None:
+                await self.in_memory_cache.async_set_cache(key, value, **kwargs)
+
+            if self.redis_cache is not None and local_only == False:
+                await self.redis_cache.async_set_cache(key, value, **kwargs)
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
+            traceback.print_exc()
+
     def flush_cache(self):
         if self.in_memory_cache is not None:
             self.in_memory_cache.flush_cache()
