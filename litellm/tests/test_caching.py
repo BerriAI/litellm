@@ -116,6 +116,23 @@ def test_caching_with_ttl():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_caching_with_default_ttl():
+    try:
+        litellm.set_verbose = True
+        litellm.cache = Cache(ttl=0)
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        litellm.cache = None  # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        assert response2["id"] != response1["id"]
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_caching_with_cache_controls():
     try:
         litellm.set_verbose = True
