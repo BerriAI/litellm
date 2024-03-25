@@ -9,7 +9,7 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
 from litellm.proxy._types import LiteLLM_UserTable, LiteLLM_EndUserTable
-from typing import Optional
+from typing import Optional, Literal
 from litellm.proxy.utils import PrismaClient
 from litellm.caching import DualCache
 
@@ -19,6 +19,13 @@ def common_checks(
     user_object: LiteLLM_UserTable,
     end_user_object: Optional[LiteLLM_EndUserTable],
 ) -> bool:
+    """
+    Common checks across jwt + key-based auth.
+
+    1. If user can call model
+    2. If user is in budget
+    3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
+    """
     _model = request_body.get("model", None)
     # 1. If user can call model
     if (
@@ -45,6 +52,52 @@ def common_checks(
                 f"End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}"
             )
     return True
+
+
+def allowed_routes_check(
+    user_role: Literal["proxy_admin", "app_owner"],
+    route: str,
+    allowed_routes: Optional[list] = None,
+) -> bool:
+    """
+    Check if user -> not admin - allowed to access these routes
+    """
+    openai_routes = [
+        # chat completions
+        "/openai/deployments/{model}/chat/completions",
+        "/chat/completions",
+        "/v1/chat/completions",
+        # completions
+        # embeddings
+        "/openai/deployments/{model}/embeddings",
+        "/embeddings",
+        "/v1/embeddings",
+        # image generation
+        "/images/generations",
+        "/v1/images/generations",
+        # audio transcription
+        "/audio/transcriptions",
+        "/v1/audio/transcriptions",
+        # moderations
+        "/moderations",
+        "/v1/moderations",
+        # models
+        "/models",
+        "/v1/models",
+    ]
+    info_routes = ["/key/info", "/team/info", "/user/info", "/model/info"]
+    default_routes = openai_routes + info_routes
+    if user_role == "proxy_admin":
+        return True
+    elif user_role == "app_owner":
+        if allowed_routes is None:
+            if route in default_routes:  # check default routes
+                return True
+        elif route in allowed_routes:
+            return True
+        else:
+            return False
+    return False
 
 
 async def get_end_user_object(

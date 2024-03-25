@@ -103,7 +103,10 @@ RUN chmod +x entrypoint.sh
 EXPOSE 4000/tcp
 
 # Override the CMD instruction with your desired command and arguments
-CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug", "--run_gunicorn"]
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 ```
 
 </TabItem>
@@ -231,7 +234,6 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 | [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend |
 | [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
 | [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
-
 
 ## Deploy with Database
 ### Docker, Kubernetes, Helm Chart
@@ -474,25 +476,6 @@ docker run --name litellm-proxy \
 ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 ```
 
-## Best Practices for Deploying to Production
-### 1. Switch of debug logs in production 
-don't use [`--detailed-debug`, `--debug`](https://docs.litellm.ai/docs/proxy/debugging#detailed-debug) or `litellm.set_verbose=True`. We found using debug logs can add 5-10% latency per LLM API call
-
-### 2. Use `run_gunicorn` and `num_workers`
-
-Example setting `--run_gunicorn` and `--num_workers`
-```shell
-docker run ghcr.io/berriai/litellm-database:main-latest --run_gunicorn --num_workers 4
-```
-
-Why `Gunicorn`?
-- Gunicorn takes care of running multiple instances of your web application
-- Gunicorn is ideal for running litellm proxy on cluster of machines with Kubernetes
-
-Why `num_workers`? 
-Setting `num_workers` to the number of CPUs available ensures optimal utilization of system resources by matching the number of worker processes to the available CPU cores.
-
-
 ## Advanced Deployment Settings
 
 ### Customization of the server root path
@@ -525,6 +508,57 @@ Provide an ssl certificate when starting litellm proxy server
 ## Platform-specific Guide
 
 <Tabs>
+<TabItem value="AWS EKS" label="AWS EKS - Kubernetes">
+
+### Kubernetes - Deploy on EKS
+
+Step1. Create an EKS Cluster with the following spec
+
+```shell
+eksctl create cluster --name=litellm-cluster --region=us-west-2 --node-type=t2.small
+```
+
+Step 2. Mount litellm proxy config on kub cluster 
+
+This will mount your local file called `proxy_config.yaml` on kubernetes cluster
+
+```shell
+kubectl create configmap litellm-config --from-file=proxy_config.yaml
+```
+
+Step 3. Apply `kub.yaml` and `service.yaml`
+Clone the following `kub.yaml` and `service.yaml` files and apply locally
+
+- Use this `kub.yaml` file - [litellm kub.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/kubernetes/kub.yaml)
+
+- Use this `service.yaml` file - [litellm service.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/kubernetes/service.yaml)
+
+Apply `kub.yaml`
+```
+kubectl apply -f kub.yaml
+```
+
+Apply `service.yaml` - creates an AWS load balancer to expose the proxy
+```
+kubectl apply -f service.yaml
+
+# service/litellm-service created
+```
+
+Step 4. Get Proxy Base URL
+
+```shell
+kubectl get services
+
+# litellm-service   LoadBalancer   10.100.6.31   a472dc7c273fd47fd******.us-west-2.elb.amazonaws.com   4000:30374/TCP   63m
+```
+
+Proxy Base URL =  `a472dc7c273fd47fd******.us-west-2.elb.amazonaws.com:4000`
+
+That's it, now you can start using LiteLLM Proxy
+
+</TabItem>
+
 
 <TabItem value="aws-stack" label="AWS Cloud Formation Stack">
 

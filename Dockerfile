@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.9
+ARG LITELLM_BUILD_IMAGE=python:3.11.8-slim
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.9-slim
+ARG LITELLM_RUNTIME_IMAGE=python:3.11.8-slim
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE as builder
 
@@ -70,5 +70,5 @@ EXPOSE 4000/tcp
 ENTRYPOINT ["litellm"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs 
-# CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--detailed_debug"]
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--num_workers", "4"]
+# CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]

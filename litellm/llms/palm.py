@@ -98,7 +98,7 @@ def completion(
     logger_fn=None,
 ):
     try:
-        import google.generativeai as palm
+        import google.generativeai as palm  # type: ignore
     except:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"

@@ -30,6 +30,7 @@ const sidebars = {
       items: [
         "proxy/quick_start", 
         "proxy/deploy", 
+        "proxy/prod", 
         "proxy/configs",
         {
           type: 'link',
@@ -187,6 +188,7 @@ const sidebars = {
       label: 'Tutorials',
       items: [
         'tutorials/azure_openai',
+        'tutorials/instructor',
         'tutorials/oobabooga',
         "tutorials/gradio_integration",
         'tutorials/huggingface_codellama',

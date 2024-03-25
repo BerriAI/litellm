@@ -8,10 +8,10 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import httpx
 import jwt
-from jwt.algorithms import RSAAlgorithm
 import json
 import os
 from litellm.caching import DualCache
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLMProxyRoles, LiteLLM_UserTable
 from litellm.proxy.utils import PrismaClient
 from typing import Optional
@@ -137,6 +137,8 @@ class JWTHandler:
         return scopes
 
     async def auth_jwt(self, token: str) -> dict:
+        from jwt.algorithms import RSAAlgorithm
+
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
@@ -147,7 +149,13 @@ class JWTHandler:
         keys = response.json()["keys"]
 
         header = jwt.get_unverified_header(token)
-        kid = header["kid"]
+
+        verbose_proxy_logger.debug(f"header: {header}")
+
+        if "kid" in header:
+            kid = header["kid"]
+        else:
+            raise Exception(f"Expected 'kid' in header. header={header}.")
 
         for key in keys:
             if key["kid"] == kid:

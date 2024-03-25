@@ -280,6 +280,29 @@ async def get_key_info(session, call_key, get_key=None):
         return await response.json()
 
 
+async def get_model_info(session, call_key):
+    """
+    Make sure only models user has access to are returned
+    """
+    url = "http://0.0.0.0:4000/model/info"
+    headers = {
+        "Authorization": f"Bearer {call_key}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(
+                f"Request did not return a 200 status code: {status}. Responses {response_text}"
+            )
+        return await response.json()
+
+
 @pytest.mark.asyncio
 async def test_key_info():
     """
@@ -303,6 +326,25 @@ async def test_key_info():
         random_key = key_gen["key"]
         status = await get_key_info(session=session, get_key=key, call_key=random_key)
         assert status == 403
+
+
+@pytest.mark.asyncio
+async def test_model_info():
+    """
+    Get model info for models key has access to
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0)
+        key = key_gen["key"]
+        # as admin #
+        admin_models = await get_model_info(session=session, call_key="sk-1234")
+        admin_models = admin_models["data"]
+        # as key itself #
+        user_models = await get_model_info(session=session, call_key=key)
+        user_models = user_models["data"]
+
+        assert len(admin_models) > len(user_models)
+        assert len(user_models) > 0
 
 
 async def get_spend_logs(session, request_id):

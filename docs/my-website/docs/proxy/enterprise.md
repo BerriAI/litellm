@@ -60,7 +60,7 @@ callbacks: ["llamaguard_moderations"]
 Set the LLM Guard API Base in your environment 
 
 ```env
-LLM_GUARD_API_BASE = "http://0.0.0.0:4000"
+LLM_GUARD_API_BASE = "http://0.0.0.0:8192" # deployed llm guard api
 ```
 
 Add `llmguard_moderations` as a callback 
