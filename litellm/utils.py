@@ -1465,6 +1465,7 @@ class Logging:
                             self.langfuse_public_key != langFuseLogger.public_key
                             and self.langfuse_secret != langFuseLogger.secret_key
                         ):
+                            print_verbose("Instantiates langfuse client")
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
