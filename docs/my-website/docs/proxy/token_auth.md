@@ -108,3 +108,37 @@ general_settings:
   enable_jwt_auth: True
   allowed_routes: ["/chat/completions", "/embeddings"]
 ```
+
+## Advanced - Set Accepted JWT Scope Names 
+
+Change the string in JWT 'scopes', that litellm evaluates to see if a user has admin access.
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_proxy_roles:
+    proxy_admin: "litellm-proxy-admin"
+```
+
+### Allowed LiteLLM scopes
+
+```python
+class LiteLLMProxyRoles(LiteLLMBase):
+    proxy_admin: str = "litellm_proxy_admin"
+    proxy_user: str = "litellm_user" # 👈 Not implemented yet, for JWT-Auth.
+```
+
+### JWT Scopes
+
+Here's what scopes on JWT-Auth tokens look like
+
+**Can be a list**
+```
+scope: ["litellm-proxy-admin",...]
+```
+
+**Can be a space-separated string**
+```
+scope: "litellm-proxy-admin ..."
+```
