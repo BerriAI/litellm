@@ -155,9 +155,19 @@ class JWTHandler:
         if keys_url is None:
             raise Exception("Missing JWT Public Key URL from environment.")
 
-        response = await self.http_handler.get(keys_url)
+        cached_keys = await self.user_api_key_cache.async_get_cache(
+            "litellm_jwt_auth_keys"
+        )
+        if cached_keys is None:
+            response = await self.http_handler.get(keys_url)
 
-        keys = response.json()["keys"]
+            keys = response.json()["keys"]
+
+            await self.user_api_key_cache.async_set_cache(
+                key="litellm_jwt_auth_keys", value=keys, ttl=600  # cache for 10 mins
+            )
+        else:
+            keys = cached_keys
 
         header = jwt.get_unverified_header(token)
 
