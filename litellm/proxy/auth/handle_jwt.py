@@ -81,7 +81,7 @@ class JWTHandler:
         return len(parts) == 3
 
     def is_admin(self, scopes: list) -> bool:
-        if self.litellm_proxy_roles.PROXY_ADMIN in scopes:
+        if self.litellm_proxy_roles.proxy_admin in scopes:
             return True
         return False
 
@@ -94,7 +94,7 @@ class JWTHandler:
 
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
-            team_id = token["azp"]
+            team_id = token["client_id"]
         except KeyError:
             team_id = default_value
         return team_id
