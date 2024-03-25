@@ -9617,15 +9617,31 @@ class CustomStreamWrapper:
             )
 
     def set_logging_event_loop(self, loop):
+        """
+        import litellm, asyncio
+
+        loop = asyncio.get_event_loop() # 👈 gets the current event loop
+
+        response = litellm.completion(.., stream=True)
+
+        response.set_logging_event_loop(loop=loop) # 👈 enables async_success callbacks for sync logging
+
+        for chunk in response:
+            ...
+        """
         self.logging_loop = loop
 
-    async def your_async_function(self):
-        # Your asynchronous code here
-        return "Your asynchronous code is running"
-
     def run_success_logging_in_thread(self, processed_chunk):
-        # Create an event loop for the new thread
+        if litellm.disable_streaming_logging == True:
+            """
+            [NOT RECOMMENDED]
+            Set this via `litellm.disable_streaming_logging = True`.
+
+            Disables streaming logging.
+            """
+            return
         ## ASYNC LOGGING
+        # Create an event loop for the new thread
         if self.logging_loop is not None:
             future = asyncio.run_coroutine_threadsafe(
                 self.logging_obj.async_success_handler(processed_chunk),
