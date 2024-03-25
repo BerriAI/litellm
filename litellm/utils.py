@@ -8899,7 +8899,6 @@ class CustomStreamWrapper:
                 if data_json["choices"][0].get("finish_reason", None):
                     is_finished = True
                     finish_reason = data_json["choices"][0]["finish_reason"]
-                    self.sent_last_chunk = True
                 print_verbose(
                     f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}"
                 )
