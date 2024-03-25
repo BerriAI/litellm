@@ -123,7 +123,9 @@ class DynamoDBWrapper(CustomDB):
                 error_occurred = False
                 verbose_proxy_logger.debug("DynamoDB Wrapper - Creating User Table")
                 table = client.table(self.database_arguments.user_table_name)
-                verbose_proxy_logger.debug(f"DynamoDB Wrapper - Created Table, {table}")
+                verbose_proxy_logger.debug(
+                    "DynamoDB Wrapper - Created Table, %s", table
+                )
                 if not await table.exists():
                     verbose_proxy_logger.debug(
                         f"DynamoDB Wrapper - {table} does not exist"

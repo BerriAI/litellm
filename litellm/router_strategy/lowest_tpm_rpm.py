@@ -210,5 +210,5 @@ class LowestTPMLoggingHandler(CustomLogger):
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 deployment = _deployment
-        verbose_router_logger.info(f"returning picked lowest tpm/rpm deployment.")
+        verbose_router_logger.info("returning picked lowest tpm/rpm deployment.")
         return deployment
