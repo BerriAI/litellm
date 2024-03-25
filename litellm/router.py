@@ -230,7 +230,7 @@ class Router:
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
-        self.chat = litellm.Chat(params=default_litellm_params)
+        self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
         # default litellm args
         self.default_litellm_params = default_litellm_params
