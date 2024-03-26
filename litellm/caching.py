@@ -334,6 +334,9 @@ class RedisCache(BaseCache):
     def flush_cache(self):
         self.redis_client.flushall()
 
+    def flushall(self):
+        self.redis_client.flushall()
+
     async def disconnect(self):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
 
