@@ -49,6 +49,7 @@ litellm_settings:
   budget_duration: 30d
   num_retries: 5
   request_timeout: 600
+  telemetry: False
   context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
 
 general_settings: 
