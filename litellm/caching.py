@@ -119,9 +119,6 @@ class RedisCache(BaseCache):
 
         # for high traffic, we store the redis results in memory and then batch write to redis
         self.redis_batch_writing_buffer = []
-        self.redis_batch_reading_buffer = []
-        self.redis_last_updated_read_buffer = None
-        self.redis_fetch_interval = 1  # fetch from redis every 1 second
         self.redis_flush_size = redis_flush_size
         self.redis_version = "Unknown"
         try:
@@ -256,24 +253,11 @@ class RedisCache(BaseCache):
             traceback.print_exc()
             logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
 
-    def _should_fetch_from_redis(self):
-        if self.redis_last_updated_read_buffer is None:
-            return True
-        if (
-            time.time() - self.redis_last_updated_read_buffer
-            > self.redis_fetch_interval
-        ):
-            return True
-        return False
-
     async def async_get_cache(self, key, **kwargs):
         _redis_client = self.init_async_client()
         async with _redis_client as redis_client:
             try:
                 print_verbose(f"Get Async Redis Cache: key: {key}")
-                if self._should_fetch_from_redis():
-                    self.redis_last_updated_read_buffer = time.time()
-
                 cached_response = await redis_client.get(key)
                 print_verbose(
                     f"Got Async Redis Cache: key: {key}, cached_response {cached_response}"
