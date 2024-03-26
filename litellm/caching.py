@@ -204,8 +204,7 @@ class RedisCache(BaseCache):
 
     async def batch_cache_write(self, key, value, **kwargs):
         print_verbose(
-            "in batch cache writing for redis buffer size=",
-            len(self.redis_batch_writing_buffer),
+            f"in batch cache writing for redis buffer size={len(self.redis_batch_writing_buffer)}",
         )
         self.redis_batch_writing_buffer.append((key, value))
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
