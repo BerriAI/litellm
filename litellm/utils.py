@@ -422,8 +422,11 @@ class StreamingChoices(OpenAIObject):
         else:
             self.finish_reason = None
         self.index = index
-        if delta:
-            self.delta = delta
+        if delta is not None:
+            if isinstance(delta, Delta):
+                self.delta = delta
+            if isinstance(delta, dict):
+                self.delta = Delta(**delta)
         else:
             self.delta = Delta()
         if enhancements is not None:
@@ -491,14 +494,25 @@ class ModelResponse(OpenAIObject):
     ):
         if stream is not None and stream == True:
             object = "chat.completion.chunk"
-            choices = [StreamingChoices()]
+            if choices is not None and isinstance(choices, list):
+                new_choices = []
+                for choice in choices:
+                    _new_choice = StreamingChoices(**choice)
+                    new_choices.append(_new_choice)
+                choices = new_choices
+            else:
+                choices = [StreamingChoices()]
         else:
             if model in litellm.open_ai_embedding_models:
                 object = "embedding"
             else:
                 object = "chat.completion"
-            if choices:
-                choices = [Choices(*choices)]
+            if choices is not None and isinstance(choices, list):
+                new_choices = []
+                for choice in choices:
+                    _new_choice = Choices(**choice)
+                    new_choices.append(_new_choice)
+                choices = new_choices
             else:
                 choices = [Choices()]
         if id is None:
