@@ -305,16 +305,6 @@ celery_fn = None  # Redis Queue for handling requests
 ### logger ###
 
 
-def usage_telemetry(
-    feature: str,
-):  # helps us know if people are using this feature. Set `litellm --telemetry False` to your cli call to turn this off
-    if user_telemetry:
-        data = {"feature": feature}  # "local_proxy_server"
-        threading.Thread(
-            target=litellm.utils.litellm_telemetry, args=(data,), daemon=True
-        ).start()
-
-
 def _get_bearer_token(
     api_key: str,
 ):
@@ -2574,7 +2564,6 @@ async def initialize(
     if experimental:
         pass
     user_telemetry = telemetry
-    usage_telemetry(feature="local_proxy_server")
 
 
 # for streaming
