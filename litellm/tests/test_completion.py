@@ -76,6 +76,8 @@ def test_completion_claude():
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
     except Exception as e:
+        if "overloaded_error" in str(e):
+            pass
         pytest.fail(f"Error occurred: {e}")
 
 
