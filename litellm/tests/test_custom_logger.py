@@ -518,7 +518,6 @@ def test_redis_cache_completion_stream():
         litellm.success_callback = []
         litellm._async_success_callback = []
         litellm.cache = None
-        raise Exception("it worked!")
     except Exception as e:
         print(e)
         litellm.success_callback = []
