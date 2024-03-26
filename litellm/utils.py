@@ -2814,6 +2814,7 @@ def client(original_function):
             )
             # if caching is false, don't run this
             final_embedding_cached_response = None
+
             if (
                 (
                     kwargs.get("caching", None) is None
