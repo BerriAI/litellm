@@ -7760,7 +7760,7 @@ async def cache_ping():
 )
 async def cache_flushall():
     """
-    A function to flush all items from the cache
+    A function to flush all items from the cache. (All items will be deleted from the cache with this)
     Raises HTTPException if the cache is not initialized or if the cache type does not support flushing.
     Returns a dictionary with the status of the operation.
 
