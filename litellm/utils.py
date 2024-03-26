@@ -8458,6 +8458,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = ""
@@ -9373,6 +9374,7 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if hasattr(chunk, "id"):
                     model_response.id = chunk.id
+                    self.response_id = chunk.id
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
@@ -9397,6 +9399,7 @@ class CustomStreamWrapper:
                     )
                     if hasattr(response_obj["original_chunk"], "id"):
                         model_response.id = response_obj["original_chunk"].id
+                        self.response_id = model_response.id
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
@@ -9412,6 +9415,7 @@ class CustomStreamWrapper:
                 # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
+                self.response_id = original_chunk.id
                 if len(original_chunk.choices) > 0:
                     if (
                         original_chunk.choices[0].delta.function_call is not None
@@ -9493,6 +9497,7 @@ class CustomStreamWrapper:
                     original_chunk = response_obj.get("original_chunk", None)
                     if original_chunk:
                         model_response.id = original_chunk.id
+                        self.response_id = original_chunk.id
                         if len(original_chunk.choices) > 0:
                             try:
                                 delta = dict(original_chunk.choices[0].delta)
