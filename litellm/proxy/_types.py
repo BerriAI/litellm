@@ -396,6 +396,7 @@ class TeamBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
     models: list = []
+    disabled: bool = False
 
 
 class NewTeamRequest(TeamBase):

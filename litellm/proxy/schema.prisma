@@ -70,6 +70,7 @@ model LiteLLM_TeamTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    disabled Boolean @default(false) 
     budget_duration String? 
     budget_reset_at DateTime?
     created_at    DateTime               @default(now()) @map("created_at")
