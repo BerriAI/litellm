@@ -49,6 +49,15 @@ general_settings:
   disable_reset_budget: true
 ```
 
+## 4. Switch of `litellm.telemetry`
+
+Switch of all telemetry tracking done by litellm
+
+```yaml
+litellm_settings:
+  telemetry: False
+```
+
 ## Machine Specifications to Deploy LiteLLM
 
 | Service | Spec | CPUs | Memory | Architecture | Version|
