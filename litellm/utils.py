@@ -1774,16 +1774,14 @@ class Logging:
                         end_time=end_time,
                     )
                 except Exception as e:
-                    verbose_logger.debug(
+                    print_verbose(
                         f"Error occurred building stream chunk: {traceback.format_exc()}"
                     )
                     complete_streaming_response = None
             else:
                 self.streaming_chunks.append(result)
         if complete_streaming_response is not None:
-            verbose_logger.debug(
-                "Async success callbacks: Got a complete streaming response"
-            )
+            print_verbose("Async success callbacks: Got a complete streaming response")
             self.model_call_details["async_complete_streaming_response"] = (
                 complete_streaming_response
             )
@@ -1824,7 +1822,7 @@ class Logging:
                     callbacks.append(callback)
         else:
             callbacks = litellm._async_success_callback
-        verbose_logger.debug(f"Async success callbacks: {callbacks}")
+        print_verbose(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -1894,10 +1892,6 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    # print_verbose(
-                    #     f"Making async function logging call for {callback}, result={result} - {self.model_call_details}",
-                    #     logger_only=True,
-                    # )
                     if self.stream:
                         if (
                             "async_complete_streaming_response"
@@ -9664,7 +9658,12 @@ class CustomStreamWrapper:
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
-                return self.finish_reason_handler()
+                processed_chunk = self.finish_reason_handler()
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.success_handler, args=(processed_chunk,)
+                ).start()  # log response
+                return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
@@ -9773,13 +9772,33 @@ class CustomStreamWrapper:
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
-                return self.finish_reason_handler()
+                processed_chunk = self.finish_reason_handler()
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.success_handler, args=(processed_chunk,)
+                ).start()  # log response
+                asyncio.create_task(
+                    self.logging_obj.async_success_handler(
+                        processed_chunk,
+                    )
+                )
+                return processed_chunk
         except StopIteration:
             if self.sent_last_chunk == True:
                 raise StopAsyncIteration
             else:
                 self.sent_last_chunk = True
-                return self.finish_reason_handler()
+                processed_chunk = self.finish_reason_handler()
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.success_handler, args=(processed_chunk,)
+                ).start()  # log response
+                asyncio.create_task(
+                    self.logging_obj.async_success_handler(
+                        processed_chunk,
+                    )
+                )
+                return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # Handle any exceptions that might occur during streaming
