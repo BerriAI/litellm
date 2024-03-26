@@ -354,7 +354,10 @@ class Choices(OpenAIObject):
         if message is None:
             self.message = Message(content=None)
         else:
-            self.message = Message(**message)
+            if isinstance(message, Message):
+                self.message = message
+            elif isinstance(message, dict):
+                self.message = Message(**message)
         if logprobs is not None:
             self.logprobs = logprobs
         if enhancements is not None:
