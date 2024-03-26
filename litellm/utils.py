@@ -9531,6 +9531,9 @@ class CustomStreamWrapper:
                 else:
                     return
             elif self.received_finish_reason is not None:
+                if self.sent_last_chunk == True:
+                    raise StopIteration
+
                 # flush any remaining holding chunk
                 if len(self.holding_chunk) > 0:
                     if model_response.choices[0].delta.content is None:
@@ -9544,6 +9547,7 @@ class CustomStreamWrapper:
                 is_delta_empty = self.is_delta_empty(
                     delta=model_response.choices[0].delta
                 )
+
                 if is_delta_empty:
                     # get any function call arguments
                     model_response.choices[0].finish_reason = map_finish_reason(
