@@ -85,6 +85,11 @@ class JWTHandler:
             return True
         return False
 
+    def is_team(self, scopes: list) -> bool:
+        if self.litellm_proxy_roles.team_jwt_scope in scopes:
+            return True
+        return False
+
     def get_end_user_id(self, token: dict, default_value: Optional[str]) -> str:
         try:
             if self.litellm_proxy_roles.team_id_jwt_field is not None:
