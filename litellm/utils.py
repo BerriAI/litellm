@@ -8301,34 +8301,6 @@ def get_or_generate_uuid():
     return uuid_value
 
 
-def litellm_telemetry(data):
-    # Load or generate the UUID
-    uuid_value = ""
-    try:
-        uuid_value = get_or_generate_uuid()
-    except:
-        uuid_value = str(uuid.uuid4())
-    try:
-        # Prepare the data to send to litellm logging api
-        try:
-            pkg_version = importlib.metadata.version("litellm")
-        except:
-            pkg_version = None
-        if "model" not in data:
-            data["model"] = None
-        payload = {"uuid": uuid_value, "data": data, "version:": pkg_version}
-        # Make the POST request to litellm logging api
-        response = requests.post(
-            "https://litellm-logging.onrender.com/logging",
-            headers={"Content-Type": "application/json"},
-            json=payload,
-        )
-        response.raise_for_status()  # Raise an exception for HTTP errors
-    except:
-        # [Non-Blocking Error]
-        return
-
-
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
