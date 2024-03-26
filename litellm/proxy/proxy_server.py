@@ -7753,6 +7753,37 @@ async def cache_ping():
         )
 
 
+@router.post(
+    "/cache/flush",
+    tags=["caching"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def cache_flush():
+    """
+    Endpoint for checking if cache can be pinged
+    """
+    try:
+        if litellm.cache is None:
+            raise HTTPException(
+                status_code=503, detail="Cache not initialized. litellm.cache is None"
+            )
+        if litellm.cache.type == "redis":
+            litellm.cache.cache.flushall()
+            return {
+                "status": "success",
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cache type {litellm.cache.type} does not support flushing",
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service Unhealthy ({str(e)})",
+        )
+
+
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
