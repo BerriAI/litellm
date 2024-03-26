@@ -124,7 +124,7 @@ general_settings:
 ### Allowed LiteLLM scopes
 
 ```python
-class LiteLLMProxyRoles(LiteLLMBase):
+class LiteLLM_JWTAuth(LiteLLMBase):
     proxy_admin: str = "litellm_proxy_admin"
     proxy_user: str = "litellm_user" # 👈 Not implemented yet, for JWT-Auth.
 ```

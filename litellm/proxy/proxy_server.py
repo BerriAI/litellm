@@ -378,13 +378,13 @@ async def user_api_key_auth(
                     is_allowed = allowed_routes_check(
                         user_role="proxy_admin",
                         user_route=route,
-                        litellm_proxy_roles=jwt_handler.litellm_proxy_roles,
+                        litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                     )
                     if is_allowed:
                         return UserAPIKeyAuth()
                     else:
                         allowed_routes = (
-                            jwt_handler.litellm_proxy_roles.admin_allowed_routes
+                            jwt_handler.litellm_jwtauth.admin_allowed_routes
                         )
                         actual_routes = get_actual_routes(allowed_routes=allowed_routes)
                         raise Exception(
@@ -394,23 +394,23 @@ async def user_api_key_auth(
                 is_team = jwt_handler.is_team(scopes=scopes)
                 if is_team == False:
                     raise Exception(
-                        f"Missing both Admin and Team scopes from token. Either is required. Admin Scope={jwt_handler.litellm_proxy_roles.admin_jwt_scope}, Team Scope={jwt_handler.litellm_proxy_roles.team_jwt_scope}"
+                        f"Missing both Admin and Team scopes from token. Either is required. Admin Scope={jwt_handler.litellm_jwtauth.admin_jwt_scope}, Team Scope={jwt_handler.litellm_jwtauth.team_jwt_scope}"
                     )
                 # get team id
                 team_id = jwt_handler.get_team_id(token=valid_token, default_value=None)
 
                 if team_id is None:
                     raise Exception(
-                        f"No team id passed in. Field checked in jwt token - '{jwt_handler.litellm_proxy_roles.team_id_jwt_field}'"
+                        f"No team id passed in. Field checked in jwt token - '{jwt_handler.litellm_jwtauth.team_id_jwt_field}'"
                     )
                 # check allowed team routes
                 is_allowed = allowed_routes_check(
                     user_role="team",
                     user_route=route,
-                    litellm_proxy_roles=jwt_handler.litellm_proxy_roles,
+                    litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                 )
                 if is_allowed == False:
-                    allowed_routes = jwt_handler.litellm_proxy_roles.team_allowed_routes
+                    allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes
                     actual_routes = get_actual_routes(allowed_routes=allowed_routes)
                     raise Exception(
                         f"Team not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
@@ -2741,11 +2741,9 @@ async def startup_event():
 
     ## JWT AUTH ##
     if general_settings.get("litellm_proxy_roles", None) is not None:
-        litellm_proxy_roles = LiteLLMProxyRoles(
-            **general_settings["litellm_proxy_roles"]
-        )
+        litellm_proxy_roles = LiteLLM_JWTAuth(**general_settings["litellm_proxy_roles"])
     else:
-        litellm_proxy_roles = LiteLLMProxyRoles()
+        litellm_proxy_roles = LiteLLM_JWTAuth()
     jwt_handler.update_environment(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
