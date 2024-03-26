@@ -28,7 +28,7 @@ public_key = {
 def test_load_config_with_custom_role_names():
     config = {
         "general_settings": {
-            "litellm_proxy_roles": {"proxy_admin": "litellm-proxy-admin"}
+            "litellm_proxy_roles": {"admin_jwt_scope": "litellm-proxy-admin"}
         }
     }
 
@@ -38,7 +38,7 @@ def test_load_config_with_custom_role_names():
 
     print(f"proxy_roles: {proxy_roles}")
 
-    assert proxy_roles.proxy_admin == "litellm-proxy-admin"
+    assert proxy_roles.admin_jwt_scope == "litellm-proxy-admin"
 
 
 # test_load_config_with_custom_role_names()
