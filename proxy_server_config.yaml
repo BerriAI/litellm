@@ -45,6 +45,7 @@ litellm_settings:
   budget_duration: 30d
   num_retries: 5
   request_timeout: 600
+  telemetry: False
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
