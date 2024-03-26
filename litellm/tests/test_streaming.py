@@ -2096,7 +2096,7 @@ async def test_azure_astreaming_and_function_calling():
                     chunk.choices[0].delta.tool_calls[0].function.arguments, str
                 )
                 validate_first_streaming_function_calling_chunk(chunk=chunk)
-            elif idx == 1:
+            elif idx == 1 and chunk.choices[0].finish_reason is None:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
