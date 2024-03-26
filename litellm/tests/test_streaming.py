@@ -824,6 +824,32 @@ def test_bedrock_claude_3_streaming():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_claude_3_streaming_finish_reason():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "Be helpful"},
+            {"role": "user", "content": "What do you know?"},
+        ]
+        response: ModelResponse = completion(
+            model="claude-3-opus-20240229",
+            messages=messages,
+            stream=True,
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        num_finish_reason = 0
+        for idx, chunk in enumerate(response):
+            if isinstance(chunk, ModelResponse):
+                if chunk.choices[0].finish_reason is not None:
+                    num_finish_reason += 1
+        assert num_finish_reason == 1
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="Replicate changed exceptions")
 def test_completion_replicate_stream_bad_key():
     try:
