@@ -9132,6 +9132,8 @@ class CustomStreamWrapper:
             model_response.id = self.response_id
         else:
             self.response_id = model_response.id
+        if self.system_fingerprint is not None:
+            model_response.system_fingerprint = self.system_fingerprint
         model_response._hidden_params["custom_llm_provider"] = self.custom_llm_provider
         model_response._hidden_params["created_at"] = time.time()
         model_response.choices = [StreamingChoices()]
@@ -9369,6 +9371,8 @@ class CustomStreamWrapper:
                 if hasattr(chunk, "id"):
                     model_response.id = chunk.id
                     self.response_id = chunk.id
+                if hasattr(chunk, "system_fingerprint"):
+                    self.system_fingerprint = chunk.system_fingerprint
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
@@ -9388,12 +9392,16 @@ class CustomStreamWrapper:
                         )
                     self.received_finish_reason = response_obj["finish_reason"]
                 if response_obj.get("original_chunk", None) is not None:
-                    model_response.system_fingerprint = getattr(
-                        response_obj["original_chunk"], "system_fingerprint", None
-                    )
                     if hasattr(response_obj["original_chunk"], "id"):
                         model_response.id = response_obj["original_chunk"].id
                         self.response_id = model_response.id
+                    if hasattr(response_obj["original_chunk"], "system_fingerprint"):
+                        model_response.system_fingerprint = response_obj[
+                            "original_chunk"
+                        ].system_fingerprint
+                        self.system_fingerprint = response_obj[
+                            "original_chunk"
+                        ].system_fingerprint
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
