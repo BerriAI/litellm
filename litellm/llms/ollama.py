@@ -396,6 +396,7 @@ async def ollama_aembeddings(
 
         response_json = await response.json()
         embeddings = response_json["embedding"]
+        embeddings = [embeddings]  # Ollama currently does not support batch embedding
         ## RESPONSE OBJECT
         output_data = []
         for idx, embedding in enumerate(embeddings):
