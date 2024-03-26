@@ -90,7 +90,7 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
 
-class LiteLLMProxyRoles(LiteLLMBase):
+class LiteLLM_JWTAuth(LiteLLMBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
 
@@ -115,6 +115,7 @@ class LiteLLMProxyRoles(LiteLLMBase):
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
     end_user_id_jwt_field: Optional[str] = "sub"
+    public_key_ttl: float = 600
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model

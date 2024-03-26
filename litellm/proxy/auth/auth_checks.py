@@ -11,7 +11,7 @@ Run checks for:
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_EndUserTable,
-    LiteLLMProxyRoles,
+    LiteLLM_JWTAuth,
     LiteLLM_TeamTable,
     LiteLLMRoutes,
 )
@@ -88,7 +88,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 def allowed_routes_check(
     user_role: Literal["proxy_admin", "team"],
     user_route: str,
-    litellm_proxy_roles: LiteLLMProxyRoles,
+    litellm_proxy_roles: LiteLLM_JWTAuth,
 ) -> bool:
     """
     Check if user -> not admin - allowed to access these routes
