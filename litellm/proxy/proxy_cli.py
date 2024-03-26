@@ -222,16 +222,14 @@ def run_server(
     ssl_keyfile_path,
     ssl_certfile_path,
 ):
-    global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry, ProxyConfig
+        from proxy_server import app, save_worker_config, ProxyConfig
     else:
         try:
             from .proxy_server import (
                 app,
                 save_worker_config,
-                usage_telemetry,
                 ProxyConfig,
             )
         except ImportError as e:
@@ -243,10 +241,8 @@ def run_server(
                 from proxy_server import (
                     app,
                     save_worker_config,
-                    usage_telemetry,
                     ProxyConfig,
                 )
-    feature_telemetry = usage_telemetry
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
