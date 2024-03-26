@@ -354,7 +354,10 @@ class Choices(OpenAIObject):
         if message is None:
             self.message = Message(content=None)
         else:
-            self.message = message
+            if isinstance(message, Message):
+                self.message = message
+            elif isinstance(message, dict):
+                self.message = Message(**message)
         if logprobs is not None:
             self.logprobs = logprobs
         if enhancements is not None:
@@ -422,8 +425,11 @@ class StreamingChoices(OpenAIObject):
         else:
             self.finish_reason = None
         self.index = index
-        if delta:
-            self.delta = delta
+        if delta is not None:
+            if isinstance(delta, Delta):
+                self.delta = delta
+            if isinstance(delta, dict):
+                self.delta = Delta(**delta)
         else:
             self.delta = Delta()
         if enhancements is not None:
@@ -491,13 +497,27 @@ class ModelResponse(OpenAIObject):
     ):
         if stream is not None and stream == True:
             object = "chat.completion.chunk"
-            choices = [StreamingChoices()]
+            if choices is not None and isinstance(choices, list):
+                new_choices = []
+                for choice in choices:
+                    _new_choice = StreamingChoices(**choice)
+                    new_choices.append(_new_choice)
+                choices = new_choices
+            else:
+                choices = [StreamingChoices()]
         else:
             if model in litellm.open_ai_embedding_models:
                 object = "embedding"
             else:
                 object = "chat.completion"
-            choices = [Choices()]
+            if choices is not None and isinstance(choices, list):
+                new_choices = []
+                for choice in choices:
+                    _new_choice = Choices(**choice)
+                    new_choices.append(_new_choice)
+                choices = new_choices
+            else:
+                choices = [Choices()]
         if id is None:
             id = _generate_id()
         else:
@@ -1774,16 +1794,14 @@ class Logging:
                         end_time=end_time,
                     )
                 except Exception as e:
-                    verbose_logger.debug(
+                    print_verbose(
                         f"Error occurred building stream chunk: {traceback.format_exc()}"
                     )
                     complete_streaming_response = None
             else:
                 self.streaming_chunks.append(result)
         if complete_streaming_response is not None:
-            verbose_logger.debug(
-                "Async success callbacks: Got a complete streaming response"
-            )
+            print_verbose("Async success callbacks: Got a complete streaming response")
             self.model_call_details["async_complete_streaming_response"] = (
                 complete_streaming_response
             )
@@ -1824,7 +1842,7 @@ class Logging:
                     callbacks.append(callback)
         else:
             callbacks = litellm._async_success_callback
-        verbose_logger.debug(f"Async success callbacks: {callbacks}")
+        print_verbose(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -1894,10 +1912,6 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    # print_verbose(
-                    #     f"Making async function logging call for {callback}, result={result} - {self.model_call_details}",
-                    #     logger_only=True,
-                    # )
                     if self.stream:
                         if (
                             "async_complete_streaming_response"
@@ -2814,21 +2828,19 @@ def client(original_function):
             )
             # if caching is false, don't run this
             final_embedding_cached_response = None
-            cache_controls = kwargs.get("cache", None)
 
-            # Check if user has opted out of caching
-            _opted_out_with_cache_controls = (
-                cache_controls and cache_controls.get("no-cache", False) == True
-            )
-            _opted_out_with_caching_param = kwargs.get("caching", True) == False
-
-            # cache is not None and user has not opted out
             if (
-                litellm.cache is not None
-                and (not _opted_out_with_cache_controls)
-                and (not _opted_out_with_caching_param)
-            ):
-                # allow users to control returning cached responses from the completion function
+                (
+                    kwargs.get("caching", None) is None
+                    and kwargs.get("cache", None) is None
+                    and litellm.cache is not None
+                )
+                or kwargs.get("caching", False) == True
+                or (
+                    kwargs.get("cache", None) is not None
+                    and kwargs.get("cache").get("no-cache", False) != True
+                )
+            ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
                 if (
@@ -8432,6 +8444,8 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self.system_fingerprint: Optional[str] = None
+        self.received_finish_reason: Optional[str] = None
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = ""
         self.complete_response = ""
@@ -8872,7 +8886,6 @@ class CustomStreamWrapper:
                 if data_json["choices"][0].get("finish_reason", None):
                     is_finished = True
                     finish_reason = data_json["choices"][0]["finish_reason"]
-                    self.sent_last_chunk = True
                 print_verbose(
                     f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}"
                 )
@@ -9105,16 +9118,32 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
 
-    def chunk_creator(self, chunk):
+    def model_response_creator(self):
         model_response = ModelResponse(stream=True, model=self.model)
         if self.response_id is not None:
             model_response.id = self.response_id
         else:
             self.response_id = model_response.id
+        if self.system_fingerprint is not None:
+            model_response.system_fingerprint = self.system_fingerprint
         model_response._hidden_params["custom_llm_provider"] = self.custom_llm_provider
         model_response._hidden_params["created_at"] = time.time()
         model_response.choices = [StreamingChoices()]
         model_response.choices[0].finish_reason = None
+        return model_response
+
+    def is_delta_empty(self, delta: Delta) -> bool:
+        is_empty = True
+        if delta.content is not None:
+            is_empty = False
+        elif delta.tool_calls is not None:
+            is_empty = False
+        elif delta.function_call is not None:
+            is_empty = False
+        return is_empty
+
+    def chunk_creator(self, chunk):
+        model_response = self.model_response_creator()
         response_obj = {}
         try:
             # return this for all models
@@ -9123,30 +9152,22 @@ class CustomStreamWrapper:
                 response_obj = self.handle_anthropic_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider and self.custom_llm_provider == "together_ai":
                 response_obj = self.handle_together_ai_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
                 response_obj = self.handle_huggingface_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif (
                 self.custom_llm_provider and self.custom_llm_provider == "baseten"
             ):  # baseten doesn't provide streaming
@@ -9157,16 +9178,12 @@ class CustomStreamWrapper:
                 response_obj = self.handle_ai21_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
                 response_obj = self.handle_maritalk_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
                 completion_obj["content"] = chunk[0].outputs[0].text
             elif (
@@ -9175,152 +9192,116 @@ class CustomStreamWrapper:
                 response_obj = self.handle_aleph_alpha_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "nlp_cloud":
                 try:
                     response_obj = self.handle_nlp_cloud_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
                     if response_obj["is_finished"]:
-                        model_response.choices[0].finish_reason = response_obj[
-                            "finish_reason"
-                        ]
+                        self.received_finish_reason = response_obj["finish_reason"]
                 except Exception as e:
-                    if self.sent_last_chunk:
+                    if self.received_finish_reason:
                         raise e
                     else:
                         if self.sent_first_chunk is False:
                             raise Exception("An unknown error occurred with the stream")
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
+                        self.received_finish_reason = "stop"
             elif self.custom_llm_provider == "gemini":
-                try:
-                    if hasattr(chunk, "parts") == True:
-                        try:
-                            if len(chunk.parts) > 0:
-                                completion_obj["content"] = chunk.parts[0].text
-                            if hasattr(chunk.parts[0], "finish_reason"):
-                                model_response.choices[0].finish_reason = (
-                                    map_finish_reason(chunk.parts[0].finish_reason.name)
-                                )
-                        except:
-                            if chunk.parts[0].finish_reason.name == "SAFETY":
-                                raise Exception(
-                                    f"The response was blocked by VertexAI. {str(chunk)}"
-                                )
-                    else:
-                        completion_obj["content"] = str(chunk)
-                except StopIteration as e:
-                    if self.sent_last_chunk:
-                        raise e
-                    else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
+                if hasattr(chunk, "parts") == True:
+                    try:
+                        if len(chunk.parts) > 0:
+                            completion_obj["content"] = chunk.parts[0].text
+                        if hasattr(chunk.parts[0], "finish_reason"):
+                            self.received_finish_reason = chunk.parts[
+                                0
+                            ].finish_reason.name
+                    except:
+                        if chunk.parts[0].finish_reason.name == "SAFETY":
+                            raise Exception(
+                                f"The response was blocked by VertexAI. {str(chunk)}"
+                            )
+                else:
+                    completion_obj["content"] = str(chunk)
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
-                try:
-                    if hasattr(chunk, "candidates") == True:
+                if hasattr(chunk, "candidates") == True:
+                    try:
                         try:
-                            try:
-                                completion_obj["content"] = chunk.text
-                            except Exception as e:
-                                if "Part has no text." in str(e):
-                                    ## check for function calling
-                                    function_call = (
-                                        chunk.candidates[0]
-                                        .content.parts[0]
-                                        .function_call
-                                    )
-                                    args_dict = {}
-                                    for k, v in function_call.args.items():
-                                        args_dict[k] = v
-                                    args_str = json.dumps(args_dict)
-                                    _delta_obj = litellm.utils.Delta(
-                                        content=None,
-                                        tool_calls=[
-                                            {
-                                                "id": f"call_{str(uuid.uuid4())}",
-                                                "function": {
-                                                    "arguments": args_str,
-                                                    "name": function_call.name,
-                                                },
-                                                "type": "function",
-                                            }
-                                        ],
-                                    )
-                                    _streaming_response = StreamingChoices(
-                                        delta=_delta_obj
-                                    )
-                                    _model_response = ModelResponse(stream=True)
-                                    _model_response.choices = [_streaming_response]
-                                    response_obj = {"original_chunk": _model_response}
-                                else:
-                                    raise e
-                            if (
-                                hasattr(chunk.candidates[0], "finish_reason")
-                                and chunk.candidates[0].finish_reason.name
-                                != "FINISH_REASON_UNSPECIFIED"
-                            ):  # every non-final chunk in vertex ai has this
-                                model_response.choices[0].finish_reason = (
-                                    map_finish_reason(
-                                        chunk.candidates[0].finish_reason.name
-                                    )
-                                )
+                            completion_obj["content"] = chunk.text
                         except Exception as e:
-                            if chunk.candidates[0].finish_reason.name == "SAFETY":
-                                raise Exception(
-                                    f"The response was blocked by VertexAI. {str(chunk)}"
+                            if "Part has no text." in str(e):
+                                ## check for function calling
+                                function_call = (
+                                    chunk.candidates[0].content.parts[0].function_call
                                 )
-                    else:
-                        completion_obj["content"] = str(chunk)
-                except StopIteration as e:
-                    if self.sent_last_chunk:
-                        raise e
-                    else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
+                                args_dict = {}
+                                for k, v in function_call.args.items():
+                                    args_dict[k] = v
+                                args_str = json.dumps(args_dict)
+                                _delta_obj = litellm.utils.Delta(
+                                    content=None,
+                                    tool_calls=[
+                                        {
+                                            "id": f"call_{str(uuid.uuid4())}",
+                                            "function": {
+                                                "arguments": args_str,
+                                                "name": function_call.name,
+                                            },
+                                            "type": "function",
+                                        }
+                                    ],
+                                )
+                                _streaming_response = StreamingChoices(delta=_delta_obj)
+                                _model_response = ModelResponse(stream=True)
+                                _model_response.choices = [_streaming_response]
+                                response_obj = {"original_chunk": _model_response}
+                            else:
+                                raise e
+                        if (
+                            hasattr(chunk.candidates[0], "finish_reason")
+                            and chunk.candidates[0].finish_reason.name
+                            != "FINISH_REASON_UNSPECIFIED"
+                        ):  # every non-final chunk in vertex ai has this
+                            self.received_finish_reason = chunk.candidates[
+                                0
+                            ].finish_reason.name
+                    except Exception as e:
+                        if chunk.candidates[0].finish_reason.name == "SAFETY":
+                            raise Exception(
+                                f"The response was blocked by VertexAI. {str(chunk)}"
+                            )
+                else:
+                    completion_obj["content"] = str(chunk)
             elif self.custom_llm_provider == "cohere":
                 response_obj = self.handle_cohere_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "cohere_chat":
                 response_obj = self.handle_cohere_chat_chunk(chunk)
                 if response_obj is None:
                     return
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "bedrock":
-                if self.sent_last_chunk:
+                if self.received_finish_reason is not None:
                     raise StopIteration
                 response_obj = self.handle_bedrock_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-                    self.sent_last_chunk = True
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "sagemaker":
-                verbose_logger.debug(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
+                print_verbose(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
                 response_obj = self.handle_sagemaker_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-                    self.sent_last_chunk = True
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
-                    if self.sent_last_chunk:
+                    if self.received_finish_reason is not None:
                         raise StopIteration
                     else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
+                        self.received_finish_reason = "stop"
                 chunk_size = 30
                 new_chunk = self.completion_stream[:chunk_size]
                 completion_obj["content"] = new_chunk
@@ -9330,11 +9311,10 @@ class CustomStreamWrapper:
                 # fake streaming
                 response_obj = {}
                 if len(self.completion_stream) == 0:
-                    if self.sent_last_chunk:
+                    if self.received_finish_reason is not None:
                         raise StopIteration
                     else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
+                        self.received_finish_reason = "stop"
                 chunk_size = 30
                 new_chunk = self.completion_stream[:chunk_size]
                 completion_obj["content"] = new_chunk
@@ -9345,41 +9325,31 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "ollama_chat":
                 response_obj = self.handle_ollama_chat_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "cloudflare":
                 response_obj = self.handle_cloudlfare_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
                 response_obj = self.handle_openai_text_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "azure_text":
                 response_obj = self.handle_azure_text_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "cached_response":
                 response_obj = {
                     "text": chunk.choices[0].delta.content,
@@ -9392,10 +9362,11 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if hasattr(chunk, "id"):
                     model_response.id = chunk.id
+                    self.response_id = chunk.id
+                if hasattr(chunk, "system_fingerprint"):
+                    self.system_fingerprint = chunk.system_fingerprint
                 if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
                 if self.custom_llm_provider == "azure":
                     if hasattr(chunk, "model"):
@@ -9411,21 +9382,24 @@ class CustomStreamWrapper:
                         raise Exception(
                             "Mistral API raised a streaming error - finish_reason: error, no content string given."
                         )
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
+                    self.received_finish_reason = response_obj["finish_reason"]
                 if response_obj.get("original_chunk", None) is not None:
-                    model_response.system_fingerprint = getattr(
-                        response_obj["original_chunk"], "system_fingerprint", None
-                    )
                     if hasattr(response_obj["original_chunk"], "id"):
                         model_response.id = response_obj["original_chunk"].id
+                        self.response_id = model_response.id
+                    if hasattr(response_obj["original_chunk"], "system_fingerprint"):
+                        model_response.system_fingerprint = response_obj[
+                            "original_chunk"
+                        ].system_fingerprint
+                        self.system_fingerprint = response_obj[
+                            "original_chunk"
+                        ].system_fingerprint
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
             model_response.model = self.model
             print_verbose(
-                f"model_response finish reason 3: {model_response.choices[0].finish_reason}; response_obj={response_obj}"
+                f"model_response finish reason 3: {self.received_finish_reason}; response_obj={response_obj}"
             )
             ## FUNCTION CALL PARSING
             if (
@@ -9435,6 +9409,7 @@ class CustomStreamWrapper:
                 # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
+                self.response_id = original_chunk.id
                 if len(original_chunk.choices) > 0:
                     if (
                         original_chunk.choices[0].delta.function_call is not None
@@ -9516,6 +9491,7 @@ class CustomStreamWrapper:
                     original_chunk = response_obj.get("original_chunk", None)
                     if original_chunk:
                         model_response.id = original_chunk.id
+                        self.response_id = original_chunk.id
                         if len(original_chunk.choices) > 0:
                             try:
                                 delta = dict(original_chunk.choices[0].delta)
@@ -9554,7 +9530,7 @@ class CustomStreamWrapper:
                     return model_response
                 else:
                     return
-            elif model_response.choices[0].finish_reason is not None:
+            elif self.received_finish_reason is not None:
                 # flush any remaining holding chunk
                 if len(self.holding_chunk) > 0:
                     if model_response.choices[0].delta.content is None:
@@ -9564,10 +9540,17 @@ class CustomStreamWrapper:
                             self.holding_chunk + model_response.choices[0].delta.content
                         )
                     self.holding_chunk = ""
-                # get any function call arguments
-                model_response.choices[0].finish_reason = map_finish_reason(
-                    model_response.choices[0].finish_reason
-                )  # ensure consistent output to openai
+                # if delta is None
+                is_delta_empty = self.is_delta_empty(
+                    delta=model_response.choices[0].delta
+                )
+                if is_delta_empty:
+                    # get any function call arguments
+                    model_response.choices[0].finish_reason = map_finish_reason(
+                        finish_reason=self.received_finish_reason
+                    )  # ensure consistent output to openai
+                    self.sent_last_chunk = True
+
                 return model_response
             elif (
                 model_response.choices[0].delta.tool_calls is not None
@@ -9627,6 +9610,16 @@ class CustomStreamWrapper:
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk)
 
+    def finish_reason_handler(self):
+        model_response = self.model_response_creator()
+        if self.received_finish_reason is not None:
+            model_response.choices[0].finish_reason = map_finish_reason(
+                finish_reason=self.received_finish_reason
+            )
+        else:
+            model_response.choices[0].finish_reason = "stop"
+        return model_response
+
     ## needs to handle the empty string case (even starting chunk can be an empty string)
     def __next__(self):
         try:
@@ -9661,7 +9654,16 @@ class CustomStreamWrapper:
                     # RETURN RESULT
                     return response
         except StopIteration:
-            raise  # Re-raise StopIteration
+            if self.sent_last_chunk == True:
+                raise  # Re-raise StopIteration
+            else:
+                self.sent_last_chunk = True
+                processed_chunk = self.finish_reason_handler()
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.success_handler, args=(processed_chunk,)
+                ).start()  # log response
+                return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
@@ -9766,9 +9768,37 @@ class CustomStreamWrapper:
                         # RETURN RESULT
                         return processed_chunk
         except StopAsyncIteration:
-            raise
+            if self.sent_last_chunk == True:
+                raise  # Re-raise StopIteration
+            else:
+                self.sent_last_chunk = True
+                processed_chunk = self.finish_reason_handler()
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.success_handler, args=(processed_chunk,)
+                ).start()  # log response
+                asyncio.create_task(
+                    self.logging_obj.async_success_handler(
+                        processed_chunk,
+                    )
+                )
+                return processed_chunk
         except StopIteration:
-            raise StopAsyncIteration  # Re-raise StopIteration
+            if self.sent_last_chunk == True:
+                raise StopAsyncIteration
+            else:
+                self.sent_last_chunk = True
+                processed_chunk = self.finish_reason_handler()
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.success_handler, args=(processed_chunk,)
+                ).start()  # log response
+                asyncio.create_task(
+                    self.logging_obj.async_success_handler(
+                        processed_chunk,
+                    )
+                )
+                return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # Handle any exceptions that might occur during streaming
