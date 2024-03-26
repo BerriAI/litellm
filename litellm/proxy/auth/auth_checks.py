@@ -8,15 +8,23 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
-from litellm.proxy._types import LiteLLM_UserTable, LiteLLM_EndUserTable
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    LiteLLM_EndUserTable,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamTable,
+    LiteLLMRoutes,
+)
 from typing import Optional, Literal
 from litellm.proxy.utils import PrismaClient
 from litellm.caching import DualCache
 
+all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
+
 
 def common_checks(
     request_body: dict,
-    user_object: LiteLLM_UserTable,
+    team_object: LiteLLM_TeamTable,
     end_user_object: Optional[LiteLLM_EndUserTable],
 ) -> bool:
     """
@@ -30,19 +38,20 @@ def common_checks(
     # 1. If user can call model
     if (
         _model is not None
-        and len(user_object.models) > 0
-        and _model not in user_object.models
+        and len(team_object.models) > 0
+        and _model not in team_object.models
     ):
         raise Exception(
-            f"User={user_object.user_id} not allowed to call model={_model}. Allowed user models = {user_object.models}"
+            f"Team={team_object.team_id} not allowed to call model={_model}. Allowed team models = {team_object.models}"
         )
-    # 2. If user is in budget
+    # 2. If team is in budget
     if (
-        user_object.max_budget is not None
-        and user_object.spend > user_object.max_budget
+        team_object.max_budget is not None
+        and team_object.spend is not None
+        and team_object.spend > team_object.max_budget
     ):
         raise Exception(
-            f"User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_object.max_budget}"
+            f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}"
         )
     # 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
@@ -54,50 +63,77 @@ def common_checks(
     return True
 
 
+def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
+    for allowed_route in allowed_routes:
+        if (
+            allowed_route == LiteLLMRoutes.openai_routes.name
+            and user_route in LiteLLMRoutes.openai_routes.value
+        ):
+            return True
+        elif (
+            allowed_route == LiteLLMRoutes.info_routes.name
+            and user_route in LiteLLMRoutes.info_routes.value
+        ):
+            return True
+        elif (
+            allowed_route == LiteLLMRoutes.management_routes.name
+            and user_route in LiteLLMRoutes.management_routes.value
+        ):
+            return True
+        elif allowed_route == user_route:
+            return True
+    return False
+
+
 def allowed_routes_check(
-    user_role: Literal["proxy_admin", "app_owner"],
-    route: str,
-    allowed_routes: Optional[list] = None,
+    user_role: Literal["proxy_admin", "team"],
+    user_route: str,
+    litellm_proxy_roles: LiteLLM_JWTAuth,
 ) -> bool:
     """
     Check if user -> not admin - allowed to access these routes
     """
-    openai_routes = [
-        # chat completions
-        "/openai/deployments/{model}/chat/completions",
-        "/chat/completions",
-        "/v1/chat/completions",
-        # completions
-        # embeddings
-        "/openai/deployments/{model}/embeddings",
-        "/embeddings",
-        "/v1/embeddings",
-        # image generation
-        "/images/generations",
-        "/v1/images/generations",
-        # audio transcription
-        "/audio/transcriptions",
-        "/v1/audio/transcriptions",
-        # moderations
-        "/moderations",
-        "/v1/moderations",
-        # models
-        "/models",
-        "/v1/models",
-    ]
-    info_routes = ["/key/info", "/team/info", "/user/info", "/model/info"]
-    default_routes = openai_routes + info_routes
+
     if user_role == "proxy_admin":
-        return True
-    elif user_role == "app_owner":
-        if allowed_routes is None:
-            if route in default_routes:  # check default routes
-                return True
-        elif route in allowed_routes:
-            return True
-        else:
-            return False
+        if litellm_proxy_roles.admin_allowed_routes is None:
+            is_allowed = _allowed_routes_check(
+                user_route=user_route, allowed_routes=["management_routes"]
+            )
+            return is_allowed
+        elif litellm_proxy_roles.admin_allowed_routes is not None:
+            is_allowed = _allowed_routes_check(
+                user_route=user_route,
+                allowed_routes=litellm_proxy_roles.admin_allowed_routes,
+            )
+            return is_allowed
+
+    elif user_role == "team":
+        if litellm_proxy_roles.team_allowed_routes is None:
+            """
+            By default allow a team to call openai + info routes
+            """
+            is_allowed = _allowed_routes_check(
+                user_route=user_route, allowed_routes=["openai_routes", "info_routes"]
+            )
+            return is_allowed
+        elif litellm_proxy_roles.team_allowed_routes is not None:
+            is_allowed = _allowed_routes_check(
+                user_route=user_route,
+                allowed_routes=litellm_proxy_roles.team_allowed_routes,
+            )
+            return is_allowed
     return False
+
+
+def get_actual_routes(allowed_routes: list) -> list:
+    actual_routes: list = []
+    for route_name in allowed_routes:
+        try:
+            route_value = LiteLLMRoutes[route_name].value
+            actual_routes = actual_routes + route_value
+        except KeyError:
+            actual_routes.append(route_name)
+    return actual_routes
 
 
 async def get_end_user_object(
@@ -135,3 +171,75 @@ async def get_end_user_object(
         return LiteLLM_EndUserTable(**response.dict())
     except Exception as e:  # if end-user not in db
         return None
+
+
+async def get_user_object(self, user_id: str) -> LiteLLM_UserTable:
+    """
+    - Check if user id in proxy User Table
+    - if valid, return LiteLLM_UserTable object with defined limits
+    - if not, then raise an error
+    """
+    if self.prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # check if in cache
+    cached_user_obj = self.user_api_key_cache.async_get_cache(key=user_id)
+    if cached_user_obj is not None:
+        if isinstance(cached_user_obj, dict):
+            return LiteLLM_UserTable(**cached_user_obj)
+        elif isinstance(cached_user_obj, LiteLLM_UserTable):
+            return cached_user_obj
+    # else, check db
+    try:
+        response = await self.prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_id}
+        )
+
+        if response is None:
+            raise Exception
+
+        return LiteLLM_UserTable(**response.dict())
+    except Exception as e:
+        raise Exception(
+            f"User doesn't exist in db. User={user_id}. Create user via `/user/new` call."
+        )
+
+
+async def get_team_object(
+    team_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+) -> LiteLLM_TeamTable:
+    """
+    - Check if team id in proxy Team Table
+    - if valid, return LiteLLM_TeamTable object with defined limits
+    - if not, then raise an error
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # check if in cache
+    cached_team_obj = user_api_key_cache.async_get_cache(key=team_id)
+    if cached_team_obj is not None:
+        if isinstance(cached_team_obj, dict):
+            return LiteLLM_TeamTable(**cached_team_obj)
+        elif isinstance(cached_team_obj, LiteLLM_TeamTable):
+            return cached_team_obj
+    # else, check db
+    try:
+        response = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
+        )
+
+        if response is None:
+            raise Exception
+
+        return LiteLLM_TeamTable(**response.dict())
+    except Exception as e:
+        raise Exception(
+            f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        )
