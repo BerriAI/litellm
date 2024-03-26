@@ -386,6 +386,48 @@ async def test_redis_cache_basic():
     assert stored_val["id"] == response1.id
 
 
+@pytest.mark.asyncio
+async def test_redis_batch_cache_write():
+    """
+    Init redis client
+    - write to client
+    - read from client
+    """
+    litellm.set_verbose = True
+    import uuid
+
+    messages = [
+        {"role": "user", "content": f"write a one sentence poem about: {uuid.uuid4()}"},
+    ]
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+        redis_flush_size=2,
+    )
+    response1 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    response2 = await litellm.acompletion(
+        model="anthropic/claude-3-opus-20240229",
+        messages=messages,
+        mock_response="good morning from this test",
+    )
+
+    # we hit the flush size, this will now send to redis
+    await asyncio.sleep(2)
+
+    response4 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    assert response1.id == response4.id
+
+
 def test_redis_cache_completion():
     litellm.set_verbose = False
 
