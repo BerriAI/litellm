@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Extra, Field, root_validator, Json, validator
+from dataclasses import fields
 import enum
 from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
@@ -37,9 +38,97 @@ class LiteLLMBase(BaseModel):
         protected_namespaces = ()
 
 
-class LiteLLMProxyRoles(LiteLLMBase):
-    proxy_admin: str = "litellm_proxy_admin"
-    proxy_user: str = "litellm_user"
+class LiteLLMRoutes(enum.Enum):
+    openai_routes: List = [  # chat completions
+        "/openai/deployments/{model}/chat/completions",
+        "/chat/completions",
+        "/v1/chat/completions",
+        # completions
+        "/openai/deployments/{model}/completions",
+        "/completions",
+        "/v1/completions",
+        # embeddings
+        "/openai/deployments/{model}/embeddings",
+        "/embeddings",
+        "/v1/embeddings",
+        # image generation
+        "/images/generations",
+        "/v1/images/generations",
+        # audio transcription
+        "/audio/transcriptions",
+        "/v1/audio/transcriptions",
+        # moderations
+        "/moderations",
+        "/v1/moderations",
+        # models
+        "/models",
+        "/v1/models",
+    ]
+
+    info_routes: List = ["/key/info", "/team/info", "/user/info", "/model/info"]
+
+    management_routes: List = [  # key
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/key/info",
+        # user
+        "/user/new",
+        "/user/update",
+        "/user/delete",
+        "/user/info",
+        # team
+        "/team/new",
+        "/team/update",
+        "/team/delete",
+        "/team/info",
+        # model
+        "/model/new",
+        "/model/update",
+        "/model/delete",
+        "/model/info",
+    ]
+
+
+class LiteLLM_JWTAuth(LiteLLMBase):
+    """
+    A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
+
+    Attributes:
+    - admin_jwt_scope: The JWT scope required for proxy admin roles.
+    - admin_allowed_routes: list of allowed routes for proxy admin roles.
+    - team_jwt_scope: The JWT scope required for proxy team roles.
+    - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
+    - team_allowed_routes: list of allowed routes for proxy team roles.
+    - end_user_id_jwt_field: Default - `sub`. The field in the JWT token that stores the end-user ID. Turn this off by setting to `None`. Enables end-user cost tracking.
+
+    See `auth_checks.py` for the specific routes
+    """
+
+    admin_jwt_scope: str = "litellm_proxy_admin"
+    admin_allowed_routes: List[
+        Literal["openai_routes", "info_routes", "management_routes"]
+    ] = ["management_routes"]
+    team_jwt_scope: str = "litellm_team"
+    team_id_jwt_field: str = "client_id"
+    team_allowed_routes: List[
+        Literal["openai_routes", "info_routes", "management_routes"]
+    ] = ["openai_routes", "info_routes"]
+    end_user_id_jwt_field: Optional[str] = "sub"
+    public_key_ttl: float = 600
+
+    def __init__(self, **kwargs: Any) -> None:
+        # get the attribute names for this Pydantic model
+        allowed_keys = self.__annotations__.keys()
+
+        invalid_keys = set(kwargs.keys()) - allowed_keys
+
+        if invalid_keys:
+            raise ValueError(
+                f"Invalid arguments provided: {', '.join(invalid_keys)}. Allowed arguments are: {', '.join(allowed_keys)}."
+            )
+
+        super().__init__(**kwargs)
 
 
 class LiteLLMPromptInjectionParams(LiteLLMBase):
