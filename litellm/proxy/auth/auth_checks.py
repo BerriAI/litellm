@@ -30,15 +30,15 @@ def common_checks(
     """
     Common checks across jwt + key-based auth.
 
-    1. If team is disabled
+    1. If team is blocked
     2. If team can call model
     3. If team is in budget
     4. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     """
     _model = request_body.get("model", None)
-    if team_object.disabled == True:
+    if team_object.blocked == True:
         raise Exception(
-            f"Team={team_object.team_id} is disabled. Update via `/team/update`."
+            f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
     # 2. If user can call model
     if (

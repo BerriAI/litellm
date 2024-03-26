@@ -82,6 +82,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/update",
         "/team/delete",
         "/team/info",
+        "/team/block",
+        "/team/unblock",
         # model
         "/model/new",
         "/model/update",
@@ -396,7 +398,7 @@ class TeamBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
     models: list = []
-    disabled: bool = False
+    blocked: bool = False
 
 
 class NewTeamRequest(TeamBase):
@@ -435,6 +437,10 @@ class UpdateTeamRequest(LiteLLMBase):
 
 class DeleteTeamRequest(LiteLLMBase):
     team_ids: List[str]  # required
+
+
+class BlockTeamRequest(LiteLLMBase):
+    team_id: str  # required
 
 
 class LiteLLM_TeamTable(TeamBase):
