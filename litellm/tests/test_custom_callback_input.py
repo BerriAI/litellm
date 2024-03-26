@@ -651,6 +651,7 @@ async def test_async_chat_vertex_ai_stream():
     try:
         load_vertex_ai_credentials()
         customHandler = CompletionCustomHandler()
+        litellm.set_verbose = True
         litellm.callbacks = [customHandler]
         # test streaming
         response = await litellm.acompletion(
@@ -667,6 +668,7 @@ async def test_async_chat_vertex_ai_stream():
         async for chunk in response:
             print(f"chunk: {chunk}")
             continue
+        await asyncio.sleep(10)
         print(f"customHandler.states: {customHandler.states}")
         assert (
             customHandler.states.count("async_success") == 1

@@ -32,41 +32,6 @@ import logging
 
 
 class Router:
-    """
-    Example usage:
-    ```python
-    from litellm import Router
-    model_list = [
-    {
-        "model_name": "azure-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "azure/<your-deployment-name-1>",
-            "api_key": <your-api-key>,
-            "api_version": <your-api-version>,
-            "api_base": <your-api-base>
-        },
-    },
-    {
-        "model_name": "azure-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "azure/<your-deployment-name-2>",
-            "api_key": <your-api-key>,
-            "api_version": <your-api-version>,
-            "api_base": <your-api-base>
-        },
-    },
-    {
-        "model_name": "openai-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "gpt-3.5-turbo",
-            "api_key": <your-api-key>,
-        },
-    ]
-
-    router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
-    ```
-    """
-
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
@@ -142,6 +107,39 @@ class Router:
 
         Returns:
             Router: An instance of the litellm.Router class.
+
+        Example Usage:
+        ```python
+        from litellm import Router
+        model_list = [
+        {
+            "model_name": "azure-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "azure/<your-deployment-name-1>",
+                "api_key": <your-api-key>,
+                "api_version": <your-api-version>,
+                "api_base": <your-api-base>
+            },
+        },
+        {
+            "model_name": "azure-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "azure/<your-deployment-name-2>",
+                "api_key": <your-api-key>,
+                "api_version": <your-api-version>,
+                "api_base": <your-api-base>
+            },
+        },
+        {
+            "model_name": "openai-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "gpt-3.5-turbo",
+                "api_key": <your-api-key>,
+            },
+        ]
+
+        router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
+        ```
         """
         self.set_verbose = set_verbose
         self.debug_level = debug_level
@@ -286,8 +284,8 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
-        verbose_router_logger.debug(
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n"
+        verbose_router_logger.info(
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}"
         )
 
     def print_deployment(self, deployment: dict):
@@ -1148,11 +1146,13 @@ class Router:
             original_exception = e
             fallback_model_group = None
             try:
+                verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
-                    hasattr(e, "status_code") and e.status_code == 400
+                    hasattr(e, "status_code")
+                    and e.status_code == 400
+                    and not isinstance(e, litellm.ContextWindowExceededError)
                 ):  # don't retry a malformed request
                     raise e
-                verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
                     isinstance(e, litellm.ContextWindowExceededError)
                     and context_window_fallbacks is not None
@@ -1346,6 +1346,13 @@ class Router:
             original_exception = e
             verbose_router_logger.debug(f"An exception occurs {original_exception}")
             try:
+                if (
+                    hasattr(e, "status_code")
+                    and e.status_code == 400
+                    and not isinstance(e, litellm.ContextWindowExceededError)
+                ):  # don't retry a malformed request
+                    raise e
+
                 verbose_router_logger.debug(
                     f"Trying to fallback b/w models. Initial model group: {model_group}"
                 )

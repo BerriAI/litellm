@@ -88,6 +88,7 @@ spec:
       containers:
         - name: litellm-container
           image: ghcr.io/berriai/litellm:main-latest
+          imagePullPolicy: Always
           env:
             - name: AZURE_API_KEY
               value: "d6******"
