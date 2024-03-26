@@ -2815,17 +2815,20 @@ def client(original_function):
             # if caching is false, don't run this
             final_embedding_cached_response = None
             cache_controls = kwargs.get("cache", None)
+
+            # Check if user has opted out of caching
+            _opted_out_with_cache_controls = (
+                cache_controls and cache_controls.get("no-cache", False) == True
+            )
+            _opted_out_with_caching_param = kwargs.get("caching", True) == False
+
+            # cache is not None and user has not opted out
             if (
-                kwargs.get("caching", None) is None
-                and cache_controls is None
-                and litellm.cache is not None
-            ) or (
-                kwargs.get("caching", False) == True
-                and (
-                    cache_controls is not None
-                    and cache_controls.get("no-cache", False) != True
-                )
-            ):  # allow users to control returning cached responses from the completion function
+                litellm.cache is not None
+                and (not _opted_out_with_cache_controls)
+                and (not _opted_out_with_caching_param)
+            ):
+                # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
                 if (
