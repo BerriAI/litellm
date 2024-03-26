@@ -281,7 +281,8 @@ async def test_async_vertexai_streaming_response():
             complete_response = ""
             async for chunk in response:
                 print(f"chunk: {chunk}")
-                complete_response += chunk.choices[0].delta.content
+                if chunk.choices[0].delta.content is not None:
+                    complete_response += chunk.choices[0].delta.content
             print(f"complete_response: {complete_response}")
             assert len(complete_response) > 0
         except litellm.RateLimitError as e:
