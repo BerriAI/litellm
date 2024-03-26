@@ -170,8 +170,10 @@ class RedisCache(BaseCache):
                 )
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
-                print_verbose(
-                    f"LiteLLM Redis Caching: async set() - Got exception from REDIS : {str(e)}"
+                verbose_logger.error(
+                    "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                    str(e),
+                    value,
                 )
                 traceback.print_exc()
 
@@ -200,7 +202,12 @@ class RedisCache(BaseCache):
             # Optionally, you could process 'results' to make sure that all set operations were successful.
             return results
         except Exception as e:
-            print_verbose(f"Error occurred in pipeline write - {str(e)}")
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS %s, Writing value=%s",
+                str(e),
+                cache_value,
+            )
+            traceback.print_exc()
 
     async def batch_cache_write(self, key, value, **kwargs):
         print_verbose(
