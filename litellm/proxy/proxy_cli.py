@@ -6,6 +6,7 @@ from datetime import datetime
 import importlib
 from dotenv import load_dotenv
 import urllib.parse as urlparse
+from litellm._logging import verbose_proxy_logger
 
 sys.path.append(os.getcwd())
 
@@ -19,8 +20,8 @@ telemetry = None
 
 
 def append_query_params(url, params):
-    print(f"url: {url}")
-    print(f"params: {params}")
+    verbose_proxy_logger.debug(f"url: {url}")
+    verbose_proxy_logger.debug(f"params: {params}")
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
     parsed_query.update(params)
