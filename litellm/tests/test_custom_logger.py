@@ -490,7 +490,7 @@ def test_redis_cache_completion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(0.1)  # sleep for 0.1 seconds allow set cache to occur
+        time.sleep(1)  # sleep for 0.1 seconds allow set cache to occur
         response2 = completion(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -505,8 +505,10 @@ def test_redis_cache_completion_stream():
             response_2_id = chunk.id
             print(chunk)
             response_2_content += chunk.choices[0].delta.content or ""
-        print("\nresponse 1", response_1_content)
-        print("\nresponse 2", response_2_content)
+        print(
+            f"\nresponse 1: {response_1_content}",
+        )
+        print(f"\nresponse 2: {response_2_content}")
         assert (
             response_1_id == response_2_id
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"

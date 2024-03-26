@@ -547,7 +547,7 @@ def test_redis_cache_completion_stream():
         response_2_id = ""
         for chunk in response2:
             print(chunk)
-            response_2_id += chunk.id
+            response_2_id = chunk.id
         assert (
             response_1_id == response_2_id
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_id} != Response 2{response_2_id}"
