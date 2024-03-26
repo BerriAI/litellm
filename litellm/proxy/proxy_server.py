@@ -6151,6 +6151,26 @@ async def team_info(
         )
 
 
+@router.post(
+    "/team/disable", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def disable_team(
+    data: DeleteTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Sets
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise Exception("No DB Connected.")
+
+    await prisma_client.db.litellm_teamtable.update_many(
+        where={"team_id": {"in": data.team_ids}}, data={"disabled": True}
+    )
+
+
 #### ORGANIZATION MANAGEMENT ####
 
 

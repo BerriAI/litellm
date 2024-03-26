@@ -30,12 +30,17 @@ def common_checks(
     """
     Common checks across jwt + key-based auth.
 
-    1. If user can call model
-    2. If user is in budget
-    3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
+    1. If team is disabled
+    2. If team can call model
+    3. If team is in budget
+    4. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     """
     _model = request_body.get("model", None)
-    # 1. If user can call model
+    if team_object.disabled == True:
+        raise Exception(
+            f"Team={team_object.team_id} is disabled. Update via `/team/update`."
+        )
+    # 2. If user can call model
     if (
         _model is not None
         and len(team_object.models) > 0
@@ -44,7 +49,7 @@ def common_checks(
         raise Exception(
             f"Team={team_object.team_id} not allowed to call model={_model}. Allowed team models = {team_object.models}"
         )
-    # 2. If team is in budget
+    # 3. If team is in budget
     if (
         team_object.max_budget is not None
         and team_object.spend is not None
@@ -53,7 +58,7 @@ def common_checks(
         raise Exception(
             f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}"
         )
-    # 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
+    # 4. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
         end_user_budget = end_user_object.litellm_budget_table.max_budget
         if end_user_budget is not None and end_user_object.spend > end_user_budget:
