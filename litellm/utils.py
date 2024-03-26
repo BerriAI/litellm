@@ -354,7 +354,7 @@ class Choices(OpenAIObject):
         if message is None:
             self.message = Message(content=None)
         else:
-            self.message = message
+            self.message = Message(**message)
         if logprobs is not None:
             self.logprobs = logprobs
         if enhancements is not None:
@@ -497,7 +497,10 @@ class ModelResponse(OpenAIObject):
                 object = "embedding"
             else:
                 object = "chat.completion"
-            choices = [Choices()]
+            if choices:
+                choices = [Choices(*choices)]
+            else:
+                choices = [Choices()]
         if id is None:
             id = _generate_id()
         else:
