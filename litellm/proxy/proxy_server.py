@@ -7754,13 +7754,20 @@ async def cache_ping():
 
 
 @router.post(
-    "/cache/flush",
+    "/cache/flushall",
     tags=["caching"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def cache_flush():
+async def cache_flushall():
     """
-    Endpoint for checking if cache can be pinged
+    A function to flush all items from the cache
+    Raises HTTPException if the cache is not initialized or if the cache type does not support flushing.
+    Returns a dictionary with the status of the operation.
+
+    Usage:
+    ```
+    curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer sk-1234"
+    ```
     """
     try:
         if litellm.cache is None:
