@@ -7231,7 +7231,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=f"AnthropicException - {original_exception.message}. Handle with `litellm.APIError`.",
                             llm_provider="anthropic",
                             model=model,
                             request=original_exception.request,
