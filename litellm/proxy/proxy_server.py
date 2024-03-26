@@ -2740,14 +2740,14 @@ async def startup_event():
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
     ## JWT AUTH ##
-    if general_settings.get("litellm_proxy_roles", None) is not None:
-        litellm_proxy_roles = LiteLLM_JWTAuth(**general_settings["litellm_proxy_roles"])
+    if general_settings.get("litellm_jwtauth", None) is not None:
+        litellm_jwtauth = LiteLLM_JWTAuth(**general_settings["litellm_jwtauth"])
     else:
-        litellm_proxy_roles = LiteLLM_JWTAuth()
+        litellm_jwtauth = LiteLLM_JWTAuth()
     jwt_handler.update_environment(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
-        litellm_proxy_roles=litellm_proxy_roles,
+        litellm_jwtauth=litellm_jwtauth,
     )
 
     if use_background_health_checks:
