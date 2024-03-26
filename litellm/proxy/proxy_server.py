@@ -7742,6 +7742,44 @@ async def cache_ping():
         )
 
 
+@router.post(
+    "/cache/flushall",
+    tags=["caching"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def cache_flushall():
+    """
+    A function to flush all items from the cache. (All items will be deleted from the cache with this)
+    Raises HTTPException if the cache is not initialized or if the cache type does not support flushing.
+    Returns a dictionary with the status of the operation.
+
+    Usage:
+    ```
+    curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer sk-1234"
+    ```
+    """
+    try:
+        if litellm.cache is None:
+            raise HTTPException(
+                status_code=503, detail="Cache not initialized. litellm.cache is None"
+            )
+        if litellm.cache.type == "redis":
+            litellm.cache.cache.flushall()
+            return {
+                "status": "success",
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cache type {litellm.cache.type} does not support flushing",
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service Unhealthy ({str(e)})",
+        )
+
+
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
