@@ -107,16 +107,21 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         - Use the sanitized prompt returned
             - LLM Guard can handle things like PII Masking, etc.
         """
-        self.print_verbose(f"Inside LLM Guard Pre-Call Hook")
+        self.print_verbose(
+            f"Inside LLM Guard Pre-Call Hook - llm_guard_mode={self.llm_guard_mode}"
+        )
 
         # check if llm guard enabled for specific keys only
         if self.llm_guard_mode == "key-specific":
+            self.print_verbose(
+                f"user_api_key_dict.permissions: {user_api_key_dict.permissions}"
+            )
             if (
                 user_api_key_dict.permissions.get("enable_llm_guard_check", False)
                 == False
             ):
                 return
-
+        self.print_verbose("Makes LLM Guard Check")
         try:
             assert call_type in [
                 "completion",
