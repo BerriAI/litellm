@@ -96,19 +96,6 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
-## Advanced - Allowed Routes 
-
-Configure which routes a non-admin JWT can access via the config.
-
-By default, a non-admin JWT can call openai + any `/info` endpoints. 
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  enable_jwt_auth: True
-  allowed_routes: ["/chat/completions", "/embeddings"]
-```
-
 ## Advanced - Set Accepted JWT Scope Names 
 
 Change the string in JWT 'scopes', that litellm evaluates to see if a user has admin access.
@@ -117,17 +104,60 @@ Change the string in JWT 'scopes', that litellm evaluates to see if a user has a
 general_settings:
   master_key: sk-1234
   enable_jwt_auth: True
-  litellm_proxy_roles:
-    proxy_admin: "litellm-proxy-admin"
+  litellm_jwtauth:
+    admin_jwt_scope: "litellm-proxy-admin"
 ```
 
-### Allowed LiteLLM scopes
+## Advanced - Allowed Routes 
 
-```python
-class LiteLLM_JWTAuth(LiteLLMBase):
-    proxy_admin: str = "litellm_proxy_admin"
-    proxy_user: str = "litellm_user" # 👈 Not implemented yet, for JWT-Auth.
+Configure which routes a JWT can access via the config.
+
+By default: 
+
+- Admins: can access only management routes (`/team/*`, `/key/*`, `/user/*`)
+- Teams: can access only openai routes (`/chat/completions`, etc.)+ info routes (`/*/info`)
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
+
+**Admin Routes**
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    admin_jwt_scope: "litellm-proxy-admin"
+    admin_allowed_routes: ["/v1/embeddings"]
 ```
+
+**Team Routes**
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    ...
+    team_jwt_scope: "litellm-team" # 👈 Set JWT Scope string
+    team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
+```
+
+## Advanced - Caching Public Keys 
+
+Control how long public keys are cached for (in seconds).
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    admin_jwt_scope: "litellm-proxy-admin"
+    admin_allowed_routes: ["/v1/embeddings"]
+    public_key_ttl: 600 # 👈 KEY CHANGE
+```
+
+### All Params
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
+
 
 ### JWT Scopes
 
@@ -142,3 +172,30 @@ scope: ["litellm-proxy-admin",...]
 ```
 scope: "litellm-proxy-admin ..."
 ```
+
+## Advanced - Block Teams 
+
+To block all requests for a certain team id, use `/team/block`
+
+**Block Team**
+
+```bash
+curl --location 'http://0.0.0.0:4000/team/block' \
+--header 'Authorization: Bearer <admin-token>' \
+--header 'Content-Type: application/json' \
+--data '{
+    "team_id": "litellm-test-client-id-new" # 👈 set team id
+}'
+```
+
+**Unblock Team**
+
+```bash
+curl --location 'http://0.0.0.0:4000/team/unblock' \
+--header 'Authorization: Bearer <admin-token>' \
+--header 'Content-Type: application/json' \
+--data '{
+    "team_id": "litellm-test-client-id-new" # 👈 set team id
+}'
+```
+
