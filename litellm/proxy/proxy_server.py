@@ -6140,6 +6140,50 @@ async def team_info(
         )
 
 
+@router.post(
+    "/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def block_team(
+    data: BlockTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Blocks all calls from keys with this team id.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise Exception("No DB Connected.")
+
+    record = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"blocked": True}
+    )
+
+    return record
+
+
+@router.post(
+    "/team/unblock", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def unblock_team(
+    data: BlockTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Blocks all calls from keys with this team id.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise Exception("No DB Connected.")
+
+    record = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"blocked": False}
+    )
+
+    return record
+
+
 #### ORGANIZATION MANAGEMENT ####
 
 
