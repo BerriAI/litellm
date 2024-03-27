@@ -53,6 +53,7 @@ async def test_llm_guard_valid_response():
                     }
                 ]
             },
+            user_api_key_dict=user_api_key_dict,
             call_type="completion",
         )
     except Exception as e:
@@ -88,6 +89,7 @@ async def test_llm_guard_error_raising():
                     }
                 ]
             },
+            user_api_key_dict=user_api_key_dict,
             call_type="completion",
         )
         pytest.fail(f"Should have failed - {str(e)}")
