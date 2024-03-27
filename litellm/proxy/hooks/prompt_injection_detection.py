@@ -199,6 +199,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
     async def async_moderation_hook(
         self,
         data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         self.print_verbose(
