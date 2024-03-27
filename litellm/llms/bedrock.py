@@ -79,11 +79,13 @@ class AmazonTitanConfig:
 
 class AmazonAnthropicClaude3Config:
     """
-    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
+    Reference:
+        https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
+        https://docs.anthropic.com/claude/docs/models-overview#model-comparison
 
     Supported Params for the Amazon / Anthropic Claude 3 models:
 
-    - `max_tokens` Required (integer) max tokens,
+    - `max_tokens` Required (integer) max tokens. Default is 4096
     - `anthropic_version` Required (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
     - `system` Optional (string) the system prompt, conversion from openai format to this is handled in factory.py
     - `temperature` Optional (float) The amount of randomness injected into the response
@@ -92,7 +94,7 @@ class AmazonAnthropicClaude3Config:
     - `stop_sequences` Optional (List[str]) Custom text sequences that cause the model to stop generating
     """
 
-    max_tokens: Optional[int] = litellm.max_tokens
+    max_tokens: Optional[int] = 4096  # Opus, Sonnet, and Haiku default
     anthropic_version: Optional[str] = "bedrock-2023-05-31"
     system: Optional[str] = None
     temperature: Optional[float] = None
