@@ -154,6 +154,18 @@ general_settings:
     public_key_ttl: 600 # 👈 KEY CHANGE
 ```
 
+## Advanced - Custom JWT Field 
+
+Set a custom field in which the team_id exists. By default, the 'client_id' field is checked. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_id_jwt_field: "client_id" # 👈 KEY CHANGE
+```
+
 ### All Params
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
