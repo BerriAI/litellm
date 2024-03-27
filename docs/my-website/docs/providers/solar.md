@@ -26,21 +26,9 @@ import os
 # set the secrets from https://console.upstage.ai/services/solar
 os.environ["SOLAR_API_KEY"] = "DUMMY"
 
-response = litellm.completion(
-    model="solar-1-mini-chat",
-    custom_llm_provider='solar',
-    messages=[
-    {
-      "role": "system",
-      "content": "You are a helpful assistant."
-    },
-    {
-      "role": "user",
-      "content": "Hello!"
-    }
-  ],
-  temperature=0.1,
-    top_p=0.95,
-    top_k=40,
-) 
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# solar call
+response = completion(model="solar-1-mini-chat", messages=messages)
+response
 ```
