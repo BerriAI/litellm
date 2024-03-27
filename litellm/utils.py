@@ -5485,6 +5485,9 @@ def get_llm_provider(
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
                 api_base = "https://api.voyageai.com/v1"
                 dynamic_api_key = get_secret("VOYAGE_API_KEY")
+            elif custom_llm_provider == "solar":
+                api_base = "https://api.upstage.ai/v1/solar"
+                dynamic_api_key = get_secret("SOLAR_API_KEY")
             elif custom_llm_provider == "together_ai":
                 api_base = "https://api.together.xyz/v1"
                 dynamic_api_key = (
@@ -5517,6 +5520,9 @@ def get_llm_provider(
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret("GROQ_API_KEY")
+                    elif endpoint == "https://api.upstage.ai/v1/solar":
+                        custom_llm_provider = "solar"
+                        dynamic_api_key = get_secret("SOLAR_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -5578,6 +5584,8 @@ def get_llm_provider(
         ## petals
         elif model in litellm.petals_models:
             custom_llm_provider = "petals"
+        elif model in litellm.solar_models:
+            custom_llm_provider = "solar"
         ## bedrock
         elif (
             model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
