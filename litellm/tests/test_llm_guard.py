@@ -25,7 +25,6 @@ from litellm.caching import DualCache
 ### UNIT TESTS FOR LLM GUARD ###
 
 
-#   Test if PII masking works with input A
 @pytest.mark.asyncio
 async def test_llm_guard_valid_response():
     """
@@ -60,7 +59,6 @@ async def test_llm_guard_valid_response():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-#   Test if PII masking works with input B (also test if the response != A's response)
 @pytest.mark.asyncio
 async def test_llm_guard_error_raising():
     """
@@ -95,3 +93,31 @@ async def test_llm_guard_error_raising():
         pytest.fail(f"Should have failed - {str(e)}")
     except Exception as e:
         pass
+
+
+def test_llm_guard_key_specific_mode():
+    """
+    Tests to see if llm guard 'key-specific' permissions work
+    """
+    litellm.llm_guard_mode = "key-specific"
+
+    llm_guard = _ENTERPRISE_LLMGuard()
+
+    _api_key = "sk-12345"
+    # NOT ENABLED
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+    )
+
+    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict)
+
+    assert should_proceed == False
+
+    # ENABLED
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key, permissions={"enable_llm_guard_check": True}
+    )
+
+    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict)
+
+    assert should_proceed == True

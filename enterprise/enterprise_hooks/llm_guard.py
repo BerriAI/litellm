@@ -95,6 +95,21 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             traceback.print_exc()
             raise e
 
+    def should_proceed(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        if self.llm_guard_mode == "key-specific":
+            # check if llm guard enabled for specific keys only
+            self.print_verbose(
+                f"user_api_key_dict.permissions: {user_api_key_dict.permissions}"
+            )
+            if (
+                user_api_key_dict.permissions.get("enable_llm_guard_check", False)
+                == True
+            ):
+                return True
+        elif self.llm_guard_mode == "all":
+            return True
+        return False
+
     async def async_moderation_hook(
         self,
         data: dict,
@@ -111,16 +126,10 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             f"Inside LLM Guard Pre-Call Hook - llm_guard_mode={self.llm_guard_mode}"
         )
 
-        # check if llm guard enabled for specific keys only
-        if self.llm_guard_mode == "key-specific":
-            self.print_verbose(
-                f"user_api_key_dict.permissions: {user_api_key_dict.permissions}"
-            )
-            if (
-                user_api_key_dict.permissions.get("enable_llm_guard_check", False)
-                == False
-            ):
-                return
+        _proceed = self.should_proceed(user_api_key_dict=user_api_key_dict)
+        if _proceed == False:
+            return
+
         self.print_verbose("Makes LLM Guard Check")
         try:
             assert call_type in [
