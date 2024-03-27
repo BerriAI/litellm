@@ -30,9 +30,12 @@ litellm.set_verbose = True
 class _ENTERPRISE_LLMGuard(CustomLogger):
     # Class variables or attributes
     def __init__(
-        self, mock_testing: bool = False, mock_redacted_text: Optional[dict] = None
+        self,
+        mock_testing: bool = False,
+        mock_redacted_text: Optional[dict] = None,
     ):
         self.mock_redacted_text = mock_redacted_text
+        self.llm_guard_mode = litellm.llm_guard_mode
         if mock_testing == True:  # for testing purposes only
             return
         self.llm_guard_api_base = litellm.get_secret("LLM_GUARD_API_BASE", None)
@@ -92,9 +95,25 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             traceback.print_exc()
             raise e
 
+    def should_proceed(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        if self.llm_guard_mode == "key-specific":
+            # check if llm guard enabled for specific keys only
+            self.print_verbose(
+                f"user_api_key_dict.permissions: {user_api_key_dict.permissions}"
+            )
+            if (
+                user_api_key_dict.permissions.get("enable_llm_guard_check", False)
+                == True
+            ):
+                return True
+        elif self.llm_guard_mode == "all":
+            return True
+        return False
+
     async def async_moderation_hook(
         self,
         data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         """
@@ -103,7 +122,15 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         - Use the sanitized prompt returned
             - LLM Guard can handle things like PII Masking, etc.
         """
-        self.print_verbose(f"Inside LLM Guard Pre-Call Hook")
+        self.print_verbose(
+            f"Inside LLM Guard Pre-Call Hook - llm_guard_mode={self.llm_guard_mode}"
+        )
+
+        _proceed = self.should_proceed(user_api_key_dict=user_api_key_dict)
+        if _proceed == False:
+            return
+
+        self.print_verbose("Makes LLM Guard Check")
         try:
             assert call_type in [
                 "completion",

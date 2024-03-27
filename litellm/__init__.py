@@ -1,6 +1,6 @@
 ### INIT VARIABLES ###
 import threading, requests, os
-from typing import Callable, List, Optional, Dict, Union, Any
+from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
 from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
 from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
@@ -64,6 +64,7 @@ google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
+llm_guard_mode: Literal["all", "key-specific"] = "all"
 ##################
 logging: bool = True
 caching: bool = (
