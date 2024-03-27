@@ -141,6 +141,7 @@ class ProxyLogging:
     async def during_call_hook(
         self,
         data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
             "embeddings",
@@ -157,7 +158,9 @@ class ProxyLogging:
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_moderation_hook(
-                        data=new_data, call_type=call_type
+                        data=new_data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=call_type,
                     )
             except Exception as e:
                 raise e
