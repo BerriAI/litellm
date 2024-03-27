@@ -14,20 +14,26 @@ spec:
     spec:
       containers:
         - name: litellm-container
-          image: ghcr.io/berriai/litellm:main-latest
-          imagePullPolicy: Always
+          image: ghcr.io/berriai/litellm-database:main-v1.34.4.dev2
           env:
             - name: AZURE_API_KEY
-              value: "d6f****"
+              value: "d6f82361954b450188295b448e2091ca"
             - name: AZURE_API_BASE
-              value: "https://openai"
+              value: "https://openai-gpt-4-test-v-1.openai.azure.com/"
             - name: LITELLM_MASTER_KEY
               value: "sk-1234"
             - name: DATABASE_URL
-              value: "postgresql://ishaan:*********"
+              value: "postgresql://ishaan:HogdJCvK89Xe@ep-bitter-fog-a573fgz9.us-east-2.aws.neon.tech/local?sslmode=require"
+            - name: SLACK_WEBHOOK_URL
+              value: "https://hooks.slack.com/services/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"
+            - name: ishu
+              value: "ishaanGMGhj"
           args:
             - "--config"
             - "/app/proxy_config.yaml"  # Update the path to mount the config file
+            - "--run_gunicorn"
+            - "--num_workers"
+            - "4"
           volumeMounts:                 # Define volume mount for proxy_config.yaml
             - name: config-volume
               mountPath: /app

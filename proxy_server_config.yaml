@@ -7,8 +7,8 @@ model_list:
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-3.5-turbo-large
     litellm_params: 
-      "model": "gpt-3.5-turbo-1106"
-      "api_key": os.environ/OPENAI_API_KEY
+      model: "gpt-3.5-turbo-1106"
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: gpt-4
     litellm_params:
       model: azure/chatgpt-v-2
