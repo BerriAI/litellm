@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     Member,
 )
 from litellm.caching import DualCache
+from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
@@ -1716,6 +1717,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         # hash the api_key
         api_key = hash_token(api_key)
 
+    # jsonify datetime object
+    # if isinstance(start_time, datetime):
+    #     start_time = start_time.isoformat()
+    # if isinstance(end_time, datetime):
+    #     end_time = end_time.isoformat()
     # clean up litellm metadata
     if isinstance(metadata, dict):
         clean_metadata = {}
@@ -1866,9 +1872,7 @@ async def reset_budget(prisma_client: PrismaClient):
             )
 
 
-async def update_spend(
-    prisma_client: PrismaClient,
-):
+async def update_spend(prisma_client: PrismaClient, db_writer_client: HTTPHandler):
     """
     Batch write updates to db.
 
@@ -1995,13 +1999,23 @@ async def update_spend(
             except Exception as e:
                 raise e
 
+    ### UPDATE SPEND LOGS ###
+    # if len(prisma_client.spend_log_transactons) > 0:
+    #     response = await db_writer_client.post(
+    #         url="http://0.0.0.0:3000/spend/update",
+    #         data=prisma_client.spend_log_transactons,
+    #         headers={"Content-Type": "application/json"},
+    #     )
+    #     if response.status_code == 200:
+    #         prisma_client.spend_log_transactons = []
 
-async def monitor_spend_list(prisma_client: PrismaClient):
-    """
-    Check the length of each spend list, if it exceeds a threshold (e.g. 100 items) - write to db
-    """
-    if len(prisma_client.user_list_transactons) > 10000:
-        await update_spend(prisma_client=prisma_client)
+
+# async def monitor_spend_list(prisma_client: PrismaClient):
+#     """
+#     Check the length of each spend list, if it exceeds a threshold (e.g. 100 items) - write to db
+#     """
+#     if len(prisma_client.user_list_transactons) > 10000:
+#         await update_spend(prisma_client=prisma_client)
 
 
 async def _read_request_body(request):
