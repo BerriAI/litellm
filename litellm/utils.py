@@ -271,7 +271,10 @@ class Message(OpenAIObject):
         if tool_calls is not None:
             self.tool_calls = []
             for tool_call in tool_calls:
-                self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
+                if isinstance(tool_call, dict):
+                    self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
+                else:
+                    self.tool_calls.append(tool_call)
 
         if logprobs is not None:
             self._logprobs = logprobs
