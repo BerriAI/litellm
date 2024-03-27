@@ -332,6 +332,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
+    "custom_openai",
 ]
 
 
