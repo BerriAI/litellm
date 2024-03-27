@@ -2630,11 +2630,7 @@ async def async_data_generator(response, user_api_key_dict):
         verbose_proxy_logger.debug(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        router_model_names = llm_router.model_names if llm_router is not None else []
         if user_debug:
             traceback.print_exc()
 
@@ -2958,11 +2954,7 @@ async def completion(
         start_time = time.time()
 
         ### ROUTE THE REQUESTs ###
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        router_model_names = llm_router.model_names if llm_router is not None else []
         # skip router if user passed their key
         if "api_key" in data:
             response = await litellm.atext_completion(**data)
@@ -3176,11 +3168,8 @@ async def chat_completion(
         start_time = time.time()
 
         ### ROUTE THE REQUEST ###
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        # Do not change this - it should be a constant time fetch - ALWAYS
+        router_model_names = llm_router.model_names if llm_router is not None else []
         # skip router if user passed their key
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
@@ -3253,11 +3242,7 @@ async def chat_completion(
         verbose_proxy_logger.debug(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        router_model_names = llm_router.model_names if llm_router is not None else []
         if user_debug:
             traceback.print_exc()
 
@@ -3365,11 +3350,7 @@ async def embeddings(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        router_model_names = llm_router.model_names if llm_router is not None else []
         if (
             "input" in data
             and isinstance(data["input"], list)
@@ -3541,11 +3522,7 @@ async def image_generation(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        router_model_names = llm_router.model_names if llm_router is not None else []
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
@@ -3689,11 +3666,7 @@ async def audio_transcriptions(
                     **data,
                 }  # add the team-specific configs to the completion call
 
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        router_model_names = llm_router.model_names if llm_router is not None else []
 
         assert (
             file.filename is not None
@@ -3858,11 +3831,7 @@ async def moderations(
                     **data,
                 }  # add the team-specific configs to the completion call
 
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
+        router_model_names = llm_router.model_names if llm_router is not None else []
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
@@ -6158,7 +6127,7 @@ async def block_team(
         raise Exception("No DB Connected.")
 
     record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": True}
+        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
     )
 
     return record
@@ -6180,7 +6149,7 @@ async def unblock_team(
         raise Exception("No DB Connected.")
 
     record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": False}
+        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
     )
 
     return record
