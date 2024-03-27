@@ -519,6 +519,8 @@ def completion(
     eos_token = kwargs.get("eos_token", None)
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
+    ### TEXT COMPLETION CALLS ###
+    text_completion = kwargs.get("text_completion", False)
     ### ASYNC CALLS ###
     acompletion = kwargs.get("acompletion", False)
     client = kwargs.get("client", None)
@@ -602,6 +604,7 @@ def completion(
         "cache",
         "no-log",
         "base_model",
+        "text_completion",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -914,15 +917,11 @@ def completion(
                 )
         elif (
             model in litellm.open_ai_chat_completion_models
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "groq"
-            or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
-            or custom_llm_provider == "together_ai"
-            or custom_llm_provider in litellm.openai_compatible_providers
+            or (
+                custom_llm_provider in litellm.openai_compatible_providers
+                and text_completion == False
+            )
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -998,6 +997,10 @@ def completion(
                 )
         elif (
             custom_llm_provider == "text-completion-openai"
+            or (
+                custom_llm_provider in litellm.openai_compatible_providers
+                and text_completion == True
+            )
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
         ):
@@ -2943,6 +2946,7 @@ async def atext_completion(*args, **kwargs):
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             response = await loop.run_in_executor(None, func_with_context)
@@ -3156,6 +3160,7 @@ def text_completion(
     # default case, non OpenAI requests go through here
     messages = [{"role": "system", "content": prompt}]
     kwargs.pop("prompt", None)
+    kwargs["text_completion"] = True
     response = completion(
         model=model,
         messages=messages,
