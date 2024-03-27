@@ -107,6 +107,19 @@ general_settings:
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
+### JWT Scopes
+
+Here's what scopes on JWT-Auth tokens look like
+
+**Can be a list**
+```
+scope: ["litellm-proxy-admin",...]
+```
+
+**Can be a space-separated string**
+```
+scope: "litellm-proxy-admin ..."
+```
 
 ## Advanced - Allowed Routes 
 
@@ -166,24 +179,12 @@ general_settings:
     team_id_jwt_field: "client_id" # 👈 KEY CHANGE
 ```
 
-### All Params
+## All Params
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
 
 
-### JWT Scopes
 
-Here's what scopes on JWT-Auth tokens look like
-
-**Can be a list**
-```
-scope: ["litellm-proxy-admin",...]
-```
-
-**Can be a space-separated string**
-```
-scope: "litellm-proxy-admin ..."
-```
 
 ## Advanced - Block Teams 
 
