@@ -127,3 +127,14 @@ def test_post_call_rule_streaming():
         print(type(e))
         print(vars(e))
         assert e.message == "This violates LiteLLM Proxy Rules. Response too short"
+
+
+def test_post_call_processing_error_async_response():
+    response = asyncio.run(
+        acompletion(
+            model="command-nightly",  # Just used as an example
+            messages=[{"content": "Hello, how are you?", "role": "user"}],
+            api_base="https://openai-proxy.berriai.repl.co",  # Just used as an example
+            custom_llm_provider="openai",
+        )
+    )
