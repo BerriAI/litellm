@@ -101,7 +101,7 @@ def test_llm_guard_key_specific_mode():
     """
     litellm.llm_guard_mode = "key-specific"
 
-    llm_guard = _ENTERPRISE_LLMGuard()
+    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
 
     _api_key = "sk-12345"
     # NOT ENABLED
