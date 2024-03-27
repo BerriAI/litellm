@@ -7,7 +7,6 @@ import importlib
 from dotenv import load_dotenv
 import urllib.parse as urlparse
 
-
 sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
@@ -20,6 +19,8 @@ telemetry = None
 
 
 def append_query_params(url, params):
+    from litellm._logging import verbose_proxy_logger
+
     from litellm._logging import verbose_proxy_logger
 
     verbose_proxy_logger.debug(f"url: {url}")
