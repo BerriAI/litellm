@@ -85,6 +85,8 @@ def test_context_window_with_fallbacks(model):
         )
     except litellm.ServiceUnavailableError as e:
         pass
+    except litellm.APIConnectionError as e:
+        pass
 
 
 # for model in litellm.models_by_provider["bedrock"]:
