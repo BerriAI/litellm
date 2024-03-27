@@ -3168,7 +3168,9 @@ async def chat_completion(
 
         tasks = []
         tasks.append(
-            proxy_logging_obj.during_call_hook(data=data, call_type="completion")
+            proxy_logging_obj.during_call_hook(
+                data=data, user_api_key_dict=user_api_key_dict, call_type="completion"
+            )
         )
 
         start_time = time.time()
