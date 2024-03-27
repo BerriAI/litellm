@@ -103,6 +103,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
     - team_allowed_routes: list of allowed routes for proxy team roles.
     - end_user_id_jwt_field: Default - `sub`. The field in the JWT token that stores the end-user ID. Turn this off by setting to `None`. Enables end-user cost tracking.
+    - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
 
     See `auth_checks.py` for the specific routes
     """
