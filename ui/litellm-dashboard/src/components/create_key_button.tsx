@@ -18,7 +18,7 @@ const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
-  teamID: string | null;
+  team: any | null;
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
@@ -27,7 +27,7 @@ interface CreateKeyProps {
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
-  teamID,
+  team,
   userRole,
   accessToken,
   data,
@@ -130,7 +130,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item label="Team ID" name="team_id">
                 <Input
                   placeholder="ai_team"
-                  defaultValue={teamID ? teamID : ""}
+                  defaultValue={team && team["team_alias"] ? team["team_alias"]  : ""}
+                  disabled={true}
                 />
               </Form.Item>
               <Form.Item label="Models" name="models">
