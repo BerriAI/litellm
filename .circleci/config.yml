@@ -30,6 +30,7 @@ jobs:
             pip install mypy
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
             pip install "boto3>=1.28.57"
             pip install "aioboto3>=12.3.0"
             pip install langchain
@@ -154,6 +155,7 @@ jobs:
             pip install mypy
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
             pip install "boto3>=1.28.57"
             pip install "aioboto3>=12.3.0"
             pip install langchain
