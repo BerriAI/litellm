@@ -562,6 +562,7 @@ async def user_api_key_auth(
             verbose_proxy_logger.debug("Token from db: %s", valid_token)
         elif valid_token is not None:
             verbose_proxy_logger.debug("API Key Cache Hit!")
+        user_id_information = None
         if valid_token:
             # Got Valid Token from Cache, DB
             # Run checks for
@@ -665,7 +666,6 @@ async def user_api_key_auth(
                     if user_passed_to_chat_completions is not None:
                         user_id_list.append(user_passed_to_chat_completions)
 
-                user_id_information = None
                 for id in user_id_list:
                     value = user_api_key_cache.get_cache(key=id)
                     if value is not None:
