@@ -1867,7 +1867,9 @@ async def reset_budget(prisma_client: PrismaClient):
             )
 
 
-async def update_spend(prisma_client: PrismaClient, db_writer_client: HTTPHandler):
+async def update_spend(
+    prisma_client: PrismaClient, db_writer_client: Optional[HTTPHandler]
+):
     """
     Batch write updates to db.
 
@@ -1996,7 +1998,11 @@ async def update_spend(prisma_client: PrismaClient, db_writer_client: HTTPHandle
 
     ### UPDATE SPEND LOGS ###
     base_url = os.getenv("SPEND_LOGS_URL", None)
-    if len(prisma_client.spend_log_transactons) > 0 and base_url is not None:
+    if (
+        len(prisma_client.spend_log_transactons) > 0
+        and base_url is not None
+        and db_writer_client is not None
+    ):
         if not base_url.endswith("/"):
             base_url += "/"
         response = await db_writer_client.post(
