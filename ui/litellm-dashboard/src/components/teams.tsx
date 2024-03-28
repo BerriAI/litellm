@@ -122,7 +122,7 @@ const Team: React.FC<TeamProps> = ({
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null && teams != null) {
-        message.info("Making API Call");
+        message.info("Adding Member");
         const user_role: Member = {
           role: "user",
           user_email: formValues.user_email,
