@@ -187,9 +187,9 @@ const Team: React.FC<TeamProps> = ({
                         </TableCell>
                         <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           <Text>
-                            TPM Limit:{" "}
+                            TPM:{" "}
                             {team.tpm_limit ? team.tpm_limit : "Unlimited"}{" "}
-                            <br></br>RPM Limit:{" "}
+                            <br></br>RPM:{" "}
                             {team.rpm_limit ? team.rpm_limit : "Unlimited"}
                           </Text>
                         </TableCell>
