@@ -2796,29 +2796,19 @@ def embedding(
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
-            ollama_input = None
-            if isinstance(input, list) and len(input) > 1:
-                raise litellm.BadRequestError(
-                    message=f"Ollama Embeddings don't support batch embeddings",
-                    model=model,  # type: ignore
-                    llm_provider="ollama",  # type: ignore
-                )
-            if isinstance(input, list) and len(input) == 1:
-                ollama_input = "".join(input[0])
-            elif isinstance(input, str):
-                ollama_input = input
-            else:
+            if isinstance(input ,str):
+                input = [input]
+            if not all(isinstance(item, str) for item in input):
                 raise litellm.BadRequestError(
                     message=f"Invalid input for ollama embeddings. input={input}",
                     model=model,  # type: ignore
                     llm_provider="ollama",  # type: ignore
                 )
-
-            if aembedding == True:
+            if aembedding:
                 response = ollama.ollama_aembeddings(
                     api_base=api_base,
                     model=model,
-                    prompt=ollama_input,
+                    prompts=input,
                     encoding=encoding,
                     logging_obj=logging,
                     optional_params=optional_params,
