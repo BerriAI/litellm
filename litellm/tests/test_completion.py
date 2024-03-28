@@ -1107,6 +1107,7 @@ def test_completion_openai_litellm_key():
 # test_ completion_openai_litellm_key()
 
 
+@pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
 def test_completion_ollama_hosted():
     try:
         litellm.request_timeout = 20  # give ollama 20 seconds to response
