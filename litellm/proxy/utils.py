@@ -1013,6 +1013,8 @@ class PrismaClient:
                     t.max_budget AS team_max_budget, 
                     t.tpm_limit AS team_tpm_limit,
                     t.rpm_limit AS team_rpm_limit,
+                    t.models AS team_models,
+                    t.blocked AS team_blocked,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
                     LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
@@ -1023,6 +1025,10 @@ class PrismaClient:
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
+                        if response["team_models"] is None:
+                            response["team_models"] = []
+                        if response["team_blocked"] is None:
+                            response["team_blocked"] = False
                         response = LiteLLM_VerificationTokenView(**response)
                         # for prisma we need to cast the expires time to str
                         if response.expires is not None and isinstance(
