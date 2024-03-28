@@ -298,6 +298,7 @@ class ProxyLogging:
             return
         else:
             user_info = str(user_info)
+
         # percent of max_budget left to spend
         if user_max_budget > 0:
             percent_left = (user_max_budget - user_current_spend) / user_max_budget
@@ -317,22 +318,35 @@ class ProxyLogging:
             )
             return
 
+        ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
+        # - Alert once within 28d period
+        # - Cache this information
+        # - Don't re-alert, if alert already sent
+        _cache: DualCache = self.call_details["user_api_key_cache"]
+
         # check if 5% of max budget is left
         if percent_left <= 0.05:
             message = "5% budget left for" + user_info
-            await self.alerting_handler(
-                message=message,
-                level="Medium",
-            )
+            result = await _cache.async_get_cache(key=message)
+            if result is None:
+                await self.alerting_handler(
+                    message=message,
+                    level="Medium",
+                )
+                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
+
             return
 
         # check if 15% of max budget is left
         if percent_left <= 0.15:
             message = "15% budget left for" + user_info
-            await self.alerting_handler(
-                message=message,
-                level="Low",
-            )
+            result = await _cache.async_get_cache(key=message)
+            if result is None:
+                await self.alerting_handler(
+                    message=message,
+                    level="Low",
+                )
+                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
             return
 
         return
