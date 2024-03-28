@@ -698,6 +698,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
+    team_models: List = []
+    team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
 
