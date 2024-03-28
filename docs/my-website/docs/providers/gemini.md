@@ -2,6 +2,7 @@
 
 ## Pre-requisites
 * `pip install -q google-generativeai`
+* Get API Key - https://aistudio.google.com/
 
 # Gemini-Pro
 ## Sample Usage
