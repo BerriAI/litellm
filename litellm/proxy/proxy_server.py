@@ -5830,6 +5830,18 @@ async def update_team(
 
     You can now update team budget / rate limits via /team/update
 
+    Parameters:
+    - team_id: str - The team id of the user. Required param.
+    - team_alias: Optional[str] - User defined team alias
+    - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
+    - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
+    - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
+    - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
+    
+    Example - update team TPM Limit
+    
     ```
     curl --location 'http://0.0.0.0:8000/team/update' \
     
@@ -5838,8 +5850,8 @@ async def update_team(
     --header 'Content-Type: application/json' \
     
     --data-raw '{
-        "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
-        "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}, {"role": "user", "user_id": "krrish247652@berri.ai"}]
+        "team_id": "litellm-test-client-id-new",
+        "tpm_limit": 100
     }'
     ```
     """
