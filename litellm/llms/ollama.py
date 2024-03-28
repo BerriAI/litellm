@@ -68,9 +68,9 @@ class OllamaConfig:
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
-    stop: Optional[
-        list
-    ] = None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    stop: Optional[list] = (
+        None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -346,7 +346,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
 async def ollama_aembeddings(
     api_base: str,
     model: str,
-    prompts: list[str],
+    prompts: list,
     optional_params=None,
     logging_obj=None,
     model_response=None,
@@ -378,9 +378,13 @@ async def ollama_aembeddings(
             logging_obj.pre_call(
                 input=None,
                 api_key=None,
-                additional_args={"api_base": url, "complete_input_dict": data, "headers": {}},
+                additional_args={
+                    "api_base": url,
+                    "complete_input_dict": data,
+                    "headers": {},
+                },
             )
-            
+
             response = await session.post(url, json=data)
             if response.status != 200:
                 text = await response.text()
