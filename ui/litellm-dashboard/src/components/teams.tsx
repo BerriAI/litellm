@@ -102,7 +102,7 @@ const Team: React.FC<TeamProps> = ({
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null) {
-        //message.info("Making API Call");
+        message.info("Creating Team");
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
