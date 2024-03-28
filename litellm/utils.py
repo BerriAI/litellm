@@ -382,15 +382,12 @@ class Choices(OpenAIObject):
 
 class Usage(OpenAIObject):
     def __init__(
-        self, prompt_tokens=None, completion_tokens=None, total_tokens=None, **params
+        self, prompt_tokens=0, completion_tokens=0, total_tokens=0, **params
     ):
         super(Usage, self).__init__(**params)
-        if prompt_tokens:
-            self.prompt_tokens = prompt_tokens
-        if completion_tokens:
-            self.completion_tokens = completion_tokens
-        if total_tokens:
-            self.total_tokens = total_tokens
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = total_tokens
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
