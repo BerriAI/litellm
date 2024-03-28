@@ -130,7 +130,6 @@ from fastapi import (
     HTTPException,
     status,
     Depends,
-    BackgroundTasks,
     Header,
     Response,
     Form,
@@ -2896,7 +2895,6 @@ async def completion(
     fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     try:
@@ -3062,7 +3060,6 @@ async def chat_completion(
     fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     try:
@@ -3299,7 +3296,6 @@ async def embeddings(
     request: Request,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     global proxy_logging_obj
     try:
@@ -3475,7 +3471,6 @@ async def embeddings(
 async def image_generation(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     global proxy_logging_obj
     try:
@@ -6158,7 +6153,7 @@ async def block_team(
         raise Exception("No DB Connected.")
 
     record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": True}
+        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
     )
 
     return record
@@ -6180,7 +6175,7 @@ async def unblock_team(
         raise Exception("No DB Connected.")
 
     record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": False}
+        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
     )
 
     return record
@@ -6783,7 +6778,6 @@ async def async_queue_request(
     request: Request,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     global general_settings, user_debug, proxy_logging_obj
     """
