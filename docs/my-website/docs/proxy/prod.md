@@ -44,7 +44,73 @@ CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 
 Writing each spend log to the db can slow down your proxy. In testing we saw a 70% improvement in median response time, by moving writing spend logs to a separate server. 
 
+👉 [LiteLLM Spend Logs Server](https://github.com/BerriAI/litellm/tree/main/litellm-js/spend-logs)
 
+
+**1. Start the server**
+
+```bash
+docker run -p 3000:3000 \
+  -e DATABASE_URL="postgres://.." \
+  ghcr.io/berriai/litellm:litellm-spend_logs-latest
+
+# RUNNING on http://0.0.0.0:3000
+```
+
+**2. Connect to proxy**
+
+Add 'SPEND_LOGS_URL' as an environment variable when starting the proxy 
+
+Example litellm_config.yaml
+
+```yaml
+model_list:
+- model_name: fake-openai-endpoint
+  litellm_params:
+    model: openai/my-fake-model
+    api_key: my-fake-key
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings:
+  master_key: sk-1234
+  proxy_batch_write_at: 5 # 👈 Frequency of batch writing logs to server (in seconds)
+```
+```bash
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e DATABASE_URL=postgres://... \
+    -e SPEND_LOGS_URL="http://0.0.0.0:3000" \ # 👈 KEY CHANGE
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
+
+# Running on http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-1234' \
+--data '{
+    "model": "fake-openai-endpoint", 
+    "messages": [
+        {"role": "system", "content": "Be helpful"},
+        {"role": "user", "content": "What do you know?"}
+    ]
+}'
+```
+
+In your LiteLLM Spend Logs Server, you should see
+
+**Expected Response**
+
+```
+Received and stored 1 logs. Total logs in memory: 1
+...
+Flushed 1 log to the DB.
+```
 
 ## 4. Switch off resetting budgets
 
