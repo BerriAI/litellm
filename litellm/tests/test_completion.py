@@ -74,7 +74,7 @@ def test_completion_claude():
         print(response.usage)
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
-        # print("new cost tracking")
+        # print("new costtracking")
     except Exception as e:
         if "overloaded_error" in str(e):
             pass
