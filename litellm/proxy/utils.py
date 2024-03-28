@@ -1717,11 +1717,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         # hash the api_key
         api_key = hash_token(api_key)
 
-    # jsonify datetime object
-    # if isinstance(start_time, datetime):
-    #     start_time = start_time.isoformat()
-    # if isinstance(end_time, datetime):
-    #     end_time = end_time.isoformat()
     # clean up litellm metadata
     if isinstance(metadata, dict):
         clean_metadata = {}
@@ -2000,14 +1995,17 @@ async def update_spend(prisma_client: PrismaClient, db_writer_client: HTTPHandle
                 raise e
 
     ### UPDATE SPEND LOGS ###
-    # if len(prisma_client.spend_log_transactons) > 0:
-    #     response = await db_writer_client.post(
-    #         url="http://0.0.0.0:3000/spend/update",
-    #         data=prisma_client.spend_log_transactons,
-    #         headers={"Content-Type": "application/json"},
-    #     )
-    #     if response.status_code == 200:
-    #         prisma_client.spend_log_transactons = []
+    base_url = os.getenv("SPEND_LOGS_URL", None)
+    if len(prisma_client.spend_log_transactons) > 0 and base_url is not None:
+        if not base_url.endswith("/"):
+            base_url += "/"
+        response = await db_writer_client.post(
+            url=base_url + "spend/update",
+            data=json.dumps(prisma_client.spend_log_transactons),  # type: ignore
+            headers={"Content-Type": "application/json"},
+        )
+        if response.status_code == 200:
+            prisma_client.spend_log_transactons = []
 
 
 # async def monitor_spend_list(prisma_client: PrismaClient):
