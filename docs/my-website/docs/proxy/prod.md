@@ -112,6 +112,13 @@ Received and stored 1 logs. Total logs in memory: 1
 Flushed 1 log to the DB.
 ```
 
+
+### Machine Specification
+
+A t2.micro should be sufficient to handle 1k logs / minute on this server. 
+
+This consumes at max 120MB, and <0.1 vCPU. 
+
 ## 4. Switch off resetting budgets
 
 Add this to your config.yaml. (Only spend per Key, User and Team will be tracked - spend per API Call will not be written to the LiteLLM Database)
