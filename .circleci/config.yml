@@ -48,6 +48,7 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
+            pip install google-cloud-aiplatform
       - save_cache:
           paths:
             - ./venv
