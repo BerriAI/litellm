@@ -3084,7 +3084,6 @@ async def chat_completion(
             "url": str(request.url),
             "method": request.method,
             "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
         ## Cache Controls
@@ -3312,7 +3311,6 @@ async def embeddings(
             "url": str(request.url),
             "method": request.method,
             "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
@@ -3488,7 +3486,6 @@ async def image_generation(
             "url": str(request.url),
             "method": request.method,
             "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
@@ -3641,7 +3638,6 @@ async def audio_transcriptions(
             "url": str(request.url),
             "method": request.method,
             "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
@@ -3811,7 +3807,6 @@ async def moderations(
             "url": str(request.url),
             "method": request.method,
             "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
@@ -6802,7 +6797,6 @@ async def async_queue_request(
             "url": str(request.url),
             "method": request.method,
             "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
         verbose_proxy_logger.debug("receiving data: %s", data)
