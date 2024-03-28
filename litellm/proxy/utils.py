@@ -449,16 +449,15 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
-        new_response = copy.deepcopy(response)
         for callback in litellm.callbacks:
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict, response=new_response
+                        user_api_key_dict=user_api_key_dict, response=response
                     )
             except Exception as e:
                 raise e
-        return new_response
+        return response
 
     async def post_call_streaming_hook(
         self,
