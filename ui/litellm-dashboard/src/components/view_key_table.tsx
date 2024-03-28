@@ -85,9 +85,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
-            <TableHeaderCell>Key Budget (USD)</TableHeaderCell>
+            <TableHeaderCell>Budget (USD)</TableHeaderCell>
             <TableHeaderCell>Spend Report</TableHeaderCell>
-            <TableHeaderCell>Team ID</TableHeaderCell>
+            <TableHeaderCell>Team</TableHeaderCell>
             <TableHeaderCell>Metadata</TableHeaderCell>
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
@@ -128,7 +128,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   {item.max_budget != null ? (
                     <Text>{item.max_budget}</Text>
                   ) : (
-                    <Text>Unlimited Budget</Text>
+                    <Text>Unlimited</Text>
                   )}
                 </TableCell>
                 <TableCell style={{ maxWidth: '2px' }}>
@@ -147,13 +147,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
                   
                 </TableCell>
-                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{JSON.stringify(item.models)}</Text>
+
+                <TableCell style={{ maxWidth: "8-x", whiteSpace: "pre-wrap", overflow: "hidden" }}>
+                  {Array.isArray(item.models) ? (
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                      {item.models.map((model: string, index: number) => (
+                        <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                           {model.length > 30 ? `${model.slice(0, 30)}...` : model}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
                 </TableCell>
                 <TableCell style={{ maxWidth: "2px", overflowWrap: "break-word" }}>
                   <Text>
-                    TPM Limit: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
-                    <br></br> RPM Limit:{" "}
+                    TPM: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
+                    <br></br> RPM:{" "}
                     {item.rpm_limit ? item.rpm_limit : "Unlimited"}
                   </Text>
                 </TableCell>
