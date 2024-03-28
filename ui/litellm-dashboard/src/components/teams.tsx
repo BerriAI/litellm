@@ -21,6 +21,7 @@ import {
   Card,
   Icon,
   Button,
+  Badge,
   Col,
   Text,
   Grid,
@@ -182,8 +183,16 @@ const Team: React.FC<TeamProps> = ({
                         <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           {team["max_budget"] ? team["max_budget"] : "No limit"}
                         </TableCell>
-                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                          <Text>{JSON.stringify(team["models"] ? team["models"] : [])}</Text>
+                          <TableCell style={{ maxWidth: "8-x", whiteSpace: "pre-wrap", overflow: "hidden" }}>
+                            {Array.isArray(team.models) ? (
+                              <div style={{ display: "flex", flexDirection: "column" }}>
+                                {team.models.map((model: string, index: number) => (
+                                  <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                                    {model.length > 30 ? `${model.slice(0, 30)}...` : model}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : null}
                         </TableCell>
                         <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           <Text>
