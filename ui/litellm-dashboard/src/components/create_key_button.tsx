@@ -12,33 +12,32 @@ import {
   Select,
   message,
 } from "antd";
-import { keyCreateCall, slackBudgetAlertsHealthCheck } from "./networking";
+import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
 
 const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
-  teamID: string | null;
+  team: any | null;
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
-  userModels: string[];
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
-  teamID,
+  team,
   userRole,
   accessToken,
   data,
-  userModels,
   setData,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
   const [softBudget, setSoftBudget] = useState(null);
+  const [userModels, setUserModels] = useState([]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -49,6 +48,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setApiKey(null);
     form.resetFields();
   };
+
+  useEffect(() => {
+    const fetchUserModels = async () => {
+      try {
+        if (userID === null || userRole === null) {
+          return;
+        }
+
+        if (accessToken !== null) {
+          const model_available = await modelAvailableCall(accessToken, userID, userRole);
+          let available_model_names = model_available["data"].map(
+            (element: { id: string }) => element.id
+          );
+          console.log("available_model_names:", available_model_names);
+          setUserModels(available_model_names);
+        }
+      } catch (error) {
+        console.error("Error fetching user models:", error);
+      }
+    };
+  
+    fetchUserModels();
+  }, [accessToken, userID, userRole]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
@@ -105,12 +127,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item label="Key Name" name="key_alias">
                 <Input />
               </Form.Item>
-              <Form.Item label="Team ID" name="team_id">
-                <Input
-                  placeholder="ai_team"
-                  defaultValue={teamID ? teamID : ""}
-                />
+              <Form.Item
+                label="Team ID"
+                name="team_id"
+                initialValue={team ? team["team_id"] : null}
+                valuePropName="team_id"
+              >
+                <Input value={team ? team["team_alias"] : ""} disabled />
               </Form.Item>
+
               <Form.Item label="Models" name="models">
                 <Select
                   mode="multiple"
@@ -158,7 +183,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <Input />
               </Form.Item>
               <Form.Item label="Team ID (Contact Group)" name="team_id">
-                <Input placeholder="ai_team" />
+                <Input placeholder="default team (create a new team)" />
               </Form.Item>
 
               <Form.Item label="Description" name="description">

@@ -102,7 +102,7 @@ const Team: React.FC<TeamProps> = ({
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null) {
-        //message.info("Making API Call");
+        message.info("Creating Team");
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -122,7 +122,7 @@ const Team: React.FC<TeamProps> = ({
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null && teams != null) {
-        message.info("Making API Call");
+        message.info("Adding Member");
         const user_role: Member = {
           role: "user",
           user_email: formValues.user_email,
@@ -157,7 +157,7 @@ const Team: React.FC<TeamProps> = ({
   };
   console.log(`received teams ${teams}`);
   return (
-    <div className="w-full">
+    <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-2 h-[75vh] w-full">
         <Col numColSpan={1}>
           <Title level={4}>All Teams</Title>
@@ -168,6 +168,7 @@ const Team: React.FC<TeamProps> = ({
                   <TableHeaderCell>Team Name</TableHeaderCell>
                   <TableHeaderCell>Spend (USD)</TableHeaderCell>
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
+                  <TableHeaderCell>Models</TableHeaderCell>
                   <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
                 </TableRow>
               </TableHead>
@@ -176,22 +177,25 @@ const Team: React.FC<TeamProps> = ({
                 {teams && teams.length > 0
                   ? teams.map((team: any) => (
                       <TableRow key={team.team_id}>
-                        <TableCell>{team["team_alias"]}</TableCell>
-                        <TableCell>{team["spend"]}</TableCell>
-                        <TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>{team["team_alias"]}</TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>{team["spend"]}</TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           {team["max_budget"] ? team["max_budget"] : "No limit"}
                         </TableCell>
-                        <TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                          <Text>{JSON.stringify(team["models"] ? team["models"] : [])}</Text>
+                        </TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           <Text>
                             TPM Limit:{" "}
                             {team.tpm_limit ? team.tpm_limit : "Unlimited"}{" "}
-                            <br></br> RPM Limit:{" "}
+                            <br></br>RPM Limit:{" "}
                             {team.rpm_limit ? team.rpm_limit : "Unlimited"}
                           </Text>
                         </TableCell>
-                        <TableCell>
+                        {/* <TableCell>
                           <Icon icon={CogIcon} size="sm" />
-                        </TableCell>
+                        </TableCell> */}
                       </TableRow>
                     ))
                   : null}
@@ -293,7 +297,7 @@ const Team: React.FC<TeamProps> = ({
                 <TableRow>
                   <TableHeaderCell>Member Name</TableHeaderCell>
                   <TableHeaderCell>Role</TableHeaderCell>
-                  <TableHeaderCell>Action</TableHeaderCell>
+                  {/* <TableHeaderCell>Action</TableHeaderCell> */}
                 </TableRow>
               </TableHead>
 
@@ -310,9 +314,9 @@ const Team: React.FC<TeamProps> = ({
                               : null}
                           </TableCell>
                           <TableCell>{member["role"]}</TableCell>
-                          <TableCell>
+                          {/* <TableCell>
                             <Icon icon={CogIcon} size="sm" />
-                          </TableCell>
+                          </TableCell> */}
                         </TableRow>
                       )
                     )

@@ -5,7 +5,6 @@ datasource client {
 
 generator client {
   provider = "prisma-client-py"
-  previewFeatures = ["jsonProtocol"]
 }
 
 // Budget / Rate Limits for an org

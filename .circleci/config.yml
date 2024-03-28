@@ -28,8 +28,9 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install mypy
-            pip install "google-generativeai>=0.3.2"
-            pip install "google-cloud-aiplatform>=1.38.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
             pip install "boto3>=1.28.57"
             pip install "aioboto3>=12.3.0"
             pip install langchain
@@ -48,6 +49,7 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
+            pip install google-cloud-aiplatform
       - save_cache:
           paths:
             - ./venv
@@ -152,8 +154,9 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install mypy
-            pip install "google-generativeai>=0.3.2"
-            pip install "google-cloud-aiplatform>=1.38.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
             pip install "boto3>=1.28.57"
             pip install "aioboto3>=12.3.0"
             pip install langchain

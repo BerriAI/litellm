@@ -203,6 +203,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     );
   }
 
+  console.log("inside user dashboard, selected team", selectedTeam);
+
   return (
     <div>
       <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
@@ -220,10 +222,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setData={setKeys}
           />
           <CreateKey
+            key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
-            teamID={selectedTeam ? selectedTeam["team_id"] : null}
+            team={selectedTeam ? selectedTeam : null}
             userRole={userRole}
-            userModels={userModels}
             accessToken={accessToken}
             data={keys}
             setData={setKeys}
