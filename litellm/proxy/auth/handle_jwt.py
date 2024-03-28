@@ -6,7 +6,6 @@ Currently only supports admin.
 JWT token must have 'litellm_proxy_admin' in scope. 
 """
 
-import httpx
 import jwt
 import json
 import os
@@ -14,40 +13,8 @@ from litellm.caching import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable
 from litellm.proxy.utils import PrismaClient
+from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from typing import Optional
-
-
-class HTTPHandler:
-    def __init__(self, concurrent_limit=1000):
-        # Create a client with a connection pool
-        self.client = httpx.AsyncClient(
-            limits=httpx.Limits(
-                max_connections=concurrent_limit,
-                max_keepalive_connections=concurrent_limit,
-            )
-        )
-
-    async def close(self):
-        # Close the client when you're done with it
-        await self.client.aclose()
-
-    async def get(
-        self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None
-    ):
-        response = await self.client.get(url, params=params, headers=headers)
-        return response
-
-    async def post(
-        self,
-        url: str,
-        data: Optional[dict] = None,
-        params: Optional[dict] = None,
-        headers: Optional[dict] = None,
-    ):
-        response = await self.client.post(
-            url, data=data, params=params, headers=headers
-        )
-        return response
 
 
 class JWTHandler:

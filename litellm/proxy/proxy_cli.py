@@ -21,8 +21,6 @@ telemetry = None
 def append_query_params(url, params):
     from litellm._logging import verbose_proxy_logger
 
-    from litellm._logging import verbose_proxy_logger
-
     verbose_proxy_logger.debug(f"url: {url}")
     verbose_proxy_logger.debug(f"params: {params}")
     parsed_url = urlparse.urlparse(url)
