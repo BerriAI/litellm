@@ -5715,7 +5715,7 @@ async def new_team(
                     raise HTTPException(
                         status_code=400,
                         detail={
-                            "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User role={user_api_key_dict.user_role}"
+                            "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
                         },
                     )
 
@@ -7099,6 +7099,13 @@ async def login(request: Request):
     except ImportError:
         subprocess.run(["pip", "install", "python-multipart"])
     global master_key
+    if master_key is None:
+        raise ProxyException(
+            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            type="auth_error",
+            param="master_key",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     form = await request.form()
     username = str(form.get("username"))
     password = str(form.get("password"))
