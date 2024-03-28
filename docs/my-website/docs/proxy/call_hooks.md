@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # Modify / Reject Incoming Requests
 
 - Modify data before making llm api calls on proxy
@@ -185,3 +187,7 @@ Set `enforce_user_param` to true, to require all calls to the openai endpoints t
 general_settings:
   enforce_user_param: True
 ```
+
+**Result**
+
+<Image img={require('../../img/end_user_enforcement.png')}/>
