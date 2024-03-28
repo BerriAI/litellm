@@ -127,13 +127,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item label="Key Name" name="key_alias">
                 <Input />
               </Form.Item>
-              <Form.Item label="Team ID" name="team_id">
-                <Input
-                  placeholder="ai_team"
-                  defaultValue={team && team["team_alias"] ? team["team_alias"]  : ""}
-                  disabled={true}
-                />
+              <Form.Item
+                label="Team ID"
+                name="team_id"
+                initialValue={team ? team["team_id"] : null}
+                valuePropName="team_id"
+              >
+                <Input value={team ? team["team_alias"] : ""} disabled />
               </Form.Item>
+
               <Form.Item label="Models" name="models">
                 <Select
                   mode="multiple"
@@ -181,7 +183,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <Input />
               </Form.Item>
               <Form.Item label="Team ID (Contact Group)" name="team_id">
-                <Input placeholder="ai_team" />
+                <Input placeholder="default team (create a new team)" />
               </Form.Item>
 
               <Form.Item label="Description" name="description">
