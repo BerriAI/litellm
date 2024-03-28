@@ -47,7 +47,23 @@ Writing each spend log to the db can slow down your proxy. In testing we saw a 7
 👉 [LiteLLM Spend Logs Server](https://github.com/BerriAI/litellm/tree/main/litellm-js/spend-logs)
 
 
-**1. Start the server**
+**Spend Logs**  
+This is a log of the key, tokens, model, and latency for each call on the proxy. 
+
+[**Full Payload**](https://github.com/BerriAI/litellm/blob/8c9623a6bc4ad9da0a2dac64249a60ed8da719e8/litellm/proxy/utils.py#L1769)
+
+
+
+If you want to disable writing spend logs, just do this:
+
+```yaml
+general_settings:
+  disable_spend_logs: True
+```
+
+If you want to move to a separate server, do this:
+
+**1. Start the spend logs server**
 
 ```bash
 docker run -p 3000:3000 \
@@ -59,7 +75,7 @@ docker run -p 3000:3000 \
 
 **2. Connect to proxy**
 
-Add 'SPEND_LOGS_URL' as an environment variable when starting the proxy 
+Add `SPEND_LOGS_URL` as an environment variable when starting the proxy 
 
 Example litellm_config.yaml
 
