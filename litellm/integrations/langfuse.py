@@ -246,13 +246,13 @@ class LangFuseLogger:
                 metadata_tags = metadata.get("tags", [])
                 tags = metadata_tags
 
-            generation_name = metadata.get("generation_name", None)
-            if generation_name is None:
-                # just log `litellm-{call_type}` as the generation name
-                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+            trace_name = metadata.get("trace_name", None)
+            if trace_name is None:
+                # just log `litellm-{call_type}` as the trace name
+                trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             trace_params = {
-                "name": generation_name,
+                "name": trace_name,
                 "input": input,
                 "user_id": metadata.get("trace_user_id", user_id),
                 "id": metadata.get("trace_id", None),
@@ -311,6 +311,11 @@ class LangFuseLogger:
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
                 }
+            generation_name = metadata.get("generation_name", None)
+            if generation_name is None:
+                # just log `litellm-{call_type}` as the generation name
+                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+
             generation_params = {
                 "name": generation_name,
                 "id": metadata.get("generation_id", generation_id),
