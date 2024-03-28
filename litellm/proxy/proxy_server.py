@@ -4343,7 +4343,7 @@ async def info_key_fn(
 
 @router.get(
     "/spend/keys",
-    tags=["budget & spend Tracking"],
+    tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def spend_key_fn():
@@ -4375,7 +4375,7 @@ async def spend_key_fn():
 
 @router.get(
     "/spend/users",
-    tags=["budget & spend Tracking"],
+    tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def spend_user_fn(
@@ -4427,7 +4427,7 @@ async def spend_user_fn(
 
 @router.get(
     "/spend/tags",
-    tags=["budget & spend Tracking"],
+    tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
@@ -4498,6 +4498,77 @@ async def view_spend_tags(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.post(
+    "/spend/calculate",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {
+            "cost": {
+                "description": "The calculated cost",
+                "example": 0.0,
+                "type": "float",
+            }
+        }
+    },
+)
+async def calculate_spend(request: Request):
+    """
+    Accepts all the params of completion_cost.
+
+    Calculate spend **before** making call:
+
+    ```
+    curl --location 'http://localhost:4000/spend/calculate'
+    --header 'Authorization: Bearer sk-1234'
+    --header 'Content-Type: application/json'
+    --data '{
+        "model": "anthropic.claude-v2",
+        "messages": [{"role": "user", "content": "Hey, how'''s it going?"}]
+    }'
+    ```
+
+    Calculate spend **after** making call:
+
+    ```
+    curl --location 'http://localhost:4000/spend/calculate'
+    --header 'Authorization: Bearer sk-1234'
+    --header 'Content-Type: application/json'
+    --data '{
+        "completion_response": {
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": "gpt-3.5-turbo-0125",
+            "system_fingerprint": "fp_44709d6fcb",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello there, how may I assist you today?"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+            }]
+            "usage": {
+                "prompt_tokens": 9,
+                "completion_tokens": 12,
+                "total_tokens": 21
+            }
+        }
+    }'
+    ```
+    """
+    from litellm import completion_cost
+
+    data = await request.json()
+    if "completion_response" in data:
+        data["completion_response"] = litellm.ModelResponse(
+            **data["completion_response"]
+        )
+    return {"cost": completion_cost(**data)}
 
 
 @router.get(
