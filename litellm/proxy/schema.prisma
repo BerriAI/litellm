@@ -3,11 +3,6 @@ datasource client {
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-py"
-  previewFeatures = ["jsonProtocol"]
-}
-
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
   budget_id String @id @default(uuid())
