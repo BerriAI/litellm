@@ -735,9 +735,13 @@ def parse_xml_params(xml_content):
     root = ET.fromstring(xml_content)
     params = {}
     for child in root.findall(".//parameters/*"):
-        params[child.tag] = child.text
+        try:
+            # Attempt to decode the element's text as JSON
+            params[child.tag] = json.loads(child.text)
+        except json.JSONDecodeError:
+            # If JSON decoding fails, use the original text
+            params[child.tag] = child.text
     return params
-
 
 ###
 
