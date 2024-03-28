@@ -5841,7 +5841,7 @@ async def update_team(
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
     
     Example - update team TPM Limit
-    
+
     ```
     curl --location 'http://0.0.0.0:8000/team/update' \
     
@@ -6169,7 +6169,10 @@ async def delete_team(
     ## DELETE ASSOCIATED KEYS
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
     ## DELETE TEAMS
-    await prisma_client.delete_data(team_id_list=data.team_ids, table_name="team")
+    deleted_teams = await prisma_client.delete_data(
+        team_id_list=data.team_ids, table_name="team"
+    )
+    return deleted_teams
 
 
 @router.get(
