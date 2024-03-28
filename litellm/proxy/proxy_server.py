@@ -5289,8 +5289,6 @@ async def user_info(
             except:
                 # if using pydantic v1
                 key = key.dict()
-            key.pop("token", None)
-
             if (
                 "team_id" in key
                 and key["team_id"] is not None
