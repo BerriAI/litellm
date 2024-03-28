@@ -37,6 +37,7 @@ telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
 modify_params = False
+disable_message_merge = False
 retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
