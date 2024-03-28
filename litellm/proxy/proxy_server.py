@@ -5290,6 +5290,18 @@ async def user_info(
                 key = key.dict()
             key.pop("token", None)
 
+            if (
+                "team_id" in key
+                and key["team_id"] is not None
+                and key["team_id"] != "litellm-dashboard"
+            ):
+                team_info = await prisma_client.get_data(
+                    team_id=key["team_id"], table_name="team"
+                )
+                key["team_alias"] = team_info["team_alias"]
+            else:
+                key["team_alias"] = "None"
+
         response_data = {
             "user_id": user_id,
             "user_info": user_info,
