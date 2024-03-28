@@ -439,6 +439,8 @@ async def user_api_key_auth(
                     request_body=request_data,
                     team_object=team_object,
                     end_user_object=end_user_object,
+                    general_settings=general_settings,
+                    route=route,
                 )
                 # save user object in cache
                 await user_api_key_cache.async_set_cache(
@@ -866,6 +868,23 @@ async def user_api_key_auth(
                         f"ExceededTokenBudget: Current Team Spend: {valid_token.team_spend}; Max Budget for Team: {valid_token.team_max_budget}"
                     )
 
+            # Check 8: Additional Common Checks across jwt + key auth
+            _team_obj = LiteLLM_TeamTable(
+                team_id=valid_token.team_id,
+                max_budget=valid_token.team_max_budget,
+                spend=valid_token.team_spend,
+                tpm_limit=valid_token.team_tpm_limit,
+                rpm_limit=valid_token.team_rpm_limit,
+                blocked=valid_token.team_blocked,
+                models=valid_token.team_models,
+            )
+            _ = common_checks(
+                request_body=request_data,
+                team_object=_team_obj,
+                end_user_object=None,
+                general_settings=general_settings,
+                route=route,
+            )
             # Token passed all checks
             api_key = valid_token.token
 
