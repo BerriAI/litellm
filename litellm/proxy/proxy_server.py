@@ -5282,6 +5282,7 @@ async def user_info(
             user_info = {"spend": spend}
 
         ## REMOVE HASHED TOKEN INFO before returning ##
+        returned_keys = []
         for key in keys:
             try:
                 key = key.model_dump()  # noqa
@@ -5290,10 +5291,24 @@ async def user_info(
                 key = key.dict()
             key.pop("token", None)
 
+            if (
+                "team_id" in key
+                and key["team_id"] is not None
+                and key["team_id"] != "litellm-dashboard"
+            ):
+                team_info = await prisma_client.get_data(
+                    team_id=key["team_id"], table_name="team"
+                )
+                team_alias = getattr(team_info, "team_alias", None)
+                key["team_alias"] = team_alias
+            else:
+                key["team_alias"] = "None"
+            returned_keys.append(key)
+
         response_data = {
             "user_id": user_id,
             "user_info": user_info,
-            "keys": keys,
+            "keys": returned_keys,
             "teams": team_list,
         }
         return response_data
