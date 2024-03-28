@@ -15,7 +15,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLMRoutes,
 )
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 from litellm.proxy.utils import PrismaClient
 from litellm.caching import DualCache
 
@@ -26,6 +26,8 @@ def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable,
     end_user_object: Optional[LiteLLM_EndUserTable],
+    general_settings: dict,
+    route: str,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -34,6 +36,7 @@ def common_checks(
     2. If team can call model
     3. If team is in budget
     4. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
+    5. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
     """
     _model = request_body.get("model", None)
     if team_object.blocked == True:
@@ -65,6 +68,16 @@ def common_checks(
             raise Exception(
                 f"End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}"
             )
+    # 5. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
+    if (
+        general_settings.get("enforce_user_param", None) is not None
+        and general_settings["enforce_user_param"] == True
+    ):
+        if route in LiteLLMRoutes.openai_routes.value and "user" not in request_body:
+            raise Exception(
+                f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
+            )
+
     return True
 
 
