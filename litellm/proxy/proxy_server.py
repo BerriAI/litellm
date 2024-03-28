@@ -5826,7 +5826,6 @@ async def update_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [BETA]
     [RECOMMENDED] - use `/team/member_add` to add new team members instead 
 
     You can now update team budget / rate limits via /team/update
