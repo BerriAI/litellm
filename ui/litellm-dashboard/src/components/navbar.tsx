@@ -59,9 +59,6 @@ const Navbar: React.FC<NavbarProps> = ({
             target="_blank"
             className="mr-2"
           >
-            <Button variant="primary" size="lg">
-              Enable SSO
-            </Button>
           </a>
         ) : null}
 
