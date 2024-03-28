@@ -4041,8 +4041,8 @@ async def generate_key_fn(
             _budget = await prisma_client.db.litellm_budgettable.create(
                 data={
                     **new_budget,  # type: ignore
-                    "created_by": user_api_key_dict.user_id,
-                    "updated_by": user_api_key_dict.user_id,
+                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 }
             )
             _budget_id = getattr(_budget, "budget_id", None)
