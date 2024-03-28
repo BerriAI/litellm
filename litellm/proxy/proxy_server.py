@@ -5674,8 +5674,13 @@ async def new_team(
     Parameters:
     - team_alias: Optional[str] - User defined team alias
     - team_id: Optional[str] - The team id of the user. If none passed, we'll generate it.
-    - members_with_roles: list - A list of dictionaries, mapping user_id to role in team (either 'admin' or 'user')
+    - members_with_roles: List[Member] - A list of members with their roles in the team
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - tpm_limit: Optional[int] - The limit for TPM (Transactions Per Minute)
+    - rpm_limit: Optional[int] - The limit for RPM (Requests Per Minute)
+    - max_budget: Optional[float] - The maximum budget allocated to the team
+    - models: list - A list of models associated with the team
+    - blocked: bool - Flag indicating if the team is blocked or not
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
