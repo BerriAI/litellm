@@ -5681,7 +5681,7 @@ async def new_team(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}"
+                    "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}. User role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -5693,7 +5693,7 @@ async def new_team(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}"
+                    "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -5705,7 +5705,7 @@ async def new_team(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}"
+                    "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}. User role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -5715,7 +5715,7 @@ async def new_team(
                     raise HTTPException(
                         status_code=400,
                         detail={
-                            "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}"
+                            "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User role={user_api_key_dict.user_role}"
                         },
                     )
 
