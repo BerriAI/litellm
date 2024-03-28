@@ -46,6 +46,7 @@ replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
+solar_api_key: Optional[str] = None
 openrouter_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
@@ -425,6 +426,13 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
+solar_models = [
+    "solar-1-mini-chat",
+    "solar-1-mini-translate-koen",
+    "solar-1-mini-summarization",
+    "solar-1-mini-answer-verification"
+]
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -484,6 +492,7 @@ provider_list: List = [
     "cloudflare",
     "xinference",
     "fireworks_ai",
+    "solar",
     "custom",  # custom apis
 ]
 
@@ -594,6 +603,7 @@ from .llms.ai21 import AI21Config
 from .llms.together_ai import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
+from .llms.solar import SolarConfig
 from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
