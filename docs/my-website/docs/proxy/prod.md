@@ -40,7 +40,13 @@ Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
-## 3. Switch off spend logging and resetting budgets
+## 3. Move spend logs to separate server
+
+Writing each spend log to the db can slow down your proxy. In testing we saw a 70% improvement in median response time, by moving writing spend logs to a separate server. 
+
+
+
+## 4. Switch off resetting budgets
 
 Add this to your config.yaml. (Only spend per Key, User and Team will be tracked - spend per API Call will not be written to the LiteLLM Database)
 ```yaml
@@ -49,7 +55,7 @@ general_settings:
   disable_reset_budget: true
 ```
 
-## 4. Switch of `litellm.telemetry`
+## 5. Switch of `litellm.telemetry`
 
 Switch of all telemetry tracking done by litellm
 

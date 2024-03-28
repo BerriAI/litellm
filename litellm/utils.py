@@ -2775,7 +2775,6 @@ def client(original_function):
                         or isinstance(e, openai.Timeout)
                         or isinstance(e, openai.APIConnectionError)
                     ):
-                        print_verbose(f"RETRY TRIGGERED!")
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
                 elif (
@@ -3598,6 +3597,8 @@ def token_counter(
             raise ValueError("text and messages cannot both be None")
     elif isinstance(text, List):
         text = "".join(t for t in text if isinstance(t, str))
+    elif isinstance(text, str):
+        count_response_tokens = True  # user just trying to count tokens for a text. don't add the chat_ml +3 tokens to this
 
     if model is not None:
         tokenizer_json = _select_tokenizer(model=model)
