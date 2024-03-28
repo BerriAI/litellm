@@ -159,8 +159,8 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: "https://github.com/BerriAI/litellm/litellm-js/spend-logs"
-          file: Dockerfile
+          context: .
+          file: ./litellm-js/spend-logs/Dockerfile
           push: true
           tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-latest 
           labels: ${{ steps.meta-spend-logs.outputs.labels }} 
