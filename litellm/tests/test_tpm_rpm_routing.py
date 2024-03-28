@@ -264,7 +264,7 @@ def test_router_skip_rate_limited_deployments():
         end_time=end_time,
     )
 
-    ## CHECK WHAT'S SELECTED ## - should skip 2, and pick 1
+    ## CHECK WHAT'S SELECTED ##
     # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
     try:
         router.get_available_deployment(
@@ -273,7 +273,41 @@ def test_router_skip_rate_limited_deployments():
         )
         pytest.fail(f"Should have raised No Models Available error")
     except Exception as e:
-        pass
+        print(f"An exception occurred! {str(e)}")
+
+
+def test_single_deployment_tpm_zero():
+    import litellm
+    import os
+    from datetime import datetime
+
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+                "tpm": 0,
+            },
+        }
+    ]
+
+    router = litellm.Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing",
+        cache_responses=True,
+    )
+
+    model = "gpt-3.5-turbo"
+    messages = [{"content": "Hello, how are you?", "role": "user"}]
+    try:
+        router.get_available_deployment(
+            model=model,
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        pytest.fail(f"Should have raised No Models Available error")
+    except Exception as e:
+        print(f"it worked - {str(e)}! \n{traceback.format_exc()}")
 
 
 @pytest.mark.asyncio
