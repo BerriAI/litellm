@@ -141,7 +141,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   />
                 </TableCell>
                 <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{item.team_id}</Text>
+                  <Text>{item.team_alias && item.team_alias != "None" ? item.team_alias : item.team_id}</Text>
                 </TableCell>
                 <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
