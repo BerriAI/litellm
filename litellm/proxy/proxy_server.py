@@ -1233,10 +1233,11 @@ async def update_database(
                         user_ids.append(litellm_proxy_budget_name)
                     ### KEY CHANGE ###
                     for _id in user_ids:
-                        prisma_client.user_list_transactons[_id] = (
-                            response_cost
-                            + prisma_client.user_list_transactons.get(_id, 0)
-                        )
+                        if _id is not None:
+                            prisma_client.user_list_transactons[_id] = (
+                                response_cost
+                                + prisma_client.user_list_transactons.get(_id, 0)
+                            )
                     if end_user_id is not None:
                         prisma_client.end_user_list_transactons[end_user_id] = (
                             response_cost
@@ -1364,16 +1365,17 @@ async def update_database(
                 )
 
                 payload["spend"] = response_cost
-                if prisma_client is not None:
+                if (
+                    os.getenv("SPEND_LOGS_URL", None) is not None
+                    and prisma_client is not None
+                ):
+                    if isinstance(payload["startTime"], datetime):
+                        payload["startTime"] = payload["startTime"].isoformat()
+                    if isinstance(payload["endTime"], datetime):
+                        payload["endTime"] = payload["endTime"].isoformat()
                     prisma_client.spend_log_transactons.append(payload)
-                # if db_writer_client is not None:
-                #     print("Tries to make call")
-                #     response = await db_writer_client.post(
-                #         url="http://0.0.0.0:3000/spend/update",
-                #         data=json.dumps(payload),
-                #         headers={"Content-Type": "application/json"},
-                #     )
-                #     print(f"response: {response}")
+                elif prisma_client is not None:
+                    await prisma_client.insert_data(data=payload, table_name="spend")
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Update Spend Logs DB failed to execute - {str(e)}\n{traceback.format_exc()}"
