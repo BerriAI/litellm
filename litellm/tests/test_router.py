@@ -590,6 +590,8 @@ async def test_aimg_gen_on_router():
             pass
         elif "Operation polling timed out" in str(e):
             pass
+        elif "Connection error" in str(e):
+            pass
         else:
             traceback.print_exc()
             pytest.fail(f"Error occurred: {e}")
@@ -670,6 +672,8 @@ def test_aembedding_on_router():
         if "Your task failed as a result of our safety system." in str(e):
             pass
         elif "Operation polling timed out" in str(e):
+            pass
+        elif "Connection error" in str(e):
             pass
         else:
             traceback.print_exc()
