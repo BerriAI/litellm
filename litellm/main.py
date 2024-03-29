@@ -671,7 +671,7 @@ def completion(
         elif (
             input_cost_per_second is not None
         ):  # time based pricing just needs cost in place
-            output_cost_per_second = output_cost_per_second or 0.0
+            output_cost_per_second = output_cost_per_second
             litellm.register_model(
                 {
                     f"{custom_llm_provider}/{model}": {
@@ -2796,7 +2796,7 @@ def embedding(
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
-            if isinstance(input ,str):
+            if isinstance(input, str):
                 input = [input]
             if not all(isinstance(item, str) for item in input):
                 raise litellm.BadRequestError(
