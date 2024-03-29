@@ -91,16 +91,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     }
   };
 
-  const sendSlackAlert = async () => {
-    try {
-      console.log("Sending Slack alert...");
-      const response = await slackBudgetAlertsHealthCheck(accessToken);
-      console.log("slackBudgetAlertsHealthCheck Response:", response);
-      console.log("Testing Slack alert successful");
-    } catch (error) {
-      console.error("Error sending Slack alert:", error);
+
+  const handleModelSelection = (selectedModels: string[]) => {
+    if (selectedModels.includes("all_models")) {
+      // Select all models except "All Models"
+      const allModelsExceptAll = team ? team.models : userModels;
+      form.setFieldsValue({
+        models: allModelsExceptAll
+      });
     }
   };
+  
 
 
   const handleCopy = () => {
@@ -153,8 +154,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
+                  onChange={(selectedModels) => handleModelSelection(selectedModels)}
                 >
-
+                  <Option key="all_models" value="all_models">
+                    All Models
+                  </Option>
                   {team && team.models ? (
                     team.models.map((model: string) => (
                       <Option key={model} value={model}>
