@@ -137,7 +137,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
   console.log(`admins: ${admins?.length}`);
   return (
-    <div className="w-full m-2">
+    <div className="w-full m-2 mt-8">
       <Title level={4}>Restricted Access</Title>
       <Paragraph>
         Add other people to just view spend. They cannot create keys, teams or
@@ -146,7 +146,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           Requires SSO Setup
         </a>
       </Paragraph>
-      <Grid numItems={1} className="gap-2 p-0 w-full">
+      <Grid numItems={1} className="gap-2 p-2 w-full">
         <Col numColSpan={1}>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
             <Table>
