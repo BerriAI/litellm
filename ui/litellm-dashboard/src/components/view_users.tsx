@@ -142,7 +142,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-10 h-[75vh] w-full">
+      <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
         <CreateUser userID={userID} accessToken={accessToken} />
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
           <TabGroup>

@@ -78,6 +78,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   }
   console.log("RERENDER TRIGGERED");
   return (
+    <div>
+    <Title>API Keys</Title>
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
       <Table className="mt-5">
         <TableHead>
@@ -230,6 +232,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         </div>
       )}
     </Card>
+    </div>
   );
 };
 

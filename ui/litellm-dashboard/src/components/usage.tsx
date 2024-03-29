@@ -254,13 +254,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
   return (
     <div style={{ width: "100%" }}>
       <TabGroup>
-        <TabList className="mt-4">
+        <TabList className="mt-10">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
-            <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
+            <Grid numItems={2} className="gap-2 p-2 h-[75vh] w-full">
               <Col numColSpan={2}>
                 <Card>
                   <Title>Monthly Spend</Title>
