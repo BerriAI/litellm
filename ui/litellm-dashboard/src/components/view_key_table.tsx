@@ -29,6 +29,7 @@ import ViewKeySpendReport from "./view_key_spend_report";
 interface ViewKeyTableProps {
   userID: string;
   accessToken: string;
+  selectedTeam: any | null;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
@@ -52,6 +53,7 @@ interface ItemData {
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   accessToken,
+  selectedTeam,
   data,
   setData,
 }) => {
@@ -177,6 +179,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             if (item.team_id === "litellm-dashboard") {
               return null;
             }
+            if (selectedTeam) {
+              if (item.team_id != selectedTeam.team_id) {
+                return null;
+              }
+            }
             return (
               <TableRow key={item.token}>
                 <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
@@ -229,19 +236,31 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   {Array.isArray(item.models) ? (
                     <div style={{ display: "flex", flexDirection: "column" }}>
                       {item.models.length === 0 ? (
-                          <Badge size={"xs"} className="mb-1" color="purple">
-                            <Text>All Models</Text>
-                          </Badge>
-                        ) : (
-                          item.models.map((model: string, index: number) => (
-                            <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                              <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                        <>
+                          {selectedTeam && selectedTeam.models && selectedTeam.models.length > 0 ? (
+                            selectedTeam.models.map((model: string, index: number) => (
+                              <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                                <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                              </Badge>
+                            ))
+                          ) : (
+                            // If selected team is None or selected team's models are empty, show all models
+                            <Badge size={"xs"} className="mb-1" color="purple">
+                              <Text>All Models</Text>
                             </Badge>
-                          ))
-                        )}
+                          )}
+                        </>
+                      ) : (
+                        item.models.map((model: string, index: number) => (
+                          <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                            <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                          </Badge>
+                        ))
+                      )}
                     </div>
                   ) : null}
                 </TableCell>
+
                 <TableCell>
                   <Text>
                     TPM: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
