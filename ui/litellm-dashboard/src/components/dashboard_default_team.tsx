@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Typography } from "antd";
-import { Select, SelectItem } from "@tremor/react";
+import { Select, SelectItem, Text, Title } from "@tremor/react";
 
 interface DashboardTeamProps {
   teams: Object[] | null;
@@ -11,16 +10,15 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   teams,
   setSelectedTeam,
 }) => {
-  const { Title, Paragraph } = Typography;
   const [value, setValue] = useState("");
 
   return (
-    <div className="mt-10">
-      <Title level={4}>Default Team</Title>
-      <Paragraph>
+    <div className="mt-5 mb-5">
+      <Title>Select Team</Title>
+      <Text>
         If you belong to multiple teams, this setting controls which team is
         used by default when creating new API Keys.
-      </Paragraph>
+      </Text>
       {teams && teams.length > 0 ? (
         <Select defaultValue="0">
           {teams.map((team: any, index) => (
@@ -34,9 +32,9 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
           ))}
         </Select>
       ) : (
-        <Paragraph>
+        <Text>
           No team created. <b>Defaulting to personal account.</b>
-        </Paragraph>
+        </Text>
       )}
     </div>
   );
