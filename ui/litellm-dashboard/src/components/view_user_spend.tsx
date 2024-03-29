@@ -59,6 +59,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, us
     return (
         <>
       <Card className="mx-auto mb-4">
+        <Title>Total Spend</Title>
         <Metric>
           ${roundedSpend}
         </Metric>
