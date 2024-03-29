@@ -3,6 +3,8 @@
 import Link from "next/link";
 import Image from "next/image";
 import React, { useState } from "react";
+import type { MenuProps } from 'antd';
+import { Dropdown, Space } from 'antd';
 import { useSearchParams } from "next/navigation";
 import {
   Button,
@@ -35,6 +37,18 @@ const Navbar: React.FC<NavbarProps> = ({
   const isLocal = process.env.NODE_ENV === "development";
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
 
+  const items: MenuProps['items'] = [
+    {
+      key: '1',
+      label: (
+        <>
+          <p>Role: {userRole}</p>
+          <p>ID: {userID}</p>
+        </>
+      ),
+    },
+  ];
+
   return (
     <nav className="left-0 right-0 top-0 flex justify-between items-center h-12 mb-4">
       <div className="text-left my-2 absolute top-0 left-0">
@@ -62,12 +76,20 @@ const Navbar: React.FC<NavbarProps> = ({
           </a>
         ) : null}
 
-        <Button variant="secondary" size="lg">
-          {userEmail}
-          <p>Role: {userRole}</p>
-          <p>ID: {userID}</p>
-        </Button>
-      </div>
+        <div style={{
+            border: '1px solid #391085',
+            padding: '6px',
+            borderRadius: '8px', // Added border-radius property
+          }}
+        >
+       <Dropdown menu={{ items }} >
+            <Space>
+              {userEmail}
+            </Space>
+        </Dropdown>
+        </div>
+        </div>
+
     </nav>
   );
 };
