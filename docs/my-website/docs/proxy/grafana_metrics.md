@@ -34,6 +34,12 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+View Metrics on `/metrics`, Visit `http://localhost:4000/metrics` 
+```shell
+http://localhost:4000/metrics
+
+# <proxy_base_url>/metrics
+```
 
 ## Metrics Tracked 
 

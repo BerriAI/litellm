@@ -6235,7 +6235,8 @@ def set_callbacks(callback_list, function_id=None):
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
             elif callback == "prometheus":
-                prometheusLogger = PrometheusLogger()
+                if prometheusLogger is None:
+                    prometheusLogger = PrometheusLogger()
             elif callback == "dynamodb":
                 dynamoLogger = DyanmoDBLogger()
             elif callback == "s3":
