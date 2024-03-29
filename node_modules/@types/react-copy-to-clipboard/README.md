@@ -1,0 +1,43 @@
+# Installation
+> `npm install --save @types/react-copy-to-clipboard`
+
+# Summary
+This package contains type definitions for react-copy-to-clipboard (https://github.com/nkbt/react-copy-to-clipboard).
+
+# Details
+Files were exported from https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-copy-to-clipboard.
+## [index.d.ts](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-copy-to-clipboard/index.d.ts)
+````ts
+import * as React from "react";
+
+export as namespace CopyToClipboard;
+
+declare class CopyToClipboard extends React.PureComponent<CopyToClipboard.Props> {}
+
+declare namespace CopyToClipboard {
+    class CopyToClipboard extends React.PureComponent<Props> {}
+
+    interface Options {
+        debug?: boolean | undefined;
+        message?: string | undefined;
+        format?: string | undefined; // MIME type
+    }
+
+    interface Props {
+        children?: React.ReactNode;
+        text: string;
+        onCopy?(text: string, result: boolean): void;
+        options?: Options | undefined;
+    }
+}
+
+export = CopyToClipboard;
+
+````
+
+### Additional Details
+ * Last updated: Tue, 07 Nov 2023 09:09:39 GMT
+ * Dependencies: [@types/react](https://npmjs.com/package/@types/react)
+
+# Credits
+These definitions were written by [Meno Abels](https://github.com/mabels), [Bernabe](https://github.com/BernabeFelix), and [Ward Delabastita](https://github.com/wdlb).
