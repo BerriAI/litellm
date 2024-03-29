@@ -4,6 +4,8 @@ LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
 
 ## Quick Start
 
+If you're using the LiteLLM CLI with `litellm --config proxy_config.yaml` then you need to `pip install prometheus_client==0.20.0`. **This is already pre-installed on the litellm Docker image**
+
 Add this to your proxy config.yaml 
 ```yaml
 model_list:
