@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall } from "./networking";
-import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Badge,
   Card,
@@ -12,6 +12,8 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
+  Dialog, 
+  DialogPanel,
   Text,
   Title,
   Icon,
@@ -35,6 +37,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
+  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
 
   const handleDelete = async (token: string) => {
     if (data == null) {
@@ -86,7 +89,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
-            {/* <TableHeaderCell>Budget (USD)</TableHeaderCell> */}
+            <TableHeaderCell>Budget (USD)</TableHeaderCell>
             {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
             {/* <TableHeaderCell>Team</TableHeaderCell> */}
             {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
@@ -123,15 +126,16 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                         return item.spend;
                       }
                     })()}
+
                   </Text>
                 </TableCell>
-                {/* <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   {item.max_budget != null ? (
                     <Text>{item.max_budget}</Text>
                   ) : (
                     <Text>Unlimited</Text>
                   )}
-                </TableCell> */}
+                </TableCell>
                 {/* <TableCell style={{ maxWidth: '2px' }}>
                   <ViewKeySpendReport
                     token={item.token}
@@ -152,17 +156,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 <TableCell>
                   {Array.isArray(item.models) ? (
                     <div style={{ display: "flex", flexDirection: "column" }}>
-                      {item.models.map((model: string, index: number) => (
-                        <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                          <Text>
-                           {model.length > 30 ? `${model.slice(0, 30)}...` : model}
-                           </Text>
-                        </Badge>
-                      ))}
+                      {item.models.length === 0 ? (
+                          <Badge size={"xs"} className="mb-1" color="purple">
+                            <Text>All Models</Text>
+                          </Badge>
+                        ) : (
+                          item.models.map((model: string, index: number) => (
+                            <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                              <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                            </Badge>
+                          ))
+                        )}
                     </div>
                   ) : null}
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", overflowWrap: "break-word" }}>
+                <TableCell>
                   <Text>
                     TPM: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
                     <br></br> RPM:{" "}
@@ -176,7 +184,52 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>Never</Text>
                   )}
                 </TableCell> */}
-                <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
+                <TableCell>
+                <Icon
+                  onClick={() => setOpenDialogId(item.id)}
+                  icon={InformationCircleIcon}
+                  size="sm"
+                />
+                <Dialog
+                  key={item.token}
+                  open={openDialogId === item.id}
+                  onClose={() => setOpenDialogId(null)}
+                  static={true}
+                  className="z-[100]"
+                >
+                <DialogPanel className="max-w-sm">
+                  <Title>Max Budget</Title>
+                {item.max_budget != null ? (
+                    <Text>{item.max_budget}</Text>
+                  ) : (
+                    <Text>Unlimited</Text>
+                  )}
+
+              <Title>Metadata</Title>
+
+                <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
+                {/* <ViewKeySpendReport
+                    token={item.token}
+                    accessToken={accessToken}
+                    keySpend={item.spend}
+                    keyBudget={item.max_budget}
+                    keyName={item.key_name}
+                  /> */}
+                  {/* {item.expires != null ? (
+                    <Text>{item.expires}</Text>
+                  ) : (
+                    <Text>Never</Text>
+                  )} */}
+                  <Button
+                    variant="light"
+                    className="mx-auto flex items-center"
+                    onClick={() => setOpenDialogId(item.id)}
+                  >
+                    Close
+                  </Button>
+                  </DialogPanel>
+                </Dialog>
+
                   <Icon
                     onClick={() => handleDelete(item.token)}
                     icon={TrashIcon}
