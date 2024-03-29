@@ -148,11 +148,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   placeholder="Select models"
                   style={{ width: "100%" }}
                 >
-                  {userModels.map((model) => (
-                    <Option key={model} value={model}>
-                      {model}
-                    </Option>
-                  ))}
+
+                  {team && team.models ? (
+                    team.models.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                  ) : (
+                    userModels.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                  )}
+
+
                 </Select>
               </Form.Item>
               <Form.Item 
