@@ -276,17 +276,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 {apiKey != null ? (
                   <div>
                     <Text>API Key: {apiKey}</Text>
-                    <Title className="mt-6">Budgets</Title>
-                      <Text>Soft Limit Budget: ${softBudget}</Text>
+                    
                       <Button className="mt-3" onClick={sendSlackAlert}>
-                        Test Slack Alert
+                        Test Key
                       </Button>
-                      <Text className="mt-2">
-                        (LiteLLM Docs - 
-                        <a href="https://docs.litellm.ai/docs/proxy/alerting" target="_blank" className="text-blue-500">
-                           Set Up Slack Alerting)
-                        </a>
-                      </Text>
                   </div>
                 ) : (
                   <Text>Key being created, this might take 30s</Text>
