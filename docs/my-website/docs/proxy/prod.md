@@ -54,14 +54,16 @@ This is a log of the key, tokens, model, and latency for each call on the proxy.
 
 
 
-If you want to disable writing spend logs, just do this:
+If you want to **disable** writing spend logs, just do this:
 
 ```yaml
 general_settings:
   disable_spend_logs: True
 ```
 
-If you want to move to a separate server, do this:
+**OR**
+
+If you want to **move** to a separate server, do this:
 
 **1. Start the spend logs server**
 
