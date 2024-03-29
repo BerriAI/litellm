@@ -1072,17 +1072,20 @@ def test_sagemaker_weird_response():
 # test_sagemaker_weird_response()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_sagemaker_streaming_async():
     try:
         messages = [{"role": "user", "content": "Hey, how's it going?"}]
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
+            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
             messages=messages,
-            max_tokens=100,
-            temperature=0.7,
+            temperature=0.2,
+            max_tokens=80,
+            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
             stream=True,
         )
         # Add any assertions here to check the response
@@ -1111,14 +1114,17 @@ async def test_sagemaker_streaming_async():
 # asyncio.run(test_sagemaker_streaming_async())
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_sagemaker_stream():
     try:
         response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
+            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
             stream=True,
         )
         complete_response = ""
