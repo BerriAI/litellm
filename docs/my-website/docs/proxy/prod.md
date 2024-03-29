@@ -96,8 +96,8 @@ general_settings:
 ```bash
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
-    -e DATABASE_URL=postgres://... \
-    -e SPEND_LOGS_URL="http://0.0.0.0:3000" \ # 👈 KEY CHANGE
+    -e DATABASE_URL="postgresql://.." \
+    -e SPEND_LOGS_URL="http://host.docker.internal:3000" \ # 👈 KEY CHANGE
     -p 4000:4000 \
     ghcr.io/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
