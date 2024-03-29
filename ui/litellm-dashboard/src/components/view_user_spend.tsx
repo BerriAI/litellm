@@ -59,8 +59,10 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, us
 
     return (
         <>
+      <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend</p>
+      <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">${roundedSpend}</p>
         
-        <Statistic title="Total Spend" value={roundedSpend !== null ? roundedSpend : 0} /> / {displayMaxBudget}
+       
     </>
     )
 }
