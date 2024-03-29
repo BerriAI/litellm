@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall } from "./networking";
 import { InformationCircleIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { keySpendLogsCall, PredictedSpendLogsCall } from "./networking";
 import {
   Badge,
   Card,
@@ -17,7 +18,11 @@ import {
   Text,
   Title,
   Icon,
+  BarChart,
 } from "@tremor/react";
+
+import { Modal } from "antd";
+
 import ViewKeySpendReport from "./view_key_spend_report";
 
 // Define the props type
@@ -26,6 +31,22 @@ interface ViewKeyTableProps {
   accessToken: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+}
+
+interface ItemData {
+  key_alias: string | null;
+  key_name: string;
+  spend: string;
+  max_budget: string | null;
+  models: string[];
+  tpm_limit: string | null;
+  rpm_limit: string | null;
+  token: string;
+  id: number;
+  team_id: string;
+  metadata: any;
+  expires: any;
+  // Add any other properties that exist in the item data
 }
 
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
@@ -38,6 +59,50 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
+  const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
+  const [spendData, setSpendData] = useState<{ day: string; spend: number }[] | null>(
+    null
+  );
+  const [predictedSpendString, setPredictedSpendString] = useState("");
+
+  
+
+
+
+  // call keySpendLogsCall and set the data
+  const fetchData = async (item: ItemData | null) => {
+    try {
+      if (accessToken == null || item == null) {
+        return;
+      }
+      console.log(`accessToken: ${accessToken}; token: ${item.token}`);
+      const response = await keySpendLogsCall(accessToken, item.token);
+
+      console.log("Response:", response);
+      setSpendData(response);
+
+      // predict spend based on response
+      const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
+      console.log("Response2:", predictedSpend);
+
+      // append predictedSpend to data
+      const combinedData = [...response, ...predictedSpend.response];
+      setSpendData(combinedData);
+      setPredictedSpendString(predictedSpend.predicted_spend)
+
+      console.log("Combined Data:", combinedData);
+      // setPredictedSpend(predictedSpend);
+      
+    } catch (error) {
+      console.error("There was an error fetching the data", error);
+    }
+  };
+
+  useEffect(() => {
+      fetchData(selectedItem);
+  }, [selectedItem]);
+
+  
 
   const handleDelete = async (token: string) => {
     if (data == null) {
@@ -79,6 +144,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   if (data == null) {
     return;
   }
+
+  // useEffect(() => {
+  //   if (openDialogId !== null && selectedItem !== null) {
+  //     fetchData(selectedItem);
+  //   }
+  // }, [openDialogId, selectedItem]);
+
   console.log("RERENDER TRIGGERED");
   return (
     <div>
@@ -114,10 +186,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>Not Set</Text>
                   )}
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                <TableCell>
                   <Text>{item.key_name}</Text>
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                <TableCell>
                   <Text>
                     {(() => {
                       try {
@@ -129,7 +201,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
                   </Text>
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                <TableCell>
                   {item.max_budget != null ? (
                     <Text>{item.max_budget}</Text>
                   ) : (
@@ -177,58 +249,116 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     {item.rpm_limit ? item.rpm_limit : "Unlimited"}
                   </Text>
                 </TableCell>
-                {/* <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
-                  {item.expires != null ? (
-                    <Text>{item.expires}</Text>
-                  ) : (
-                    <Text>Never</Text>
-                  )}
-                </TableCell> */}
                 <TableCell>
-                <Icon
-                  onClick={() => setOpenDialogId(item.id)}
-                  icon={InformationCircleIcon}
-                  size="sm"
-                />
+                    <Icon
+                      onClick={() => {
+                        setSelectedItem(item);
+                        setOpenDialogId(item.id);
+                      }}
+                      icon={InformationCircleIcon}
+                      size="sm"
+                    />
+                
                 <Dialog
-                  key={item.token}
-                  open={openDialogId === item.id}
-                  onClose={() => setOpenDialogId(null)}
-                  static={true}
-                  className="z-[100]"
-                >
-                <DialogPanel className="max-w-sm">
-                  <Title>Max Budget</Title>
-                {item.max_budget != null ? (
-                    <Text>{item.max_budget}</Text>
-                  ) : (
-                    <Text>Unlimited</Text>
-                  )}
+  open={openDialogId !== null}
+  onClose={() => {
+    setOpenDialogId(null);
+    setSelectedItem(null);
+  }}
 
-              <Title>Metadata</Title>
+>
+  <DialogPanel>
+    {selectedItem && (
+      <>
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <Card>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Spend
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+              {(() => {
+                      try {
+                        return parseFloat(selectedItem.spend).toFixed(4);
+                      } catch (error) {
+                        return selectedItem.spend;
+                      }
+                    })()}
 
-                <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
-                {/* <ViewKeySpendReport
-                    token={item.token}
-                    accessToken={accessToken}
-                    keySpend={item.spend}
-                    keyBudget={item.max_budget}
-                    keyName={item.key_name}
-                  /> */}
-                  {/* {item.expires != null ? (
-                    <Text>{item.expires}</Text>
-                  ) : (
-                    <Text>Never</Text>
-                  )} */}
-                  <Button
-                    variant="light"
-                    className="mx-auto flex items-center"
-                    onClick={() => setOpenDialogId(item.id)}
-                  >
-                    Close
-                  </Button>
-                  </DialogPanel>
-                </Dialog>
+              </p>
+            </div>
+          </Card>
+          <Card key={item.name}>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Budget
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+              {selectedItem.max_budget != null ? (
+                  <>{selectedItem.max_budget}</>
+                ) : (
+                  <>Unlimited</>
+                )}
+              </p>
+            </div>
+          </Card>
+          <Card key={item.name}>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Expires
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor-default font-small text-tremor-content-strong dark:text-dark-tremor-content-strong">
+              {selectedItem.expires != null ? (
+                  <>
+                  {new Date(selectedItem.expires).toLocaleString(undefined, {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                    hour: 'numeric',
+                    minute: 'numeric',
+                    second: 'numeric'
+                  })}
+                </>
+                ) : (
+                  <>Never</>
+                )}
+              </p>
+            </div>
+          </Card>
+      </div>
+
+        <Card className="mt-6 mb-6">
+          {spendData && (
+            <BarChart
+              className="mt-6"
+              data={spendData}
+              colors={["blue", "amber"]}
+              index="date"
+              categories={["spend", "predicted_spend"]}
+              yAxisWidth={80}
+            />
+          )}
+        </Card>
+
+        <Title>Metadata</Title>
+
+        <Text>{JSON.stringify(selectedItem.metadata)}</Text>
+
+
+        <Button
+          variant="light"
+          className="mx-auto flex items-center"
+          onClick={() => {
+            setOpenDialogId(null);
+            setSelectedItem(null);
+          }}
+        >
+          Close
+        </Button>
+      </>
+    )}
+</DialogPanel>
+</Dialog>
 
                   <Icon
                     onClick={() => handleDelete(item.token)}
