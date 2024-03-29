@@ -53,18 +53,6 @@ This is a log of the key, tokens, model, and latency for each call on the proxy.
 [**Full Payload**](https://github.com/BerriAI/litellm/blob/8c9623a6bc4ad9da0a2dac64249a60ed8da719e8/litellm/proxy/utils.py#L1769)
 
 
-
-If you want to **disable** writing spend logs, just do this:
-
-```yaml
-general_settings:
-  disable_spend_logs: True
-```
-
-**OR**
-
-If you want to **move** to a separate server, do this:
-
 **1. Start the spend logs server**
 
 ```bash
@@ -77,7 +65,6 @@ docker run -p 3000:3000 \
 
 **2. Connect to proxy**
 
-Add `SPEND_LOGS_URL` as an environment variable when starting the proxy 
 
 Example litellm_config.yaml
 
@@ -93,6 +80,9 @@ general_settings:
   master_key: sk-1234
   proxy_batch_write_at: 5 # 👈 Frequency of batch writing logs to server (in seconds)
 ```
+
+Add `SPEND_LOGS_URL` as an environment variable when starting the proxy 
+
 ```bash
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
@@ -105,7 +95,8 @@ docker run \
 # Running on http://0.0.0.0:4000
 ```
 
-**3. Test it!**
+**3. Test Proxy!**
+
 
 ```bash
 curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
