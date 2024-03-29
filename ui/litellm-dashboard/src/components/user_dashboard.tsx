@@ -215,6 +215,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
           />
+          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
           <ViewKeyTable
             userID={userID}
             accessToken={accessToken}
@@ -230,7 +231,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             data={keys}
             setData={setKeys}
           />
-          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
         </Col>
       </Grid>
     </div>
