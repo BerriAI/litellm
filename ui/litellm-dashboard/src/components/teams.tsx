@@ -235,7 +235,11 @@ const Team: React.FC<TeamProps> = ({
               labelAlign="left"
             >
               <>
-                <Form.Item label="Team Name" name="team_alias">
+                <Form.Item 
+                  label="Team Name" 
+                  name="team_alias"
+                  rules={[{ required: true, message: 'Please input a team name' }]}
+                >
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
