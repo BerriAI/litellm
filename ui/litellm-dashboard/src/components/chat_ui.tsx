@@ -112,9 +112,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("model_info:", fetchedAvailableModels);
   
         if (fetchedAvailableModels?.data.length > 0) {
-          const options = fetchedAvailableModels["data"].map(item => ({
-            value: item.id, // Replace 'value' with the actual property name you want to use as the value
-            label: item.id // Replace 'label' with the actual property name you want to use as the label
+          const options = fetchedAvailableModels["data"].map((item: { id: string }) => ({
+            value: item.id,
+            label: item.id
           }));
   
           // Now, 'options' contains the list you wanted
