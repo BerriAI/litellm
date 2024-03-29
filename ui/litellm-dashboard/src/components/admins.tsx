@@ -137,7 +137,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
   console.log(`admins: ${admins?.length}`);
   return (
-    <div className="w-full m-2 mt-8">
+    <div className="w-full m-2 mt-2 p-8">
       <Title level={4}>Restricted Access</Title>
       <Paragraph>
         Add other people to just view spend. They cannot create keys, teams or
