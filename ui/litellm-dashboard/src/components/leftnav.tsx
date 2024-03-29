@@ -58,11 +58,6 @@ const Sidebar: React.FC<SidebarProps> = ({
             API Keys
             </Text>
           </Menu.Item>
-          <Menu.Item key="2" onClick={() => setPage("models")}>
-          <Text>
-            Models
-            </Text>
-          </Menu.Item>
           <Menu.Item key="3" onClick={() => setPage("llm-playground")}>
           <Text>
             Test Key
@@ -74,19 +69,24 @@ const Sidebar: React.FC<SidebarProps> = ({
             </Text>
           </Menu.Item>
           {userRole == "Admin" ? (
-            <Menu.Item key="5" onClick={() => setPage("users")}>
-              <Text>
-              Users
-              </Text>
-            </Menu.Item>
-          ) : null}
-          {userRole == "Admin" ? (
             <Menu.Item key="6" onClick={() => setPage("teams")}>
               <Text>
               Teams
               </Text>
             </Menu.Item>
           ) : null}
+            {userRole == "Admin" ? (
+            <Menu.Item key="5" onClick={() => setPage("users")}>
+              <Text>
+              Users
+              </Text>
+            </Menu.Item>
+          ) : null}
+          <Menu.Item key="2" onClick={() => setPage("models")}>
+          <Text>
+            Models
+            </Text>
+          </Menu.Item>
           {userRole == "Admin" ? (
             <Menu.Item key="7" onClick={() => setPage("admin-panel")}>
               <Text>
