@@ -45,3 +45,5 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 litellm_settings:
   success_callback: ["prometheus"]
+general_settings:
+  master_key: sk-1234
