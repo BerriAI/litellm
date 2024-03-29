@@ -55,7 +55,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, us
 
     const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
 
-    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
+    const roundedSpend = spend !== undefined ? spend.toFixed(5) : null;
 
     return (
         <>

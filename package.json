@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "react-copy-to-clipboard": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/react-copy-to-clipboard": "^5.0.7"
+  }
+}
