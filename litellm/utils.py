@@ -2464,15 +2464,7 @@ def client(original_function):
                 f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
             )
             raise e
-
-    def check_coroutine(value) -> bool:
-        if inspect.iscoroutine(value):
-            return True
-        elif inspect.iscoroutinefunction(value):
-            return True
-        else:
-            return False
-
+            
     def post_call_processing(original_response, model):
         try:
             if original_response is None:
@@ -2483,15 +2475,11 @@ def client(original_function):
                     call_type == CallTypes.completion.value
                     or call_type == CallTypes.acompletion.value
                 ):
-                    is_coroutine = check_coroutine(original_function)
-                    if is_coroutine == True:
-                        pass
-                    else:
-                        model_response = original_response["choices"][0]["message"][
-                            "content"
-                        ]
-                        ### POST-CALL RULES ###
-                        rules_obj.post_call_rules(input=model_response, model=model)
+                    model_response = original_response["choices"][0]["message"][
+                        "content"
+                    ]
+                    ### POST-CALL RULES ###
+                    rules_obj.post_call_rules(input=model_response, model=model)
         except Exception as e:
             raise e
 
