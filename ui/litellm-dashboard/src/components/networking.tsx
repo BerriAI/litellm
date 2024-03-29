@@ -165,6 +165,37 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
   }
 };
 
+export const teamDeleteCall = async (accessToken: String, teamID: String) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/delete` : `/team/delete`;
+    console.log("in teamDeleteCall:", teamID);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        team_ids: [teamID],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to delete team: " + errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to delete key:", error);
+    throw error;
+  }
+  
+}
+
 export const userInfoCall = async (
   accessToken: String,
   userID: String | null,
