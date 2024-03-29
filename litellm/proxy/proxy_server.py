@@ -5820,7 +5820,7 @@ async def new_team(
                 }
             },
         )
-    return team_row.model_dump()
+    return team_row
 
 
 @router.post(
