@@ -1901,6 +1901,7 @@ async def update_spend(
     spend_logs: list,
     """
     n_retry_times = 3
+    verbose_proxy_logger.debug("INSIDE UPDATE SPEND")
     ### UPDATE USER TABLE ###
     if len(prisma_client.user_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
@@ -1989,6 +1990,11 @@ async def update_spend(
                 raise e
 
     ### UPDATE TEAM TABLE ###
+    verbose_proxy_logger.debug(
+        "Team Spend transactions: {}".format(
+            len(prisma_client.team_list_transactons.keys())
+        )
+    )
     if len(prisma_client.team_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
             try:
@@ -2000,6 +2006,11 @@ async def update_spend(
                             team_id,
                             response_cost,
                         ) in prisma_client.team_list_transactons.items():
+                            verbose_proxy_logger.debug(
+                                "Updating spend for team id={} by {}".format(
+                                    team_id, response_cost
+                                )
+                            )
                             batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                 where={"team_id": team_id},
                                 data={"spend": {"increment": response_cost}},
