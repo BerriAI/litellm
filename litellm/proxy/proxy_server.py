@@ -361,6 +361,7 @@ async def user_api_key_auth(
                 valid_token = await jwt_handler.auth_jwt(token=api_key)
                 # get scopes
                 scopes = jwt_handler.get_scopes(token=valid_token)
+
                 # check if admin
                 is_admin = jwt_handler.is_admin(scopes=scopes)
                 # if admin return
@@ -453,9 +454,9 @@ async def user_api_key_auth(
                 return UserAPIKeyAuth(
                     api_key=None,
                     team_id=team_object.team_id,
-                    tpm_limit=team_object.tpm_limit,
-                    rpm_limit=team_object.rpm_limit,
-                    models=team_object.models,
+                    team_tpm_limit=team_object.tpm_limit,
+                    team_rpm_limit=team_object.rpm_limit,
+                    team_models=team_object.models,
                     user_role="app_owner",
                 )
         #### ELSE ####
@@ -5759,7 +5760,7 @@ async def new_team(
                 },
             )
 
-        if data.models is not None:
+        if data.models is not None and len(user_api_key_dict.models) > 0:
             for m in data.models:
                 if m not in user_api_key_dict.models:
                     raise HTTPException(
