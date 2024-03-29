@@ -231,7 +231,8 @@ export const getTotalSpendCall = async (
     }
 
     const data = await response.json();
-    //message.info("Received model data");
+    message.info("global spend", data);
+    console.log("global soend", data)
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
