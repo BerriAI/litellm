@@ -9704,7 +9704,14 @@ class CustomStreamWrapper:
             threading.Thread(
                 target=self.logging_obj.failure_handler, args=(e, traceback_exception)
             ).start()
-            raise e
+            if isinstance(e, OpenAIError):
+                raise e
+            else:
+                raise exception_type(
+                    model=self.model,
+                    original_exception=e,
+                    custom_llm_provider=self.custom_llm_provider,
+                )
 
     async def __anext__(self):
         try:
