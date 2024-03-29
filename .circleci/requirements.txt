@@ -7,7 +7,6 @@ baseten
 cohere
 redis
 anthropic
-boto3
 orjson
 pydantic
 google-cloud-aiplatform==1.43.0
