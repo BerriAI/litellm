@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import requests, copy
 import time, uuid
-from typing import Callable, Optional
+from typing import Callable, Optional, List
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
 import litellm
 from .prompt_templates.factory import (
@@ -118,6 +118,7 @@ def completion(
 ):
     headers = validate_environment(api_key, headers)
     _is_function_call = False
+    json_schemas: dict = {}
     messages = copy.deepcopy(messages)
     optional_params = copy.deepcopy(optional_params)
     if model in custom_prompt_dict:
@@ -161,6 +162,10 @@ def completion(
     ## Handle Tool Calling
     if "tools" in optional_params:
         _is_function_call = True
+        for tool in optional_params["tools"]:
+            json_schemas[tool["function"]["name"]] = tool["function"].get(
+                "parameters", None
+            )
         tool_calling_system_prompt = construct_tool_use_system_prompt(
             tools=optional_params["tools"]
         )
@@ -248,7 +253,12 @@ def completion(
                     0
                 ].strip()
                 function_arguments_str = f"<invoke>{function_arguments_str}</invoke>"
-                function_arguments = parse_xml_params(function_arguments_str)
+                function_arguments = parse_xml_params(
+                    function_arguments_str,
+                    json_schema=json_schemas.get(
+                        function_name, None
+                    ),  # check if we have a json schema for this function name
+                )
                 _message = litellm.Message(
                     tool_calls=[
                         {
@@ -263,6 +273,9 @@ def completion(
                     content=None,
                 )
                 model_response.choices[0].message = _message  # type: ignore
+                model_response._hidden_params["original_response"] = (
+                    text_content  # allow user to access raw anthropic tool calling response
+                )
             else:
                 model_response.choices[0].message.content = text_content  # type: ignore
             model_response.choices[0].finish_reason = map_finish_reason(
