@@ -2024,6 +2024,7 @@ async def update_spend(
     ):
         if not base_url.endswith("/"):
             base_url += "/"
+        verbose_proxy_logger.debug("base_url: {}".format(base_url))
         response = await db_writer_client.post(
             url=base_url + "spend/update",
             data=json.dumps(prisma_client.spend_log_transactons),  # type: ignore
