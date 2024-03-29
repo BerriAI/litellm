@@ -68,6 +68,7 @@ const sidebars = {
             "proxy/streaming_logging",
           ]
         },
+        "proxy/grafana_metrics",
         "proxy/call_hooks",
         "proxy/rules",
         "proxy/cli", 
