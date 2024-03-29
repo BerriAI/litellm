@@ -1749,33 +1749,29 @@ def test_completion_sagemaker():
 # test_completion_sagemaker()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_sagemaker_stream():
+@pytest.mark.asyncio
+async def test_acompletion_sagemaker():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         print("testing sagemaker")
-        response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+        response = await litellm.acompletion(
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
+            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            stream=True,
+            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
+            input_cost_per_second=0.000420,
         )
-
-        complete_streaming_response = ""
-        first_chunk_id, chunk_id = None, None
-        for i, chunk in enumerate(response):
-            print(chunk)
-            chunk_id = chunk.id
-            print(chunk_id)
-            if i == 0:
-                first_chunk_id = chunk_id
-            else:
-                assert chunk_id == first_chunk_id
-            complete_streaming_response += chunk.choices[0].delta.content or ""
         # Add any assertions here to check the response
-        # print(response)
-        assert len(complete_streaming_response) > 0
+        print(response)
+        cost = completion_cost(completion_response=response)
+        print("calculated cost", cost)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
