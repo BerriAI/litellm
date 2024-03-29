@@ -195,6 +195,48 @@ def test_completion_claude_3_function_call():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_parse_xml_params():
+    from litellm.llms.prompt_templates.factory import parse_xml_params
+
+    ## SCENARIO 1 ## - W/ ARRAY
+    xml_content = """<invoke><tool_name>return_list_of_str</tool_name>\n<parameters>\n<value>\n<item>apple</item>\n<item>banana</item>\n<item>orange</item>\n</value>\n</parameters></invoke>"""
+    json_schema = {
+        "properties": {
+            "value": {
+                "items": {"type": "string"},
+                "title": "Value",
+                "type": "array",
+            }
+        },
+        "required": ["value"],
+        "type": "object",
+    }
+    response = parse_xml_params(xml_content=xml_content, json_schema=json_schema)
+
+    print(f"response: {response}")
+    assert response["value"] == ["apple", "banana", "orange"]
+
+    ## SCENARIO 2 ## - W/OUT ARRAY
+    xml_content = """<invoke><tool_name>get_current_weather</tool_name>\n<parameters>\n<location>Boston, MA</location>\n<unit>fahrenheit</unit>\n</parameters></invoke>"""
+    json_schema = {
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "The city and state, e.g. San Francisco, CA",
+            },
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+    }
+
+    response = parse_xml_params(xml_content=xml_content, json_schema=json_schema)
+
+    print(f"response: {response}")
+    assert response["location"] == "Boston, MA"
+    assert response["unit"] == "fahrenheit"
+
+
 def test_completion_claude_3_multi_turn_conversations():
     litellm.set_verbose = True
     litellm.modify_params = True
