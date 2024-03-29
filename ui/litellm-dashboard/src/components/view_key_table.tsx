@@ -86,13 +86,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
-            <TableHeaderCell>Budget (USD)</TableHeaderCell>
-            <TableHeaderCell>Spend Report</TableHeaderCell>
-            <TableHeaderCell>Team</TableHeaderCell>
-            <TableHeaderCell>Metadata</TableHeaderCell>
+            {/* <TableHeaderCell>Budget (USD)</TableHeaderCell> */}
+            {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
+            {/* <TableHeaderCell>Team</TableHeaderCell> */}
+            {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-            <TableHeaderCell>Expires</TableHeaderCell>
+            {/* <TableHeaderCell>Expires</TableHeaderCell> */}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -125,14 +125,14 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     })()}
                   </Text>
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                {/* <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   {item.max_budget != null ? (
                     <Text>{item.max_budget}</Text>
                   ) : (
                     <Text>Unlimited</Text>
                   )}
-                </TableCell>
-                <TableCell style={{ maxWidth: '2px' }}>
+                </TableCell> */}
+                {/* <TableCell style={{ maxWidth: '2px' }}>
                   <ViewKeySpendReport
                     token={item.token}
                     accessToken={accessToken}
@@ -140,21 +140,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     keyBudget={item.max_budget}
                     keyName={item.key_name}
                   />
-                </TableCell>
-                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                </TableCell> */}
+                {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{item.team_alias && item.team_alias != "None" ? item.team_alias : item.team_id}</Text>
-                </TableCell>
-                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                </TableCell> */}
+                {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
                   
-                </TableCell>
+                </TableCell> */}
 
-                <TableCell style={{ maxWidth: "8-x", whiteSpace: "pre-wrap", overflow: "hidden" }}>
+                <TableCell>
                   {Array.isArray(item.models) ? (
                     <div style={{ display: "flex", flexDirection: "column" }}>
                       {item.models.map((model: string, index: number) => (
                         <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                          <Text>
                            {model.length > 30 ? `${model.slice(0, 30)}...` : model}
+                           </Text>
                         </Badge>
                       ))}
                     </div>
@@ -167,13 +169,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     {item.rpm_limit ? item.rpm_limit : "Unlimited"}
                   </Text>
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
+                {/* <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
                   {item.expires != null ? (
                     <Text>{item.expires}</Text>
                   ) : (
                     <Text>Never</Text>
                   )}
-                </TableCell>
+                </TableCell> */}
                 <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
                   <Icon
                     onClick={() => handleDelete(item.token)}
