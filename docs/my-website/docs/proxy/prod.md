@@ -70,7 +70,7 @@ If you want to **move** to a separate server, do this:
 ```bash
 docker run -p 3000:3000 \
   -e DATABASE_URL="postgres://.." \
-  ghcr.io/berriai/litellm:litellm-spend_logs-latest
+  ghcr.io/berriai/litellm-spend_logs:main-latest
 
 # RUNNING on http://0.0.0.0:3000
 ```
