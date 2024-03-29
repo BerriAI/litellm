@@ -43,8 +43,5 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-general_settings:
-  master_key: sk-1234
-  disable_spend_logs: true
-  disable_reset_budget: true
-  num_retries: 2
+litellm_settings:
+  success_callback: ["prometheus"]
