@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
+import { teamDeleteCall } from "./networking";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Button as Button2,
   Modal,
@@ -56,6 +58,8 @@ const Team: React.FC<TeamProps> = ({
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState([]);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
@@ -76,6 +80,40 @@ const Team: React.FC<TeamProps> = ({
     setIsAddMemberModalVisible(false);
     memberForm.resetFields();
   };
+
+  const handleDelete = async (team_id: string) => {
+    // Set the team to delete and open the confirmation modal
+    setTeamToDelete(team_id);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (teamToDelete == null || teams == null || accessToken == null) {
+      return;
+    }
+
+    try {
+      await teamDeleteCall(accessToken, teamToDelete);
+      // Successfully completed the deletion. Update the state to trigger a rerender.
+      const filteredData = teams.filter((item) => item.team_id !== teamToDelete);
+      setTeams(filteredData);
+    } catch (error) {
+      console.error("Error deleting the team:", error);
+      // Handle any error situations, such as displaying an error message to the user.
+    }
+
+    // Close the confirmation modal and reset the teamToDelete
+    setIsDeleteModalOpen(false);
+    setTeamToDelete(null);
+  };
+
+  const cancelDelete = () => {
+    // Close the confirmation modal and reset the teamToDelete
+    setIsDeleteModalOpen(false);
+    setTeamToDelete(null);
+  };
+
+
 
   useEffect(() => {
     const fetchUserModels = async () => {
@@ -115,7 +153,7 @@ const Team: React.FC<TeamProps> = ({
         setIsTeamModalVisible(false);
       }
     } catch (error) {
-      console.error("Error creating the key:", error);
+      console.error("Error creating the team:", error);
       message.error("Error creating the team: " + error);
     }
   };
@@ -153,7 +191,7 @@ const Team: React.FC<TeamProps> = ({
         setIsAddMemberModalVisible(false);
       }
     } catch (error) {
-      console.error("Error creating the key:", error);
+      console.error("Error creating the team:", error);
     }
   };
   console.log(`received teams ${teams}`);
@@ -208,14 +246,66 @@ const Team: React.FC<TeamProps> = ({
                             {team.rpm_limit ? team.rpm_limit : "Unlimited"}
                           </Text>
                         </TableCell>
-                        {/* <TableCell>
-                          <Icon icon={CogIcon} size="sm" />
-                        </TableCell> */}
+                        <TableCell>
+                        <Icon
+                            icon={PencilAltIcon}
+                            size="sm"
+                          />
+                        <Icon
+                            onClick={() => handleDelete(team.team_id)}
+                            icon={TrashIcon}
+                            size="sm"
+                          />
+                        </TableCell>
                       </TableRow>
                     ))
                   : null}
               </TableBody>
             </Table>
+            {isDeleteModalOpen && (
+              <div className="fixed z-10 inset-0 overflow-y-auto">
+                <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                  <div
+                    className="fixed inset-0 transition-opacity"
+                    aria-hidden="true"
+                  >
+                    <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+                  </div>
+
+                  {/* Modal Panel */}
+                  <span
+                    className="hidden sm:inline-block sm:align-middle sm:h-screen"
+                    aria-hidden="true"
+                  >
+                    &#8203;
+                  </span>
+
+                  {/* Confirmation Modal Content */}
+                  <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                    <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                      <div className="sm:flex sm:items-start">
+                        <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                          <h3 className="text-lg leading-6 font-medium text-gray-900">
+                            Delete Team
+                          </h3>
+                          <div className="mt-2">
+                            <p className="text-sm text-gray-500">
+                              Are you sure you want to delete this team ?
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                      <Button onClick={confirmDelete} color="red" className="ml-2">
+                        Delete
+                      </Button>
+                      <Button onClick={cancelDelete}>Cancel</Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </Card>
         </Col>
         <Col numColSpan={1}>
