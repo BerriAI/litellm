@@ -166,6 +166,7 @@ def completion(
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
+    model_id = optional_params.pop("model_id", None)
 
     if aws_access_key_id != None:
         # uses auth params passed to completion
@@ -288,12 +289,21 @@ def completion(
     )
     ## COMPLETION CALL
     try:
-        response = client.invoke_endpoint(
-            EndpointName=model,
-            ContentType="application/json",
-            Body=data,
-            CustomAttributes="accept_eula=true",
-        )
+        if model_id is not None:
+            response = client.invoke_endpoint(
+                EndpointName=model,
+                InferenceComponentName=model_id,
+                ContentType="application/json",
+                Body=data,
+                CustomAttributes="accept_eula=true",
+            )
+        else:
+            response = client.invoke_endpoint(
+                EndpointName=model,
+                ContentType="application/json",
+                Body=data,
+                CustomAttributes="accept_eula=true",
+            )
     except Exception as e:
         status_code = (
             getattr(e, "response", {})
@@ -303,6 +313,8 @@ def completion(
         error_message = (
             getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
         )
+        if "Inference Component Name header is required" in error_message:
+            error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
         raise SagemakerError(status_code=status_code, message=error_message)
 
     response = response["Body"].read().decode("utf8")

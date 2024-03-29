@@ -20,7 +20,28 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            model="sagemaker/<your-endpoint-name>", 
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            temperature=0.2,
+            max_tokens=80
+        )
+```
+
+### Passing Inference Component Name
+
+If you have multiple models on an endpoint, you'll need to specify the individual model names, do this via `model_id`.  
+
+```python
+import os 
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+            model="sagemaker/<your-endpoint-name>", 
+            model_id="<your-model-name",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             temperature=0.2,
             max_tokens=80
