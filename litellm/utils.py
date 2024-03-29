@@ -9093,6 +9093,17 @@ class CustomStreamWrapper:
                 if stop_reason != None:
                     is_finished = True
                     finish_reason = stop_reason
+            ######## bedrock.mistral mappings ###############
+            elif "outputs" in chunk_data:
+                if (
+                    len(chunk_data["outputs"]) == 1
+                    and chunk_data["outputs"][0].get("text", None) is not None
+                ):
+                    text = chunk_data["outputs"][0]["text"]
+                stop_reason = chunk_data.get("stop_reason", None)
+                if stop_reason != None:
+                    is_finished = True
+                    finish_reason = stop_reason
             ######## bedrock.cohere mappings ###############
             # meta mapping
             elif "generation" in chunk_data:
