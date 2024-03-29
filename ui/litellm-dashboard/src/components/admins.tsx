@@ -154,7 +154,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 <TableRow>
                   <TableHeaderCell>Member Name</TableHeaderCell>
                   <TableHeaderCell>Role</TableHeaderCell>
-                  <TableHeaderCell>Action</TableHeaderCell>
+                  {/* <TableHeaderCell>Action</TableHeaderCell> */}
                 </TableRow>
               </TableHead>
 
@@ -170,9 +170,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                             : null}
                         </TableCell>
                         <TableCell>{member["user_role"]}</TableCell>
-                        <TableCell>
+                        {/* <TableCell>
                           <Icon icon={CogIcon} size="sm" />
-                        </TableCell>
+                        </TableCell> */}
                       </TableRow>
                     ))
                   : null}
