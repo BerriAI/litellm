@@ -186,11 +186,17 @@ const Team: React.FC<TeamProps> = ({
                           <TableCell style={{ maxWidth: "8-x", whiteSpace: "pre-wrap", overflow: "hidden" }}>
                             {Array.isArray(team.models) ? (
                               <div style={{ display: "flex", flexDirection: "column" }}>
-                                {team.models.map((model: string, index: number) => (
-                                  <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                                    {model.length > 30 ? `${model.slice(0, 30)}...` : model}
+                                {team.models.length === 0 ? (
+                                  <Badge size={"xs"} className="mb-1" color="purple">
+                                    <Text>All Models</Text>
                                   </Badge>
-                                ))}
+                                ) : (
+                                  team.models.map((model: string, index: number) => (
+                                    <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                                      <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                                    </Badge>
+                                  ))
+                                )}
                               </div>
                             ) : null}
                         </TableCell>
