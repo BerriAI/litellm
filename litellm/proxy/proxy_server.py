@@ -689,7 +689,7 @@ async def user_api_key_auth(
                         user_id_information.append(value)
                 if user_id_information is None or (
                     isinstance(user_id_information, list)
-                    and len(user_id_information) < 2
+                    and len(user_id_information) < 1
                 ):
                     if prisma_client is not None:
                         user_id_information = await prisma_client.get_data(
