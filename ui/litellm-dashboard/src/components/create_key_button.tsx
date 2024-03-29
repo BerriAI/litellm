@@ -124,7 +124,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         >
           {userRole === "App Owner" || userRole === "Admin" ? (
             <>
-              <Form.Item label="Key Name" name="key_alias">
+              <Form.Item 
+                label="Key Name" 
+                name="key_alias"
+                rules={[{ required: true, message: 'Please input a key name' }]}
+              >
                 <Input />
               </Form.Item>
               <Form.Item
@@ -148,9 +152,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     </Option>
                   ))}
                 </Select>
-              </Form.Item>
-              <Form.Item label="Soft Budget (USD) Monthly" name="soft_budget" initialValue={50.00}>
-                <InputNumber step={0.01} precision={2} defaultValue={50.00} width={200} />
               </Form.Item>
               <Form.Item label="Max Budget (USD)" name="max_budget">
                 <InputNumber step={0.01} precision={2} width={200} />
