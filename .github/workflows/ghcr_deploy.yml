@@ -48,8 +48,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          context: litellm-js/spend-logs
-          file: Dockerfile
+          file: ./litellm-js/spend-logs/Dockerfile
           tags: litellm/litellm-spend_logs:${{ github.event.inputs.tag || 'latest' }}
       
   build-and-push-image:
