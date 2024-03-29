@@ -40,6 +40,19 @@ Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
+## 2. Batch write spend updates every 60s
+
+The default proxy batch write is 10s. This is to make it easy to see spend when debugging locally. 
+
+In production, we recommend using a longer interval period of 60s. This reduces the number of connections used to make DB writes. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  proxy_batch_write_at: 5 # 👈 Frequency of batch writing logs to server (in seconds)
+```
+
+
 ## 3. Move spend logs to separate server
 
 Writing each spend log to the db can slow down your proxy. In testing we saw a 70% improvement in median response time, by moving writing spend logs to a separate server. 
