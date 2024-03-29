@@ -215,8 +215,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
           />
-          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
-          <Title>API Keys</Title>
+
+          <ViewKeyTable
+            userID={userID}
+            accessToken={accessToken}
+            data={keys}
+            setData={setKeys}
+          />
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
@@ -226,12 +231,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             data={keys}
             setData={setKeys}
           />
-          <ViewKeyTable
-            userID={userID}
-            accessToken={accessToken}
-            data={keys}
-            setData={setKeys}
-          />
+          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
         </Col>
       </Grid>
     </div>
