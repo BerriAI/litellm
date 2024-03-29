@@ -158,7 +158,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   return (
     <div style={{ width: "100%", position: "relative" }}>
-      <Grid className="gap-2 p-10 h-[75vh] w-full">
+      <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
         <Card>
           <TabGroup>
             <TabList className="mt-4">

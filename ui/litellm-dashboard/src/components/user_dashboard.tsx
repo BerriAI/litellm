@@ -206,8 +206,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   console.log("inside user dashboard, selected team", selectedTeam);
 
   return (
-    <div>
-      <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
+      <div className="w-full mx-4">
+      <Grid numItems={1} className="gap-2 p-2 h-[75vh] w-full mt-8">
         <Col numColSpan={1}>
           <ViewUserSpend
             userID={userID}
@@ -215,6 +215,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
           />
+          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
           <ViewKeyTable
             userID={userID}
             accessToken={accessToken}
@@ -230,7 +231,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             data={keys}
             setData={setKeys}
           />
-          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
         </Col>
       </Grid>
     </div>

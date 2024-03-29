@@ -159,7 +159,7 @@ const Team: React.FC<TeamProps> = ({
   console.log(`received teams ${teams}`);
   return (
     <div className="w-full mx-4">
-      <Grid numItems={1} className="gap-2 p-2 h-[75vh] w-full">
+      <Grid numItems={1} className="gap-2 p-2 h-[75vh] w-full mt-8">
         <Col numColSpan={1}>
           <Title level={4}>All Teams</Title>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
@@ -235,7 +235,11 @@ const Team: React.FC<TeamProps> = ({
               labelAlign="left"
             >
               <>
-                <Form.Item label="Team Name" name="team_alias">
+                <Form.Item 
+                  label="Team Name" 
+                  name="team_alias"
+                  rules={[{ required: true, message: 'Please input a team name' }]}
+                >
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
