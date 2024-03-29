@@ -81,14 +81,11 @@ def common_checks(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
     # 6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
-    if (
-        litellm.max_budget > 0
-        and global_proxy_spend is not None
-        and global_proxy_spend > litellm.max_budget
-    ):
-        raise Exception(
-            f"'ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
-        )
+    if litellm.max_budget > 0 and global_proxy_spend is not None:
+        if global_proxy_spend > litellm.max_budget:
+            raise Exception(
+                f"'ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
+            )
     return True
 
 

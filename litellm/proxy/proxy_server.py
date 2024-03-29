@@ -446,7 +446,7 @@ async def user_api_key_auth(
                     )
                     if global_proxy_spend is None and prisma_client is not None:
                         # get from db
-                        sql_query = """SELECT SUM(spend) as total_spend FROM MONTHLYGLOBALSPEND;"""
+                        sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
 
                         response = await prisma_client.db.query_raw(query=sql_query)
 
@@ -457,7 +457,21 @@ async def user_api_key_auth(
                             value=global_proxy_spend,
                             ttl=60,
                         )
-
+                    if global_proxy_spend is not None:
+                        user_info = {
+                            "user_id": litellm_proxy_admin_name,
+                            "max_budget": litellm.max_budget,
+                            "spend": global_proxy_spend,
+                            "user_email": "",
+                        }
+                        asyncio.create_task(
+                            proxy_logging_obj.budget_alerts(
+                                user_max_budget=litellm.max_budget,
+                                user_current_spend=global_proxy_spend,
+                                type="user_and_proxy_budget",
+                                user_info=user_info,
+                            )
+                        )
                 # run through common checks
                 _ = common_checks(
                     request_body=request_data,
@@ -903,18 +917,31 @@ async def user_api_key_auth(
                 )
                 if global_proxy_spend is None:
                     # get from db
-                    sql_query = (
-                        """SELECT SUM(spend) as total_spend FROM MONTHLYGLOBALSPEND;"""
-                    )
+                    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
 
                     response = await prisma_client.db.query_raw(query=sql_query)
 
-                    global_proxy_spend = response[0].total_spend
-
+                    global_proxy_spend = response[0]["total_spend"]
                     await user_api_key_cache.async_set_cache(
                         key="{}:spend".format(litellm_proxy_admin_name),
                         value=global_proxy_spend,
                         ttl=60,
+                    )
+
+                if global_proxy_spend is not None:
+                    user_info = {
+                        "user_id": litellm_proxy_admin_name,
+                        "max_budget": litellm.max_budget,
+                        "spend": global_proxy_spend,
+                        "user_email": "",
+                    }
+                    asyncio.create_task(
+                        proxy_logging_obj.budget_alerts(
+                            user_max_budget=litellm.max_budget,
+                            user_current_spend=global_proxy_spend,
+                            type="user_and_proxy_budget",
+                            user_info=user_info,
+                        )
                     )
 
             _ = common_checks(
@@ -4086,7 +4113,6 @@ async def generate_key_fn(
             )
             _budget_id = getattr(_budget, "budget_id", None)
         data_json = data.json()  # type: ignore
-
         # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
