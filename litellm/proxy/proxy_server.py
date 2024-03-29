@@ -5820,7 +5820,10 @@ async def new_team(
                 }
             },
         )
-    return team_row
+    try:
+        return team_row.model_dump()
+    except Exception as e:
+        return team_row.dict()
 
 
 @router.post(
