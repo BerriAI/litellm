@@ -1503,7 +1503,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
-    "mistral.mixtral-8x7b-instruct": {
+    "mistral.mixtral-8x7b-instruct-v0:1": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
@@ -1512,7 +1512,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
-    "bedrock/us-west-2/mistral.mixtral-8x7b-instruct": {
+    "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
