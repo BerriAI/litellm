@@ -5022,52 +5022,53 @@ async def global_spend_per_tea():
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
     sql_query = """
         SELECT
-            team_id,
-            DATE("startTime") AS spend_date,
-            SUM(spend) AS total_spend
+            t.team_alias as team_alias,
+            DATE(s."startTime") AS spend_date,
+            SUM(s.spend) AS total_spend
         FROM
-            "LiteLLM_SpendLogs"
+            "LiteLLM_SpendLogs" s
+        JOIN
+            "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+            s."startTime" >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY
-            team_id,
-            DATE("startTime")
+            t.team_alias,
+            DATE(s."startTime")
         ORDER BY
             spend_date;
-    """
+        """
     response = await prisma_client.db.query_raw(query=sql_query)
-    # print("spend_per_day", response)
 
     # transform the response for the Admin UI
     spend_by_date = {}
-    team_ids = set()
+    team_aliases = set()
     total_spend_per_team = {}
     for row in response:
         row_date = row["spend_date"]
         if row_date is None:
             continue
-        team_id = row["team_id"]
-        team_ids.add(team_id)
+        team_alias = row["team_alias"]
+        team_aliases.add(team_alias)
         if row_date in spend_by_date:
             # get the team_id for this entry
             # get the spend for this entry
             spend = row["total_spend"]
             current_date_entries = spend_by_date[row_date]
-            current_date_entries[team_id] = spend
+            current_date_entries[team_alias] = spend
         else:
             spend = row["total_spend"]
-            spend_by_date[row_date] = {team_id: spend}
+            spend_by_date[row_date] = {team_alias: spend}
 
-        if team_id in total_spend_per_team:
-            total_spend_per_team[team_id] += spend
+        if team_alias in total_spend_per_team:
+            total_spend_per_team[team_alias] += spend
         else:
-            total_spend_per_team[team_id] = spend
+            total_spend_per_team[team_alias] = spend
 
-        total_spend_per_team_ui = []
-        for team_id in total_spend_per_team:
-            total_spend_per_team_ui.append(
-                {"team_id": team_id, "total_spend": total_spend_per_team[team_id]}
-            )
+    total_spend_per_team_ui = []
+    for team_id in total_spend_per_team:
+        total_spend_per_team_ui.append(
+            {"team_id": team_id, "total_spend": total_spend_per_team[team_id]}
+        )
 
     # sort spend_by_date by it's key (which is a date)
 
@@ -5078,7 +5079,7 @@ async def global_spend_per_tea():
 
     return {
         "daily_spend": response_data,
-        "teams": list(team_ids),
+        "teams": list(team_aliases),
         "total_spend_per_team": total_spend_per_team_ui,
     }
 
