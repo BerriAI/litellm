@@ -12,7 +12,6 @@ litellm.success_callback = ["lunary"]
 litellm.set_verbose = True
 
 
-
 def test_lunary_logging():
     try:
         response = completion(
@@ -40,7 +39,9 @@ def test_lunary_template():
     except Exception as e:
         print(e)
 
+
 # test_lunary_template()
+
 
 def test_lunary_logging_with_metadata():
     try:
@@ -81,4 +82,4 @@ def test_lunary_logging_with_streaming_and_metadata():
         print(e)
 
 
-test_lunary_logging_with_streaming_and_metadata()
+# test_lunary_logging_with_streaming_and_metadata()
