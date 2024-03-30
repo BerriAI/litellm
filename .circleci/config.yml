@@ -34,6 +34,7 @@ jobs:
             pip install "boto3>=1.28.57"
             pip install "aioboto3>=12.3.0"
             pip install langchain
+            pip install lunary==0.2.5
             pip install "langfuse>=2.0.0"
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
