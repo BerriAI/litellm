@@ -6,9 +6,11 @@ import {
   Table,
   TableHead,
   TableRow,
+  TableHeaderCell,
   TableCell,
   TableBody,
   Metric,
+  Text,
   Grid,
 } from "@tremor/react";
 import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall } from "./networking";
@@ -146,39 +148,32 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <Table className="mt-5">
             <TableHead>
               <TableRow>
-                <TableCell>
-                  <Title>Model Name </Title>
-                </TableCell>
-                <TableCell>
-                  <Title>Provider</Title>
-                </TableCell>
+
+                  <TableHeaderCell>Model Name </TableHeaderCell>
+
+                <TableHeaderCell>
+                  Provider
+                </TableHeaderCell>
                 {
                   userRole === "Admin" && (
-                    <TableCell>
-                      <Title>API Base</Title>
-                    </TableCell>
+                    <TableHeaderCell>
+                      API Base
+                    </TableHeaderCell>
                   )
                 }
-                
-                <TableCell>
-                  <Title>Access</Title>
-                </TableCell>
-                <TableCell>
-                  <Title>Input Price per token ($)</Title>
-                </TableCell>
-                <TableCell>
-                  <Title>Output Price per token ($)</Title>
-                </TableCell>
-                <TableCell>
-                  <Title>Max Tokens</Title>
-                </TableCell>
+                <TableHeaderCell>
+                  Access
+                </TableHeaderCell>
+                <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
+                <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
+                <TableHeaderCell>Max Tokens</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {modelData.data.map((model: any) => (
                 <TableRow key={model.model_name}>
                   <TableCell>
-                    <Title>{model.model_name}</Title>
+                    <Text>{model.model_name}</Text>
                   </TableCell>
                   <TableCell>{model.provider}</TableCell>
                   {
