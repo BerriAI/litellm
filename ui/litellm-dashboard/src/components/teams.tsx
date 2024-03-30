@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
-import { teamDeleteCall } from "./networking";
+import { teamDeleteCall, teamUpdateCall } from "./networking";
 import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Button as Button2,
@@ -71,13 +71,14 @@ const EditTeamModal = ({ visible, onCancel, team, onSubmit }) => {
     form
       .validateFields()
       .then((values) => {
-        onSubmit(team.team_id, values);
+        const updatedValues = {...values, team_id: team.team_id};
+        onSubmit(updatedValues);
         form.resetFields();
       })
       .catch((error) => {
         console.error("Validation failed:", error);
       });
-  };
+};
 
   return (
       <Modal
@@ -90,6 +91,7 @@ const EditTeamModal = ({ visible, onCancel, team, onSubmit }) => {
           >
       <Form
         form={form}
+        onFinish={handleEditSubmit}
         initialValues={team} // Pass initial values here
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
@@ -140,24 +142,40 @@ const EditTeamModal = ({ visible, onCancel, team, onSubmit }) => {
   );
 };
 
-  const handleEditClick = (team: any) => {
-    setSelectedTeam(team);
-    setEditModalVisible(true);
-  };
+const handleEditClick = (team: any) => {
+  setSelectedTeam(team);
+  setEditModalVisible(true);
+};
 
-  const handleEditCancel = () => {
-    setEditModalVisible(false);
-    setSelectedTeam(null);
-  };
+const handleEditCancel = () => {
+  setEditModalVisible(false);
+  setSelectedTeam(null);
+};
 
-  const handleEditSubmit = (teamId: string, values) => {
-    // Call API to update team with teamId and values
-    // Handle success or failure accordingly
-    console.log("Editing team:", teamId, "with values:", values);
-    message.success("Team updated successfully");
-    setEditModalVisible(false);
-    setSelectedTeam(null);
-  };
+const handleEditSubmit = async (formValues: Record<string, any>) => {
+  // Call API to update team with teamId and values
+  const teamId = formValues.team_id; // get team_id
+  
+  console.log("handleEditSubmit:", formValues);
+  if (accessToken == null) {
+    return;
+  }
+
+  // Update the teams state with the updated team data
+  if (teams) {
+    const updatedTeams = teams.map((team) =>
+      team.team_id === teamId ? formValues : team
+    );
+    setTeams(updatedTeams);
+  }
+
+  console.log("Editing team:", teamId, "with values:", formValues);
+  message.success("Team updated successfully");
+  teamUpdateCall(accessToken, formValues);
+
+  setEditModalVisible(false);
+  setSelectedTeam(null);
+};
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
