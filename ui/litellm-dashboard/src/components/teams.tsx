@@ -552,7 +552,6 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 <TableRow>
                   <TableHeaderCell>Member Name</TableHeaderCell>
                   <TableHeaderCell>Role</TableHeaderCell>
-                  {/* <TableHeaderCell>Action</TableHeaderCell> */}
                 </TableRow>
               </TableHead>
 
@@ -569,9 +568,6 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                               : null}
                           </TableCell>
                           <TableCell>{member["role"]}</TableCell>
-                          {/* <TableCell>
-                            <Icon icon={CogIcon} size="sm" />
-                          </TableCell> */}
                         </TableRow>
                       )
                     )
