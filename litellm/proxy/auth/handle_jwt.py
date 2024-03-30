@@ -114,7 +114,8 @@ class JWTHandler:
         public_key: Optional[dict] = None
 
         if len(keys) == 1:
-            public_key = keys[0]
+            if kid is None or keys["kid"] == kid:
+                public_key = keys[0]
         elif len(keys) > 1:
             for key in keys:
                 if kid is not None and key["kid"] == kid:

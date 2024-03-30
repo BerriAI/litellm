@@ -2,11 +2,11 @@
 
 import QuickStart from '../src/components/QuickStart.js'
 
-LiteLLM simplifies LLM API calls by mapping them all to the [OpenAI ChatCompletion format](https://platform.openai.com/docs/api-reference/chat). 
+LiteLLM simplifies LLM API calls by mapping them all to the [OpenAI ChatCompletion format](https://platform.openai.com/docs/api-reference/chat).
 
-## basic usage 
+## basic usage
 
-By default we provide a free $10 community-key to try all providers supported on LiteLLM. 
+By default we provide a free $10 community-key to try all providers supported on LiteLLM.
 
 ```python
 from litellm import completion
@@ -29,14 +29,16 @@ Email us @ krrish@berri.ai
 
 Next Steps 👉 [Call all supported models - e.g. Claude-2, Llama2-70b, etc.](./proxy_api.md#supported-models)
 
-More details 👉 
-* [Completion() function details](./completion/)
-* [All supported models / providers on LiteLLM](./providers/)
-* [Build your own OpenAI proxy](https://github.com/BerriAI/liteLLM-proxy/tree/main)
+More details 👉
+
+- [Completion() function details](./completion/)
+- [All supported models / providers on LiteLLM](./providers/)
+- [Build your own OpenAI proxy](https://github.com/BerriAI/liteLLM-proxy/tree/main)
 
 ## streaming
 
-Same example from before. Just pass in `stream=True` in the completion args. 
+Same example from before. Just pass in `stream=True` in the completion args.
+
 ```python
 from litellm import completion
 
@@ -55,46 +57,50 @@ response = completion("command-nightly", messages, stream=True)
 print(response)
 ```
 
-More details 👉 
-* [streaming + async](./completion/stream.md)
-* [tutorial for streaming Llama2 on TogetherAI](./tutorials/TogetherAI_liteLLM.md)
+More details 👉
 
-## exception handling 
+- [streaming + async](./completion/stream.md)
+- [tutorial for streaming Llama2 on TogetherAI](./tutorials/TogetherAI_liteLLM.md)
 
-LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
+## exception handling
 
-```python 
+LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
+
+```python
 from openai.error import OpenAIError
 from litellm import completion
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-try: 
-    # some code 
+try:
+    # some code
     completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
 except OpenAIError as e:
     print(e)
 ```
 
 ## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-LiteLLM exposes pre defined callbacks to send data to Langfuse, LLMonitor, Helicone, Promptlayer, Traceloop, Slack
+
+LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+
 ```python
 from litellm import completion
 
 ## set env variables for logging tools
+os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
-os.environ["LLMONITOR_APP_ID"] = "your-llmonitor-app-id"
 
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["langfuse", "llmonitor"] # log input/output to langfuse, llmonitor, supabase
+litellm.success_callback = ["lunary", "langfuse"] # log input/output to langfuse, lunary, supabase
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
-More details 👉 
-* [exception mapping](./exception_mapping.md)
-* [retries + model fallbacks for completion()](./completion/reliable_completions.md)
-* [tutorial for model fallbacks with completion()](./tutorials/fallbacks.md)
+More details 👉
+
+- [exception mapping](./exception_mapping.md)
+- [retries + model fallbacks for completion()](./completion/reliable_completions.md)
+- [tutorial for model fallbacks with completion()](./tutorials/fallbacks.md)

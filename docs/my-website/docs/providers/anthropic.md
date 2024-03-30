@@ -175,6 +175,15 @@ print(response)
 
 ## Usage - Function Calling 
 
+:::info 
+
+Claude returns it's output as an XML Tree. [Here is how we translate it](https://github.com/BerriAI/litellm/blob/49642a5b00a53b1babc1a753426a8afcac85dbbe/litellm/llms/prompt_templates/factory.py#L734).
+
+You can see the raw response via `response._hidden_params["original_response"]`.
+
+Claude hallucinates, e.g. returning the list param `value` as `<value>\n<item>apple</item>\n<item>banana</item>\n</value>` or `<value>\n<list>\n<item>apple</item>\n<item>banana</item>\n</list>\n</value>`.
+:::
+
 ```python
 from litellm import completion
 
