@@ -5065,7 +5065,14 @@ async def global_spend_per_tea():
             total_spend_per_team[team_alias] = spend
 
     total_spend_per_team_ui = []
+    # order the elements in total_spend_per_team by spend
+    total_spend_per_team = dict(
+        sorted(total_spend_per_team.items(), key=lambda item: item[1], reverse=True)
+    )
     for team_id in total_spend_per_team:
+        # only add first 10 elements to total_spend_per_team_ui
+        if len(total_spend_per_team_ui) >= 10:
+            break
         total_spend_per_team_ui.append(
             {"team_id": team_id, "total_spend": total_spend_per_team[team_id]}
         )
