@@ -864,7 +864,7 @@ class Router:
                 elif k == "metadata":
                     kwargs[k].update(v)
 
-            # for some reason python overrides the model parameter in data (which is correct for litellm) with the model alias in kwargs
+            # The model parameter in data (correct for LittLM.text_completion) is unexpectedly overridden by the model key which is the alias in kwargs for some reason making the call fail as it can't recgonize the model name.
             if "model" in data and "model" in kwargs:
                 kwargs.pop("model")
             # call via litellm.completion()

@@ -8114,8 +8114,8 @@ async def get_routes():
 
     return {"routes": routes}
 
-# new endpoint for the azure lang chain client for text completion
-# probably reduntant can be removed and integradet with the original /completion endpoint after fixing issue number with async completion calls
+# new endpoint for the azure langchain client for text completion
+# # After fixing the issue with async completion calls, this can likely be removed and integrated with the original completion endpoint.
 @router.post(
     "/openai/deployments/{model:path}/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -8136,7 +8136,9 @@ async def completion(
         except:
             data = json.loads(body_str)
 
-        print(data)
+        query_params = dict(request.query_params)
+        if "api_version" in query_params:
+            data["api_version"] = query_params["api_version"]
         data["user"] = data.get("user", user_api_key_dict.user_id)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
