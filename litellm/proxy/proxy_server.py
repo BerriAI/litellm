@@ -472,6 +472,7 @@ async def user_api_key_auth(
                                 user_info=user_info,
                             )
                         )
+
                 # run through common checks
                 _ = common_checks(
                     request_body=request_data,
@@ -949,7 +950,6 @@ async def user_api_key_auth(
                             user_info=user_info,
                         )
                     )
-
             _ = common_checks(
                 request_body=request_data,
                 team_object=_team_obj,
@@ -1623,7 +1623,7 @@ async def update_cache(
 
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        user_ids = [user_id, litellm_proxy_budget_name]
+        user_ids = [user_id]
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
@@ -1664,6 +1664,19 @@ async def update_cache(
                     user_api_key_cache.set_cache(
                         key=_id, value=existing_spend_obj.json()
                     )
+            ## UPDATE GLOBAL PROXY ##
+            global_proxy_spend = await user_api_key_cache.async_get_cache(
+                key="{}:spend".format(litellm_proxy_admin_name)
+            )
+            if global_proxy_spend is None:
+                await user_api_key_cache.async_set_cache(
+                    key="{}:spend".format(litellm_proxy_admin_name), value=response_cost
+                )
+            elif response_cost is not None and global_proxy_spend is not None:
+                increment = global_proxy_spend + response_cost
+                await user_api_key_cache.async_set_cache(
+                    key="{}:spend".format(litellm_proxy_admin_name), value=increment
+                )
         except Exception as e:
             verbose_proxy_logger.debug(
                 f"An error occurred updating user cache: {str(e)}\n\n{traceback.format_exc()}"

@@ -84,7 +84,7 @@ def common_checks(
     if litellm.max_budget > 0 and global_proxy_spend is not None:
         if global_proxy_spend > litellm.max_budget:
             raise Exception(
-                f"'ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
+                f"ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
             )
     return True
 
