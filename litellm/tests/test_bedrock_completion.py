@@ -214,6 +214,7 @@ def test_bedrock_claude_3():
             model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             messages=messages,
             max_tokens=10,
+            temperature=0.78,
         )
         # Add any assertions here to check the response
         assert len(response.choices) > 0

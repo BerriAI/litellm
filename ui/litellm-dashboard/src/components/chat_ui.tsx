@@ -14,10 +14,17 @@ import {
   TabList,
   TabPanel,
   Metric,
-  Select,
+  Col,
+  Text,
   SelectItem,
+  TextInput,
   TabPanels,
+  Button,
 } from "@tremor/react";
+
+
+
+import { message, Select } from "antd";
 import { modelAvailableCall } from "./networking";
 import openai from "openai";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -48,24 +55,29 @@ async function generateModelResponse(
     dangerouslyAllowBrowser: true, // using a temporary litellm proxy key
   });
 
-  const response = await client.chat.completions.create({
-    model: selectedModel,
-    stream: true,
-    messages: [
-      {
-        role: "user",
-        content: inputMessage,
-      },
-    ],
-  });
+  try {
+    const response = await client.chat.completions.create({
+      model: selectedModel,
+      stream: true,
+      messages: [
+        {
+          role: "user",
+          content: inputMessage,
+        },
+      ],
+    });
 
-  for await (const chunk of response) {
-    console.log(chunk);
-    if (chunk.choices[0].delta.content) {
-      updateUI(chunk.choices[0].delta.content);
+    for await (const chunk of response) {
+      console.log(chunk);
+      if (chunk.choices[0].delta.content) {
+        updateUI(chunk.choices[0].delta.content);
+      }
     }
+  } catch (error) {
+    message.error(`Error occurred while generating model response. Please try again. Error: ${error}`);
   }
 }
+
 
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -73,34 +85,54 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userRole,
   userID,
 }) => {
+  const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
-  const [modelInfo, setModelInfo] = useState<any | null>(null); // Declare modelInfo at the component level
+  const [modelInfo, setModelInfo] = useState<any[]>([]);// Declare modelInfo at the component level
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
+
+    
+
     // Fetch model info and set the default selected model
     const fetchModelInfo = async () => {
-      const fetchedAvailableModels = await modelAvailableCall(
-        accessToken,
-        userID,
-        userRole
-      );
-      console.log("model_info:", fetchedAvailableModels);
-
-      if (fetchedAvailableModels?.data.length > 0) {
-        setModelInfo(fetchedAvailableModels.data);
-        setSelectedModel(fetchedAvailableModels.data[0].id);
+      try {
+        const fetchedAvailableModels = await modelAvailableCall(
+          accessToken,
+          userID,
+          userRole
+        );
+  
+        console.log("model_info:", fetchedAvailableModels);
+  
+        if (fetchedAvailableModels?.data.length > 0) {
+          const options = fetchedAvailableModels["data"].map((item: { id: string }) => ({
+            value: item.id,
+            label: item.id
+          }));
+  
+          // Now, 'options' contains the list you wanted
+          console.log(options); // You can log it to verify the list
+          
+          // setModelInfo(options) should be inside the if block to avoid setting it when no data is available
+          setModelInfo(options);
+          setSelectedModel(fetchedAvailableModels.data[0].id);
+        }
+      } catch (error) {
+        console.error("Error fetching model info:", error);
+        // Handle error as needed
       }
     };
-
+  
     fetchModelInfo();
   }, [accessToken, userID, userRole]);
+  
 
   const updateUI = (role: string, chunk: string) => {
     setChatHistory((prevHistory) => {
@@ -120,7 +152,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
-    if (!accessToken || !token || !userRole || !userID) {
+    if (!apiKey || !token || !userRole || !userID) {
       return;
     }
 
@@ -135,7 +167,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           inputMessage,
           (chunk) => updateUI("assistant", chunk),
           selectedModel,
-          accessToken
+          apiKey
         );
       }
     } catch (error) {
@@ -156,32 +188,47 @@ const ChatUI: React.FC<ChatUIProps> = ({
     );
   }
 
+  const onChange = (value: string) => {
+    console.log(`selected ${value}`);
+    setSelectedModel(value);
+  };
+
   return (
     <div style={{ width: "100%", position: "relative" }}>
-      <Grid className="gap-2 p-10 h-[75vh] w-full">
+      <Grid className="gap-2 p-8 h-[80vh] w-full mt-2">
         <Card>
+          
           <TabGroup>
-            <TabList className="mt-4">
+            <TabList>
               <Tab>Chat</Tab>
               <Tab>API Reference</Tab>
             </TabList>
 
             <TabPanels>
               <TabPanel>
-                <div>
-                  <label>Select Model:</label>
-                  <select
-                    value={selectedModel || ""}
-                    onChange={(e) => setSelectedModel(e.target.value)}
-                  >
-                    {/* Populate dropdown options from available models */}
-                    {modelInfo?.map((element: { id: string }) => (
-                      <option key={element.id} value={element.id}>
-                        {element.id}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div className="sm:max-w-2xl">
+          <Grid numItems={2}>
+            <Col>
+            <Text>API Key</Text>
+              <TextInput placeholder="Type API Key here" type="password" onValueChange={setApiKey} value={apiKey}/>
+            </Col>
+            <Col className="mx-2">
+            <Text>Select Model:</Text>
+
+            <Select
+                placeholder="Select a Model"
+                onChange={onChange}
+                options={modelInfo}
+                style={{ width: "200px" }}
+                
+                
+               
+              />
+            </Col>
+          </Grid>
+        
+          
+        </div>
                 <Table
                   className="mt-5"
                   style={{
@@ -193,7 +240,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <TableHead>
                     <TableRow>
                       <TableCell>
-                        <Title>Chat</Title>
+                        {/* <Title>Chat</Title> */}
                       </TableCell>
                     </TableRow>
                   </TableHead>
@@ -210,19 +257,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   style={{ position: "absolute", bottom: 5, width: "95%" }}
                 >
                   <div className="flex">
-                    <input
+                    <TextInput
                       type="text"
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
-                      className="flex-1 p-2 border rounded-md mr-2"
                       placeholder="Type your message..."
                     />
-                    <button
+                    <Button
                       onClick={handleSendMessage}
-                      className="p-2 bg-blue-500 text-white rounded-md"
+                      className="ml-2"
                     >
                       Send
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </TabPanel>

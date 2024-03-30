@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     Member,
 )
 from litellm.caching import DualCache
+from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
@@ -138,7 +139,18 @@ class ProxyLogging:
         except Exception as e:
             raise e
 
-    async def during_call_hook(self, data: dict):
+    async def during_call_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
+    ):
         """
         Runs the CustomLogger's async_moderation_hook()
         """
@@ -146,7 +158,11 @@ class ProxyLogging:
             new_data = copy.deepcopy(data)
             try:
                 if isinstance(callback, CustomLogger):
-                    await callback.async_moderation_hook(data=new_data)
+                    await callback.async_moderation_hook(
+                        data=new_data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=call_type,
+                    )
             except Exception as e:
                 raise e
         return data
@@ -283,6 +299,7 @@ class ProxyLogging:
             return
         else:
             user_info = str(user_info)
+
         # percent of max_budget left to spend
         if user_max_budget > 0:
             percent_left = (user_max_budget - user_current_spend) / user_max_budget
@@ -294,7 +311,7 @@ class ProxyLogging:
 
         # check if crossed budget
         if user_current_spend >= user_max_budget:
-            verbose_proxy_logger.debug(f"Budget Crossed for {user_info}")
+            verbose_proxy_logger.debug("Budget Crossed for %s", user_info)
             message = "Budget Crossed for" + user_info
             await self.alerting_handler(
                 message=message,
@@ -302,22 +319,35 @@ class ProxyLogging:
             )
             return
 
+        ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
+        # - Alert once within 28d period
+        # - Cache this information
+        # - Don't re-alert, if alert already sent
+        _cache: DualCache = self.call_details["user_api_key_cache"]
+
         # check if 5% of max budget is left
         if percent_left <= 0.05:
             message = "5% budget left for" + user_info
-            await self.alerting_handler(
-                message=message,
-                level="Medium",
-            )
+            result = await _cache.async_get_cache(key=message)
+            if result is None:
+                await self.alerting_handler(
+                    message=message,
+                    level="Medium",
+                )
+                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
+
             return
 
         # check if 15% of max budget is left
         if percent_left <= 0.15:
             message = "15% budget left for" + user_info
-            await self.alerting_handler(
-                message=message,
-                level="Low",
-            )
+            result = await _cache.async_get_cache(key=message)
+            if result is None:
+                await self.alerting_handler(
+                    message=message,
+                    level="Low",
+                )
+                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
             return
 
         return
@@ -434,16 +464,15 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
-        new_response = copy.deepcopy(response)
         for callback in litellm.callbacks:
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict, response=new_response
+                        user_api_key_dict=user_api_key_dict, response=response
                     )
             except Exception as e:
                 raise e
-        return new_response
+        return response
 
     async def post_call_streaming_hook(
         self,
@@ -998,6 +1027,8 @@ class PrismaClient:
                     t.max_budget AS team_max_budget, 
                     t.tpm_limit AS team_tpm_limit,
                     t.rpm_limit AS team_rpm_limit,
+                    t.models AS team_models,
+                    t.blocked AS team_blocked,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
                     LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
@@ -1008,6 +1039,10 @@ class PrismaClient:
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
+                        if response["team_models"] is None:
+                            response["team_models"] = []
+                        if response["team_blocked"] is None:
+                            response["team_blocked"] = False
                         response = LiteLLM_VerificationTokenView(**response)
                         # for prisma we need to cast the expires time to str
                         if response.expires is not None and isinstance(
@@ -1049,7 +1084,7 @@ class PrismaClient:
         Add a key to the database. If it already exists, do nothing.
         """
         try:
-            verbose_proxy_logger.debug(f"PrismaClient: insert_data: {data}")
+            verbose_proxy_logger.debug("PrismaClient: insert_data: %s", data)
             if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
@@ -1067,7 +1102,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
-                verbose_proxy_logger.info(f"Data Inserted into Keys Table")
+                verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
@@ -1078,7 +1113,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
-                verbose_proxy_logger.info(f"Data Inserted into User Table")
+                verbose_proxy_logger.info("Data Inserted into User Table")
                 return new_user_row
             elif table_name == "team":
                 db_data = self.jsonify_object(data=data)
@@ -1095,7 +1130,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
-                verbose_proxy_logger.info(f"Data Inserted into Team Table")
+                verbose_proxy_logger.info("Data Inserted into Team Table")
                 return new_team_row
             elif table_name == "config":
                 """
@@ -1120,7 +1155,7 @@ class PrismaClient:
 
                     tasks.append(updated_table_row)
                 await asyncio.gather(*tasks)
-                verbose_proxy_logger.info(f"Data Inserted into Config Table")
+                verbose_proxy_logger.info("Data Inserted into Config Table")
             elif table_name == "spend":
                 db_data = self.jsonify_object(data=data)
                 new_spend_row = await self.db.litellm_spendlogs.upsert(
@@ -1130,7 +1165,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
-                verbose_proxy_logger.info(f"Data Inserted into Spend Table")
+                verbose_proxy_logger.info("Data Inserted into Spend Table")
                 return new_spend_row
             elif table_name == "user_notification":
                 db_data = self.jsonify_object(data=data)
@@ -1143,7 +1178,7 @@ class PrismaClient:
                         },
                     )
                 )
-                verbose_proxy_logger.info(f"Data Inserted into Model Request Table")
+                verbose_proxy_logger.info("Data Inserted into Model Request Table")
                 return new_user_notification_row
 
         except Exception as e:
@@ -1393,7 +1428,7 @@ class PrismaClient:
                 deleted_tokens = await self.db.litellm_verificationtoken.delete_many(
                     where=filter_query  # type: ignore
                 )
-                verbose_proxy_logger.debug(f"deleted_tokens: {deleted_tokens}")
+                verbose_proxy_logger.debug("deleted_tokens: %s", deleted_tokens)
                 return {"deleted_keys": deleted_tokens}
             elif (
                 table_name == "team"
@@ -1756,7 +1791,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "api_base": litellm_params.get("api_base", ""),
     }
 
-    verbose_proxy_logger.debug(f"SpendTable: created payload - payload: {payload}\n\n")
+    verbose_proxy_logger.debug("SpendTable: created payload - payload: %s\n\n", payload)
     json_fields = [
         field
         for field, field_type in LiteLLM_SpendLogs.__annotations__.items()
@@ -1852,7 +1887,7 @@ async def reset_budget(prisma_client: PrismaClient):
 
 
 async def update_spend(
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient, db_writer_client: Optional[HTTPHandler]
 ):
     """
     Batch write updates to db.
@@ -1866,6 +1901,7 @@ async def update_spend(
     spend_logs: list,
     """
     n_retry_times = 3
+    verbose_proxy_logger.debug("INSIDE UPDATE SPEND")
     ### UPDATE USER TABLE ###
     if len(prisma_client.user_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
@@ -1905,9 +1941,9 @@ async def update_spend(
                             end_user_id,
                             response_cost,
                         ) in prisma_client.end_user_list_transactons.items():
-                            max_user_budget = None
-                            if litellm.max_user_budget is not None:
-                                max_user_budget = litellm.max_user_budget
+                            max_end_user_budget = None
+                            if litellm.max_end_user_budget is not None:
+                                max_end_user_budget = litellm.max_end_user_budget
                             new_user_obj = LiteLLM_EndUserTable(
                                 user_id=end_user_id, spend=response_cost, blocked=False
                             )
@@ -1954,6 +1990,11 @@ async def update_spend(
                 raise e
 
     ### UPDATE TEAM TABLE ###
+    verbose_proxy_logger.debug(
+        "Team Spend transactions: {}".format(
+            len(prisma_client.team_list_transactons.keys())
+        )
+    )
     if len(prisma_client.team_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
             try:
@@ -1965,6 +2006,11 @@ async def update_spend(
                             team_id,
                             response_cost,
                         ) in prisma_client.team_list_transactons.items():
+                            verbose_proxy_logger.debug(
+                                "Updating spend for team id={} by {}".format(
+                                    team_id, response_cost
+                                )
+                            )
                             batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                 where={"team_id": team_id},
                                 data={"spend": {"increment": response_cost}},
@@ -1980,13 +2026,31 @@ async def update_spend(
             except Exception as e:
                 raise e
 
+    ### UPDATE SPEND LOGS ###
+    base_url = os.getenv("SPEND_LOGS_URL", None)
+    if (
+        len(prisma_client.spend_log_transactons) > 0
+        and base_url is not None
+        and db_writer_client is not None
+    ):
+        if not base_url.endswith("/"):
+            base_url += "/"
+        verbose_proxy_logger.debug("base_url: {}".format(base_url))
+        response = await db_writer_client.post(
+            url=base_url + "spend/update",
+            data=json.dumps(prisma_client.spend_log_transactons),  # type: ignore
+            headers={"Content-Type": "application/json"},
+        )
+        if response.status_code == 200:
+            prisma_client.spend_log_transactons = []
 
-async def monitor_spend_list(prisma_client: PrismaClient):
-    """
-    Check the length of each spend list, if it exceeds a threshold (e.g. 100 items) - write to db
-    """
-    if len(prisma_client.user_list_transactons) > 10000:
-        await update_spend(prisma_client=prisma_client)
+
+# async def monitor_spend_list(prisma_client: PrismaClient):
+#     """
+#     Check the length of each spend list, if it exceeds a threshold (e.g. 100 items) - write to db
+#     """
+#     if len(prisma_client.user_list_transactons) > 10000:
+#         await update_spend(prisma_client=prisma_client)
 
 
 async def _read_request_body(request):

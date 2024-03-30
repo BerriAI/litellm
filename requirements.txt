@@ -1,11 +1,11 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.2.0 # openai + http req.
 openai>=1.0.0 # openai req. 
-fastapi # server dep
+fastapi>=0.109.1 # server dep
 pydantic>=2.5 # openai req. 
 backoff==2.2.1 # server dep
 pyyaml>=6.0.1 # server dep
-uvicorn==0.22.0 # server dep
+uvicorn==0.29.0 # server dep
 gunicorn==21.2.0 # server dep
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
@@ -23,7 +23,7 @@ orjson==3.9.15 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
 fastapi-sso==0.10.0 # admin UI, SSO
 pyjwt[crypto]==2.8.0
-python-multipart==0.0.6 # admin UI
+python-multipart==0.0.9 # admin UI
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage
@@ -34,4 +34,5 @@ jinja2==3.1.3 # for prompt templates
 certifi>=2023.7.22 # [TODO] clean up 
 aiohttp==3.9.0 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
+tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 ####

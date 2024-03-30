@@ -32,41 +32,6 @@ import logging
 
 
 class Router:
-    """
-    Example usage:
-    ```python
-    from litellm import Router
-    model_list = [
-    {
-        "model_name": "azure-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "azure/<your-deployment-name-1>",
-            "api_key": <your-api-key>,
-            "api_version": <your-api-version>,
-            "api_base": <your-api-base>
-        },
-    },
-    {
-        "model_name": "azure-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "azure/<your-deployment-name-2>",
-            "api_key": <your-api-key>,
-            "api_version": <your-api-version>,
-            "api_base": <your-api-base>
-        },
-    },
-    {
-        "model_name": "openai-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "gpt-3.5-turbo",
-            "api_key": <your-api-key>,
-        },
-    ]
-
-    router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
-    ```
-    """
-
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
@@ -98,6 +63,7 @@ class Router:
         fallbacks: List = [],
         context_window_fallbacks: List = [],
         model_group_alias: Optional[dict] = {},
+        enable_pre_call_checks: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         allowed_fails: Optional[
             int
@@ -131,6 +97,7 @@ class Router:
             debug_level (Literal["DEBUG", "INFO"]): Debug level for logging. Defaults to "INFO".
             fallbacks (List): List of fallback options. Defaults to [].
             context_window_fallbacks (List): List of context window fallback options. Defaults to [].
+            enable_pre_call_checks (boolean): Filter out deployments which are outside context window limits for a given prompt
             model_group_alias (Optional[dict]): Alias for model groups. Defaults to {}.
             retry_after (int): Minimum time to wait before retrying a failed request. Defaults to 0.
             allowed_fails (Optional[int]): Number of allowed fails before adding to cooldown. Defaults to None.
@@ -140,9 +107,43 @@ class Router:
 
         Returns:
             Router: An instance of the litellm.Router class.
+
+        Example Usage:
+        ```python
+        from litellm import Router
+        model_list = [
+        {
+            "model_name": "azure-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "azure/<your-deployment-name-1>",
+                "api_key": <your-api-key>,
+                "api_version": <your-api-version>,
+                "api_base": <your-api-base>
+            },
+        },
+        {
+            "model_name": "azure-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "azure/<your-deployment-name-2>",
+                "api_key": <your-api-key>,
+                "api_version": <your-api-version>,
+                "api_base": <your-api-base>
+            },
+        },
+        {
+            "model_name": "openai-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "gpt-3.5-turbo",
+                "api_key": <your-api-key>,
+            },
+        ]
+
+        router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
+        ```
         """
         self.set_verbose = set_verbose
         self.debug_level = debug_level
+        self.enable_pre_call_checks = enable_pre_call_checks
         if self.set_verbose == True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -227,7 +228,7 @@ class Router:
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
-        self.chat = litellm.Chat(params=default_litellm_params)
+        self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
         # default litellm args
         self.default_litellm_params = default_litellm_params
@@ -283,8 +284,8 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
-        verbose_router_logger.debug(
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n"
+        verbose_router_logger.info(
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}"
         )
 
     def print_deployment(self, deployment: dict):
@@ -1145,11 +1146,13 @@ class Router:
             original_exception = e
             fallback_model_group = None
             try:
+                verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
-                    hasattr(e, "status_code") and e.status_code == 400
+                    hasattr(e, "status_code")
+                    and e.status_code == 400
+                    and not isinstance(e, litellm.ContextWindowExceededError)
                 ):  # don't retry a malformed request
                     raise e
-                verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
                     isinstance(e, litellm.ContextWindowExceededError)
                     and context_window_fallbacks is not None
@@ -1343,6 +1346,13 @@ class Router:
             original_exception = e
             verbose_router_logger.debug(f"An exception occurs {original_exception}")
             try:
+                if (
+                    hasattr(e, "status_code")
+                    and e.status_code == 400
+                    and not isinstance(e, litellm.ContextWindowExceededError)
+                ):  # don't retry a malformed request
+                    raise e
+
                 verbose_router_logger.debug(
                     f"Trying to fallback b/w models. Initial model group: {model_group}"
                 )
@@ -2150,6 +2160,62 @@ class Router:
                     client = self.cache.get_cache(key=cache_key)
                 return client
 
+    def _pre_call_checks(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: List[Dict[str, str]],
+    ):
+        """
+        Filter out model in model group, if:
+
+        - model context window < message length
+        - function call and model doesn't support function calling
+        """
+        verbose_router_logger.debug(
+            f"Starting Pre-call checks for deployments in model={model}"
+        )
+
+        _returned_deployments = copy.deepcopy(healthy_deployments)
+
+        invalid_model_indices = []
+
+        try:
+            input_tokens = litellm.token_counter(messages=messages)
+        except Exception as e:
+            return _returned_deployments
+
+        for idx, deployment in enumerate(_returned_deployments):
+            # see if we have the info for this model
+            try:
+                base_model = deployment.get("model_info", {}).get("base_model", None)
+                if base_model is None:
+                    base_model = deployment.get("litellm_params", {}).get(
+                        "base_model", None
+                    )
+                model = base_model or deployment.get("litellm_params", {}).get(
+                    "model", None
+                )
+                model_info = litellm.get_model_info(model=model)
+            except:
+                continue
+
+            if (
+                isinstance(model_info, dict)
+                and model_info.get("max_input_tokens", None) is not None
+            ):
+                if (
+                    isinstance(model_info["max_input_tokens"], int)
+                    and input_tokens > model_info["max_input_tokens"]
+                ):
+                    invalid_model_indices.append(idx)
+
+        if len(invalid_model_indices) > 0:
+            for idx in reversed(invalid_model_indices):
+                _returned_deployments.pop(idx)
+
+        return _returned_deployments
+
     def get_available_deployment(
         self,
         model: str,
@@ -2208,6 +2274,12 @@ class Router:
         # remove unhealthy deployments from healthy deployments
         for deployment in deployments_to_remove:
             healthy_deployments.remove(deployment)
+
+        # filter pre-call checks
+        if self.enable_pre_call_checks and messages is not None:
+            healthy_deployments = self._pre_call_checks(
+                model=model, healthy_deployments=healthy_deployments, messages=messages
+            )
 
         verbose_router_logger.debug(
             f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}"

@@ -115,24 +115,54 @@ class LiteLLM:
         default_headers: Optional[Mapping[str, str]] = None,
     ):
         self.params = locals()
-        self.chat = Chat(self.params)
+        self.chat = Chat(self.params, router_obj=None)
 
 
 class Chat:
-    def __init__(self, params):
+    def __init__(self, params, router_obj: Optional[Any]):
         self.params = params
-        self.completions = Completions(self.params)
+        if self.params.get("acompletion", False) == True:
+            self.params.pop("acompletion")
+            self.completions: Union[AsyncCompletions, Completions] = AsyncCompletions(
+                self.params, router_obj=router_obj
+            )
+        else:
+            self.completions = Completions(self.params, router_obj=router_obj)
 
 
 class Completions:
-    def __init__(self, params):
+    def __init__(self, params, router_obj: Optional[Any]):
         self.params = params
+        self.router_obj = router_obj
 
     def create(self, messages, model=None, **kwargs):
         for k, v in kwargs.items():
             self.params[k] = v
         model = model or self.params.get("model")
-        response = completion(model=model, messages=messages, **self.params)
+        if self.router_obj is not None:
+            response = self.router_obj.completion(
+                model=model, messages=messages, **self.params
+            )
+        else:
+            response = completion(model=model, messages=messages, **self.params)
+        return response
+
+
+class AsyncCompletions:
+    def __init__(self, params, router_obj: Optional[Any]):
+        self.params = params
+        self.router_obj = router_obj
+
+    async def create(self, messages, model=None, **kwargs):
+        for k, v in kwargs.items():
+            self.params[k] = v
+        model = model or self.params.get("model")
+        if self.router_obj is not None:
+            response = await self.router_obj.acompletion(
+                model=model, messages=messages, **self.params
+            )
+        else:
+            response = await acompletion(model=model, messages=messages, **self.params)
         return response
 
 
@@ -571,6 +601,7 @@ def completion(
         "ttl",
         "cache",
         "no-log",
+        "base_model",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -639,7 +670,7 @@ def completion(
         elif (
             input_cost_per_second is not None
         ):  # time based pricing just needs cost in place
-            output_cost_per_second = output_cost_per_second or 0.0
+            output_cost_per_second = output_cost_per_second
             litellm.register_model(
                 {
                     f"{custom_llm_provider}/{model}": {
@@ -1752,7 +1783,11 @@ def completion(
                 timeout=timeout,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if (
+                "stream" in optional_params
+                and optional_params["stream"] == True
+                and not isinstance(response, CustomStreamWrapper)
+            ):
                 # don't try to access stream object,
                 if "ai21" in model:
                     response = CustomStreamWrapper(
@@ -2754,28 +2789,25 @@ def embedding(
                 model_response=EmbeddingResponse(),
             )
         elif custom_llm_provider == "ollama":
-            ollama_input = None
-            if isinstance(input, list) and len(input) > 1:
-                raise litellm.BadRequestError(
-                    message=f"Ollama Embeddings don't support batch embeddings",
-                    model=model,  # type: ignore
-                    llm_provider="ollama",  # type: ignore
-                )
-            if isinstance(input, list) and len(input) == 1:
-                ollama_input = "".join(input[0])
-            elif isinstance(input, str):
-                ollama_input = input
-            else:
+            api_base = (
+                litellm.api_base
+                or api_base
+                or get_secret("OLLAMA_API_BASE")
+                or "http://localhost:11434"
+            )
+            if isinstance(input, str):
+                input = [input]
+            if not all(isinstance(item, str) for item in input):
                 raise litellm.BadRequestError(
                     message=f"Invalid input for ollama embeddings. input={input}",
                     model=model,  # type: ignore
                     llm_provider="ollama",  # type: ignore
                 )
-
-            if aembedding == True:
+            if aembedding:
                 response = ollama.ollama_aembeddings(
+                    api_base=api_base,
                     model=model,
-                    prompt=ollama_input,
+                    prompts=input,
                     encoding=encoding,
                     logging_obj=logging,
                     optional_params=optional_params,

@@ -60,11 +60,30 @@ export ANTHROPIC_API_KEY="your-api-key"
 
 ### 2. Start the proxy 
 
+<Tabs>
+<TabItem value="cli" label="cli">
+
 ```bash
 $ litellm --model claude-3-opus-20240229
 
 # Server running on http://0.0.0.0:4000
 ```
+</TabItem>
+<TabItem value="config" label="config.yaml">
+
+```yaml
+model_list:
+  - model_name: claude-3 ### RECEIVED MODEL NAME ###
+    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
+      model: claude-3-opus-20240229 ### MODEL NAME sent to `litellm.completion()` ###
+      api_key: "os.environ/ANTHROPIC_API_KEY" # does os.getenv("AZURE_API_KEY_EU")
+```
+
+```bash
+litellm --config /path/to/config.yaml
+```
+</TabItem>
+</Tabs>
 
 ### 3. Test it
 
@@ -76,7 +95,7 @@ $ litellm --model claude-3-opus-20240229
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "claude-3",
       "messages": [
         {
           "role": "user",
@@ -97,7 +116,7 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="claude-3", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -121,7 +140,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo",
+    model = "claude-3",
     temperature=0.1
 )
 
@@ -238,7 +257,7 @@ resp = litellm.completion(
 print(f"\nResponse: {resp}")
 ```
 
-### Usage - "Assistant Pre-fill"
+## Usage - "Assistant Pre-fill"
 
 You can "put words in Claude's mouth" by including an `assistant` role message as the last item in the `messages` array.
 
@@ -271,8 +290,8 @@ Human: How do you say 'Hello' in German? Return your answer as a JSON object, li
 Assistant: {
 ```
 
-### Usage - "System" messages
-If you're using Anthropic's Claude 2.1 with Bedrock, `system` role messages are properly formatted for you.
+## Usage - "System" messages
+If you're using Anthropic's Claude 2.1, `system` role messages are properly formatted for you.
 
 ```python
 import os

@@ -102,11 +102,15 @@ const CreateKeyPage = () => {
           showSSOBanner={showSSOBanner}
         />
         <div className="flex flex-1 overflow-auto">
+          <div className="mt-8">
           <Sidebar
             setPage={setPage}
             userRole={userRole}
             defaultSelectedKey={null}
           />
+
+          </div>
+        
           {page == "api-keys" ? (
             <UserDashboard
               userID={userID}

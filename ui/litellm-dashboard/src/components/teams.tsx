@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
+import { teamDeleteCall } from "./networking";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Button as Button2,
   Modal,
@@ -21,6 +23,7 @@ import {
   Card,
   Icon,
   Button,
+  Badge,
   Col,
   Text,
   Grid,
@@ -55,6 +58,8 @@ const Team: React.FC<TeamProps> = ({
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState([]);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
@@ -75,6 +80,51 @@ const Team: React.FC<TeamProps> = ({
     setIsAddMemberModalVisible(false);
     memberForm.resetFields();
   };
+
+  const handleDelete = async (team_id: string) => {
+    // Set the team to delete and open the confirmation modal
+    setTeamToDelete(team_id);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleModelSelection = (selectedModels: string[]) => {
+    if (selectedModels.includes("all_models")) {
+      // Select all models except "All Models"
+      const allModelsExceptAll = userModels.filter(model => model !== "all");
+      form.setFieldsValue({
+        models: allModelsExceptAll
+      });
+    }
+  };
+  
+
+  const confirmDelete = async () => {
+    if (teamToDelete == null || teams == null || accessToken == null) {
+      return;
+    }
+
+    try {
+      await teamDeleteCall(accessToken, teamToDelete);
+      // Successfully completed the deletion. Update the state to trigger a rerender.
+      const filteredData = teams.filter((item) => item.team_id !== teamToDelete);
+      setTeams(filteredData);
+    } catch (error) {
+      console.error("Error deleting the team:", error);
+      // Handle any error situations, such as displaying an error message to the user.
+    }
+
+    // Close the confirmation modal and reset the teamToDelete
+    setIsDeleteModalOpen(false);
+    setTeamToDelete(null);
+  };
+
+  const cancelDelete = () => {
+    // Close the confirmation modal and reset the teamToDelete
+    setIsDeleteModalOpen(false);
+    setTeamToDelete(null);
+  };
+
+
 
   useEffect(() => {
     const fetchUserModels = async () => {
@@ -102,7 +152,7 @@ const Team: React.FC<TeamProps> = ({
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null) {
-        //message.info("Making API Call");
+        message.info("Creating Team");
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -114,7 +164,7 @@ const Team: React.FC<TeamProps> = ({
         setIsTeamModalVisible(false);
       }
     } catch (error) {
-      console.error("Error creating the key:", error);
+      console.error("Error creating the team:", error);
       message.error("Error creating the team: " + error);
     }
   };
@@ -122,7 +172,7 @@ const Team: React.FC<TeamProps> = ({
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null && teams != null) {
-        message.info("Making API Call");
+        message.info("Adding Member");
         const user_role: Member = {
           role: "user",
           user_email: formValues.user_email,
@@ -152,13 +202,13 @@ const Team: React.FC<TeamProps> = ({
         setIsAddMemberModalVisible(false);
       }
     } catch (error) {
-      console.error("Error creating the key:", error);
+      console.error("Error creating the team:", error);
     }
   };
   console.log(`received teams ${teams}`);
   return (
-    <div className="w-full">
-      <Grid numItems={1} className="gap-2 p-2 h-[75vh] w-full">
+    <div className="w-full mx-4">
+      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
           <Title level={4}>All Teams</Title>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
@@ -168,6 +218,7 @@ const Team: React.FC<TeamProps> = ({
                   <TableHeaderCell>Team Name</TableHeaderCell>
                   <TableHeaderCell>Spend (USD)</TableHeaderCell>
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
+                  <TableHeaderCell>Models</TableHeaderCell>
                   <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
                 </TableRow>
               </TableHead>
@@ -176,27 +227,96 @@ const Team: React.FC<TeamProps> = ({
                 {teams && teams.length > 0
                   ? teams.map((team: any) => (
                       <TableRow key={team.team_id}>
-                        <TableCell>{team["team_alias"]}</TableCell>
-                        <TableCell>{team["spend"]}</TableCell>
-                        <TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>{team["team_alias"]}</TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>{team["spend"]}</TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           {team["max_budget"] ? team["max_budget"] : "No limit"}
                         </TableCell>
-                        <TableCell>
+                          <TableCell style={{ maxWidth: "8-x", whiteSpace: "pre-wrap", overflow: "hidden" }}>
+                            {Array.isArray(team.models) ? (
+                              <div style={{ display: "flex", flexDirection: "column" }}>
+                                {team.models.length === 0 ? (
+                                  <Badge size={"xs"} className="mb-1" color="purple">
+                                    <Text>All Models</Text>
+                                  </Badge>
+                                ) : (
+                                  team.models.map((model: string, index: number) => (
+                                    <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                                      <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                                    </Badge>
+                                  ))
+                                )}
+                              </div>
+                            ) : null}
+                        </TableCell>
+                        <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           <Text>
-                            TPM Limit:{" "}
+                            TPM:{" "}
                             {team.tpm_limit ? team.tpm_limit : "Unlimited"}{" "}
-                            <br></br> RPM Limit:{" "}
+                            <br></br>RPM:{" "}
                             {team.rpm_limit ? team.rpm_limit : "Unlimited"}
                           </Text>
                         </TableCell>
                         <TableCell>
-                          <Icon icon={CogIcon} size="sm" />
+                        <Icon
+                            icon={PencilAltIcon}
+                            size="sm"
+                          />
+                        <Icon
+                            onClick={() => handleDelete(team.team_id)}
+                            icon={TrashIcon}
+                            size="sm"
+                          />
                         </TableCell>
                       </TableRow>
                     ))
                   : null}
               </TableBody>
             </Table>
+            {isDeleteModalOpen && (
+              <div className="fixed z-10 inset-0 overflow-y-auto">
+                <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                  <div
+                    className="fixed inset-0 transition-opacity"
+                    aria-hidden="true"
+                  >
+                    <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+                  </div>
+
+                  {/* Modal Panel */}
+                  <span
+                    className="hidden sm:inline-block sm:align-middle sm:h-screen"
+                    aria-hidden="true"
+                  >
+                    &#8203;
+                  </span>
+
+                  {/* Confirmation Modal Content */}
+                  <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                    <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                      <div className="sm:flex sm:items-start">
+                        <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                          <h3 className="text-lg leading-6 font-medium text-gray-900">
+                            Delete Team
+                          </h3>
+                          <div className="mt-2">
+                            <p className="text-sm text-gray-500">
+                              Are you sure you want to delete this team ?
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                      <Button onClick={confirmDelete} color="red" className="ml-2">
+                        Delete
+                      </Button>
+                      <Button onClick={cancelDelete}>Cancel</Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </Card>
         </Col>
         <Col numColSpan={1}>
@@ -222,7 +342,11 @@ const Team: React.FC<TeamProps> = ({
               labelAlign="left"
             >
               <>
-                <Form.Item label="Team Name" name="team_alias">
+                <Form.Item 
+                  label="Team Name" 
+                  name="team_alias"
+                  rules={[{ required: true, message: 'Please input a team name' }]}
+                >
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
@@ -230,7 +354,11 @@ const Team: React.FC<TeamProps> = ({
                     mode="multiple"
                     placeholder="Select models"
                     style={{ width: "100%" }}
+                    onChange={(selectedModels) => handleModelSelection(selectedModels)}
                   >
+                    <Select2.Option key="all_models" value="all_models">
+                      All Models
+                    </Select2.Option>
                     {userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {model}
@@ -238,6 +366,7 @@ const Team: React.FC<TeamProps> = ({
                     ))}
                   </Select2>
                 </Form.Item>
+
                 <Form.Item label="Max Budget (USD)" name="max_budget">
                   <InputNumber step={0.01} precision={2} width={200} />
                 </Form.Item>
@@ -293,7 +422,7 @@ const Team: React.FC<TeamProps> = ({
                 <TableRow>
                   <TableHeaderCell>Member Name</TableHeaderCell>
                   <TableHeaderCell>Role</TableHeaderCell>
-                  <TableHeaderCell>Action</TableHeaderCell>
+                  {/* <TableHeaderCell>Action</TableHeaderCell> */}
                 </TableRow>
               </TableHead>
 
@@ -310,9 +439,9 @@ const Team: React.FC<TeamProps> = ({
                               : null}
                           </TableCell>
                           <TableCell>{member["role"]}</TableCell>
-                          <TableCell>
+                          {/* <TableCell>
                             <Icon icon={CogIcon} size="sm" />
-                          </TableCell>
+                          </TableCell> */}
                         </TableRow>
                       )
                     )

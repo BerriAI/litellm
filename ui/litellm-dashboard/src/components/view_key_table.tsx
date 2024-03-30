@@ -1,7 +1,8 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall } from "./networking";
-import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { keySpendLogsCall, PredictedSpendLogsCall } from "./networking";
 import {
   Badge,
   Card,
@@ -12,29 +13,98 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
+  Dialog, 
+  DialogPanel,
   Text,
   Title,
   Icon,
+  BarChart,
 } from "@tremor/react";
+
+import { Modal } from "antd";
+
 import ViewKeySpendReport from "./view_key_spend_report";
 
 // Define the props type
 interface ViewKeyTableProps {
   userID: string;
   accessToken: string;
+  selectedTeam: any | null;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+}
+
+interface ItemData {
+  key_alias: string | null;
+  key_name: string;
+  spend: string;
+  max_budget: string | null;
+  models: string[];
+  tpm_limit: string | null;
+  rpm_limit: string | null;
+  token: string;
+  id: number;
+  team_id: string;
+  metadata: any;
+  expires: any;
+  // Add any other properties that exist in the item data
 }
 
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   accessToken,
+  selectedTeam,
   data,
   setData,
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
+  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
+  const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
+  const [spendData, setSpendData] = useState<{ day: string; spend: number }[] | null>(
+    null
+  );
+  const [predictedSpendString, setPredictedSpendString] = useState("");
+
+  
+
+
+
+  // call keySpendLogsCall and set the data
+  const fetchData = async (item: ItemData | null) => {
+    try {
+      if (accessToken == null || item == null) {
+        return;
+      }
+      console.log(`accessToken: ${accessToken}; token: ${item.token}`);
+      const response = await keySpendLogsCall(accessToken, item.token);
+
+      console.log("Response:", response);
+      setSpendData(response);
+
+      // predict spend based on response
+      const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
+      console.log("Response2:", predictedSpend);
+
+      // append predictedSpend to data
+      const combinedData = [...response, ...predictedSpend.response];
+      setSpendData(combinedData);
+      setPredictedSpendString(predictedSpend.predicted_spend)
+
+      console.log("Combined Data:", combinedData);
+      // setPredictedSpend(predictedSpend);
+      
+    } catch (error) {
+      console.error("There was an error fetching the data", error);
+    }
+  };
+
+  useEffect(() => {
+      fetchData(selectedItem);
+  }, [selectedItem]);
+
+  
 
   const handleDelete = async (token: string) => {
     if (data == null) {
@@ -76,22 +146,30 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   if (data == null) {
     return;
   }
+
+  // useEffect(() => {
+  //   if (openDialogId !== null && selectedItem !== null) {
+  //     fetchData(selectedItem);
+  //   }
+  // }, [openDialogId, selectedItem]);
+
   console.log("RERENDER TRIGGERED");
   return (
-    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
+    <div>
+    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
       <Table className="mt-5">
         <TableHead>
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
-            <TableHeaderCell>Key Budget (USD)</TableHeaderCell>
-            <TableHeaderCell>Spend Report</TableHeaderCell>
-            <TableHeaderCell>Team ID</TableHeaderCell>
-            <TableHeaderCell>Metadata</TableHeaderCell>
+            <TableHeaderCell>Budget (USD)</TableHeaderCell>
+            {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
+            {/* <TableHeaderCell>Team</TableHeaderCell> */}
+            {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-            <TableHeaderCell>Expires</TableHeaderCell>
+            {/* <TableHeaderCell>Expires</TableHeaderCell> */}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -100,6 +178,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             // skip item if item.team_id == "litellm-dashboard"
             if (item.team_id === "litellm-dashboard") {
               return null;
+            }
+            if (selectedTeam) {
+              if (item.team_id != selectedTeam.team_id) {
+                return null;
+              }
             }
             return (
               <TableRow key={item.token}>
@@ -110,10 +193,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>Not Set</Text>
                   )}
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                <TableCell>
                   <Text>{item.key_name}</Text>
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                <TableCell>
                   <Text>
                     {(() => {
                       try {
@@ -122,16 +205,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                         return item.spend;
                       }
                     })()}
+
                   </Text>
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                <TableCell>
                   {item.max_budget != null ? (
                     <Text>{item.max_budget}</Text>
                   ) : (
-                    <Text>Unlimited Budget</Text>
+                    <Text>Unlimited</Text>
                   )}
                 </TableCell>
-                <TableCell style={{ maxWidth: '2px' }}>
+                {/* <TableCell style={{ maxWidth: '2px' }}>
                   <ViewKeySpendReport
                     token={item.token}
                     accessToken={accessToken}
@@ -139,32 +223,162 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     keyBudget={item.max_budget}
                     keyName={item.key_name}
                   />
-                </TableCell>
-                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{item.team_id}</Text>
-                </TableCell>
-                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                </TableCell> */}
+                {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
+                  <Text>{item.team_alias && item.team_alias != "None" ? item.team_alias : item.team_id}</Text>
+                </TableCell> */}
+                {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                   <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
                   
+                </TableCell> */}
+
+                <TableCell>
+                  {Array.isArray(item.models) ? (
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                      {item.models.length === 0 ? (
+                        <>
+                          {selectedTeam && selectedTeam.models && selectedTeam.models.length > 0 ? (
+                            selectedTeam.models.map((model: string, index: number) => (
+                              <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                                <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                              </Badge>
+                            ))
+                          ) : (
+                            // If selected team is None or selected team's models are empty, show all models
+                            <Badge size={"xs"} className="mb-1" color="purple">
+                              <Text>All Models</Text>
+                            </Badge>
+                          )}
+                        </>
+                      ) : (
+                        item.models.map((model: string, index: number) => (
+                          <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                            <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
                 </TableCell>
-                <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{JSON.stringify(item.models)}</Text>
-                </TableCell>
-                <TableCell style={{ maxWidth: "2px", overflowWrap: "break-word" }}>
+
+                <TableCell>
                   <Text>
-                    TPM Limit: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
-                    <br></br> RPM Limit:{" "}
+                    TPM: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
+                    <br></br> RPM:{" "}
                     {item.rpm_limit ? item.rpm_limit : "Unlimited"}
                   </Text>
                 </TableCell>
-                <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
-                  {item.expires != null ? (
-                    <Text>{item.expires}</Text>
-                  ) : (
-                    <Text>Never</Text>
-                  )}
-                </TableCell>
-                <TableCell style={{ maxWidth: "2px", wordWrap: "break-word" }}>
+                <TableCell>
+                    <Icon
+                      onClick={() => {
+                        setSelectedItem(item);
+                        setOpenDialogId(item.id);
+                      }}
+                      icon={InformationCircleIcon}
+                      size="sm"
+                    />
+                
+                <Dialog
+  open={openDialogId !== null}
+  onClose={() => {
+    setOpenDialogId(null);
+    setSelectedItem(null);
+  }}
+
+>
+  <DialogPanel>
+    {selectedItem && (
+      <>
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <Card>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Spend
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+              {(() => {
+                      try {
+                        return parseFloat(selectedItem.spend).toFixed(4);
+                      } catch (error) {
+                        return selectedItem.spend;
+                      }
+                    })()}
+
+              </p>
+            </div>
+          </Card>
+          <Card key={item.name}>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Budget
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+              {selectedItem.max_budget != null ? (
+                  <>{selectedItem.max_budget}</>
+                ) : (
+                  <>Unlimited</>
+                )}
+              </p>
+            </div>
+          </Card>
+          <Card key={item.name}>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Expires
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor-default font-small text-tremor-content-strong dark:text-dark-tremor-content-strong">
+              {selectedItem.expires != null ? (
+                  <>
+                  {new Date(selectedItem.expires).toLocaleString(undefined, {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                    hour: 'numeric',
+                    minute: 'numeric',
+                    second: 'numeric'
+                  })}
+                </>
+                ) : (
+                  <>Never</>
+                )}
+              </p>
+            </div>
+          </Card>
+      </div>
+
+        <Card className="mt-6 mb-6">
+          {spendData && (
+            <BarChart
+              className="mt-6"
+              data={spendData}
+              colors={["blue", "amber"]}
+              index="date"
+              categories={["spend", "predicted_spend"]}
+              yAxisWidth={80}
+            />
+          )}
+        </Card>
+
+        <Title>Metadata</Title>
+
+        <Text>{JSON.stringify(selectedItem.metadata)}</Text>
+
+
+        <Button
+          variant="light"
+          className="mx-auto flex items-center"
+          onClick={() => {
+            setOpenDialogId(null);
+            setSelectedItem(null);
+          }}
+        >
+          Close
+        </Button>
+      </>
+    )}
+</DialogPanel>
+</Dialog>
+
                   <Icon
                     onClick={() => handleDelete(item.token)}
                     icon={TrashIcon}
@@ -221,6 +435,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         </div>
       )}
     </Card>
+    </div>
   );
 };
 

@@ -28,8 +28,9 @@ const sidebars = {
         slug: "/simple_proxy",
       },
       items: [
-        "proxy/quick_start", 
-        "proxy/deploy",
+        "proxy/quick_start",
+        "proxy/deploy", 
+        "proxy/prod", 
         "proxy/configs",
         {
           type: "link",
@@ -42,7 +43,6 @@ const sidebars = {
         "proxy/users",
         "proxy/team_based_routing",
         "proxy/ui",
-        "proxy/budget_alerts",
         "proxy/cost_tracking",
         "proxy/token_auth",
         {
@@ -61,6 +61,7 @@ const sidebars = {
           label: "Logging, Alerting",
           items: ["proxy/logging", "proxy/alerting", "proxy/streaming_logging"],
         },
+        "proxy/grafana_metrics",
         "proxy/call_hooks",
         "proxy/rules",
         "proxy/cli", 
@@ -180,8 +181,9 @@ const sidebars = {
       type: "category",
       label: "Tutorials",
       items: [
-        "tutorials/azure_openai",
-        "tutorials/oobabooga",
+        'tutorials/azure_openai',
+        'tutorials/instructor',
+        'tutorials/oobabooga',
         "tutorials/gradio_integration",
         "tutorials/huggingface_codellama",
         "tutorials/huggingface_tutorial",
