@@ -3144,13 +3144,15 @@ def text_completion(
     # these are the params supported by Completion() but not ChatCompletion
 
     # default case, non OpenAI requests go through here
-    messages = [{"role": "system", "content": prompt}]
+    # Need to look at this more as it will need more logic to handle bigger lists as above logic do for 2d lists
+    # removed kwargs as it contains only litellm params and not compatible with the completion client here
+    messages = [{"role": "system", "content": prompt[0]}]
     kwargs.pop("prompt", None)
     response = completion(
         model=model,
         messages=messages,
         *args,
-        **kwargs,
+        # **kwargs,
         **optional_params,
     )
     if kwargs.get("acompletion", False) == True:
