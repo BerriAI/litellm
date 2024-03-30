@@ -37,6 +37,15 @@ interface TeamProps {
   userID: string | null;
   userRole: string | null;
 }
+
+interface EditTeamModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  team: any; // Assuming TeamType is a type representing your team object
+  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
+}
+
+
 import { teamCreateCall, teamMemberAddCall, Member, modelAvailableCall } from "./networking";
 
 const Team: React.FC<TeamProps> = ({
@@ -64,7 +73,7 @@ const Team: React.FC<TeamProps> = ({
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
 
 
-const EditTeamModal = ({ visible, onCancel, team, onSubmit }) => {
+  const EditTeamModal: React.FC<EditTeamModalProps> = ({ visible, onCancel, team, onSubmit }) => {
   const [form] = Form.useForm();
 
   const handleOk = () => {
