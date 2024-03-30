@@ -1992,6 +1992,13 @@ class ProxyConfig:
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                     litellm.cache = Cache(**cache_params)
+
+                    from litellm.caching import RedisCache
+
+                    if litellm.cache is not None and isinstance(
+                        litellm.cache.cache, RedisCache
+                    ):
+                        user_api_key_cache.redis_cache = litellm.cache.cache
                     print(  # noqa
                         f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                     )
