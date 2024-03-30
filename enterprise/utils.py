@@ -251,6 +251,11 @@ def _forecast_daily_cost(data: list):
     import requests
     from datetime import datetime, timedelta
 
+    if len(data) == 0:
+        return {
+            "response": [],
+            "predicted_spend": "Current Spend = $0, Predicted = $0",
+        }
     first_entry = data[0]
     last_entry = data[-1]
 
