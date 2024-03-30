@@ -18,6 +18,7 @@ from litellm.proxy._types import (
 from typing import Optional, Literal, Union
 from litellm.proxy.utils import PrismaClient
 from litellm.caching import DualCache
+import litellm
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
@@ -26,6 +27,7 @@ def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable,
     end_user_object: Optional[LiteLLM_EndUserTable],
+    global_proxy_spend: Optional[float],
     general_settings: dict,
     route: str,
 ) -> bool:
@@ -37,6 +39,7 @@ def common_checks(
     3. If team is in budget
     4. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     5. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
+    6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     """
     _model = request_body.get("model", None)
     if team_object.blocked == True:
@@ -66,7 +69,7 @@ def common_checks(
         end_user_budget = end_user_object.litellm_budget_table.max_budget
         if end_user_budget is not None and end_user_object.spend > end_user_budget:
             raise Exception(
-                f"End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}"
+                f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}"
             )
     # 5. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
@@ -77,7 +80,12 @@ def common_checks(
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
-
+    # 6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
+    if litellm.max_budget > 0 and global_proxy_spend is not None:
+        if global_proxy_spend > litellm.max_budget:
+            raise Exception(
+                f"ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
+            )
     return True
 
 
