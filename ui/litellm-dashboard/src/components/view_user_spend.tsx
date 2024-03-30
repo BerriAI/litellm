@@ -29,16 +29,17 @@ interface UserSpendData {
   }
 interface ViewUserSpendProps {
     userID: string | null;
-    userSpendData: UserSpendData | null; // Use the UserSpendData interface here
     userRole: string | null;
-    accessToken: string;
+    accessToken: string | null;
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, userRole, accessToken }) => {
-    const [spend, setSpend] = useState(userSpendData?.spend);
-    const [maxBudget, setMaxBudget] = useState(userSpendData?.max_budget || null);
-
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken }) => {
+    const [spend, setSpend] = useState(0.0);
+    const [maxBudget, setMaxBudget] = useState(0.0);
     useEffect(() => {
       const fetchData = async () => {
+        if (!accessToken || !userID || !userRole) {
+          return;
+        }
         if (userRole === "Admin") {
           try {
             const globalSpend = await getTotalSpendCall(accessToken);
