@@ -216,6 +216,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     setIsDeleteModalOpen(true);
   };
 
+  const handleModelSelection = (selectedModels: string[]) => {
+    if (selectedModels.includes("all_models")) {
+      // Select all models except "All Models"
+      const allModelsExceptAll = userModels.filter(model => model !== "all");
+      form.setFieldsValue({
+        models: allModelsExceptAll
+      });
+    }
+  };
+  
+
   const confirmDelete = async () => {
     if (teamToDelete == null || teams == null || accessToken == null) {
       return;
@@ -473,7 +484,11 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     mode="multiple"
                     placeholder="Select models"
                     style={{ width: "100%" }}
+                    onChange={(selectedModels) => handleModelSelection(selectedModels)}
                   >
+                    <Select2.Option key="all_models" value="all_models">
+                      All Models
+                    </Select2.Option>
                     {userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {model}
@@ -481,6 +496,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     ))}
                   </Select2>
                 </Form.Item>
+
                 <Form.Item label="Max Budget (USD)" name="max_budget">
                   <InputNumber step={0.01} precision={2} width={200} />
                 </Form.Item>

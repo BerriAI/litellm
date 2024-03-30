@@ -1941,9 +1941,9 @@ async def update_spend(
                             end_user_id,
                             response_cost,
                         ) in prisma_client.end_user_list_transactons.items():
-                            max_user_budget = None
-                            if litellm.max_user_budget is not None:
-                                max_user_budget = litellm.max_user_budget
+                            max_end_user_budget = None
+                            if litellm.max_end_user_budget is not None:
+                                max_end_user_budget = litellm.max_end_user_budget
                             new_user_obj = LiteLLM_EndUserTable(
                                 user_id=end_user_id, spend=response_cost, blocked=False
                             )

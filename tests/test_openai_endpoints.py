@@ -2,7 +2,8 @@
 ## Tests /chat/completions by generating a key and then making a chat completions request
 import pytest
 import asyncio
-import aiohttp
+import aiohttp, openai
+from openai import OpenAI
 
 
 async def generate_key(session):
@@ -114,13 +115,13 @@ async def completion(session, key):
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
-        response_text = await response.text()
-
-        print(response_text)
-        print()
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response = await response.json()
+
+        return response
 
 
 @pytest.mark.asyncio
@@ -137,7 +138,17 @@ async def test_completion():
         await completion(session=session, key=key)
         key_gen = await new_user(session=session)
         key_2 = key_gen["key"]
-        await completion(session=session, key=key_2)
+        # response = await completion(session=session, key=key_2)
+
+    ## validate openai format ##
+    client = OpenAI(api_key=key_2, base_url="http://0.0.0.0:4000")
+
+    client.completions.create(
+        model="gpt-4",
+        prompt="Say this is a test",
+        max_tokens=7,
+        temperature=0,
+    )
 
 
 async def embeddings(session, key):

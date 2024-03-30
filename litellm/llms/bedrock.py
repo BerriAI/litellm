@@ -691,6 +691,7 @@ def completion(
 ):
     exception_mapping_worked = False
     _is_function_call = False
+    json_schemas: dict = {}
     try:
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
@@ -757,6 +758,10 @@ def completion(
                 ## Handle Tool Calling
                 if "tools" in inference_params:
                     _is_function_call = True
+                    for tool in inference_params["tools"]:
+                        json_schemas[tool["function"]["name"]] = tool["function"].get(
+                            "parameters", None
+                        )
                     tool_calling_system_prompt = construct_tool_use_system_prompt(
                         tools=inference_params["tools"]
                     )
@@ -943,7 +948,12 @@ def completion(
                     function_arguments_str = (
                         f"<invoke>{function_arguments_str}</invoke>"
                     )
-                    function_arguments = parse_xml_params(function_arguments_str)
+                    function_arguments = parse_xml_params(
+                        function_arguments_str,
+                        json_schema=json_schemas.get(
+                            function_name, None
+                        ),  # check if we have a json schema for this function name)
+                    )
                     _message = litellm.Message(
                         tool_calls=[
                             {
@@ -958,6 +968,9 @@ def completion(
                         content=None,
                     )
                     model_response.choices[0].message = _message  # type: ignore
+                    model_response._hidden_params["original_response"] = (
+                        outputText  # allow user to access raw anthropic tool calling response
+                    )
                 if _is_function_call == True and stream is not None and stream == True:
                     print_verbose(
                         f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
