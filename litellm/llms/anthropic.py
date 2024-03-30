@@ -243,23 +243,29 @@ def completion(
             text_content = completion_response["content"][0].get("text", None)
             ## TOOL CALLING - OUTPUT PARSE
             if text_content is not None and contains_tag("invoke", text_content):
-                function_name = extract_between_tags("tool_name", text_content)[0]
-                function_arguments_str = extract_between_tags("invoke", text_content)[
-                    0
-                ].strip()
-                function_arguments_str = f"<invoke>{function_arguments_str}</invoke>"
-                function_arguments = parse_xml_params(function_arguments_str)
+                function_names = extract_between_tags("tool_name", text_content)
+                function_arguments_str_list = extract_between_tags(
+                    "invoke", text_content
+                )
+                tool_calls = []
+                for function_name, function_arguments_str in zip(
+                    function_names, function_arguments_str_list
+                ):
+                    function_arguments_str = (
+                        f"<invoke>{function_arguments_str.strip()}</invoke>"
+                    )
+                    function_arguments = parse_xml_params(function_arguments_str)
+                    tool_call = {
+                        "id": f"call_{uuid.uuid4()}",
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": json.dumps(function_arguments),
+                        },
+                    }
+                    tool_calls.append(tool_call)
                 _message = litellm.Message(
-                    tool_calls=[
-                        {
-                            "id": f"call_{uuid.uuid4()}",
-                            "type": "function",
-                            "function": {
-                                "name": function_name,
-                                "arguments": json.dumps(function_arguments),
-                            },
-                        }
-                    ],
+                    tool_calls=tool_calls,
                     content=None,
                 )
                 model_response.choices[0].message = _message  # type: ignore
