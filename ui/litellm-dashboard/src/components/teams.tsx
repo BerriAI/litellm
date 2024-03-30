@@ -166,17 +166,16 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     return;
   }
 
+  let newTeamValues = await teamUpdateCall(accessToken, formValues);
+
   // Update the teams state with the updated team data
   if (teams) {
     const updatedTeams = teams.map((team) =>
-      team.team_id === teamId ? formValues : team
+      team.team_id === teamId ? newTeamValues.data : team
     );
     setTeams(updatedTeams);
   }
-
-  console.log("Editing team:", teamId, "with values:", formValues);
   message.success("Team updated successfully");
-  teamUpdateCall(accessToken, formValues);
 
   setEditModalVisible(false);
   setSelectedTeam(null);
