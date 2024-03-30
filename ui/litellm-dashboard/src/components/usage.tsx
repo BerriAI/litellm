@@ -1,4 +1,4 @@
-import { BarChart, Card, Title } from "@tremor/react";
+import { BarChart, BarList, Card, Title } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
@@ -204,7 +204,17 @@ const UsagePage: React.FC<UsagePageProps> = ({
             console.log("teamSpend", teamSpend);
             setTeamSpendData(teamSpend.daily_spend);
             setUniqueTeamIds(teamSpend.teams)
-            setTotalSpendPerTeam(teamSpend.total_spend_per_team);
+
+            let total_spend_per_team = teamSpend.total_spend_per_team;
+            // in total_spend_per_team, replace null team_id with "" and replace null total_spend with 0
+
+            total_spend_per_team = total_spend_per_team.map((tspt: any) => {
+              tspt["name"] = tspt["team_id"] || "";
+              tspt["value"] = tspt["total_spend"] || 0;
+              return tspt;
+            })
+
+            setTotalSpendPerTeam(total_spend_per_team);
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -328,31 +338,30 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
-            <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
               <Col numColSpan={2}>
+              <Card className="mb-2">
+              <Title>Total Spend Per Team</Title>
+                <BarList
+                  data={totalSpendPerTeam}
+                />
+              </Card>
               <Card>
+
               <Title>Daily Spend Per Team</Title>
                 <BarChart
                   className="h-72"
                   data={teamSpendData}
+                  showLegend={true}
                   index="date"
                   categories={uniqueTeamIds}
-                  yAxisWidth={30}
+                  yAxisWidth={80}
+                  
                   stack={true}
                 />
               </Card>
               </Col>
               <Col numColSpan={2}>
-              <Card>
-              <Title>Total Spend Per Team</Title>
-                <BarChart
-                  className="h-72"
-                  data={totalSpendPerTeam}
-                  index="team_id"
-                  categories={["total_spend"]}
-                  yAxisWidth={30}
-                />
-              </Card>
               </Col>
             </Grid>
             </TabPanel>
