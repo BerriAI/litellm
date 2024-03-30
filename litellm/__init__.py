@@ -174,6 +174,7 @@ upperbound_key_generate_params: Optional[Dict] = None
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
+max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
