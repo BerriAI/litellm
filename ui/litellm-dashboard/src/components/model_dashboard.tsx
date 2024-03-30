@@ -141,7 +141,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-10 h-[75vh] w-full">
+      <Grid className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Card>
           <Table className="mt-5">
             <TableHead>

@@ -165,6 +165,37 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
   }
 };
 
+export const teamDeleteCall = async (accessToken: String, teamID: String) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/delete` : `/team/delete`;
+    console.log("in teamDeleteCall:", teamID);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        team_ids: [teamID],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to delete team: " + errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to delete key:", error);
+    throw error;
+  }
+  
+}
+
 export const userInfoCall = async (
   accessToken: String,
   userID: String | null,
@@ -174,11 +205,11 @@ export const userInfoCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
     if (userRole == "App Owner" && userID) {
-      url = `${url}/?user_id=${userID}`;
+      url = `${url}?user_id=${userID}`;
     }
     console.log("in userInfoCall viewAll=", viewAll);
     if (viewAll) {
-      url = `${url}/?view_all=true`;
+      url = `${url}?view_all=true`;
     }
     //message.info("Requesting user data");
     const response = await fetch(url, {
@@ -231,7 +262,6 @@ export const getTotalSpendCall = async (
     }
 
     const data = await response.json();
-    //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -353,7 +383,7 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
       ? `${proxyBaseUrl}/global/spend/logs`
       : `/global/spend/logs`;
     console.log("in keySpendLogsCall:", url);
-    const response = await fetch(`${url}/?api_key=${token}`, {
+    const response = await fetch(`${url}?api_key=${token}`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -416,9 +446,9 @@ export const userSpendLogsCall = async (
     console.log(`user role in spend logs call: ${userRole}`);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs` : `/spend/logs`;
     if (userRole == "App Owner") {
-      url = `${url}/?user_id=${userID}&start_date=${startTime}&end_date=${endTime}`;
+      url = `${url}?user_id=${userID}&start_date=${startTime}&end_date=${endTime}`;
     } else {
-      url = `${url}/?start_date=${startTime}&end_date=${endTime}`;
+      url = `${url}?start_date=${startTime}&end_date=${endTime}`;
     }
     //message.info("Making spend logs request");
     const response = await fetch(url, {
@@ -620,7 +650,7 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/users` : `/spend/users`;
     console.log("in spendUsersCall:", url);
-    const response = await fetch(`${url}/?user_id=${userID}`, {
+    const response = await fetch(`${url}?user_id=${userID}`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`,

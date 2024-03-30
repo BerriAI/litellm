@@ -324,7 +324,7 @@ def test_call_with_end_user_over_budget(prisma_client):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm, "max_user_budget", 0.00001)
+    setattr(litellm, "max_end_user_budget", 0.00001)
     try:
 
         async def test():
@@ -378,7 +378,9 @@ def test_call_with_end_user_over_budget(prisma_client):
                             "user_api_key_user_id": user,
                         },
                         "proxy_server_request": {
-                            "user": user,
+                            "body": {
+                                "user": user,
+                            }
                         },
                     },
                     "response_cost": 10,
@@ -407,18 +409,20 @@ def test_call_with_proxy_over_budget(prisma_client):
     litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     setattr(
         litellm.proxy.proxy_server,
-        "litellm_proxy_budget_name",
+        "litellm_proxy_admin_name",
         litellm_proxy_budget_name,
     )
+    setattr(litellm, "max_budget", 0.00001)
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    user_api_key_cache.set_cache(
+        key="{}:spend".format(litellm_proxy_budget_name), value=0
+    )
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     try:
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
-            ## CREATE PROXY + USER BUDGET ##
-            request = NewUserRequest(
-                max_budget=0.00001, user_id=litellm_proxy_budget_name
-            )
-            await new_user(request)
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
@@ -470,6 +474,7 @@ def test_call_with_proxy_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
+
             await asyncio.sleep(5)
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
@@ -571,9 +576,17 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
     litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     setattr(
         litellm.proxy.proxy_server,
-        "litellm_proxy_budget_name",
+        "litellm_proxy_admin_name",
         litellm_proxy_budget_name,
     )
+    setattr(litellm, "max_budget", 0.00001)
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    user_api_key_cache.set_cache(
+        key="{}:spend".format(litellm_proxy_budget_name), value=0
+    )
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+
     from litellm._logging import verbose_proxy_logger
     import logging
 
@@ -584,10 +597,10 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
             ## CREATE PROXY + USER BUDGET ##
-            request = NewUserRequest(
-                max_budget=0.00001, user_id=litellm_proxy_budget_name
-            )
-            await new_user(request)
+            # request = NewUserRequest(
+            #     max_budget=0.00001, user_id=litellm_proxy_budget_name
+            # )
+            # await new_user(request)
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
