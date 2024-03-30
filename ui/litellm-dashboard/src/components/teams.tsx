@@ -133,6 +133,11 @@ const EditTeamModal = ({ visible, onCancel, team, onSubmit }) => {
                 >
                   <InputNumber step={1} width={400} />
                 </Form.Item>
+                <Form.Item
+                  label="Requests per minute Limit (RPM)"
+                  name="team_id"
+                  hidden={true}
+                ></Form.Item>
               </>
               <div style={{ textAlign: "right", marginTop: "10px" }}>
                 <Button2 htmlType="submit">Edit Team</Button2>
