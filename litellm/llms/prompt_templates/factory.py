@@ -1198,6 +1198,30 @@ def _gemini_vision_convert_messages(messages: list):
                 # Case 1: Image from URL
                 image = _load_image_from_url(img)
                 processed_images.append(image)
+            elif "base64" in img:
+                # Case 2: Images with base64 encoding
+                import base64, re
+                try:
+                    from google.ai.generativelanguage import Part, Blob
+                except:
+                    raise Exception(
+                        "gemini image conversion failed please run `pip install google-generativeai`"
+                )
+
+                # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
+                image_metadata, img_without_base_64 = img.split(",")
+
+                # read mime_type from img_without_base_64=data:image/jpeg;base64
+                # Extract MIME type using regular expression
+                mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
+
+                if mime_type_match:
+                    mime_type = mime_type_match.group(1)
+                else:
+                    mime_type = "image/jpeg"
+                decoded_img = base64.b64decode(img_without_base_64)
+                processed_image = Part(inline_data=Blob(mime_type=mime_type, data=decoded_img))
+                processed_images.append(processed_image)
             else:
                 try:
                     from PIL import Image
@@ -1205,7 +1229,7 @@ def _gemini_vision_convert_messages(messages: list):
                     raise Exception(
                         "gemini image conversion failed please run `pip install Pillow`"
                     )
-                # Case 2: Image filepath (e.g. temp.jpeg) given
+                # Case 3: Image filepath (e.g. temp.jpeg) given
                 image = Image.open(img)
                 processed_images.append(image)
         content = [prompt] + processed_images
