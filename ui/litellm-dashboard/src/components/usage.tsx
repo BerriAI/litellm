@@ -1,6 +1,8 @@
 import { BarChart, BarList, Card, Title } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
+
+import ViewUserSpend from "./view_user_spend";
 import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import {
   userSpendLogsCall,
@@ -263,6 +265,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
+      <ViewUserSpend
+            userID={userID}
+            userSpendData={[]}
+            userRole={userRole}
+            accessToken={accessToken}
+          />
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
