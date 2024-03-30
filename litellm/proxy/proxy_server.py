@@ -2991,6 +2991,11 @@ def model_list(
     dependencies=[Depends(user_api_key_auth)],
     tags=["completions"],
 )
+@router.post(
+    "/openai/deployments/{model:path}/completions",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["completions"],
+)
 async def completion(
     request: Request,
     fastapi_response: Response,
