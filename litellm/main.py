@@ -2952,7 +2952,26 @@ async def atext_completion(*args, **kwargs):
                 model=model,
             )
         else:
-            return response
+            transformed_logprobs = None
+            # only supported for TGI models
+            try:
+                raw_response = response._hidden_params.get("original_response", None)
+                transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
+            except Exception as e:
+                print_verbose(f"LiteLLM non blocking exception: {e}")
+            text_completion_response = TextCompletionResponse()
+            text_completion_response["id"] = response.get("id", None)
+            text_completion_response["object"] = "text_completion"
+            text_completion_response["created"] = response.get("created", None)
+            text_completion_response["model"] = response.get("model", None)
+            text_choices = TextChoices()
+            text_choices["text"] = response["choices"][0]["message"]["content"]
+            text_choices["index"] = response["choices"][0]["index"]
+            text_choices["logprobs"] = transformed_logprobs
+            text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
+            text_completion_response["choices"] = [text_choices]
+            text_completion_response["usage"] = response.get("usage", None)
+            return text_completion_response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
@@ -3165,6 +3184,7 @@ def text_completion(
         transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
     except Exception as e:
         print_verbose(f"LiteLLM non blocking exception: {e}")
+
     text_completion_response["id"] = response.get("id", None)
     text_completion_response["object"] = "text_completion"
     text_completion_response["created"] = response.get("created", None)
@@ -3176,6 +3196,7 @@ def text_completion(
     text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
     text_completion_response["choices"] = [text_choices]
     text_completion_response["usage"] = response.get("usage", None)
+
     return text_completion_response
 
 
