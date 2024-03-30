@@ -4189,6 +4189,13 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
                 0,
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
+
+        if "duration" in non_default_values:
+            duration = non_default_values.pop("duration")
+            duration_s = _duration_in_seconds(duration=duration)
+            expires = datetime.utcnow() + timedelta(seconds=duration_s)
+            non_default_values["expires"] = expires
+
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
         )

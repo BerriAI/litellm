@@ -65,7 +65,7 @@ async def update_key(session, get_key):
         "Authorization": f"Bearer sk-1234",
         "Content-Type": "application/json",
     }
-    data = {"key": get_key, "models": ["gpt-4"]}
+    data = {"key": get_key, "models": ["gpt-4"], "duration": "120s"}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
