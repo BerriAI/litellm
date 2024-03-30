@@ -116,6 +116,23 @@ def test_caching_with_ttl():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_caching_with_default_ttl():
+    try:
+        litellm.set_verbose = True
+        litellm.cache = Cache(ttl=0)
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        litellm.cache = None  # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        assert response2["id"] != response1["id"]
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_caching_with_cache_controls():
     try:
         litellm.set_verbose = True
@@ -369,6 +386,48 @@ async def test_redis_cache_basic():
     assert stored_val["id"] == response1.id
 
 
+@pytest.mark.asyncio
+async def test_redis_batch_cache_write():
+    """
+    Init redis client
+    - write to client
+    - read from client
+    """
+    litellm.set_verbose = True
+    import uuid
+
+    messages = [
+        {"role": "user", "content": f"write a one sentence poem about: {uuid.uuid4()}"},
+    ]
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+        redis_flush_size=2,
+    )
+    response1 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    response2 = await litellm.acompletion(
+        model="anthropic/claude-3-opus-20240229",
+        messages=messages,
+        mock_response="good morning from this test",
+    )
+
+    # we hit the flush size, this will now send to redis
+    await asyncio.sleep(2)
+
+    response4 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    assert response1.id == response4.id
+
+
 def test_redis_cache_completion():
     litellm.set_verbose = False
 
@@ -488,7 +547,7 @@ def test_redis_cache_completion_stream():
         response_2_id = ""
         for chunk in response2:
             print(chunk)
-            response_2_id += chunk.id
+            response_2_id = chunk.id
         assert (
             response_1_id == response_2_id
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_id} != Response 2{response_2_id}"
@@ -865,6 +924,53 @@ def test_cache_override():
 
 
 # test_cache_override()
+
+
+@pytest.mark.asyncio
+async def test_cache_control_overrides():
+    # we use the cache controls to ensure there is no cache hit on this test
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    print("Testing cache override")
+    litellm.set_verbose = True
+    import uuid
+
+    unique_num = str(uuid.uuid4())
+
+    start_time = time.time()
+
+    response1 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you" + unique_num,
+            }
+        ],
+    )
+
+    print(response1)
+
+    await asyncio.sleep(2)
+
+    response2 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you" + unique_num,
+            }
+        ],
+        cache={"no-cache": True},
+    )
+
+    print(response2)
+
+    assert response1.id != response2.id
 
 
 def test_custom_redis_cache_params():

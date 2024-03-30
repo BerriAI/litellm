@@ -198,6 +198,10 @@ async def image_generation(session, key):
         print()
 
         if status != 200:
+            if (
+                "Connection error" in response_text
+            ):  # OpenAI endpoint returns a connection error
+                return
             raise Exception(f"Request did not return a 200 status code: {status}")
 
 

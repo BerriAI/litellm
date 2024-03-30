@@ -76,6 +76,8 @@ def test_completion_claude():
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
     except Exception as e:
+        if "overloaded_error" in str(e):
+            pass
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -102,7 +104,20 @@ def test_completion_claude_3_empty_response():
 
 def test_completion_claude_3():
     litellm.set_verbose = True
-    messages = [{"role": "user", "content": "Hello, world"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.log` => `console.error`\n",
+        },
+        {
+            "role": "assistant",
+            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
+        },
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
+        },
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -182,6 +197,7 @@ def test_completion_claude_3_function_call():
 
 def test_completion_claude_3_multi_turn_conversations():
     litellm.set_verbose = True
+    litellm.modify_params = True
     messages = [
         {"role": "assistant", "content": "?"},  # test first user message auto injection
         {"role": "user", "content": "Hi!"},
@@ -1091,6 +1107,7 @@ def test_completion_openai_litellm_key():
 # test_ completion_openai_litellm_key()
 
 
+@pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
 def test_completion_ollama_hosted():
     try:
         litellm.request_timeout = 20  # give ollama 20 seconds to response
@@ -1703,16 +1720,19 @@ def test_customprompt_together_ai():
 # test_customprompt_together_ai()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_sagemaker():
     try:
         litellm.set_verbose = True
         print("testing sagemaker")
         response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
+            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
             input_cost_per_second=0.000420,
         )
         # Add any assertions here to check the response
@@ -1729,33 +1749,29 @@ def test_completion_sagemaker():
 # test_completion_sagemaker()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_sagemaker_stream():
+@pytest.mark.asyncio
+async def test_acompletion_sagemaker():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         print("testing sagemaker")
-        response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+        response = await litellm.acompletion(
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
+            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            stream=True,
+            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
+            input_cost_per_second=0.000420,
         )
-
-        complete_streaming_response = ""
-        first_chunk_id, chunk_id = None, None
-        for i, chunk in enumerate(response):
-            print(chunk)
-            chunk_id = chunk.id
-            print(chunk_id)
-            if i == 0:
-                first_chunk_id = chunk_id
-            else:
-                assert chunk_id == first_chunk_id
-            complete_streaming_response += chunk.choices[0].delta.content or ""
         # Add any assertions here to check the response
-        # print(response)
-        assert len(complete_streaming_response) > 0
+        print(response)
+        cost = completion_cost(completion_response=response)
+        print("calculated cost", cost)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

@@ -157,18 +157,10 @@ async def new_team(session, i, user_id=None, member_list=None, model_aliases=Non
         return await response.json()
 
 
-async def update_team(
-    session,
-    i,
-    team_id,
-    user_id=None,
-    member_list=None,
-):
+async def update_team(session, i, team_id, user_id=None, member_list=None, **kwargs):
     url = "http://0.0.0.0:4000/team/update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {
-        "team_id": team_id,
-    }
+    data = {"team_id": team_id, **kwargs}
     if user_id is not None:
         data["members_with_roles"] = [{"role": "user", "user_id": user_id}]
     elif member_list is not None:
@@ -284,8 +276,14 @@ async def test_team_update():
             {"role": "user", "user_id": new_normal_user},
         ]
         team_data = await update_team(
-            session=session, i=0, member_list=member_list, team_id=team_data["team_id"]
+            session=session,
+            i=0,
+            member_list=member_list,
+            team_id=team_data["team_id"],
+            tpm_limit=100,
         )
+
+        assert team_data["data"]["tpm_limit"] == 100
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ import {
   Title,
   Icon,
 } from "@tremor/react";
+import { Statistic } from "antd"
 import { spendUsersCall }  from "./networking";
 
 
@@ -54,18 +55,14 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, us
 
     const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
 
-    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
+    const roundedSpend = spend !== undefined ? spend.toFixed(5) : null;
 
     return (
         <>
-      <Card className="mx-auto mb-4">
-        <Metric>
-          ${roundedSpend}
-        </Metric>
-        <Title>
-            / {displayMaxBudget}
-        </Title>
-      </Card>
+      <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend</p>
+      <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">${roundedSpend}</p>
+        
+       
     </>
     )
 }

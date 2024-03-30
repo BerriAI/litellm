@@ -2,6 +2,7 @@
 
 ## Pre-requisites
 * `pip install -q google-generativeai`
+* Get API Key - https://aistudio.google.com/
 
 # Gemini-Pro
 ## Sample Usage
@@ -97,6 +98,6 @@ print(content)
 | Model Name       | Function Call                        | Required OS Variables    |
 |------------------|--------------------------------------|-------------------------|
 | gemini-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-1.5-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
+| gemini-1.5-pro       | `completion('gemini/gemini-1.5-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
 | gemini-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-1.5-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |
+| gemini-1.5-pro-vision       | `completion('gemini/gemini-1.5-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |

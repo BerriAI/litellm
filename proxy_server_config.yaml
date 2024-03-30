@@ -5,6 +5,10 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+  - model_name: gpt-3.5-turbo-large
+    litellm_params: 
+      model: "gpt-3.5-turbo-1106"
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: gpt-4
     litellm_params:
       model: azure/chatgpt-v-2
@@ -45,9 +49,11 @@ litellm_settings:
   budget_duration: 30d
   num_retries: 5
   request_timeout: 600
+  telemetry: False
+  context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
 
 general_settings: 
-  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
   proxy_budget_rescheduler_min_time: 60
   proxy_budget_rescheduler_max_time: 64
   proxy_batch_write_at: 1

@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Extra, Field, root_validator, Json
+from pydantic import BaseModel, Extra, Field, root_validator, Json, validator
+from dataclasses import fields
 import enum
 from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
@@ -12,11 +13,6 @@ def hash_token(token: str):
     hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
     return hashed_token
-
-
-class LiteLLMProxyRoles(enum.Enum):
-    PROXY_ADMIN = "litellm_proxy_admin"
-    USER = "litellm_user"
 
 
 class LiteLLMBase(BaseModel):
@@ -40,6 +36,135 @@ class LiteLLMBase(BaseModel):
 
     class Config:
         protected_namespaces = ()
+
+
+class LiteLLMRoutes(enum.Enum):
+    openai_routes: List = [  # chat completions
+        "/openai/deployments/{model}/chat/completions",
+        "/chat/completions",
+        "/v1/chat/completions",
+        # completions
+        "/openai/deployments/{model}/completions",
+        "/completions",
+        "/v1/completions",
+        # embeddings
+        "/openai/deployments/{model}/embeddings",
+        "/embeddings",
+        "/v1/embeddings",
+        # image generation
+        "/images/generations",
+        "/v1/images/generations",
+        # audio transcription
+        "/audio/transcriptions",
+        "/v1/audio/transcriptions",
+        # moderations
+        "/moderations",
+        "/v1/moderations",
+        # models
+        "/models",
+        "/v1/models",
+    ]
+
+    info_routes: List = ["/key/info", "/team/info", "/user/info", "/model/info"]
+
+    management_routes: List = [  # key
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/key/info",
+        # user
+        "/user/new",
+        "/user/update",
+        "/user/delete",
+        "/user/info",
+        # team
+        "/team/new",
+        "/team/update",
+        "/team/delete",
+        "/team/info",
+        "/team/block",
+        "/team/unblock",
+        # model
+        "/model/new",
+        "/model/update",
+        "/model/delete",
+        "/model/info",
+    ]
+
+
+class LiteLLM_JWTAuth(LiteLLMBase):
+    """
+    A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
+
+    Attributes:
+    - admin_jwt_scope: The JWT scope required for proxy admin roles.
+    - admin_allowed_routes: list of allowed routes for proxy admin roles.
+    - team_jwt_scope: The JWT scope required for proxy team roles.
+    - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
+    - team_allowed_routes: list of allowed routes for proxy team roles.
+    - end_user_id_jwt_field: Default - `sub`. The field in the JWT token that stores the end-user ID. Turn this off by setting to `None`. Enables end-user cost tracking.
+    - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
+
+    See `auth_checks.py` for the specific routes
+    """
+
+    admin_jwt_scope: str = "litellm_proxy_admin"
+    admin_allowed_routes: List[
+        Literal["openai_routes", "info_routes", "management_routes"]
+    ] = ["management_routes"]
+    team_jwt_scope: str = "litellm_team"
+    team_id_jwt_field: str = "client_id"
+    team_allowed_routes: List[
+        Literal["openai_routes", "info_routes", "management_routes"]
+    ] = ["openai_routes", "info_routes"]
+    end_user_id_jwt_field: Optional[str] = "sub"
+    public_key_ttl: float = 600
+
+    def __init__(self, **kwargs: Any) -> None:
+        # get the attribute names for this Pydantic model
+        allowed_keys = self.__annotations__.keys()
+
+        invalid_keys = set(kwargs.keys()) - allowed_keys
+
+        if invalid_keys:
+            raise ValueError(
+                f"Invalid arguments provided: {', '.join(invalid_keys)}. Allowed arguments are: {', '.join(allowed_keys)}."
+            )
+
+        super().__init__(**kwargs)
+
+
+class LiteLLMPromptInjectionParams(LiteLLMBase):
+    heuristics_check: bool = False
+    vector_db_check: bool = False
+    llm_api_check: bool = False
+    llm_api_name: Optional[str] = None
+    llm_api_system_prompt: Optional[str] = None
+    llm_api_fail_call_string: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_llm_api_params(cls, values):
+        llm_api_check = values.get("llm_api_check")
+        if llm_api_check is True:
+            if "llm_api_name" not in values or not values["llm_api_name"]:
+                raise ValueError(
+                    "If llm_api_check is set to True, llm_api_name must be provided"
+                )
+            if (
+                "llm_api_system_prompt" not in values
+                or not values["llm_api_system_prompt"]
+            ):
+                raise ValueError(
+                    "If llm_api_check is set to True, llm_api_system_prompt must be provided"
+                )
+            if (
+                "llm_api_fail_call_string" not in values
+                or not values["llm_api_fail_call_string"]
+            ):
+                raise ValueError(
+                    "If llm_api_check is set to True, llm_api_fail_call_string must be provided"
+                )
+        return values
 
 
 ######### Request Class Definition ######
@@ -180,7 +305,7 @@ class GenerateKeyResponse(GenerateKeyRequest):
     key: str
     key_name: Optional[str] = None
     expires: Optional[datetime]
-    user_id: str
+    user_id: Optional[str] = None
 
     @root_validator(pre=True)
     def set_model_info(cls, values):
@@ -274,6 +399,7 @@ class TeamBase(LiteLLMBase):
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
     models: list = []
+    blocked: bool = False
 
 
 class NewTeamRequest(TeamBase):
@@ -301,17 +427,16 @@ class TeamMemberDeleteRequest(LiteLLMBase):
         return values
 
 
-class UpdateTeamRequest(LiteLLMBase):
+class UpdateTeamRequest(TeamBase):
     team_id: str  # required
-    team_alias: Optional[str] = None
-    admins: Optional[list] = None
-    members: Optional[list] = None
-    members_with_roles: Optional[List[Member]] = None
-    metadata: Optional[dict] = None
 
 
 class DeleteTeamRequest(LiteLLMBase):
     team_ids: List[str]  # required
+
+
+class BlockTeamRequest(LiteLLMBase):
+    team_id: str  # required
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -498,6 +623,9 @@ class ConfigGeneralSettings(LiteLLMBase):
     ui_access_mode: Optional[Literal["admin_only", "all"]] = Field(
         "all", description="Control access to the Proxy UI"
     )
+    allowed_routes: Optional[List] = Field(
+        None, description="Proxy API Endpoints you want users to be able to access"
+    )
 
 
 class ConfigYAML(LiteLLMBase):
@@ -565,6 +693,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
+    team_models: List = []
+    team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
 

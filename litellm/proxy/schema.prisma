@@ -54,6 +54,7 @@ model LiteLLM_ModelTable {
   team LiteLLM_TeamTable?
 }
 
+
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
 		team_id    String @id @default(uuid())
@@ -71,6 +72,7 @@ model LiteLLM_TeamTable {
     rpm_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
+    blocked Boolean @default(false)
     created_at    DateTime               @default(now()) @map("created_at")
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
