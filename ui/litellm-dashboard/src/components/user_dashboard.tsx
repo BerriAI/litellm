@@ -211,7 +211,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         <Col numColSpan={1}>
           <ViewUserSpend
             userID={userID}
-            userSpendData={userSpendData}
             userRole={userRole}
             accessToken={accessToken}
           />

@@ -190,7 +190,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             const filtered_keys = top_keys.map((k: any) => ({
               key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
                 0,
-                7
+                10
               ),
               spend: k["total_spend"],
             }));
@@ -243,9 +243,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 const filtered_keys = topKeysResponse["info"].map((k: any) => ({
                   key: (
                     k["key_name"] ||
-                    k["key_alias"] ||
-                    k["token"]
-                  ).substring(0, 7),
+                    k["key_alias"]
+                  ).substring(0, 10),
                   spend: k["spend"],
                 }));
                 setTopKeys(filtered_keys);
@@ -267,7 +266,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
     <div style={{ width: "100%" }} className="p-8">
       <ViewUserSpend
             userID={userID}
-            userSpendData={[]}
             userRole={userRole}
             accessToken={accessToken}
           />
