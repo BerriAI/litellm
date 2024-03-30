@@ -864,6 +864,9 @@ class Router:
                 elif k == "metadata":
                     kwargs[k].update(v)
 
+            # for some reason python overrides the model parameter in data (which is correct for litellm) with the model alias in kwargs
+            if "model" in data and "model" in kwargs:
+                kwargs.pop("model")
             # call via litellm.completion()
             return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})  # type: ignore
         except Exception as e:
