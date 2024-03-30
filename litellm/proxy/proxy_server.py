@@ -6051,7 +6051,7 @@ async def team_member_delete(
     
     -D '{
         "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
-        "member": {"role": "user", "user_id": "krrish247652@berri.ai"}
+        "user_id": "krrish247652@berri.ai"
     }'
     ```
     """
