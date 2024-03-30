@@ -692,7 +692,6 @@ async def user_api_key_auth(
                 )
 
             # Check 2. If user_id for this token is in budget
-            ## Check 2.2 [OPTIONAL - checked only if litellm.max_user_budget is not None] If 'user' passed in /chat/completions is in budget
             if valid_token.user_id is not None:
                 user_id_list = [valid_token.user_id]
                 for id in user_id_list:
@@ -909,6 +908,13 @@ async def user_api_key_auth(
                 models=valid_token.team_models,
             )
 
+            _end_user_object = None
+            if "user" in request_data:
+                _id = "end_user_id:{}".format(request_data["user"])
+                _end_user_object = await user_api_key_cache.async_get_cache(key=_id)
+                if _end_user_object is not None:
+                    _end_user_object = LiteLLM_EndUserTable(**_end_user_object)
+
             global_proxy_spend = None
             if litellm.max_budget > 0:  # user set proxy max budget
                 # check cache
@@ -947,7 +953,7 @@ async def user_api_key_auth(
             _ = common_checks(
                 request_body=request_data,
                 team_object=_team_obj,
-                end_user_object=None,
+                end_user_object=_end_user_object,
                 general_settings=general_settings,
                 global_proxy_spend=global_proxy_spend,
                 route=route,
@@ -1617,7 +1623,7 @@ async def update_cache(
 
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        user_ids = [user_id, litellm_proxy_budget_name, end_user_id]
+        user_ids = [user_id, litellm_proxy_budget_name]
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
@@ -1664,8 +1670,7 @@ async def update_cache(
             )
 
     async def _update_end_user_cache():
-        ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        _id = end_user_id
+        _id = "end_user_id:{}".format(end_user_id)
         try:
             # Fetch the existing cost for the given user
             existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
@@ -1673,14 +1678,14 @@ async def update_cache(
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 existing_spend = 0
                 max_user_budget = None
-                if litellm.max_user_budget is not None:
-                    max_user_budget = litellm.max_user_budget
+                if litellm.max_end_user_budget is not None:
+                    max_end_user_budget = litellm.max_end_user_budget
                 existing_spend_obj = LiteLLM_EndUserTable(
                     user_id=_id,
                     spend=0,
                     blocked=False,
                     litellm_budget_table=LiteLLM_BudgetTable(
-                        max_budget=max_user_budget
+                        max_budget=max_end_user_budget
                     ),
                 )
             verbose_proxy_logger.debug(
