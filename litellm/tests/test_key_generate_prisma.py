@@ -324,7 +324,7 @@ def test_call_with_end_user_over_budget(prisma_client):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm, "max_user_budget", 0.00001)
+    setattr(litellm, "max_end_user_budget", 0.00001)
     try:
 
         async def test():
@@ -378,7 +378,9 @@ def test_call_with_end_user_over_budget(prisma_client):
                             "user_api_key_user_id": user,
                         },
                         "proxy_server_request": {
-                            "user": user,
+                            "body": {
+                                "user": user,
+                            }
                         },
                     },
                     "response_cost": 10,
