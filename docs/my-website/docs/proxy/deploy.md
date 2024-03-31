@@ -250,10 +250,13 @@ docker pull docker pull ghcr.io/berriai/litellm-database:main-latest
 ```
 
 ```shell
-docker run --name litellm-proxy \
--e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
--p 4000:4000 \
-ghcr.io/berriai/litellm-database:main-latest
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e AZURE_API_KEY=d6*********** \
+    -e AZURE_API_BASE=https://openai-***********/ \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm-database:main-latest \
+    --config /app/config.yaml --detailed_debug
 ```
 
 Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
