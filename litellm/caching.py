@@ -796,6 +796,8 @@ class DualCache(BaseCache):
         self,
         in_memory_cache: Optional[InMemoryCache] = None,
         redis_cache: Optional[RedisCache] = None,
+        default_in_memory_ttl: Optional[float] = None,
+        default_redis_ttl: Optional[float] = None,
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
@@ -803,11 +805,17 @@ class DualCache(BaseCache):
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
 
+        self.default_in_memory_ttl = default_in_memory_ttl
+        self.default_redis_ttl = default_redis_ttl
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
             print_verbose(f"set cache: key: {key}; value: {value}")
             if self.in_memory_cache is not None:
+                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                    kwargs["ttl"] = self.default_in_memory_ttl
+
                 self.in_memory_cache.set_cache(key, value, **kwargs)
 
             if self.redis_cache is not None and local_only == False:
@@ -823,7 +831,6 @@ class DualCache(BaseCache):
             if self.in_memory_cache is not None:
                 in_memory_result = self.in_memory_cache.get_cache(key, **kwargs)
 
-                print_verbose(f"in_memory_result: {in_memory_result}")
                 if in_memory_result is not None:
                     result = in_memory_result
 
