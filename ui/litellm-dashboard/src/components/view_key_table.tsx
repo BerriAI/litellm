@@ -84,15 +84,20 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       setSpendData(response);
 
       // predict spend based on response
-      const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
-      console.log("Response2:", predictedSpend);
+      try {
+        const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
+        console.log("Response2:", predictedSpend);
 
-      // append predictedSpend to data
-      const combinedData = [...response, ...predictedSpend.response];
-      setSpendData(combinedData);
-      setPredictedSpendString(predictedSpend.predicted_spend)
+        // append predictedSpend to data
+        const combinedData = [...response, ...predictedSpend.response];
+        setSpendData(combinedData);
+        setPredictedSpendString(predictedSpend.predicted_spend)
 
-      console.log("Combined Data:", combinedData);
+        console.log("Combined Data:", combinedData);
+      } catch (error) {
+        console.error("There was an error fetching the predicted data", error);
+      }
+      
       // setPredictedSpend(predictedSpend);
       
     } catch (error) {
