@@ -20,7 +20,7 @@ class OllamaError(Exception):
 
 class OllamaChatConfig:
     """
-    Reference: https://github.com/jmorganca/ollama/blob/main/docs/api.md#parameters
+    Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 
     The class `OllamaConfig` provides the configuration for the Ollama's API interface. Below are the parameters:
 
@@ -69,7 +69,7 @@ class OllamaChatConfig:
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
