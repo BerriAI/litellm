@@ -328,11 +328,9 @@ def completion(
         # vertexai does not use an API key, it looks for credentials.json in the environment
 
         prompt = " ".join(
-            [
-                message["content"]
-                for message in messages
-                if isinstance(message["content"], str)
-            ]
+            str(item)
+            for message in messages
+            for item in (message["content"] if isinstance(message["content"], (str, list)) else [message["content"]])
         )
 
         mode = ""
