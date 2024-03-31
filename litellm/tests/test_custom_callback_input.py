@@ -253,7 +253,12 @@ class CompletionCustomHandler(
             assert isinstance(end_time, datetime)
             ## RESPONSE OBJECT
             assert isinstance(
-                response_obj, (litellm.ModelResponse, litellm.EmbeddingResponse)
+                response_obj,
+                (
+                    litellm.ModelResponse,
+                    litellm.EmbeddingResponse,
+                    litellm.TextCompletionResponse,
+                ),
             )
             ## KWARGS
             assert isinstance(kwargs["model"], str)
