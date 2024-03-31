@@ -310,7 +310,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
   ),
 ```
 
-Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
 </TabItem>
 
 <TabItem value="aider" label="Aider">
@@ -1351,5 +1351,3 @@ LiteLLM proxy adds **0.00325 seconds** latency as compared to using the Raw Open
      ```shell
      litellm --telemetry False
      ```
-
-
