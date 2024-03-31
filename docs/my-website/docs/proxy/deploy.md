@@ -246,7 +246,7 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
 
 ```shell
-docker pull docker pull ghcr.io/berriai/litellm-database:main-latest
+docker pull ghcr.io/berriai/litellm-database:main-latest
 ```
 
 ```shell
