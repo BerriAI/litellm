@@ -48,14 +48,12 @@ class ProxyLogging:
     """
 
     def __init__(
-        self,
-        user_api_key_cache: DualCache,
-        redis_usage_cache: Optional[RedisCache] = None,
+        self, user_api_key_cache: DualCache, redis_usage_cache: Optional[RedisCache]
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
-        self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler()
+        # self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler()
         self.max_tpm_rpm_limiter = _PROXY_MaxTPMRPMLimiter(
             redis_usage_cache=redis_usage_cache
         )
@@ -74,7 +72,7 @@ class ProxyLogging:
 
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
-        litellm.callbacks.append(self.max_parallel_request_limiter)
+        # litellm.callbacks.append(self.max_parallel_request_limiter)
         litellm.callbacks.append(self.max_tpm_rpm_limiter)
         litellm.callbacks.append(self.max_budget_limiter)
         litellm.callbacks.append(self.cache_control_check)
