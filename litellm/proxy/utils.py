@@ -48,7 +48,9 @@ class ProxyLogging:
     """
 
     def __init__(
-        self, user_api_key_cache: DualCache, redis_usage_cache: Optional[RedisCache]
+        self,
+        user_api_key_cache: DualCache,
+        redis_usage_cache: Optional[RedisCache] = None,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
