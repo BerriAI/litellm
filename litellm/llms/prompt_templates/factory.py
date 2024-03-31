@@ -684,9 +684,15 @@ def anthropic_messages_pt(messages: list):
         assistant_content = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
+            # Handle assistant messages as string, none, or list of text-content dictionaries.
+            if isinstance(messages[msg_i].get("content"), list):
+                assistant_text = ''
+                for content in messages[msg_i]["content"]:
+                    if content.get("type") == "text":
+                        assistant_text += content["text"]
+            else:
+                assistant_text = messages[msg_i].get("content") or ""
+            
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
