@@ -61,7 +61,7 @@ from litellm.proxy.utils import DBClient
 from starlette.datastructures import URL
 from litellm.caching import DualCache
 
-proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache(), redis_usage_cache=None)
 
 
 @pytest.fixture
