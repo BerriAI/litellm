@@ -1241,7 +1241,7 @@ class Router:
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
-                and context_window_fallbacks is None
+                and context_window_fallbacks is not None
             ) or (
                 isinstance(original_exception, openai.RateLimitError)
                 and fallbacks is not None
@@ -1442,7 +1442,7 @@ class Router:
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
-                and context_window_fallbacks is None
+                and context_window_fallbacks is not None
             ) or (
                 isinstance(original_exception, openai.RateLimitError)
                 and fallbacks is not None
@@ -2170,7 +2170,7 @@ class Router:
         Filter out model in model group, if:
 
         - model context window < message length
-        - function call and model doesn't support function calling
+        - [TODO] function call and model doesn't support function calling
         """
         verbose_router_logger.debug(
             f"Starting Pre-call checks for deployments in model={model}"
@@ -2210,6 +2210,18 @@ class Router:
                 ):
                     invalid_model_indices.append(idx)
 
+        if len(invalid_model_indices) == len(_returned_deployments):
+            """
+            - no healthy deployments available b/c context window checks
+            """
+            raise litellm.ContextWindowExceededError(
+                message="Context Window exceeded for given call",
+                model=model,
+                llm_provider="",
+                response=httpx.Response(
+                    status_code=400, request=httpx.Request("GET", "https://example.com")
+                ),
+            )
         if len(invalid_model_indices) > 0:
             for idx in reversed(invalid_model_indices):
                 _returned_deployments.pop(idx)
