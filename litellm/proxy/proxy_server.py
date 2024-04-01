@@ -1908,6 +1908,19 @@ class ProxyConfig:
                 team_config[k] = litellm.get_secret(v)
         return team_config
 
+    def _init_cache(
+        self,
+        cache_params: dict,
+    ):
+        global redis_usage_cache
+        from litellm import Cache
+
+        litellm.cache = Cache(**cache_params)
+
+        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
+            ## INIT PROXY REDIS USAGE CLIENT ##
+            redis_usage_cache = litellm.cache.cache
+
     async def load_config(
         self, router: Optional[litellm.Router], config_file_path: str
     ):
@@ -2001,17 +2014,11 @@ class ProxyConfig:
                             cache_params[key] = litellm.get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-
-                    litellm.cache = Cache(**cache_params)
-
-                    if litellm.cache is not None and isinstance(
-                        litellm.cache.cache, RedisCache
-                    ):
-                        ## INIT PROXY REDIS USAGE CLIENT ##
-                        redis_usage_cache = litellm.cache.cache
-                    print(  # noqa
-                        f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
-                    )
+                    self._init_cache(cache_params=cache_params)
+                    if litellm.cache is not None:
+                        print(  # noqa
+                            f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
+                        )
                 elif key == "cache" and value == False:
                     pass
                 elif key == "callbacks":
