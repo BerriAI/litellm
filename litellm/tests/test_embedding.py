@@ -10,9 +10,18 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion, completion_cost
+from litellm import embedding, completion, completion_cost, EmbeddingResponse
 
 litellm.set_verbose = False
+
+
+def format_tests(response: EmbeddingResponse):
+    """
+    Tests to check if the response is in the openai format
+    """
+
+    # 1. if data is a pydantic object
+    assert hasattr(response.data[0], "embedding")  # type: ignore
 
 
 def test_openai_embedding():
@@ -23,6 +32,9 @@ def test_openai_embedding():
             input=["good morning from litellm", "this is another item"],
             metadata={"anything": "good day"},
         )
+
+        format_tests(response=response)
+
         litellm_response = dict(response)
         litellm_response_keys = set(litellm_response.keys())
         litellm_response_keys.discard("_response_ms")
@@ -50,6 +62,7 @@ def test_openai_embedding():
             len(litellm_response["data"]) == 2
         )  # expect two embedding responses from litellm_response since input had two
         print(openai_response_keys)
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -66,6 +79,7 @@ def test_openai_embedding_3():
             metadata={"anything": "good day"},
             dimensions=5,
         )
+        format_tests(response=response)
         print(f"response:", response)
         litellm_response = dict(response)
         litellm_response_keys = set(litellm_response.keys())
@@ -107,6 +121,7 @@ def test_openai_azure_embedding_simple():
             input=["good morning from litellm"],
         )
         print(response)
+        format_tests(response=response)
         response_keys = set(dict(response).keys())
         response_keys.discard("_response_ms")
         assert set(["usage", "model", "object", "data"]) == set(
@@ -133,6 +148,7 @@ def test_openai_azure_embedding_timeouts():
             input=["good morning from litellm"],
             timeout=0.00001,
         )
+        format_tests(response=response)
         print(response)
     except openai.APITimeoutError:
         print("Good job got timeout error!")
@@ -153,6 +169,7 @@ def test_openai_embedding_timeouts():
             input=["good morning from litellm"],
             timeout=0.00001,
         )
+        format_tests(response=response)
         print(response)
     except openai.APITimeoutError:
         print("Good job got OpenAI timeout error!")
@@ -184,6 +201,8 @@ def test_openai_azure_embedding():
             api_version=api_version,
         )
         print(response)
+
+        format_tests(response=response)
 
         os.environ["AZURE_API_VERSION"] = api_version
         os.environ["AZURE_API_BASE"] = api_base
@@ -234,6 +253,8 @@ def test_cohere_embedding():
         )
         print(f"response:", response)
 
+        format_tests(response=response)
+
         assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -251,6 +272,7 @@ def test_cohere_embedding3():
         )
         print(f"response:", response)
 
+        format_tests(response=response)
         custom_llm_provider = response._hidden_params["custom_llm_provider"]
 
         assert custom_llm_provider == "cohere"
@@ -275,7 +297,10 @@ def test_bedrock_embedding_titan():
             model="bedrock/amazon.titan-embed-text-v1",
             input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
         )
-        print(f"response:", response)
+
+        format_tests(response=response)
+
+        # print(f"response:", response)
         assert isinstance(
             response["data"][0]["embedding"], list
         ), "Expected response to be a list"
@@ -294,6 +319,8 @@ def test_bedrock_embedding_titan():
             input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
         )
         print(response)
+
+        format_tests(response=response)
 
         end_time = time.time()
         print(f"Embedding 2 response time: {end_time - start_time} seconds")
@@ -320,6 +347,9 @@ def test_bedrock_embedding_cohere():
             ],
             aws_region_name="os.environ/AWS_REGION_NAME_2",
         )
+
+        format_tests(response=response)
+
         assert isinstance(
             response["data"][0]["embedding"], list
         ), "Expected response to be a list"
@@ -365,12 +395,18 @@ def test_hf_embedding():
             model="huggingface/sentence-transformers/all-MiniLM-L6-v2",
             input=["good morning from litellm", "this is another item"],
         )
+
+        format_tests(response=response)
+
         print(f"response:", response)
 
         assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
         # Note: Huggingface inference API is unstable and fails with "model loading errors all the time"
-        pass
+        if isinstance(e, litellm.APIError) or isinstance(e, litellm.APIConnectionError):
+            pass
+        else:
+            pytest.fail(f"Failed - {str(e)}")
 
 
 # test_hf_embedding()
@@ -388,6 +424,7 @@ def test_aembedding():
                     input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
+                format_tests(response=response)
                 return response
             except Exception as e:
                 pytest.fail(f"Error occurred: {e}")
@@ -417,6 +454,8 @@ def test_aembedding_azure():
                     input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
+
+                format_tests(response=response)
 
                 print(
                     "hidden params - custom_llm_provider",
@@ -478,6 +517,7 @@ def test_mistral_embeddings():
             model="mistral/mistral-embed",
             input=["good morning from litellm"],
         )
+        format_tests(response=response)
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
@@ -494,6 +534,7 @@ def test_voyage_embeddings():
             model="voyage/voyage-01",
             input=["good morning from litellm"],
         )
+        format_tests(response=response)
         print(f"response: {response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

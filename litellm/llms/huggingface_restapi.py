@@ -7,7 +7,14 @@ from .base import BaseLLM
 import time
 import litellm
 from typing import Callable, Dict, List, Any
-from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, Usage
+from litellm.utils import (
+    ModelResponse,
+    Choices,
+    Message,
+    CustomStreamWrapper,
+    Usage,
+    Embedding,
+)
 from typing import Optional
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
@@ -753,39 +760,23 @@ class Huggingface(BaseLLM):
         if "similarities" in embeddings:
             for idx, embedding in embeddings["similarities"]:
                 output_data.append(
-                    {
-                        "object": "embedding",
-                        "index": idx,
-                        "embedding": embedding,  # flatten list returned from hf
-                    }
+                    Embedding(embedding=embedding, index=idx, object="embedding")
                 )
         else:
             for idx, embedding in enumerate(embeddings):
                 if isinstance(embedding, float):
                     output_data.append(
-                        {
-                            "object": "embedding",
-                            "index": idx,
-                            "embedding": embedding,  # flatten list returned from hf
-                        }
+                        Embedding(embedding=[embedding], index=idx, object="embedding")
                     )
                 elif isinstance(embedding, list) and isinstance(embedding[0], float):
                     output_data.append(
-                        {
-                            "object": "embedding",
-                            "index": idx,
-                            "embedding": embedding,  # flatten list returned from hf
-                        }
+                        Embedding(embedding=embedding, index=idx, object="embedding")
                     )
                 else:
                     output_data.append(
-                        {
-                            "object": "embedding",
-                            "index": idx,
-                            "embedding": embedding[0][
-                                0
-                            ],  # flatten list returned from hf
-                        }
+                        Embedding(
+                            embedding=embedding[0][0], index=idx, object="embeddding"
+                        )
                     )
         model_response["object"] = "list"
         model_response["data"] = output_data

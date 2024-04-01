@@ -534,7 +534,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=stringified_response,
             )
             return convert_to_model_response_object(
-                response_object=stringified_response,
+                response_object=response,  # type: ignore
                 model_response_object=model_response,
                 response_type="embedding",
             )
@@ -627,7 +627,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding")  # type: ignore
+            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="embedding")  # type: ignore
         except AzureOpenAIError as e:
             exception_mapping_worked = True
             raise e

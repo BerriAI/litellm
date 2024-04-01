@@ -4,7 +4,7 @@ from enum import Enum
 import time, uuid
 from typing import Callable, Optional, Any, Union, List
 import litellm
-from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse
+from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse, Embedding
 from .prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -1253,11 +1253,7 @@ def embedding(
     embedding_response = []
     for idx, embedding in enumerate(embeddings):
         embedding_response.append(
-            {
-                "object": "embedding",
-                "index": idx,
-                "embedding": embedding,
-            }
+            Embedding(embedding=embedding, index=idx, object="embedding")
         )
     model_response["object"] = "list"
     model_response["data"] = embedding_response

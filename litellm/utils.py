@@ -24,6 +24,7 @@ import logging
 import asyncio, httpx, inspect
 from inspect import iscoroutine
 import copy
+from pydantic import BaseModel
 from tokenizers import Tokenizer
 from dataclasses import (
     dataclass,
@@ -577,7 +578,7 @@ class ModelResponse(OpenAIObject):
 class Embedding(OpenAIObject):
     embedding: list = []
     index: int
-    object: str
+    object: str = "embedding"
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -596,7 +597,7 @@ class EmbeddingResponse(OpenAIObject):
     model: Optional[str] = None
     """The model used for embedding."""
 
-    data: Optional[List] = None
+    data: Optional[List[Embedding]] = None
     """The actual embedding value"""
 
     object: str
@@ -6676,14 +6677,44 @@ def convert_to_model_response_object(
             if model_response_object is None:
                 model_response_object = EmbeddingResponse()
 
-            if "model" in response_object:
+            if hasattr(response_object, "model"):
+                model_response_object.model = response_object.model
+            elif "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            if "object" in response_object:
+            if hasattr(response_object, "object"):
+                model_response_object.object = response_object.object
+            elif "object" in response_object:
                 model_response_object.object = response_object["object"]
 
-            model_response_object.data = response_object["data"]
+            if hasattr(response_object, "data"):
+                model_response_object.data = response_object.data
+            elif "data" in response_object:
+                if (
+                    isinstance(response_object["data"], list)
+                    and len(response_object["data"]) > 0
+                    and isinstance(response_object["data"][0], dict)
+                ):
+                    emb_list = []
+                    for item in response_object["data"]:
+                        _value = Embedding(**item)
+                        emb_list.append(_value)
+                    model_response_object.data = emb_list
+                else:
+                    model_response_object.data = response_object["data"]
 
+            if hasattr(response_object, "usage") and hasattr(
+                model_response_object, "usage"
+            ):
+                model_response_object.usage.completion_tokens = getattr(  # type: ignore
+                    response_object.usage, "completion_tokens", 0
+                )
+                model_response_object.usage.prompt_tokens = getattr(  # type: ignore
+                    response_object.usage, "prompt_tokens", 0
+                )
+                model_response_object.usage.total_tokens = getattr(  # type: ignore
+                    response_object.usage, "total_tokens", 0
+                )
             if "usage" in response_object and response_object["usage"] is not None:
                 model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
                 model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore

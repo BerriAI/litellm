@@ -4,7 +4,7 @@ from enum import Enum
 import requests
 import time, traceback
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message, Usage
+from litellm.utils import ModelResponse, Choices, Message, Usage, Embedding
 import litellm
 import httpx
 
@@ -291,7 +291,7 @@ def embedding(
     output_data = []
     for idx, embedding in enumerate(embeddings):
         output_data.append(
-            {"object": "embedding", "index": idx, "embedding": embedding}
+            Embedding(embedding=embedding, object="embedding", index=idx)
         )
     model_response["object"] = "list"
     model_response["data"] = output_data
