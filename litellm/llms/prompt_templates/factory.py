@@ -62,7 +62,7 @@ def llama_2_chat_pt(messages):
 
 def ollama_pt(
     model, messages
-):  # https://github.com/jmorganca/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
+):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
     if "instruct" in model:
         prompt = custom_prompt(
             role_dict={
