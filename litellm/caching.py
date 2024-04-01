@@ -338,6 +338,14 @@ class RedisCache(BaseCache):
                 traceback.print_exc()
                 raise e
 
+    def client_list(self):
+        client_list = self.redis_client.client_list()
+        return client_list
+
+    def info(self):
+        info = self.redis_client.info()
+        return info
+
     def flush_cache(self):
         self.redis_client.flushall()
 
