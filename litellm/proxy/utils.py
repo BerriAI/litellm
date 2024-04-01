@@ -63,7 +63,7 @@ class ProxyLogging:
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
-        self.redis_usage_cache = redis_usage_cache
+        self.internal_usage_cache = DualCache(redis_cache=redis_usage_cache)
 
     def update_values(
         self, alerting: Optional[List], alerting_threshold: Optional[float]
@@ -332,7 +332,7 @@ class ProxyLogging:
         # - Alert once within 28d period
         # - Cache this information
         # - Don't re-alert, if alert already sent
-        _cache: DualCache = self.call_details["user_api_key_cache"]
+        _cache: DualCache = self.internal_usage_cache
 
         # check if 5% of max budget is left
         if percent_left <= 0.05:
