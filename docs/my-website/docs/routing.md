@@ -567,9 +567,13 @@ from litellm import Router
 router = Router(model_list=model_list, enable_pre_call_checks=True) # 👈 Set to True
 ```
 
-**2. (Azure-only) Set base model**
+
+**2. Set Model List**
 
 For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with `azure/`. 
+
+<Tabs>
+<TabItem value="same-group" label="Same Group">
 
 ```python
 model_list = [
@@ -582,7 +586,7 @@ model_list = [
                     "api_base": os.getenv("AZURE_API_BASE"),
                 },
 				"model_info": {
-					"base_model": "azure/gpt-35-turbo", # 👈 SET BASE MODEL
+					"base_model": "azure/gpt-35-turbo", # 👈 (Azure-only) SET BASE MODEL
 				}
             },
             {
@@ -593,7 +597,50 @@ model_list = [
                 },
             },
         ]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True) 
 ```
+
+</TabItem>
+
+<TabItem value="different-group" label="Context Window Fallbacks (Different Groups)">
+
+```python
+model_list = [
+            {
+                "model_name": "gpt-3.5-turbo-small", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+				"model_info": {
+					"base_model": "azure/gpt-35-turbo", # 👈 (Azure-only) SET BASE MODEL
+				}
+            },
+            {
+                "model_name": "gpt-3.5-turbo-large", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo-1106",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-opus", 
+                "litellm_params": {  call
+                    "model": "claude-3-opus-20240229",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            },
+        ]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True, context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}]) 
+```
+
+</TabItem>
+
+</Tabs>
 
 **3. Test it!**
 
@@ -646,60 +693,9 @@ print(f"response: {response}")
 </TabItem>
 <TabItem value="proxy" label="Proxy">
 
-**1. Setup config**
-
-For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with azure/.
-
-```yaml
-router_settings:
-	enable_pre_call_checks: true # 1. Enable pre-call checks
-
-model_list:
-	- model_name: gpt-3.5-turbo
-	  litellm_params:
-		model: azure/chatgpt-v-2
-		api_base: os.environ/AZURE_API_BASE
-		api_key: os.environ/AZURE_API_KEY
-		api_version: "2023-07-01-preview"
-	  model_info:
-		base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
-	
-	- model_name: gpt-3.5-turbo
-	  litellm_params:
-		model: gpt-3.5-turbo-1106
-		api_key: os.environ/OPENAI_API_KEY
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING on http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-text = "What is the meaning of 42?" * 5000
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {"role": "system", "content": text},
-		{"role": "user", "content": "Who was Alexander?"},
-    ],
-)
-
-print(response)
-```
+:::info
+Go [here](./proxy/reliability.md#advanced---context-window-fallbacks) for how to do this on the proxy
+:::
 </TabItem>
 </Tabs>
 

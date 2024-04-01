@@ -2170,7 +2170,7 @@ class Router:
         Filter out model in model group, if:
 
         - model context window < message length
-        - function call and model doesn't support function calling
+        - [TODO] function call and model doesn't support function calling
         """
         verbose_router_logger.debug(
             f"Starting Pre-call checks for deployments in model={model}"
