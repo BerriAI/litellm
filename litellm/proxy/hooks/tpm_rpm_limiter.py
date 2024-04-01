@@ -102,6 +102,7 @@ class _PROXY_MaxTPMRPMLimiter(CustomLogger):
         request_count_api_key: str,
         type: Literal["key", "user", "team"],
     ):
+
         if type == "key" and user_api_key_dict.api_key is not None:
             current = current_minute_dict["key"].get(user_api_key_dict.api_key, None)
         elif type == "user" and user_api_key_dict.user_id is not None:
@@ -110,7 +111,6 @@ class _PROXY_MaxTPMRPMLimiter(CustomLogger):
             current = current_minute_dict["team"].get(user_api_key_dict.team_id, None)
         else:
             return
-
         if current is None:
             if tpm_limit == 0 or rpm_limit == 0:
                 # base case
@@ -138,9 +138,13 @@ class _PROXY_MaxTPMRPMLimiter(CustomLogger):
         ## get team tpm/rpm limits
         team_id = user_api_key_dict.team_id
 
+        self.user_api_key_cache = cache
+
         _set_limits = self._check_limits_set(
             user_api_key_cache=cache, key=api_key, user_id=user_id, team_id=team_id
         )
+
+        self.print_verbose(f"_set_limits: {_set_limits}")
 
         if _set_limits == False:
             return
@@ -148,8 +152,6 @@ class _PROXY_MaxTPMRPMLimiter(CustomLogger):
         # ------------
         # Setup values
         # ------------
-
-        self.user_api_key_cache = cache
 
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_hour = datetime.now().strftime("%H")
@@ -247,7 +249,6 @@ class _PROXY_MaxTPMRPMLimiter(CustomLogger):
             user_api_key_team_id = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_team_id", None
             )
-
             _limits_set = self._check_limits_set(
                 user_api_key_cache=self.user_api_key_cache,
                 key=user_api_key,
@@ -377,4 +378,4 @@ class _PROXY_MaxTPMRPMLimiter(CustomLogger):
                 )
 
         except Exception as e:
-            self.print_verbose(e)  # noqa
+            self.print_verbose("{}\n{}".format(e, traceback.format_exc()))  # noqa
