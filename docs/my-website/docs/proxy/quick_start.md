@@ -438,7 +438,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
   ),
 ```
 
-Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
 </TabItem>
 
 <TabItem value="aider" label="Aider">
@@ -551,4 +551,3 @@ No Logs
 ```shell
 export LITELLM_LOG=None
 ```
-
