@@ -1700,6 +1700,7 @@ async def update_cache(
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 existing_spend = 0
                 max_user_budget = None
+                max_end_user_budget = None
                 if litellm.max_end_user_budget is not None:
                     max_end_user_budget = litellm.max_end_user_budget
                 existing_spend_obj = LiteLLM_EndUserTable(
