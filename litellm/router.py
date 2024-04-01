@@ -1241,7 +1241,7 @@ class Router:
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
-                and context_window_fallbacks is None
+                and context_window_fallbacks is not None
             ) or (
                 isinstance(original_exception, openai.RateLimitError)
                 and fallbacks is not None
@@ -1442,7 +1442,7 @@ class Router:
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
-                and context_window_fallbacks is None
+                and context_window_fallbacks is not None
             ) or (
                 isinstance(original_exception, openai.RateLimitError)
                 and fallbacks is not None
