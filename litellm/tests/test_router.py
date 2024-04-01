@@ -397,7 +397,7 @@ async def test_async_router_context_window_fallback():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_context_window_check():
+def test_router_context_window_check_pre_call_check_in_group():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
@@ -434,6 +434,54 @@ def test_router_context_window_check():
 
         response = router.completion(
             model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": text},
+                {"role": "user", "content": "Who was Alexander?"},
+            ],
+        )
+
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+
+def test_router_context_window_check_pre_call_check_out_group():
+    """
+    - Give 2 gpt-3.5-turbo model groups with different context windows (4k vs. 16k)
+    - Send a 5k prompt
+    - Assert it works
+    """
+    from large_text import text
+    import os
+
+    litellm.set_verbose = False
+
+    print(f"len(text): {len(text)}")
+    try:
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo-small",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "base_model": "azure/gpt-35-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo-large",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo-1106",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ]
+
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0, context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large"]}])  # type: ignore
+
+        response = router.completion(
+            model="gpt-3.5-turbo-small",
             messages=[
                 {"role": "system", "content": text},
                 {"role": "user", "content": "Who was Alexander?"},
