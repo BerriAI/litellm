@@ -5700,7 +5700,7 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     elif llm_provider == "baseten":
         api_key = api_key or litellm.baseten_key or get_secret("BASETEN_API_KEY")
     # cohere
-    elif llm_provider == "cohere":
+    elif llm_provider == "cohere" or llm_provider == "cohere_chat":
         api_key = api_key or litellm.cohere_key or get_secret("COHERE_API_KEY")
     # huggingface
     elif llm_provider == "huggingface":
