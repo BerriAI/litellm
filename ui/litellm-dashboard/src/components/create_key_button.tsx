@@ -142,9 +142,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   placeholder="Select models"
                   style={{ width: "100%" }}
                 >
-                  <Option key="all-models" value="all-models">
-                    All Models
-                  </Option>
                   {team && team.models ? (
                     team.models.map((model: string) => (
                       <Option key={model} value={model}>
