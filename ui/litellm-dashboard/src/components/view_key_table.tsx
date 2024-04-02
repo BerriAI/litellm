@@ -418,7 +418,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                           ) : (
                             // If selected team is None or selected team's models are empty, show all models
                             <Badge size={"xs"} className="mb-1" color="blue">
-                              <Text>all-models</Text>
+                              <Text>all-models-on-proxy</Text>
                             </Badge>
                           )}
                         </>
