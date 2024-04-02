@@ -58,6 +58,7 @@ const Team: React.FC<TeamProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
+  const [editForm] = Form.useForm();
   const { Title, Paragraph } = Typography;
   const [value, setValue] = useState("");
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -74,15 +75,26 @@ const Team: React.FC<TeamProps> = ({
 
 
   const EditTeamModal: React.FC<EditTeamModalProps> = ({ visible, onCancel, team, onSubmit }) => {
-  const [form] = Form.useForm();
+
+  const handleModelSelectionOnEdit = (selectedModels: string[]) => {
+    console.log("handleModelSelectionOnEdit:", selectedModels);
+    if (selectedModels.includes("all_models")) {
+      // Select all models except "All Models"
+      const allModelsExceptAll = userModels.filter(model => model !== "all");
+      console.log("allModelsExceptAll:", allModelsExceptAll);
+      editForm.setFieldsValue({
+        models: allModelsExceptAll
+      });
+    }
+  };
 
   const handleOk = () => {
-    form
+    editForm
       .validateFields()
       .then((values) => {
         const updatedValues = {...values, team_id: team.team_id};
         onSubmit(updatedValues);
-        form.resetFields();
+        editForm.resetFields();
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -99,7 +111,7 @@ const Team: React.FC<TeamProps> = ({
             onCancel={onCancel}
           >
       <Form
-        form={form}
+        form={editForm}
         onFinish={handleEditSubmit}
         initialValues={team} // Pass initial values here
         labelCol={{ span: 8 }}
@@ -115,18 +127,25 @@ const Team: React.FC<TeamProps> = ({
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
-                  <Select2
-                    mode="multiple"
-                    placeholder="Select models"
-                    style={{ width: "100%" }}
-                  >
-                    {userModels && userModels.map((model) => (
+                <Select2
+                  mode="multiple"
+                  placeholder="Select models"
+                  style={{ width: "100%" }}
+                  onChange={(selectedModels) => handleModelSelectionOnEdit(selectedModels)}
+                >
+                  <Select2.Option key="all_models" value="all_models">
+                    All Models
+                  </Select2.Option>
+                  {userModels && userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {model}
                       </Select2.Option>
                     ))}
-                  </Select2>
-                </Form.Item>
+
+
+                </Select2>
+              </Form.Item>
+                
                 <Form.Item label="Max Budget (USD)" name="max_budget">
                   <InputNumber step={0.01} precision={2} width={200} />
                 </Form.Item>
@@ -184,7 +203,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     );
     setTeams(updatedTeams);
   }
-  message.success("Team updated successfully");
+  let newTeamAlias = newTeamValues.data.team_alias
+  message.success(`Team ${newTeamAlias} updated successfully`);
 
   setEditModalVisible(false);
   setSelectedTeam(null);
@@ -192,7 +212,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
-    form.resetFields();
+    editForm.resetFields();
   };
 
   const handleMemberOk = () => {
@@ -202,7 +222,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   const handleCancel = () => {
     setIsTeamModalVisible(false);
-    form.resetFields();
+    editForm.resetFields();
   };
 
   const handleMemberCancel = () => {
@@ -225,7 +245,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       });
     }
   };
-  
+
 
   const confirmDelete = async () => {
     if (teamToDelete == null || teams == null || accessToken == null) {
