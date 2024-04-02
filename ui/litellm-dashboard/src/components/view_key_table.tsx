@@ -100,15 +100,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       
     }
 
-    const handleModelSelection = (selectedModels: string[]) => {
-      if (selectedModels.includes("all_models")) {
-        // Select all models except "All Models"
-        const allModelsExceptAll = selectedTeam ? selectedTeam.models : userModels;
-        form.setFieldsValue({
-          models: allModelsExceptAll
-        });
-      }
-    };
+
   
     const handleOk = () => {
       form
@@ -155,7 +147,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
-                  onChange={(selectedModels) => handleModelSelection(selectedModels)}
                 >
                   <Option key="all_models" value="all_models">
                     All Models
