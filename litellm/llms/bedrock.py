@@ -1008,7 +1008,7 @@ def completion(
                         )
                         streaming_choice.delta = delta_obj
                         streaming_model_response.choices = [streaming_choice]
-                        completion_stream = model_response_iterator(
+                        completion_stream = ModelResponseIterator(
                             model_response=streaming_model_response
                         )
                         print_verbose(
@@ -1108,10 +1108,30 @@ def completion(
 
             raise BedrockError(status_code=500, message=traceback.format_exc())
 
+class ModelResponseIterator:
+    def __init__(self, model_response):
+        self.model_response = model_response
+        self.is_done = False
 
-async def model_response_iterator(model_response):
-    yield model_response
+    # Sync iterator
+    def __iter__(self):
+        return self
 
+    def __next__(self):
+        if self.is_done:
+            raise StopIteration
+        self.is_done = True
+        return self.model_response
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.is_done:
+            raise StopAsyncIteration
+        self.is_done = True
+        return self.model_response
 
 def _embedding_func_single(
     model: str,
