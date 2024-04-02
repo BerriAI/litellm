@@ -16,7 +16,9 @@ from litellm import (
     text_completion,
     completion_cost,
     atext_completion,
+    TextCompletionResponse,
 )
+from litellm.utils import Logprobs
 from litellm import RateLimitError
 
 litellm.num_retries = 3
@@ -2963,3 +2965,21 @@ async def test_async_text_completion_chat_model_stream():
 
 
 # asyncio.run(test_async_text_completion_chat_model_stream())
+@pytest.mark.asyncio
+async def test_async_text_completion_openai_logprobs():
+    response: TextCompletionResponse = await atext_completion(
+        model="gpt-3.5-turbo-instruct",
+        prompt=["Hey, how's it going?"],
+        max_tokens=1,
+        temperature=0.0,
+        n=1,
+        stop=["####"],
+        logprobs=5,
+    )
+    print(f"response: {response}")
+
+    assert response.choices[0].logprobs is not None
+    assert isinstance(response.choices[0].logprobs, Logprobs)
+
+
+# asyncio.run(test_async_text_completion_openai_logprobs())
