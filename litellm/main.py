@@ -3172,10 +3172,26 @@ def text_completion(
             messages.append(message)
     elif isinstance(prompt, str):
         messages = [{"role": "user", "content": prompt}]
+    elif (
+        (
+            custom_llm_provider == "openai"
+            or custom_llm_provider == "azure"
+            or custom_llm_provider == "azure_text"
+            or custom_llm_provider == "text-completion-openai"
+        )
+        and isinstance(prompt, list)
+        and len(prompt) > 0
+        and isinstance(prompt[0], list)
+    ):
+        verbose_logger.warning(
+            msg="List of lists being passed. If this is for tokens, then it might not work across all models."
+        )
+        messages = [{"role": "user", "content": prompt}]  # type: ignore
     else:
         raise Exception(
             f"Unmapped prompt format. Your prompt is neither a list of strings nor a string. prompt={prompt}. File an issue - https://github.com/BerriAI/litellm/issues"
         )
+
     kwargs.pop("prompt", None)
     response = completion(
         model=model,
