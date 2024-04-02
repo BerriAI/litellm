@@ -927,6 +927,7 @@ def completion(
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
+
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
@@ -2035,7 +2036,7 @@ def completion(
             """
             assume input to custom LLM api bases follow this format:
             resp = requests.post(
-                api_base, 
+                api_base,
                 json={
                     'model': 'meta-llama/Llama-2-13b-hf', # model name
                     'params': {
@@ -2236,7 +2237,7 @@ def batch_completion(
         def chunks(lst, n):
             """Yield successive n-sized chunks from lst."""
             for i in range(0, len(lst), n):
-                yield lst[i : i + n]
+                yield lst[i: i + n]
 
         with ThreadPoolExecutor(max_workers=100) as executor:
             for sub_batch in chunks(batch_messages, 100):

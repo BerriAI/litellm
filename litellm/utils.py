@@ -5460,6 +5460,9 @@ def get_llm_provider(
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
                 dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
+            elif custom_llm_provider == "empower":
+                api_base = "https://app.empower.dev/api/v1"
+                dynamic_api_key = get_secret("EMPOWER_API_KEY")
             elif custom_llm_provider == "groq":
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
@@ -5528,6 +5531,9 @@ def get_llm_provider(
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret("GROQ_API_KEY")
+                    elif endpoint == "app.empower.dev/api/v1":
+                        custom_llm_provider = "empower"
+                        dynamic_api_key = get_secret("EMPOWER_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -8496,7 +8502,7 @@ class CustomStreamWrapper:
 
             if chunk.startswith(self.complete_response):
                 # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response) :]
+                chunk = chunk[len(self.complete_response):]
 
             self.complete_response += chunk
             return chunk
@@ -9891,7 +9897,7 @@ class TextCompletionStreamWrapper:
 
 def mock_completion_streaming_obj(model_response, mock_response, model):
     for i in range(0, len(mock_response), 3):
-        completion_obj = {"role": "assistant", "content": mock_response[i : i + 3]}
+        completion_obj = {"role": "assistant", "content": mock_response[i: i + 3]}
         model_response.choices[0].delta = completion_obj
         yield model_response
 

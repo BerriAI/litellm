@@ -256,6 +256,7 @@ config_path = None
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
+empower_models: List = []
 cohere_chat_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
@@ -281,6 +282,8 @@ for key, value in model_cost.items():
         cohere_models.append(key)
     elif value.get("litellm_provider") == "cohere_chat":
         cohere_chat_models.append(key)
+    elif value.get("litellm_provider") == "empower":
+        empower_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
@@ -314,6 +317,7 @@ for key, value in model_cost.items():
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
+    "app.empower.dev/api/v1",
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -326,6 +330,7 @@ openai_compatible_endpoints: List = [
 openai_compatible_providers: List = [
     "anyscale",
     "mistral",
+    "empower",
     "groq",
     "deepinfra",
     "perplexity",
@@ -365,6 +370,11 @@ huggingface_models: List = [
     "meta-llama/Llama-2-70b",
     "meta-llama/Llama-2-70b-chat",
 ]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
+
+empower_models = [
+    "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "empower-functions",
+]
 
 together_ai_models: List = [
     # llama llms - chat
@@ -430,6 +440,7 @@ model_list = (
     + open_ai_text_completion_models
     + cohere_models
     + cohere_chat_models
+    + empower_models
     + anthropic_models
     + replicate_models
     + openrouter_models
@@ -454,6 +465,7 @@ provider_list: List = [
     "text-completion-openai",
     "cohere",
     "cohere_chat",
+    "empower",
     "anthropic",
     "replicate",
     "huggingface",
@@ -491,6 +503,7 @@ models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "cohere": cohere_models,
     "cohere_chat": cohere_chat_models,
+    "empower": empower_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
     "huggingface": huggingface_models,
@@ -588,6 +601,7 @@ from .utils import (
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
 from .llms.anthropic_text import AnthropicTextConfig
+from .llms.empower import EmpowerConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
