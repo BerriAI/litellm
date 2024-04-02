@@ -115,16 +115,16 @@ const Team: React.FC<TeamProps> = ({
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
-                  <Select2.Option key="all-models" value="all-models">
-                      All Models
+                  <Select2.Option key="all-models-on-proxy" value="all-models-on-proxy">
+                      All Models on Proxy
                     </Select2.Option>
                   <Select2
                     mode="multiple"
                     placeholder="Select models"
                     style={{ width: "100%" }}
                   >
-                    <Select2.Option key="all-models" value="all-models">
-                      All Models
+                    <Select2.Option key="all-models-on-proxy" value="all-models-on-proxy">
+                      All Models on Proxy
                     </Select2.Option>
                     {userModels && userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
@@ -364,7 +364,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                               <div style={{ display: "flex", flexDirection: "column" }}>
                                 {team.models.length === 0 ? (
                                   <Badge size={"xs"} className="mb-1" color="blue">
-                                    <Text>all-models</Text>
+                                    <Text>all-models-on-proxy</Text>
                                   </Badge>
                                 ) : (
                                   team.models.map((model: string, index: number) => (
@@ -483,8 +483,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     placeholder="Select models"
                     style={{ width: "100%" }}
                   >
-                    <Select2.Option key="all-models" value="all-models">
-                      All Models
+                    <Select2.Option key="all-models-on-proxy" value="all-models-on-proxy">
+                      All Models on Proxy
                     </Select2.Option>
                     {userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
