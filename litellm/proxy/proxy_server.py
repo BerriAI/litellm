@@ -3100,6 +3100,12 @@ async def completion(
             response = await llm_router.atext_completion(
                 **data, specific_deployment=True
             )
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.default_deployment is not None
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.atext_completion(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.atext_completion(**data)
         else:
@@ -3317,6 +3323,12 @@ async def chat_completion(
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
             tasks.append(llm_router.acompletion(**data, specific_deployment=True))
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.default_deployment is not None
+        ):  # model in router deployments, calling a specific deployment on the router
+            tasks.append(llm_router.acompletion(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             tasks.append(litellm.acompletion(**data))
         else:
@@ -3531,6 +3543,12 @@ async def embeddings(
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
             response = await llm_router.aembedding(**data, specific_deployment=True)
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.default_deployment is not None
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.aembedding(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.aembedding(**data)
         else:
@@ -3676,6 +3694,12 @@ async def image_generation(
             response = await llm_router.aimage_generation(
                 **data
             )  # ensure this goes the llm_router, router will do the correct alias mapping
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.default_deployment is not None
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.aimage_generation(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.aimage_generation(**data)
         else:
@@ -3830,6 +3854,12 @@ async def audio_transcriptions(
                     response = await llm_router.atranscription(
                         **data
                     )  # ensure this goes the llm_router, router will do the correct alias mapping
+                elif (
+                    llm_router is not None
+                    and data["model"] not in router_model_names
+                    and llm_router.default_deployment is not None
+                ):  # model in router deployments, calling a specific deployment on the router
+                    response = await llm_router.atranscription(**data)
                 elif user_model is not None:  # `litellm --model <your-model-name>`
                     response = await litellm.atranscription(**data)
                 else:
@@ -3983,6 +4013,12 @@ async def moderations(
             response = await llm_router.amoderation(
                 **data
             )  # ensure this goes the llm_router, router will do the correct alias mapping
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.default_deployment is not None
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.amoderation(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.amoderation(**data)
         else:
