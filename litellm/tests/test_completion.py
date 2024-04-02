@@ -2595,6 +2595,37 @@ def test_completion_gemini():
 
 # test_completion_gemini()
 
+# test Gemini with base64 images
+def test_completion_gemini_vision_base64():
+    try:
+        litellm.set_verbose = True
+        image_path = "../proxy/cached_logo.jpg"
+        # Getting the base64 string
+        base64_image = encode_image(image_path)
+        resp = litellm.completion(
+            model="gemini/gemini-pro-vision",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + base64_image
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+        print(f"\nResponse: {resp}")
+    except Exception as e:
+        if "500 Internal error encountered.'" in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
+
 
 @pytest.mark.asyncio
 async def test_acompletion_gemini():
