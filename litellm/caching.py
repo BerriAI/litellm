@@ -109,6 +109,7 @@ class RedisCache(BaseCache):
         **kwargs,
     ):
         from ._redis import get_redis_client, get_redis_connection_pool
+        import redis
 
         redis_kwargs = {}
         if host is not None:
@@ -122,6 +123,14 @@ class RedisCache(BaseCache):
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
+
+        if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+            parsed_kwargs = redis.connection.parse_url(redis_kwargs["url"])
+            redis_kwargs.update(parsed_kwargs)
+            self.redis_kwargs.update(parsed_kwargs)
+            # pop url
+            self.redis_kwargs.pop("url")
+
         # redis namespaces
         self.namespace = namespace
         # for high traffic, we store the redis results in memory and then batch write to redis
@@ -337,6 +346,14 @@ class RedisCache(BaseCache):
                 )
                 traceback.print_exc()
                 raise e
+
+    def client_list(self):
+        client_list = self.redis_client.client_list()
+        return client_list
+
+    def info(self):
+        info = self.redis_client.info()
+        return info
 
     def flush_cache(self):
         self.redis_client.flushall()
