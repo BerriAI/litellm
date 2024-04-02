@@ -639,7 +639,7 @@ async def user_api_key_auth(
                 pass
             elif (
                 isinstance(valid_token.models, list)
-                and "all-models-on-proxy" in valid_token.models
+                and "all-proxy-models" in valid_token.models
             ):
                 # Admin UI - Special alias to allow `all_models`
                 pass
