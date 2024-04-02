@@ -385,12 +385,6 @@ async def user_api_key_auth(
                         raise Exception(
                             f"Admin not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
                         )
-                # check if team in scopes
-                is_team = jwt_handler.is_team(scopes=scopes)
-                if is_team == False:
-                    raise Exception(
-                        f"Missing both Admin and Team scopes from token. Either is required. Admin Scope={jwt_handler.litellm_jwtauth.admin_jwt_scope}, Team Scope={jwt_handler.litellm_jwtauth.team_jwt_scope}"
-                    )
                 # get team id
                 team_id = jwt_handler.get_team_id(token=valid_token, default_value=None)
 
