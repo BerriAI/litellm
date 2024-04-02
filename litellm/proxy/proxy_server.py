@@ -5069,7 +5069,7 @@ async def global_spend_per_tea():
             SUM(s.spend) AS total_spend
         FROM
             "LiteLLM_SpendLogs" s
-        JOIN
+        LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
             s."startTime" >= CURRENT_DATE - INTERVAL '30 days'
