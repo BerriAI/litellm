@@ -5090,6 +5090,8 @@ async def global_spend_per_tea():
         if row_date is None:
             continue
         team_alias = row["team_alias"]
+        if team_alias is None:
+            team_alias = "Unassigned"
         team_aliases.add(team_alias)
         if row_date in spend_by_date:
             # get the team_id for this entry
@@ -5115,6 +5117,8 @@ async def global_spend_per_tea():
         # only add first 10 elements to total_spend_per_team_ui
         if len(total_spend_per_team_ui) >= 10:
             break
+        if team_id is None:
+            team_id = "Unassigned"
         total_spend_per_team_ui.append(
             {"team_id": team_id, "total_spend": total_spend_per_team[team_id]}
         )
