@@ -448,3 +448,67 @@ def test_usage_based_routing():
         ), f"Assertion failed: 'chatgpt-high-tpm' does not have about 80% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_wildcard_openai_routing():
+    """
+    Initialize router with *, all models go through * and use OPENAI_API_KEY
+    """
+    try:
+        model_list = [
+            {
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 100,
+            },
+        ]
+
+        router = Router(
+            model_list=model_list,
+        )
+
+        messages = [
+            {"content": "Tell me a joke.", "role": "user"},
+        ]
+
+        selection_counts = defaultdict(int)
+        for _ in range(25):
+            response = await router.acompletion(
+                model="gpt-4",
+                messages=messages,
+                mock_response="good morning",
+            )
+            # print("response1", response)
+
+            selection_counts[response["model"]] += 1
+
+            response = await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                mock_response="good morning",
+            )
+            # print("response2", response)
+
+            selection_counts[response["model"]] += 1
+
+            response = await router.acompletion(
+                model="gpt-4-turbo-preview",
+                messages=messages,
+                mock_response="good morning",
+            )
+            # print("response3", response)
+
+            # print("response", response)
+
+            selection_counts[response["model"]] += 1
+
+        assert selection_counts["gpt-4"] == 25
+        assert selection_counts["gpt-3.5-turbo"] == 25
+        assert selection_counts["gpt-4-turbo-preview"] == 25
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
