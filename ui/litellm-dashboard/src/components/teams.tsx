@@ -123,6 +123,9 @@ const Team: React.FC<TeamProps> = ({
                     placeholder="Select models"
                     style={{ width: "100%" }}
                   >
+                    <Select2.Option key="all-models" value="all-models">
+                      All Models
+                    </Select2.Option>
                     {userModels && userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {model}
@@ -360,8 +363,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                             {Array.isArray(team.models) ? (
                               <div style={{ display: "flex", flexDirection: "column" }}>
                                 {team.models.length === 0 ? (
-                                  <Badge size={"xs"} className="mb-1" color="purple">
-                                    <Text>All Models</Text>
+                                  <Badge size={"xs"} className="mb-1" color="blue">
+                                    <Text>all-models</Text>
                                   </Badge>
                                 ) : (
                                   team.models.map((model: string, index: number) => (

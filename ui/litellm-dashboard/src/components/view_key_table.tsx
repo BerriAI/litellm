@@ -147,10 +147,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
-                >
-                  <Option key="all_models" value="all_models">
-                    All Models
-                  </Option>
+                >                
                   {selectedTeam && selectedTeam.models ? (
                     selectedTeam.models.map((model: string) => (
                       <Option key={model} value={model}>
@@ -420,8 +417,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                             ))
                           ) : (
                             // If selected team is None or selected team's models are empty, show all models
-                            <Badge size={"xs"} className="mb-1" color="purple">
-                              <Text>All Models</Text>
+                            <Badge size={"xs"} className="mb-1" color="blue">
+                              <Text>all-models</Text>
                             </Badge>
                           )}
                         </>
