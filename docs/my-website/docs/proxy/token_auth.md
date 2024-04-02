@@ -149,7 +149,7 @@ general_settings:
   enable_jwt_auth: True
   litellm_jwtauth:
     ...
-    team_jwt_scope: "litellm-team" # 👈 Set JWT Scope string
+    team_id_jwt_field: "litellm-team" # 👈 Set field in the JWT token that stores the team ID
     team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
 ```
 
