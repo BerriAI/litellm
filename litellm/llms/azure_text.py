@@ -8,6 +8,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     convert_to_model_response_object,
     TranscriptionResponse,
+    TextCompletionResponse,
 )
 from typing import Callable, Optional, BinaryIO
 from litellm import OpenAIConfig
@@ -15,11 +16,11 @@ import litellm, json
 import httpx
 from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTransport
 from openai import AzureOpenAI, AsyncAzureOpenAI
-from ..llms.openai import OpenAITextCompletion
+from ..llms.openai import OpenAITextCompletion, OpenAITextCompletionConfig
 import uuid
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
-openai_text_completion = OpenAITextCompletion()
+openai_text_completion_config = OpenAITextCompletionConfig()
 
 
 class AzureOpenAIError(Exception):
@@ -300,9 +301,11 @@ class AzureTextCompletion(BaseLLM):
                         "api_base": api_base,
                     },
                 )
-                return openai_text_completion.convert_to_model_response_object(
-                    response_object=stringified_response,
-                    model_response_object=model_response,
+                return (
+                    openai_text_completion_config.convert_to_chat_model_response_object(
+                        response_object=TextCompletionResponse(**stringified_response),
+                        model_response_object=model_response,
+                    )
                 )
         except AzureOpenAIError as e:
             exception_mapping_worked = True
@@ -373,7 +376,7 @@ class AzureTextCompletion(BaseLLM):
                 },
             )
             response = await azure_client.completions.create(**data, timeout=timeout)
-            return openai_text_completion.convert_to_model_response_object(
+            return openai_text_completion_config.convert_to_chat_model_response_object(
                 response_object=response.model_dump(),
                 model_response_object=model_response,
             )

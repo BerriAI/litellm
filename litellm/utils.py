@@ -652,6 +652,13 @@ class EmbeddingResponse(OpenAIObject):
             return self.dict()
 
 
+class Logprobs(OpenAIObject):
+    text_offset: List[int]
+    token_logprobs: List[float]
+    tokens: List[str]
+    top_logprobs: List[Dict[str, float]]
+
+
 class TextChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params):
         super(TextChoices, self).__init__(**params)
@@ -664,10 +671,13 @@ class TextChoices(OpenAIObject):
             self.text = text
         else:
             self.text = None
-        if logprobs:
-            self.logprobs = []
+        if logprobs is None:
+            self.logprobs = None
         else:
-            self.logprobs = logprobs
+            if isinstance(logprobs, dict):
+                self.logprobs = Logprobs(**logprobs)
+            else:
+                self.logprobs = logprobs
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -712,6 +722,15 @@ class TextCompletionResponse(OpenAIObject):
     }
     """
 
+    id: str
+    object: str
+    created: int
+    model: Optional[str]
+    choices: List[TextChoices]
+    usage: Optional[Usage]
+    _response_ms: Optional[int] = None
+    _hidden_params: Optional[dict] = None
+
     def __init__(
         self,
         id=None,
@@ -721,32 +740,58 @@ class TextCompletionResponse(OpenAIObject):
         usage=None,
         stream=False,
         response_ms=None,
+        object=None,
         **params,
     ):
-        super(TextCompletionResponse, self).__init__(**params)
+
         if stream:
-            self.object = "text_completion.chunk"
-            self.choices = [TextChoices()]
+            object = "text_completion.chunk"
+            choices = [TextChoices()]
         else:
-            self.object = "text_completion"
-            self.choices = [TextChoices()]
+            object = "text_completion"
+            if choices is not None and isinstance(choices, list):
+                new_choices = []
+                for choice in choices:
+
+                    if isinstance(choice, TextChoices):
+                        _new_choice = choice
+                    elif isinstance(choice, dict):
+                        _new_choice = TextChoices(**choice)
+                    new_choices.append(_new_choice)
+                choices = new_choices
+            else:
+                choices = [TextChoices()]
+        if object is not None:
+            object = object
         if id is None:
-            self.id = _generate_id()
+            id = _generate_id()
         else:
-            self.id = id
+            id = id
         if created is None:
-            self.created = int(time.time())
+            created = int(time.time())
         else:
-            self.created = created
+            created = created
+
+        model = model
+        if usage:
+            usage = usage
+        else:
+            usage = Usage()
+
+        super(TextCompletionResponse, self).__init__(
+            id=id,
+            object=object,
+            created=created,
+            model=model,
+            choices=choices,
+            usage=usage,
+            **params,
+        )
+
         if response_ms:
             self._response_ms = response_ms
         else:
             self._response_ms = None
-        self.model = model
-        if usage:
-            self.usage = usage
-        else:
-            self.usage = Usage()
         self._hidden_params = (
             {}
         )  # used in case users want to access the original model response
@@ -2513,11 +2558,12 @@ def client(original_function):
                     if is_coroutine == True:
                         pass
                     else:
-                        model_response = original_response["choices"][0]["message"][
-                            "content"
-                        ]
-                        ### POST-CALL RULES ###
-                        rules_obj.post_call_rules(input=model_response, model=model)
+                        if isinstance(original_response, ModelResponse):
+                            model_response = original_response["choices"][0]["message"][
+                                "content"
+                            ]
+                            ### POST-CALL RULES ###
+                            rules_obj.post_call_rules(input=model_response, model=model)
         except Exception as e:
             raise e
 
@@ -7082,7 +7128,10 @@ def exception_type(
                 or custom_llm_provider in litellm.openai_compatible_providers
             ):
                 # custom_llm_provider is openai, make it OpenAI
-                message = original_exception.message
+                if hasattr(original_exception, "message"):
+                    message = original_exception.message
+                else:
+                    message = str(original_exception)
                 if message is not None and isinstance(message, str):
                     message = message.replace("OPENAI", custom_llm_provider.upper())
                     message = message.replace("openai", custom_llm_provider)
@@ -7231,10 +7280,12 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        __cause__=original_exception.__cause__,
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
-                        request=original_exception.request,
+                        request=httpx.Request(
+                            method="POST", url="https://api.openai.com/v1/"
+                        ),
                     )
             elif custom_llm_provider == "anthropic":  # one of the anthropics
                 if hasattr(original_exception, "message"):
@@ -8304,14 +8355,10 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        __cause__=original_exception.__cause__,
+                        message=f"{exception_provider} - {message}",
                         llm_provider="azure",
                         model=model,
-                        request=getattr(
-                            original_exception,
-                            "request",
-                            httpx.Request(method="POST", url="https://openai.com/"),
-                        ),
+                        request=httpx.Request(method="POST", url="https://openai.com/"),
                     )
         if (
             "BadRequestError.__init__() missing 1 required positional argument: 'param'"

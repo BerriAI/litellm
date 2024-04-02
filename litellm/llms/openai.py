@@ -10,6 +10,7 @@ from litellm.utils import (
     convert_to_model_response_object,
     Usage,
     TranscriptionResponse,
+    TextCompletionResponse,
 )
 from typing import Callable, Optional
 import aiohttp, requests
@@ -199,6 +200,43 @@ class OpenAITextCompletionConfig:
             )
             and v is not None
         }
+
+    def convert_to_chat_model_response_object(
+        self,
+        response_object: Optional[TextCompletionResponse] = None,
+        model_response_object: Optional[ModelResponse] = None,
+    ):
+        try:
+            ## RESPONSE OBJECT
+            if response_object is None or model_response_object is None:
+                raise ValueError("Error in response object format")
+            choice_list = []
+            for idx, choice in enumerate(response_object["choices"]):
+                message = Message(
+                    content=choice["text"],
+                    role="assistant",
+                )
+                choice = Choices(
+                    finish_reason=choice["finish_reason"], index=idx, message=message
+                )
+                choice_list.append(choice)
+            model_response_object.choices = choice_list
+
+            if "usage" in response_object:
+                model_response_object.usage = response_object["usage"]
+
+            if "id" in response_object:
+                model_response_object.id = response_object["id"]
+
+            if "model" in response_object:
+                model_response_object.model = response_object["model"]
+
+            model_response_object._hidden_params["original_response"] = (
+                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            )
+            return model_response_object
+        except Exception as e:
+            raise e
 
 
 class OpenAIChatCompletion(BaseLLM):
@@ -962,40 +1000,6 @@ class OpenAITextCompletion(BaseLLM):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def convert_to_model_response_object(
-        self,
-        response_object: Optional[dict] = None,
-        model_response_object: Optional[ModelResponse] = None,
-    ):
-        try:
-            ## RESPONSE OBJECT
-            if response_object is None or model_response_object is None:
-                raise ValueError("Error in response object format")
-            choice_list = []
-            for idx, choice in enumerate(response_object["choices"]):
-                message = Message(content=choice["text"], role="assistant")
-                choice = Choices(
-                    finish_reason=choice["finish_reason"], index=idx, message=message
-                )
-                choice_list.append(choice)
-            model_response_object.choices = choice_list
-
-            if "usage" in response_object:
-                model_response_object.usage = response_object["usage"]
-
-            if "id" in response_object:
-                model_response_object.id = response_object["id"]
-
-            if "model" in response_object:
-                model_response_object.model = response_object["model"]
-
-            model_response_object._hidden_params["original_response"] = (
-                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
-            )
-            return model_response_object
-        except Exception as e:
-            raise e
-
     def completion(
         self,
         model_response: ModelResponse,
@@ -1077,6 +1081,8 @@ class OpenAITextCompletion(BaseLLM):
                         status_code=response.status_code, message=response.text
                     )
 
+                response_json = response.json()
+
                 ## LOGGING
                 logging_obj.post_call(
                     input=prompt,
@@ -1089,10 +1095,7 @@ class OpenAITextCompletion(BaseLLM):
                 )
 
                 ## RESPONSE OBJECT
-                return self.convert_to_model_response_object(
-                    response_object=response.json(),
-                    model_response_object=model_response,
-                )
+                return TextCompletionResponse(**response_json)
         except Exception as e:
             raise e
 
@@ -1108,6 +1111,7 @@ class OpenAITextCompletion(BaseLLM):
         model: str,
         timeout: float,
     ):
+
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
                 response = await client.post(
@@ -1134,9 +1138,7 @@ class OpenAITextCompletion(BaseLLM):
                 )
 
                 ## RESPONSE OBJECT
-                return self.convert_to_model_response_object(
-                    response_object=response_json, model_response_object=model_response
-                )
+                return TextCompletionResponse(**response_json)
             except Exception as e:
                 raise e
 
