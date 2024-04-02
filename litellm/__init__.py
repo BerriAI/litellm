@@ -76,6 +76,8 @@ caching_with_models: bool = (
 cache: Optional[Cache] = (
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
+default_in_memory_ttl: Optional[float] = None
+default_redis_ttl: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
