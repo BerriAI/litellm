@@ -8050,6 +8050,41 @@ async def cache_ping():
         )
 
 
+@router.get(
+    "/cache/redis/info",
+    tags=["caching"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def cache_redis_info():
+    """
+    Endpoint for getting /redis/info
+    """
+    try:
+        if litellm.cache is None:
+            raise HTTPException(
+                status_code=503, detail="Cache not initialized. litellm.cache is None"
+            )
+        if litellm.cache.type == "redis":
+            client_list = litellm.cache.cache.client_list()
+            redis_info = litellm.cache.cache.info()
+            num_clients = len(client_list)
+            return {
+                "num_clients": num_clients,
+                "clients": client_list,
+                "info": redis_info,
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cache type {litellm.cache.type} does not support flushing",
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service Unhealthy ({str(e)})",
+        )
+
+
 @router.post(
     "/cache/flushall",
     tags=["caching"],
