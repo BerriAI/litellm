@@ -9005,37 +9005,20 @@ class CustomStreamWrapper:
     def handle_openai_text_completion_chunk(self, chunk):
         try:
             print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
-            str_line = chunk
             text = ""
             is_finished = False
             finish_reason = None
-            if "data: [DONE]" in str_line or self.sent_last_chunk == True:
-                raise StopIteration
-            elif str_line.startswith("data:"):
-                data_json = json.loads(str_line[5:])
-                print_verbose(f"delta content: {data_json}")
-                text = data_json["choices"][0].get("text", "")
-                if data_json["choices"][0].get("finish_reason", None):
+            choices = getattr(chunk, "choices", [])
+            if len(choices) > 0:
+                text = choices[0].text
+                if choices[0].finish_reason is not None:
                     is_finished = True
-                    finish_reason = data_json["choices"][0]["finish_reason"]
-                print_verbose(
-                    f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}"
-                )
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            elif "error" in str_line:
-                raise ValueError(
-                    f"Unable to parse response. Original response: {str_line}"
-                )
-            else:
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
+                    finish_reason = choices[0].finish_reason
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
 
         except Exception as e:
             raise e
