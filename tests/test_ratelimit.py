@@ -91,6 +91,10 @@ def test_rate_limit(router_factory, num_messages, num_rate_limits, sync_mode):
             results = sync_call(router, list_of_messages)
         else:
             results = asyncio.run(async_call(router, list_of_messages))
+            if len([i for i in results if i is not None]) != num_messages:
+                raise ValueError(
+                    "No deployments available for selected model"
+                )  # not all results got returned
         raise ExpectNoException
 
     if expected_exception is not ExpectNoException:
