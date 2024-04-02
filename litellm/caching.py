@@ -828,8 +828,10 @@ class DualCache(BaseCache):
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
 
-        self.default_in_memory_ttl = default_in_memory_ttl
-        self.default_redis_ttl = default_redis_ttl
+        self.default_in_memory_ttl = (
+            default_in_memory_ttl or litellm.default_in_memory_ttl
+        )
+        self.default_redis_ttl = default_redis_ttl or litellm.default_redis_ttl
 
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
@@ -939,6 +941,8 @@ class Cache:
         password: Optional[str] = None,
         namespace: Optional[str] = None,
         ttl: Optional[float] = None,
+        default_in_memory_ttl: Optional[float] = None,
+        default_in_redis_ttl: Optional[float] = None,
         similarity_threshold: Optional[float] = None,
         supported_call_types: Optional[
             List[
@@ -1037,6 +1041,14 @@ class Cache:
         self.namespace = namespace
         self.redis_flush_size = redis_flush_size
         self.ttl = ttl
+
+        if self.type == "local" and default_in_memory_ttl is not None:
+            self.ttl = default_in_memory_ttl
+
+        if (
+            self.type == "redis" or self.type == "redis-semantic"
+        ) and default_in_redis_ttl is not None:
+            self.ttl = default_in_redis_ttl
 
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace

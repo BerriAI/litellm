@@ -1914,6 +1914,12 @@ class ProxyConfig:
         global redis_usage_cache
         from litellm import Cache
 
+        if "default_in_memory_ttl" in cache_params:
+            litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
+
+        if "default_in_redis_ttl" in cache_params:
+            litellm.default_redis_ttl = cache_params["default_in_redis_ttl"]
+
         litellm.cache = Cache(**cache_params)
 
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
