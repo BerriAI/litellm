@@ -21,9 +21,25 @@ import {
   BarChart,
 } from "@tremor/react";
 
-import { Modal } from "antd";
+import {
+  Button as Button2,
+  Modal,
+  Form,
+  Input,
+  Select as Select2,
+  InputNumber,
+  message,
+  Select,
+} from "antd";
 
 import ViewKeySpendReport from "./view_key_spend_report";
+
+interface EditKeyModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  token: any; // Assuming TeamType is a type representing your team object
+  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
+}
 
 // Define the props type
 interface ViewKeyTableProps {
@@ -67,7 +83,120 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   );
   const [predictedSpendString, setPredictedSpendString] = useState("");
 
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
+
+  const EditKeyModal: React.FC<EditKeyModalProps> = ({ visible, onCancel, token, onSubmit }) => {
+    const [form] = Form.useForm();
+    console.log("in edit modal, token:", token);
   
+    const handleOk = () => {
+      form
+        .validateFields()
+        .then((values) => {
+          // const updatedValues = {...values, team_id: team.team_id};
+          // onSubmit(updatedValues);
+          form.resetFields();
+        })
+        .catch((error) => {
+          console.error("Validation failed:", error);
+        });
+  };
+  
+    return (
+        <Modal
+              title="Edit Key"
+              visible={visible}
+              width={800}
+              footer={null}
+              onOk={handleOk}
+              onCancel={onCancel}
+            >
+        <Form
+          form={form}
+          onFinish={handleEditSubmit}
+          initialValues={token} // Pass initial values here
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+                <>
+                <Form.Item 
+                label="Key Name" 
+                name="key_alias"
+                rules={[{ required: true, message: 'Please input a key name' }]}
+                help="required"
+              >
+                <Input />
+              </Form.Item>
+
+              <Form.Item label="Models" name="models">
+                <Select
+                  mode="multiple"
+                  placeholder="Select models"
+                  style={{ width: "100%" }}
+                  // onChange={(selectedModels) => handleModelSelection(selectedModels)}
+                >
+                  {/* <Option key="all_models" value="all_models">
+                    All Models
+                  </Option>
+                   */}
+
+                </Select>
+              </Form.Item>
+    
+              
+              <Form.Item label="Expire Key (eg: 30s, 30h, 30d)" name="duration" className="mt-8">
+                <Input />
+              </Form.Item>
+              <Form.Item label="Metadata" name="metadata">
+                <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+              </Form.Item>
+            </>
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button2 htmlType="submit">Create Key</Button2>
+          </div>
+        </Form>
+      </Modal>
+    );
+  };
+  
+
+  
+  const handleEditClick = (token: any) => {
+    console.log("handleEditClick:", token);
+    setSelectedToken(token);
+    setEditModalVisible(true);
+  };
+
+const handleEditCancel = () => {
+  setEditModalVisible(false);
+  setSelectedToken(null);
+};
+
+const handleEditSubmit = async (formValues: Record<string, any>) => {
+  // Call API to update team with teamId and values
+  // const teamId = formValues.team_id; // get team_id
+  
+  console.log("handleEditSubmit:", formValues);
+  if (accessToken == null) {
+    return;
+  }
+
+  // let newTeamValues = await teamUpdateCall(accessToken, formValues);
+
+  // // Update the teams state with the updated team data
+  // if (teams) {
+  //   const updatedTeams = teams.map((team) =>
+  //     team.team_id === teamId ? newTeamValues.data : team
+  //   );
+  //   setTeams(updatedTeams);
+  // }
+  // message.success("Team updated successfully");
+
+  // setEditModalVisible(false);
+  // setSelectedTeam(null);
+};
 
 
 
@@ -386,7 +515,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Icon
                     icon={PencilAltIcon}
                     size="sm"
-                    // onClick={() => handleEditClick(team)}
+                    onClick={() => handleEditClick(item)}
                   />
                   <Icon
                     onClick={() => handleDelete(item.token)}
@@ -444,6 +573,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         </div>
       )}
     </Card>
+
+    {selectedToken && (
+        <EditKeyModal
+          visible={editModalVisible}
+          onCancel={handleEditCancel}
+          token={selectedToken}
+          onSubmit={handleEditSubmit}
+        />
+      )}
     </div>
   );
 };
