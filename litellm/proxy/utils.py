@@ -50,27 +50,32 @@ class ProxyLogging:
     def __init__(
         self,
         user_api_key_cache: DualCache,
-        redis_usage_cache: Optional[RedisCache] = None,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
+        self.internal_usage_cache = DualCache()
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler()
         self.max_tpm_rpm_limiter = _PROXY_MaxTPMRPMLimiter(
-            redis_usage_cache=redis_usage_cache
+            internal_cache=self.internal_usage_cache
         )
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
-        self.internal_usage_cache = DualCache(redis_cache=redis_usage_cache)
 
     def update_values(
-        self, alerting: Optional[List], alerting_threshold: Optional[float]
+        self,
+        alerting: Optional[List],
+        alerting_threshold: Optional[float],
+        redis_cache: Optional[RedisCache],
     ):
         self.alerting = alerting
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
+
+        if redis_cache is not None:
+            self.internal_usage_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
@@ -265,10 +270,11 @@ class ProxyLogging:
         if self.alerting is None:
             # do nothing if alerting is not switched on
             return
-
+        _id: str = "default_id"  # used for caching
         if type == "user_and_proxy_budget":
             user_info = dict(user_info)
             user_id = user_info["user_id"]
+            _id = user_id
             max_budget = user_info["max_budget"]
             spend = user_info["spend"]
             user_email = user_info["user_email"]
@@ -276,12 +282,14 @@ class ProxyLogging:
         elif type == "token_budget":
             token_info = dict(user_info)
             token = token_info["token"]
+            _id = token
             spend = token_info["spend"]
             max_budget = token_info["max_budget"]
             user_id = token_info["user_id"]
             user_info = f"""\nToken: {token}\nSpend: ${spend}\nMax Budget: ${max_budget}\nUser ID: {user_id}"""
         elif type == "failed_tracking":
             user_id = str(user_info)
+            _id = user_id
             user_info = f"\nUser ID: {user_id}\n Error {error_message}"
             message = "Failed Tracking Cost for" + user_info
             await self.alerting_handler(
@@ -337,13 +345,15 @@ class ProxyLogging:
         # check if 5% of max budget is left
         if percent_left <= 0.05:
             message = "5% budget left for" + user_info
-            result = await _cache.async_get_cache(key=message)
+            cache_key = "alerting:{}".format(_id)
+            result = await _cache.async_get_cache(key=cache_key)
             if result is None:
                 await self.alerting_handler(
                     message=message,
                     level="Medium",
                 )
-                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
+
+                await _cache.async_set_cache(key=cache_key, value="SENT", ttl=2419200)
 
             return
 

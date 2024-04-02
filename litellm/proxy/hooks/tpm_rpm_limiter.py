@@ -22,13 +22,11 @@ class _PROXY_MaxTPMRPMLimiter(CustomLogger):
     user_api_key_cache = None
 
     # Class variables or attributes
-    def __init__(self, redis_usage_cache: Optional[RedisCache]):
-        self.redis_usage_cache = redis_usage_cache
-        self.internal_cache = DualCache(
-            redis_cache=redis_usage_cache,
-            default_in_memory_ttl=10,
-            default_redis_ttl=60,
-        )
+    def __init__(self, internal_cache: Optional[DualCache]):
+        if internal_cache is None:
+            self.internal_cache = DualCache()
+        else:
+            self.internal_cache = internal_cache
 
     def print_verbose(self, print_statement):
         try:

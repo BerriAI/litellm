@@ -38,7 +38,7 @@ async def test_pre_call_hook_rpm_limits():
         key=_api_key, value={"api_key": _api_key, "tpm_limit": 9, "rpm_limit": 1}
     )
 
-    tpm_rpm_limiter = _PROXY_MaxTPMRPMLimiter(redis_usage_cache=None)
+    tpm_rpm_limiter = _PROXY_MaxTPMRPMLimiter(internal_cache=DualCache())
 
     await tpm_rpm_limiter.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -89,8 +89,8 @@ async def test_pre_call_hook_team_rpm_limits(
     user_api_key_dict = UserAPIKeyAuth(**_user_api_key_dict)  # type: ignore
     local_cache = DualCache()
     local_cache.set_cache(key=_api_key, value=_user_api_key_dict)
-    tpm_rpm_limiter = _PROXY_MaxTPMRPMLimiter(redis_usage_cache=_redis_usage_cache)
-
+    internal_cache = DualCache(redis_cache=_redis_usage_cache)
+    tpm_rpm_limiter = _PROXY_MaxTPMRPMLimiter(internal_cache=internal_cache)
     await tpm_rpm_limiter.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
     )
