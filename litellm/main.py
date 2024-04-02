@@ -3163,7 +3163,18 @@ def text_completion(
     # these are the params supported by Completion() but not ChatCompletion
 
     # default case, non OpenAI requests go through here
-    messages = [{"role": "system", "content": prompt}]
+    # handle prompt formatting if prompt is a string vs. list of strings
+    messages = []
+    if isinstance(prompt, list) and len(prompt) > 0 and isinstance(prompt[0], str):
+        for p in prompt:
+            message = {"role": "user", "content": p}
+            messages.append(message)
+    elif isinstance(prompt, str):
+        messages = [{"role": "user", "content": prompt}]
+    else:
+        raise Exception(
+            f"Unmapped prompt format. Your prompt is neither a list of strings nor a string. prompt={prompt}. File an issue - https://github.com/BerriAI/litellm/issues"
+        )
     kwargs.pop("prompt", None)
     response = completion(
         model=model,

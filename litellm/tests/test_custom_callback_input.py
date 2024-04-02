@@ -686,6 +686,44 @@ async def test_async_chat_vertex_ai_stream():
 # Text Completion
 
 
+@pytest.mark.asyncio
+async def test_async_text_completion_bedrock():
+    try:
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        response = await litellm.atext_completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            prompt=["Hi 👋 - i'm async text completion bedrock"],
+        )
+        # test streaming
+        response = await litellm.atext_completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            prompt=["Hi 👋 - i'm async text completion bedrock"],
+            stream=True,
+        )
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+            continue
+        ## test failure callback
+        try:
+            response = await litellm.atext_completion(
+                model="bedrock/",
+                prompt=["Hi 👋 - i'm async text completion bedrock"],
+                stream=True,
+                api_key="my-bad-key",
+            )
+            async for chunk in response:
+                continue
+        except:
+            pass
+        time.sleep(1)
+        print(f"customHandler.errors: {customHandler.errors}")
+        assert len(customHandler.errors) == 0
+        litellm.callbacks = []
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+
 ## Test OpenAI text completion + Async
 @pytest.mark.asyncio
 async def test_async_text_completion_openai_stream():

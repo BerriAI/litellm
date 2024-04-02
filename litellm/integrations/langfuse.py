@@ -119,6 +119,11 @@ class LangFuseLogger:
                 input = prompt
                 output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
+                response_obj, litellm.TextCompletionResponse
+            ):
+                input = prompt
+                output = response_obj.choices[0].text
+            elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
                 input = prompt
@@ -242,6 +247,7 @@ class LangFuseLogger:
 
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
+            print(f"response_obj: {response_obj}")
             if supports_tags:
                 metadata_tags = metadata.get("tags", [])
                 tags = metadata_tags
@@ -306,11 +312,13 @@ class LangFuseLogger:
             usage = None
             if response_obj is not None and response_obj.get("id", None) is not None:
                 generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+                print(f"getting usage, cost={cost}")
                 usage = {
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
                 }
+                print(f"constructed usage - {usage}")
             generation_name = metadata.get("generation_name", None)
             if generation_name is None:
                 # just log `litellm-{call_type}` as the generation name
