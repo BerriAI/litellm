@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall } from "./networking";
-import { InformationCircleIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon } from "@heroicons/react/outline";
 import { keySpendLogsCall, PredictedSpendLogsCall } from "./networking";
 import {
   Badge,
@@ -383,7 +383,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     )}
 </DialogPanel>
 </Dialog>
-
+                  <Icon
+                    icon={PencilAltIcon}
+                    size="sm"
+                    // onClick={() => handleEditClick(team)}
+                  />
                   <Icon
                     onClick={() => handleDelete(item.token)}
                     icon={TrashIcon}
