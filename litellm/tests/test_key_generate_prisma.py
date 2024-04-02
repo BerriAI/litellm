@@ -247,14 +247,14 @@ def test_call_with_valid_model(prisma_client):
 
 
 def test_call_with_valid_model_using_all_models(prisma_client):
-    # Make a call to a key with model = `all-models-on-proxy` this is an Alias from LiteLLM Admin UI
+    # Make a call to a key with model = `all-proxy-models` this is an Alias from LiteLLM Admin UI
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
-            request = GenerateKeyRequest(models=["all-models-on-proxy"])
+            request = GenerateKeyRequest(models=["all-proxy-models"])
             key = await generate_key_fn(data=request)
             print(key)
 
@@ -273,11 +273,11 @@ def test_call_with_valid_model_using_all_models(prisma_client):
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
 
-            # call /key/info for key - models == "all-models-on-proxy"
+            # call /key/info for key - models == "all-proxy-models"
             key_info = await info_key_fn(key=generated_key)
             print("key_info", key_info)
             models = key_info["info"]["models"]
-            assert models == ["all-models-on-proxy"]
+            assert models == ["all-proxy-models"]
 
         asyncio.run(test())
     except Exception as e:
