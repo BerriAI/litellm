@@ -785,10 +785,10 @@ class OpenAIChatCompletion(BaseLLM):
         optional_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
+        max_retries: int,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
-        max_retries=None,
         logging_obj=None,
         atranscription: bool = False,
     ):
