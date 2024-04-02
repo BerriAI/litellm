@@ -302,9 +302,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
-proxy_logging_obj = ProxyLogging(
-    user_api_key_cache=user_api_key_cache, redis_usage_cache=redis_usage_cache
-)
+proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
 async_result = None
 celery_app_conn = None
@@ -2251,6 +2249,7 @@ class ProxyConfig:
             proxy_logging_obj.update_values(
                 alerting=general_settings.get("alerting", None),
                 alerting_threshold=general_settings.get("alerting_threshold", 600),
+                redis_cache=redis_usage_cache,
             )
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)
@@ -4976,31 +4975,13 @@ async def global_spend():
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = f"""
-        SELECT SUM(spend) AS total_spend
-        FROM "LiteLLM_VerificationToken";
-        ;
-    """
+    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
     response = await prisma_client.db.query_raw(query=sql_query)
     if response is not None:
         if isinstance(response, list) and len(response) > 0:
             total_spend = response[0].get("total_spend", 0.0)
 
-    sql_query = f"""
-        SELECT 
-            *
-        FROM 
-            "LiteLLM_UserTable"
-        WHERE 
-            user_id = 'litellm-proxy-budget';
-    """
-    user_response = await prisma_client.db.query_raw(query=sql_query)
-
-    if user_response is not None:
-        if isinstance(user_response, list) and len(user_response) > 0:
-            total_proxy_budget = user_response[0].get("max_budget", 0.0)
-
-    return {"spend": total_spend, "max_budget": total_proxy_budget}
+    return {"spend": total_spend, "max_budget": litellm.max_budget}
 
 
 @router.get(
