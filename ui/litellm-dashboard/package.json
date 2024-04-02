@@ -21,6 +21,7 @@
     "next": "14.1.0",
     "openai": "^4.28.0",
     "react": "^18",
+    "react-copy-to-clipboard": "^5.1.0",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
     "react-syntax-highlighter": "^15.5.0"
