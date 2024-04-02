@@ -852,9 +852,16 @@ class TranscriptionResponse(OpenAIObject):
 
 
 ############################################################
-def print_verbose(print_statement, logger_only: bool = False):
+def print_verbose(
+    print_statement,
+    logger_only: bool = False,
+    log_level: Literal["DEBUG", "INFO"] = "DEBUG",
+):
     try:
-        verbose_logger.debug(print_statement)
+        if log_level == "DEBUG":
+            verbose_logger.debug(print_statement)
+        elif log_level == "INFO":
+            verbose_logger.info(print_statement)
         if litellm.set_verbose == True and logger_only == False:
             print(print_statement)  # noqa
     except:
@@ -903,10 +910,20 @@ class Logging:
             raise ValueError(
                 f"Invalid call_type {call_type}. Allowed values: {allowed_values}"
             )
-        if messages is not None and isinstance(messages, str):
-            messages = [
-                {"role": "user", "content": messages}
-            ]  # convert text completion input to the chat completion format
+        if messages is not None:
+            if isinstance(messages, str):
+                messages = [
+                    {"role": "user", "content": messages}
+                ]  # convert text completion input to the chat completion format
+            elif (
+                isinstance(messages, list)
+                and len(messages) > 0
+                and isinstance(messages[0], str)
+            ):
+                new_messages = []
+                for m in messages:
+                    new_messages.append({"role": "user", "content": m})
+                messages = new_messages
         self.model = model
         self.messages = messages
         self.stream = stream
@@ -1199,6 +1216,7 @@ class Logging:
                     or isinstance(result, EmbeddingResponse)
                     or isinstance(result, ImageResponse)
                     or isinstance(result, TranscriptionResponse)
+                    or isinstance(result, TextCompletionResponse)
                 )
                 and self.stream != True
             ):  # handle streaming separately
@@ -4464,7 +4482,7 @@ def get_optional_params(
         if unsupported_params and not litellm.drop_params:
             raise UnsupportedParamsError(
                 status_code=500,
-                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True`.",
+                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
             )
 
     def _map_and_modify_arg(supported_params: dict, provider: str, model: str):
@@ -10374,22 +10392,28 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
 
         args_str = ", ".join(map(repr, args))
         kwargs_str = ", ".join(f"{key}={repr(value)}" for key, value in kwargs.items())
-        print_verbose("\n")  # new line before
-        print_verbose("\033[92mRequest to litellm:\033[0m")
+        print_verbose("\n", log_level="INFO")  # new line before
+        print_verbose("\033[92mRequest to litellm:\033[0m", log_level="INFO")
         if args and kwargs:
             print_verbose(
-                f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m"
+                f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m",
+                log_level="INFO",
             )
         elif args:
             print_verbose(
-                f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m"
+                f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m",
+                log_level="INFO",
             )
         elif kwargs:
             print_verbose(
-                f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m"
+                f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m",
+                log_level="INFO",
             )
         else:
-            print_verbose(f"\033[92mlitellm.{original_function.__name__}()\033[0m")
+            print_verbose(
+                f"\033[92mlitellm.{original_function.__name__}()\033[0m",
+                log_level="INFO",
+            )
         print_verbose("\n")  # new line after
     except:
         # This should always be non blocking
