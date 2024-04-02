@@ -220,6 +220,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
             data={keys}
+            userModels={userModels}
             setData={setKeys}
           />
           <CreateKey
