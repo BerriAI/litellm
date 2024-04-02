@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall } from "./networking";
 import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon } from "@heroicons/react/outline";
-import { keySpendLogsCall, PredictedSpendLogsCall } from "./networking";
+import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall } from "./networking";
 import {
   Badge,
   Card,
@@ -34,6 +34,9 @@ import {
 
 import ViewKeySpendReport from "./view_key_spend_report";
 
+const { Option } = Select;
+
+
 interface EditKeyModalProps {
   visible: boolean;
   onCancel: () => void;
@@ -46,6 +49,7 @@ interface ViewKeyTableProps {
   userID: string;
   accessToken: string;
   selectedTeam: any | null;
+  userModels: string[];
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
@@ -70,6 +74,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   accessToken,
   selectedTeam,
+  userModels,
   data,
   setData,
 }) => {
@@ -88,7 +93,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const EditKeyModal: React.FC<EditKeyModalProps> = ({ visible, onCancel, token, onSubmit }) => {
     const [form] = Form.useForm();
-    console.log("in edit modal, token:", token);
+
+    // check token.models length == 0
+    if (token.models.length == 0 && selectedTeam) {
+      token.models = selectedTeam.models;
+      
+    }
+
+    const handleModelSelection = (selectedModels: string[]) => {
+      if (selectedModels.includes("all_models")) {
+        // Select all models except "All Models"
+        const allModelsExceptAll = selectedTeam ? selectedTeam.models : userModels;
+        form.setFieldsValue({
+          models: allModelsExceptAll
+        });
+      }
+    };
   
     const handleOk = () => {
       form
@@ -135,26 +155,54 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
-                  // onChange={(selectedModels) => handleModelSelection(selectedModels)}
+                  onChange={(selectedModels) => handleModelSelection(selectedModels)}
                 >
-                  {/* <Option key="all_models" value="all_models">
+                  <Option key="all_models" value="all_models">
                     All Models
                   </Option>
-                   */}
+                  {selectedTeam && selectedTeam.models ? (
+                    selectedTeam.models.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                  ) : (
+                    userModels.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                  )}
+
 
                 </Select>
               </Form.Item>
-    
-              
-              <Form.Item label="Expire Key (eg: 30s, 30h, 30d)" name="duration" className="mt-8">
-                <Input />
+              <Form.Item 
+                className="mt-8"
+                label="Max Budget (USD)" 
+                name="max_budget" 
+                help={`Budget cannot exceed team max budget: $${selectedTeam?.max_budget !== null && selectedTeam?.max_budget !== undefined ? selectedTeam?.max_budget : 'unlimited'}`}
+                rules={[
+                  {
+                      validator: async (_, value) => {
+                          if (value && selectedTeam && selectedTeam.max_budget !== null && value > selectedTeam.max_budget) {
+                              throw new Error(`Budget cannot exceed team max budget: $${selectedTeam.max_budget}`);
+                          }
+                      },
+                  },
+              ]}
+              >
+                <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
-              <Form.Item label="Metadata" name="metadata">
-                <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-              </Form.Item>
+              <Form.Item
+                  label="token"
+                  name="token"
+                  hidden={true}
+                ></Form.Item>
+
             </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Create Key</Button2>
+            <Button2 htmlType="submit">Edit Key</Button2>
           </div>
         </Form>
       </Modal>
@@ -176,26 +224,28 @@ const handleEditCancel = () => {
 
 const handleEditSubmit = async (formValues: Record<string, any>) => {
   // Call API to update team with teamId and values
-  // const teamId = formValues.team_id; // get team_id
-  
-  console.log("handleEditSubmit:", formValues);
   if (accessToken == null) {
     return;
   }
+  const currentKey = formValues.token; 
+  formValues.key = currentKey;
+  
+  console.log("handleEditSubmit:", formValues);
 
-  // let newTeamValues = await teamUpdateCall(accessToken, formValues);
+  let newKeyValues = await keyUpdateCall(accessToken, formValues);
+  console.log("handleEditSubmit: newKeyValues", newKeyValues);
 
-  // // Update the teams state with the updated team data
-  // if (teams) {
-  //   const updatedTeams = teams.map((team) =>
-  //     team.team_id === teamId ? newTeamValues.data : team
-  //   );
-  //   setTeams(updatedTeams);
-  // }
-  // message.success("Team updated successfully");
+  // Update the keys with the update key
+  if (data) {
+    const updatedData = data.map((key) =>
+      key.token === currentKey ? newKeyValues : key
+    );
+    setData(updatedData);
+  }
+  message.success("Key updated successfully");
 
-  // setEditModalVisible(false);
-  // setSelectedTeam(null);
+  setEditModalVisible(false);
+  setSelectedToken(null);
 };
 
 
