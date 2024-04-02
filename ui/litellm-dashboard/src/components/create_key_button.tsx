@@ -91,19 +91,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     }
   };
 
-
-  const handleModelSelection = (selectedModels: string[]) => {
-    if (selectedModels.includes("all_models")) {
-      // Select all models except "All Models"
-      const allModelsExceptAll = team ? team.models : userModels;
-      form.setFieldsValue({
-        models: allModelsExceptAll
-      });
-    }
-  };
-  
-
-
   const handleCopy = () => {
     message.success('API Key copied to clipboard');
 };
@@ -154,9 +141,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
-                  onChange={(selectedModels) => handleModelSelection(selectedModels)}
                 >
-                  <Option key="all_models" value="all_models">
+                  <Option key="all-models" value="all-models">
                     All Models
                   </Option>
                   {team && team.models ? (

@@ -115,6 +115,9 @@ const Team: React.FC<TeamProps> = ({
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
+                  <Select2.Option key="all-models" value="all-models">
+                      All Models
+                    </Select2.Option>
                   <Select2
                     mode="multiple"
                     placeholder="Select models"
@@ -216,15 +219,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleModelSelection = (selectedModels: string[]) => {
-    if (selectedModels.includes("all_models")) {
-      // Select all models except "All Models"
-      const allModelsExceptAll = userModels.filter(model => model !== "all");
-      form.setFieldsValue({
-        models: allModelsExceptAll
-      });
-    }
-  };
+
   
 
   const confirmDelete = async () => {
@@ -484,9 +479,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     mode="multiple"
                     placeholder="Select models"
                     style={{ width: "100%" }}
-                    onChange={(selectedModels) => handleModelSelection(selectedModels)}
                   >
-                    <Select2.Option key="all_models" value="all_models">
+                    <Select2.Option key="all-models" value="all-models">
                       All Models
                     </Select2.Option>
                     {userModels.map((model) => (
