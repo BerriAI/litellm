@@ -637,6 +637,12 @@ async def user_api_key_auth(
                 len(valid_token.models) == 0
             ):  # assume an empty model list means all models are allowed to be called
                 pass
+            elif (
+                isinstance(valid_token.models, list)
+                and "all-models" in valid_token.models
+            ):
+                # Admin UI - Special alias to allow `all_models`
+                pass
             else:
                 try:
                     data = await request.json()
