@@ -25,21 +25,21 @@ class PrometheusLogger:
             self.litellm_requests_metric = Counter(
                 name="litellm_requests_metric",
                 documentation="Total number of LLM calls to litellm",
-                labelnames=["user", "key", "model"],
+                labelnames=["end_user", "key", "model", "team"],
             )
 
             # Counter for spend
             self.litellm_spend_metric = Counter(
                 "litellm_spend_metric",
                 "Total spend on LLM requests",
-                labelnames=["user", "key", "model"],
+                labelnames=["end_user", "key", "model", "team"],
             )
 
             # Counter for total_output_tokens
             self.litellm_tokens_metric = Counter(
                 "litellm_total_tokens",
                 "Total number of input + output tokens from LLM requests",
-                labelnames=["user", "key", "model"],
+                labelnames=["end_user", "key", "model", "team"],
             )
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
@@ -66,19 +66,24 @@ class PrometheusLogger:
             proxy_server_request = litellm_params.get("proxy_server_request") or {}
             end_user_id = proxy_server_request.get("body", {}).get("user", None)
             user_api_key = litellm_params.get("metadata", {}).get("user_api_key", None)
+            user_api_team = litellm_params.get("metadata", {}).get(
+                "user_api_key_team_id", None
+            )
             tokens_used = response_obj.get("usage", {}).get("total_tokens", 0)
 
             print_verbose(
                 f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
             )
 
-            self.litellm_requests_metric.labels(end_user_id, user_api_key, model).inc()
-            self.litellm_spend_metric.labels(end_user_id, user_api_key, model).inc(
-                response_cost
-            )
-            self.litellm_tokens_metric.labels(end_user_id, user_api_key, model).inc(
-                tokens_used
-            )
+            self.litellm_requests_metric.labels(
+                end_user_id, user_api_key, model, user_api_team
+            ).inc()
+            self.litellm_spend_metric.labels(
+                end_user_id, user_api_key, model, user_api_team
+            ).inc(response_cost)
+            self.litellm_tokens_metric.labels(
+                end_user_id, user_api_key, model, user_api_team
+            ).inc(tokens_used)
         except Exception as e:
             traceback.print_exc()
             verbose_logger.debug(
