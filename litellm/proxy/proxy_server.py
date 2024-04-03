@@ -356,6 +356,11 @@ async def user_api_key_auth(
         ```
         """
         route: str = request.url.path
+
+        if route in LiteLLMRoutes.public_routes.value:
+            # check if public endpoint
+            return UserAPIKeyAuth()
+
         if general_settings.get("enable_jwt_auth", False) == True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
@@ -499,6 +504,13 @@ async def user_api_key_auth(
                 return UserAPIKeyAuth(api_key=api_key)
             else:
                 return UserAPIKeyAuth()
+        elif api_key is None:  # only require api key if master key is set
+            raise Exception("No api key passed in.")
+        elif api_key == "":
+            # missing 'Bearer ' prefix
+            raise Exception(
+                f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
+            )
 
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) == True:
@@ -508,29 +520,6 @@ async def user_api_key_auth(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="'allow_user_auth' not set or set to False",
                 )
-        elif (
-            route == "/routes"
-            or route == "/"
-            or route == "/health/liveliness"
-            or route == "/health/readiness"
-            or route == "/test"
-            or route == "/config/yaml"
-        ):
-            """
-            Unprotected endpoints
-            """
-            return UserAPIKeyAuth()
-        elif route.startswith("/config/"):
-            raise Exception(f"Only admin can modify config")
-
-        if api_key is None:  # only require api key if master key is set
-            raise Exception(f"No api key passed in.")
-
-        if api_key == "":
-            # missing 'Bearer ' prefix
-            raise Exception(
-                f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
-            )
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -561,6 +550,8 @@ async def user_api_key_auth(
             )
 
             return _user_api_key_obj
+        elif route.startswith("/config/"):
+            raise Exception(f"Only admin can modify config")
 
         if isinstance(
             api_key, str
@@ -2590,7 +2581,10 @@ async def generate_key_helper_fn(
             await custom_db_client.insert_data(value=key_data, table_name="key")
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Internal Server Error."},
+        )
 
     # Add budget related info in key_data - this ensures it's returned
     key_data["budget_id"] = budget_id
