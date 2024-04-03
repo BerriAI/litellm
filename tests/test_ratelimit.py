@@ -28,13 +28,13 @@ class RouterConfig(BaseModel):
 
 @pytest.fixture(scope="function")
 def router_factory():
-    def create_router(rpm, tpm):
+    def create_router(rpm, tpm, routing_strategy):
         model_list = base_model_list.copy()
         model_list[0]["rpm"] = rpm
         model_list[0]["tpm"] = tpm
         return Router(
             model_list=model_list,
-            routing_strategy="usage-based-routing",
+            routing_strategy=routing_strategy,
             debug_level="DEBUG",
         )
 
@@ -77,13 +77,22 @@ class ExpectNoException(Exception):
     "num_try_send, num_allowed_send",
     [
         (2, 2),  # sending as many as allowed, ExpectNoException
-        # (10, 10),  # sending as many as allowed, ExpectNoException
+        (10, 10),  # sending as many as allowed, ExpectNoException
         (3, 2),  # Sending more than allowed, ValueError
-        # (10, 9),  # Sending more than allowed, ValueError
+        (10, 9),  # Sending more than allowed, ValueError
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])  # Use parametrization for sync/async
-def test_rate_limit(router_factory, num_try_send, num_allowed_send, sync_mode):
+@pytest.mark.parametrize(
+    "routing_strategy",
+    [
+        "usage-based-routing",
+        # "simple-shuffle", # dont expect to rate limit
+        # "least-busy", # dont expect to rate limit
+        "latency-based-routing",
+    ],
+)
+def test_rate_limit(router_factory, num_try_send, num_allowed_send, sync_mode, routing_strategy):
     """
     Check if router.completion and router.acompletion can send more messages than they've been limited to.
     Args:
@@ -101,7 +110,7 @@ def test_rate_limit(router_factory, num_try_send, num_allowed_send, sync_mode):
     list_of_messages = generate_list_of_messages(max(num_try_send, num_allowed_send))
     rpm, tpm = calculate_limits(list_of_messages[:num_allowed_send])
     list_of_messages = list_of_messages[:num_try_send]
-    router = router_factory(rpm, tpm)
+    router = router_factory(rpm, tpm, routing_strategy)
 
     with pytest.raises(expected_exception) as excinfo:  # asserts correct type raised
         if sync_mode:
