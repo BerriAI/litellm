@@ -410,7 +410,7 @@ def run_server(
             )
 
         db_connection_pool_limit = 100
-        db_connection_timeout = 60
+        db_connection_timeout = 120
         if config is not None:
             """
             Allow user to pass in db url via config
