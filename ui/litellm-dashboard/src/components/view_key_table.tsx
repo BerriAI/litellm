@@ -152,18 +152,27 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     All Team Models
                   </Option>                
                   {selectedTeam && selectedTeam.models ? (
-                    selectedTeam.models.map((model: string) => (
-                      <Option key={model} value={model}>
-                        {model}
-                      </Option>
-                    ))
-                  ) : (
-                    userModels.map((model: string) => (
-                      <Option key={model} value={model}>
-                        {model}
-                      </Option>
-                    ))
-                  )}
+  selectedTeam.models.includes("all-proxy-models") ? (
+    userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
+      <Option key={model} value={model}>
+        {model}
+      </Option>
+    ))
+  ) : (
+    selectedTeam.models.map((model: string) => (
+      <Option key={model} value={model}>
+        {model}
+      </Option>
+    ))
+  )
+) : (
+  userModels.map((model: string) => (
+    <Option key={model} value={model}>
+      {model}
+    </Option>
+  ))
+)}
+
 
 
                 </Select>
