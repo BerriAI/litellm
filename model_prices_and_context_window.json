@@ -10,9 +10,9 @@
         "supports_function_calling": true
     },
     "gpt-4-turbo-preview": {
-        "max_tokens": 4096, 
-        "max_input_tokens": 8192,
-        "max_output_tokens": 4096, 
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
