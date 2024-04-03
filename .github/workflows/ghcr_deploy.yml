@@ -5,6 +5,10 @@ on:
     inputs:
       tag:
         description: "The tag version you want to build"
+      stable:
+        description: "Build Stable version"
+        type: boolean
+        default: false
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
