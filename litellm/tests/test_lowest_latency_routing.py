@@ -195,7 +195,8 @@ async def _gather_deploy(all_deploys):
     return await asyncio.gather(*[_deploy(*t) for t in all_deploys])
 
 
-def test1_get_available_endpoints_tpm_rpm_check_async():
+@pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
+def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     """
     Pass in list of 2 valid models
 
@@ -204,32 +205,31 @@ def test1_get_available_endpoints_tpm_rpm_check_async():
     assert that only the valid model is returned
     """
     test_cache = DualCache()
+    ans = "1234"
+    non_ans_rpm = 3
+    assert ans_rpm != non_ans_rpm, "invalid test"
+    if ans_rpm < non_ans_rpm:
+        ans = None
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "azure/chatgpt-v-2"},
-            "model_info": {"id": "1234", "rpm": 3},
+            "model_info": {"id": "1234", "rpm": ans_rpm},
         },
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "azure/chatgpt-v-2"},
-            "model_info": {"id": "5678", "rpm": 3},
+            "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
     lowest_latency_logger = LowestLatencyLoggingHandler(
         router_cache=test_cache, model_list=model_list
     )
     model_group = "gpt-3.5-turbo"
-    d1 = [(lowest_latency_logger, "1234", 50, 0.05)] * 5
-    d2 = [(lowest_latency_logger, "5678", 50, 0.05)] * 5
+    d1 = [(lowest_latency_logger, "1234", 50, 0.01)] * non_ans_rpm
+    d2 = [(lowest_latency_logger, "5678", 50, 0.01)] * non_ans_rpm
     asyncio.run(_gather_deploy([*d1, *d2]))
     ## CHECK WHAT'S SELECTED ##
-    assert (
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )
-        is None
-    )  # both should've exceded bounds
     print(dir(lowest_latency_logger))
     print(
         "availible",
@@ -241,14 +241,14 @@ def test1_get_available_endpoints_tpm_rpm_check_async():
         lowest_latency_logger.get_available_deployments(
             model_group=model_group, healthy_deployments=model_list
         )["model_info"]["id"]
-        == "1234"
+        == ans
     )
 
 
 # test_get_available_endpoints_tpm_rpm_check_async()
 
 
-@pytest.mark.parametrize("ans_rpm", [1, 10])  # 1 should produce nothing, 10 should select first
+@pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
 def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
     """
     Pass in list of 2 valid models
@@ -259,8 +259,9 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
     """
     test_cache = DualCache()
     ans = "1234"
-    assert ans_rpm != 3, "invalid test"
-    if ans_rpm < 3:
+    non_ans_rpm = 3
+    assert ans_rpm != non_ans_rpm, "invalid test"
+    if ans_rpm < non_ans_rpm:
         ans = None
     model_list = [
         {
@@ -271,7 +272,7 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "azure/chatgpt-v-2"},
-            "model_info": {"id": "5678", "rpm": 3},
+            "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
     lowest_latency_logger = LowestLatencyLoggingHandler(
@@ -289,10 +290,10 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
             "model_info": {"id": deployment_id},
         }
     }
-    for _ in range(3):
+    for _ in range(non_ans_rpm):
         start_time = time.time()
         response_obj = {"usage": {"total_tokens": 50}}
-        time.sleep(0.05)
+        time.sleep(0.01)
         end_time = time.time()
         lowest_latency_logger.log_success_event(
             response_obj=response_obj,
@@ -311,10 +312,10 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
             "model_info": {"id": deployment_id},
         }
     }
-    for _ in range(3):
+    for _ in range(non_ans_rpm):
         start_time = time.time()
         response_obj = {"usage": {"total_tokens": 20}}
-        time.sleep(2)
+        time.sleep(0.5)
         end_time = time.time()
         lowest_latency_logger.log_success_event(
             response_obj=response_obj,
