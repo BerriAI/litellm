@@ -2566,7 +2566,7 @@ async def generate_key_helper_fn(
             create_key_response = await prisma_client.insert_data(
                 data=key_data, table_name="key"
             )
-            key_data["token_id"] = create_key_response.token
+            key_data["token_id"] = getattr(create_key_response, "token", None)
         elif custom_db_client is not None:
             if table_name is None or table_name == "user":
                 ## CREATE USER (If necessary)
