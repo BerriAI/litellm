@@ -17,7 +17,7 @@ class LangFuseLogger:
             from langfuse import Langfuse
         except Exception as e:
             raise Exception(
-                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
+                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
             )
         # Instance variables
         self.secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
