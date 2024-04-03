@@ -115,19 +115,20 @@ const Team: React.FC<TeamProps> = ({
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
-                  <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                      All Proxy Models
-                    </Select2.Option>
                   <Select2
                     mode="multiple"
                     placeholder="Select models"
                     style={{ width: "100%" }}
                   >
+                    <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                        {"All Proxy Models"}
+                      </Select2.Option>
                     {userModels && userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {model}
                       </Select2.Option>
                     ))}
+                    
                   </Select2>
                 </Form.Item>
                 <Form.Item label="Max Budget (USD)" name="max_budget">
