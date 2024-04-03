@@ -2563,7 +2563,10 @@ async def generate_key_helper_fn(
 
             ## CREATE KEY
             verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
-            await prisma_client.insert_data(data=key_data, table_name="key")
+            create_key_response = await prisma_client.insert_data(
+                data=key_data, table_name="key"
+            )
+            key_data["token_id"] = create_key_response.token
         elif custom_db_client is not None:
             if table_name is None or table_name == "user":
                 ## CREATE USER (If necessary)
