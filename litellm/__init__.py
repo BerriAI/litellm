@@ -256,7 +256,6 @@ config_path = None
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
-empower_models: List = []
 cohere_chat_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
@@ -282,8 +281,6 @@ for key, value in model_cost.items():
         cohere_models.append(key)
     elif value.get("litellm_provider") == "cohere_chat":
         cohere_chat_models.append(key)
-    elif value.get("litellm_provider") == "empower":
-        empower_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
@@ -601,7 +598,6 @@ from .utils import (
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
 from .llms.anthropic_text import AnthropicTextConfig
-from .llms.empower import EmpowerConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
