@@ -98,6 +98,7 @@ class LiteLLMRoutes(enum.Enum):
         "/health/readiness",
         "/test",
         "/config/yaml",
+        "/metrics",
     ]
 
 
