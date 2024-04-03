@@ -2938,6 +2938,7 @@ async def atext_completion(*args, **kwargs):
         if (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
+            or custom_llm_provider == "azure_text"
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
