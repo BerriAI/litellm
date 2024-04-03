@@ -43,8 +43,18 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
         if (userRole === "Admin") {
           try {
             const globalSpend = await getTotalSpendCall(accessToken);
-            setSpend(globalSpend.spend);
-            setMaxBudget(globalSpend.max_budget || null);
+            if (globalSpend) {
+              if (globalSpend.spend) {
+                setSpend(globalSpend.spend);
+              } else {
+                setSpend(0.0);
+              }
+              if (globalSpend.max_budget) {
+                setMaxBudget(globalSpend.max_budget);
+              } else {
+                setMaxBudget(0.0);
+              }
+            }
           } catch (error) {
             console.error("Error fetching global spend data:", error);
           }
@@ -63,7 +73,6 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
       <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend</p>
       <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">${roundedSpend}</p>
         
-       
     </>
     )
 }
