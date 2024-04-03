@@ -52,9 +52,14 @@ def common_checks(
         and len(team_object.models) > 0
         and _model not in team_object.models
     ):
-        raise Exception(
-            f"Team={team_object.team_id} not allowed to call model={_model}. Allowed team models = {team_object.models}"
-        )
+        # this means the team has access to all models on the proxy
+        if "all-proxy-models" in team_object.models:
+            # this means the team has access to all models on the proxy
+            pass
+        else:
+            raise Exception(
+                f"Team={team_object.team_id} not allowed to call model={_model}. Allowed team models = {team_object.models}"
+            )
     # 3. If team is in budget
     if (
         team_object.max_budget is not None

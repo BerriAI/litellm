@@ -49,6 +49,7 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
     user_info,
+    info_key_fn,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 from litellm._logging import verbose_proxy_logger
@@ -239,6 +240,44 @@ def test_call_with_valid_model(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
+
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
+def test_call_with_valid_model_using_all_models(prisma_client):
+    # Make a call to a key with model = `all-proxy-models` this is an Alias from LiteLLM Admin UI
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = GenerateKeyRequest(models=["all-proxy-models"])
+            key = await generate_key_fn(data=request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            async def return_body():
+                return b'{"model": "mistral"}'
+
+            request.body = return_body
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+            # call /key/info for key - models == "all-proxy-models"
+            key_info = await info_key_fn(key=generated_key)
+            print("key_info", key_info)
+            models = key_info["info"]["models"]
+            assert models == ["all-proxy-models"]
 
         asyncio.run(test())
     except Exception as e:
