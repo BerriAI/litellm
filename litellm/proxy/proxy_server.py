@@ -1468,8 +1468,8 @@ async def update_database(
 
                 payload["spend"] = response_cost
                 if (
-                    os.getenv("SPEND_LOGS_URL", None) is not None
-                    and prisma_client is not None
+                    prisma_client is not None
+                    and os.getenv("SPEND_LOGS_URL", None) is not None
                 ):
                     if isinstance(payload["startTime"], datetime):
                         payload["startTime"] = payload["startTime"].isoformat()
@@ -1477,7 +1477,7 @@ async def update_database(
                         payload["endTime"] = payload["endTime"].isoformat()
                     prisma_client.spend_log_transactons.append(payload)
                 elif prisma_client is not None:
-                    await prisma_client.insert_data(data=payload, table_name="spend")
+                    prisma_client.spend_log_transactions.append(payload)
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Update Spend Logs DB failed to execute - {str(e)}\n{traceback.format_exc()}"
@@ -2966,7 +2966,7 @@ async def startup_event():
             update_spend,
             "interval",
             seconds=batch_writing_interval,
-            args=[prisma_client, db_writer_client],
+            args=[prisma_client, db_writer_client, proxy_logging_obj],
         )
         scheduler.start()
 
