@@ -449,6 +449,7 @@ model_list = (
     + deepinfra_models
     + perplexity_models
     + maritalk_models
+    + vertex_language_models
 )
 
 provider_list: List = [
