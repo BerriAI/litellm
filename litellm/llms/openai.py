@@ -1153,7 +1153,9 @@ class OpenAITextCompletion(BaseLLM):
                 },
             )
             ## RESPONSE OBJECT
-            return TextCompletionResponse(**response_json)
+            response_obj = TextCompletionResponse(**response_json)
+            response_obj._hidden_params.original_response = json.dumps(response_json)
+            return response_obj
         except Exception as e:
             raise e
 

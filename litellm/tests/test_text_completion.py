@@ -4023,7 +4023,7 @@ def test_async_text_completion_stream():
     asyncio.run(test_get_response())
 
 
-test_async_text_completion_stream()
+# test_async_text_completion_stream()
 
 
 @pytest.mark.asyncio
