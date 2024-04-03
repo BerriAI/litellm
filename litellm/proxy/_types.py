@@ -306,6 +306,7 @@ class GenerateKeyResponse(GenerateKeyRequest):
     key_name: Optional[str] = None
     expires: Optional[datetime]
     user_id: Optional[str] = None
+    token_id: Optional[str] = None
 
     @root_validator(pre=True)
     def set_model_info(cls, values):
