@@ -4,10 +4,10 @@ from datetime import datetime, timezone
 import traceback
 import dotenv
 import importlib
-from pkg_resources import parse_version
 import sys
 
-dotenv.load_dotenv() 
+dotenv.load_dotenv()
+
 
 # convert to {completion: xx, tokens: xx}
 def parse_usage(usage):
@@ -15,6 +15,7 @@ def parse_usage(usage):
         "completion": usage["completion_tokens"] if "completion_tokens" in usage else 0,
         "prompt": usage["prompt_tokens"] if "prompt_tokens" in usage else 0,
     }
+
 
 def parse_messages(input):
     if input is None:
@@ -27,8 +28,7 @@ def parse_messages(input):
 
         if "message" in message:
             return clean_message(message["message"])
-       
-        
+
         serialized = {
             "role": message.get("role"),
             "content": message.get("content"),
@@ -56,12 +56,16 @@ class LunaryLogger:
     def __init__(self):
         try:
             import lunary
+            from pkg_resources import parse_version
+
             version = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
             if parse_version(version) < parse_version("0.1.43"):
-                print("Lunary version outdated. Required: > 0.1.43. Upgrade via 'pip install lunary --upgrade'")
+                print(
+                    "Lunary version outdated. Required: > 0.1.43. Upgrade via 'pip install lunary --upgrade'"
+                )
                 raise ImportError
-            
+
             self.lunary_client = lunary
         except ImportError:
             print("Lunary not installed. Please install it using 'pip install lunary'")
@@ -88,9 +92,7 @@ class LunaryLogger:
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )
+            metadata = litellm_params.get("metadata", {}) or {}
 
             tags = litellm_params.pop("tags", None) or []
 
@@ -148,7 +150,7 @@ class LunaryLogger:
                 runtime="litellm",
                 error=error_obj,
                 output=parse_messages(output),
-                token_usage=usage
+                token_usage=usage,
             )
 
         except:
