@@ -230,19 +230,11 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     d2 = [(lowest_latency_logger, "5678", 50, 0.01)] * non_ans_rpm
     asyncio.run(_gather_deploy([*d1, *d2]))
     ## CHECK WHAT'S SELECTED ##
-    print(dir(lowest_latency_logger))
-    print(
-        "availible",
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        ),
+    d_ans = lowest_latency_logger.get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
     )
-    assert (
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )["model_info"]["id"]
-        == ans
-    )
+    print(d_ans)
+    assert (d_ans and d_ans["model_info"]["id"]) == ans
 
 
 # test_get_available_endpoints_tpm_rpm_check_async()
@@ -325,17 +317,11 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
         )
 
     ## CHECK WHAT'S SELECTED ##
-    print(
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )
+    d_ans = lowest_latency_logger.get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
     )
-    assert (
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )["model_info"]["id"]
-        == ans
-    )
+    print(d_ans)
+    assert (d_ans and d_ans["model_info"]["id"]) == ans
 
 
 def test_router_get_available_deployments():
