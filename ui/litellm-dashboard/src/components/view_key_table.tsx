@@ -407,34 +407,54 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   
                 </TableCell> */}
 
-                <TableCell>
-                  {Array.isArray(item.models) ? (
-                    <div style={{ display: "flex", flexDirection: "column" }}>
-                      {item.models.length === 0 ? (
-                        <>
-                          {selectedTeam && selectedTeam.models && selectedTeam.models.length > 0 ? (
-                            selectedTeam.models.map((model: string, index: number) => (
-                              <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                                <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
-                              </Badge>
-                            ))
-                          ) : (
-                            // If selected team is None or selected team's models are empty, show all models
-                            <Badge size={"xs"} className="mb-1" color="blue">
-                              <Text>all-proxy-models</Text>
-                            </Badge>
-                          )}
-                        </>
-                      ) : (
-                        item.models.map((model: string, index: number) => (
-                          <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                            <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
-                          </Badge>
-                        ))
-                      )}
-                    </div>
-                  ) : null}
-                </TableCell>
+<TableCell>
+  {Array.isArray(item.models) ? (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      {item.models.length === 0 ? (
+        <>
+          {selectedTeam && selectedTeam.models && selectedTeam.models.length > 0 ? (
+            selectedTeam.models.map((model: string, index: number) => (
+              model === "all-proxy-models" ? (
+                <Badge key={index} size={"xs"} className="mb-1" color="red">
+                  <Text>All Proxy Models</Text>
+                </Badge>
+              ) : model === "all-team-models" ? (
+                <Badge key={index} size={"xs"} className="mb-1" color="red">
+                  <Text>All Team Models</Text>
+                </Badge>
+              ) : (
+                <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                  <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                </Badge>
+              )
+            ))
+          ) : (
+            // If selected team is None or selected team's models are empty, show all models
+            <Badge size={"xs"} className="mb-1" color="blue">
+              <Text>all-proxy-models</Text>
+            </Badge>
+          )}
+        </>
+      ) : (
+        item.models.map((model: string, index: number) => (
+          model === "all-proxy-models" ? (
+            <Badge key={index} size={"xs"} className="mb-1" color="red">
+              <Text>All Proxy Models</Text>
+            </Badge>
+          ) : model === "all-team-models" ? (
+            <Badge key={index} size={"xs"} className="mb-1" color="red">
+              <Text>All Team Models</Text>
+            </Badge>
+          ) : (
+            <Badge key={index} size={"xs"} className="mb-1" color="blue">
+              <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+            </Badge>
+          )
+        ))
+      )}
+    </div>
+  ) : null}
+</TableCell>
 
                 <TableCell>
                   <Text>
