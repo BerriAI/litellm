@@ -528,7 +528,7 @@ class PrismaClient:
     end_user_list_transactons: dict = {}
     key_list_transactons: dict = {}
     team_list_transactons: dict = {}
-    spend_log_transactons: List = []
+    spend_log_transactions: List = []
 
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
         print_verbose(
@@ -1906,7 +1906,9 @@ async def reset_budget(prisma_client: PrismaClient):
 
 
 async def update_spend(
-    prisma_client: PrismaClient, db_writer_client: Optional[HTTPHandler]
+    prisma_client: PrismaClient,
+    db_writer_client: Optional[HTTPHandler],
+    proxy_logging_obj: ProxyLogging,
 ):
     """
     Batch write updates to db.
@@ -1920,7 +1922,6 @@ async def update_spend(
     spend_logs: list,
     """
     n_retry_times = 3
-    verbose_proxy_logger.debug("INSIDE UPDATE SPEND")
     ### UPDATE USER TABLE ###
     if len(prisma_client.user_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
@@ -1940,12 +1941,25 @@ async def update_spend(
                 prisma_client.user_list_transactons = (
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
+                break
             except httpx.ReadTimeout:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
                 await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update user spend: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e, traceback_str=error_traceback
+                    )
+                )
                 raise e
 
     ### UPDATE END-USER TABLE ###
@@ -1973,12 +1987,25 @@ async def update_spend(
                 prisma_client.end_user_list_transactons = (
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
+                break
             except httpx.ReadTimeout:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
                 await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update end-user spend: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e, traceback_str=error_traceback
+                    )
+                )
                 raise e
 
     ### UPDATE KEY TABLE ###
@@ -2000,12 +2027,25 @@ async def update_spend(
                 prisma_client.key_list_transactons = (
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
+                break
             except httpx.ReadTimeout:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
                 await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update key spend: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e, traceback_str=error_traceback
+                    )
+                )
                 raise e
 
     ### UPDATE TEAM TABLE ###
@@ -2037,39 +2077,108 @@ async def update_spend(
                 prisma_client.team_list_transactons = (
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
+                break
             except httpx.ReadTimeout:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
                 await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update team spend: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e, traceback_str=error_traceback
+                    )
+                )
                 raise e
 
     ### UPDATE SPEND LOGS ###
-    base_url = os.getenv("SPEND_LOGS_URL", None)
-    if (
-        len(prisma_client.spend_log_transactons) > 0
-        and base_url is not None
-        and db_writer_client is not None
-    ):
-        if not base_url.endswith("/"):
-            base_url += "/"
-        verbose_proxy_logger.debug("base_url: {}".format(base_url))
-        response = await db_writer_client.post(
-            url=base_url + "spend/update",
-            data=json.dumps(prisma_client.spend_log_transactons),  # type: ignore
-            headers={"Content-Type": "application/json"},
-        )
-        if response.status_code == 200:
-            prisma_client.spend_log_transactons = []
+    verbose_proxy_logger.debug(
+        "Spend Logs transactions: {}".format(len(prisma_client.spend_log_transactions))
+    )
 
+    BATCH_SIZE = 100  # Preferred size of each batch to write to the database
+    MAX_LOGS_PER_INTERVAL = 1000  # Maximum number of logs to flush in a single interval
 
-# async def monitor_spend_list(prisma_client: PrismaClient):
-#     """
-#     Check the length of each spend list, if it exceeds a threshold (e.g. 100 items) - write to db
-#     """
-#     if len(prisma_client.user_list_transactons) > 10000:
-#         await update_spend(prisma_client=prisma_client)
+    if len(prisma_client.spend_log_transactions) > 0:
+        for _ in range(n_retry_times + 1):
+            try:
+                base_url = os.getenv("SPEND_LOGS_URL", None)
+                ## WRITE TO SEPARATE SERVER ##
+                if (
+                    len(prisma_client.spend_log_transactions) > 0
+                    and base_url is not None
+                    and db_writer_client is not None
+                ):
+                    if not base_url.endswith("/"):
+                        base_url += "/"
+                    verbose_proxy_logger.debug("base_url: {}".format(base_url))
+                    response = await db_writer_client.post(
+                        url=base_url + "spend/update",
+                        data=json.dumps(prisma_client.spend_log_transactions),  # type: ignore
+                        headers={"Content-Type": "application/json"},
+                    )
+                    if response.status_code == 200:
+                        prisma_client.spend_log_transactions = []
+                else:  ## (default) WRITE TO DB ##
+                    logs_to_process = prisma_client.spend_log_transactions[
+                        :MAX_LOGS_PER_INTERVAL
+                    ]
+                    for i in range(0, len(logs_to_process), BATCH_SIZE):
+                        # Create sublist for current batch, ensuring it doesn't exceed the BATCH_SIZE
+                        batch = logs_to_process[i : i + BATCH_SIZE]
+
+                        # Convert datetime strings to Date objects
+                        batch_with_dates = [
+                            prisma_client.jsonify_object(
+                                {
+                                    **entry,
+                                }
+                            )
+                            for entry in batch
+                        ]
+
+                        await prisma_client.db.litellm_spendlogs.create_many(
+                            data=batch_with_dates, skip_duplicates=True  # type: ignore
+                        )
+
+                        verbose_proxy_logger.debug(
+                            f"Flushed {len(batch)} logs to the DB."
+                        )
+                    # Remove the processed logs from spend_logs
+                    prisma_client.spend_log_transactions = (
+                        prisma_client.spend_log_transactions[len(logs_to_process) :]
+                    )
+
+                    verbose_proxy_logger.debug(
+                        f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
+                    )
+                break
+            except httpx.ReadTimeout:
+                if i >= n_retry_times:  # If we've reached the maximum number of retries
+                    raise  # Re-raise the last exception
+                # Optionally, sleep for a bit before retrying
+                await asyncio.sleep(2**i)  # Exponential backoff
+            except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update spend logs: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e, traceback_str=error_traceback
+                    )
+                )
+                raise e
 
 
 async def _read_request_body(request):

@@ -109,7 +109,7 @@ async def test_spend_logs():
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
         response = await chat_completion(session=session, key=key)
-        await asyncio.sleep(5)
+        await asyncio.sleep(20)
         await get_spend_logs(session=session, request_id=response["id"])
 
 
