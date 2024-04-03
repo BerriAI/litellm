@@ -35,7 +35,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache, model_list: list, routing_args: dict = {}):
+    def __init__(
+        self, router_cache: DualCache, model_list: list, routing_args: dict = {}
+    ):
         self.router_cache = router_cache
         self.model_list = model_list
         self.routing_args = RoutingArgs(**routing_args)
@@ -48,7 +50,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group = kwargs["litellm_params"]["metadata"].get(
+                    "model_group", None
+                )
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -128,7 +132,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group = kwargs["litellm_params"]["metadata"].get(
+                    "model_group", None
+                )
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -281,7 +287,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 deployment = _deployment
                 break
             elif (
-                item_tpm + input_tokens > _deployment_tpm or item_rpm + 1 > _deployment_rpm
+                item_tpm + input_tokens > _deployment_tpm
+                or item_rpm + 1 > _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             elif item_latency < lowest_latency:
