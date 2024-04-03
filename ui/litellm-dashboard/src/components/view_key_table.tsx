@@ -147,7 +147,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
-                >                
+                >
+                  <Option key="all-team-models" value="all-team-models">
+                    All Team Models
+                  </Option>                
                   {selectedTeam && selectedTeam.models ? (
                     selectedTeam.models.map((model: string) => (
                       <Option key={model} value={model}>
