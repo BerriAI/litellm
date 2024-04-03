@@ -95,4 +95,5 @@ async def test_batch_update_spend(prisma_client):
     await update_spend(
         prisma_client=litellm.proxy.proxy_server.prisma_client,
         db_writer_client=None,
+        proxy_logging_obj=proxy_logging_obj,
     )
