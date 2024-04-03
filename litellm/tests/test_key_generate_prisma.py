@@ -50,6 +50,7 @@ from litellm.proxy.proxy_server import (
     view_spend_logs,
     user_info,
     info_key_fn,
+    new_team,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
@@ -63,6 +64,8 @@ from litellm.proxy._types import (
     KeyRequest,
     UpdateKeyRequest,
     GenerateKeyRequest,
+    NewTeamRequest,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.utils import DBClient
 from starlette.datastructures import URL
@@ -246,40 +249,60 @@ def test_call_with_valid_model(prisma_client):
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_call_with_valid_model_using_all_models(prisma_client):
+@pytest.mark.asyncio
+async def test_call_with_valid_model_using_all_models(prisma_client):
+    """
+    Do not delete
+    this is the Admin UI flow
+    1. Create a team with model = `all-proxy-models`
+    2. Create a key with model = `all-team-models`
+    3. Call /chat/completions with the key -> expect to pass
+    """
     # Make a call to a key with model = `all-proxy-models` this is an Alias from LiteLLM Admin UI
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
-        async def test():
-            await litellm.proxy.proxy_server.prisma_client.connect()
-            request = GenerateKeyRequest(models=["all-proxy-models"])
-            key = await generate_key_fn(data=request)
-            print(key)
+        await litellm.proxy.proxy_server.prisma_client.connect()
 
-            generated_key = key.key
-            bearer_token = "Bearer " + generated_key
+        team_request = NewTeamRequest(
+            team_alias="testing-team",
+            models=["all-proxy-models"],
+        )
 
-            request = Request(scope={"type": "http"})
-            request._url = URL(url="/chat/completions")
+        new_team_response = await new_team(
+            data=team_request, user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin")
+        )
+        print("new_team_response", new_team_response)
+        created_team_id = new_team_response["team_id"]
 
-            async def return_body():
-                return b'{"model": "mistral"}'
+        request = GenerateKeyRequest(
+            models=["all-team-models"], team_id=created_team_id
+        )
+        key = await generate_key_fn(data=request)
+        print(key)
 
-            request.body = return_body
+        generated_key = key.key
+        bearer_token = "Bearer " + generated_key
 
-            # use generated key to auth in
-            result = await user_api_key_auth(request=request, api_key=bearer_token)
-            print("result from user auth with new key", result)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
 
-            # call /key/info for key - models == "all-proxy-models"
-            key_info = await info_key_fn(key=generated_key)
-            print("key_info", key_info)
-            models = key_info["info"]["models"]
-            assert models == ["all-proxy-models"]
+        async def return_body():
+            return b'{"model": "mistral"}'
 
-        asyncio.run(test())
+        request.body = return_body
+
+        # use generated key to auth in
+        result = await user_api_key_auth(request=request, api_key=bearer_token)
+        print("result from user auth with new key", result)
+
+        # call /key/info for key - models == "all-proxy-models"
+        key_info = await info_key_fn(key=generated_key)
+        print("key_info", key_info)
+        models = key_info["info"]["models"]
+        assert models == ["all-team-models"]
+
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
