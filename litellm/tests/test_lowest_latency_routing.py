@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import pytest
 from litellm import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -47,7 +49,8 @@ def test_latency_updated():
     )
     latency_key = f"{model_group}_map"
     assert (
-        end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
+        end_time - start_time
+        == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
     )
 
 
@@ -195,7 +198,9 @@ async def _gather_deploy(all_deploys):
     return await asyncio.gather(*[_deploy(*t) for t in all_deploys])
 
 
-@pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
+@pytest.mark.parametrize(
+    "ans_rpm", [1, 5]
+)  # 1 should produce nothing, 10 should select first
 def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     """
     Pass in list of 2 valid models
@@ -240,7 +245,9 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
 # test_get_available_endpoints_tpm_rpm_check_async()
 
 
-@pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
+@pytest.mark.parametrize(
+    "ans_rpm", [1, 5]
+)  # 1 should produce nothing, 10 should select first
 def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
     """
     Pass in list of 2 valid models
@@ -409,7 +416,9 @@ def test_router_get_available_deployments():
 
 @pytest.mark.asyncio
 async def test_router_completion_streaming():
-    messages = [{"role": "user", "content": "Hello, can you generate a 500 words poem?"}]
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
     model = "azure-model"
     model_list = [
         {
@@ -459,8 +468,10 @@ async def test_router_completion_streaming():
         final_response = await router.acompletion(model=model, messages=messages)
         print(f"min deployment id: {picked_deployment}")
         print(f"model id: {final_response._hidden_params['model_id']}")
-        assert final_response._hidden_params["model_id"] == picked_deployment["model_info"]["id"]
+        assert (
+            final_response._hidden_params["model_id"]
+            == picked_deployment["model_info"]["id"]
+        )
 
 
 # asyncio.run(test_router_completion_streaming())
-# %%
