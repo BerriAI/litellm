@@ -3775,12 +3775,12 @@ def test_completion_openai_prompt():
     try:
         print("\n text 003 test\n")
         response = text_completion(
-            model="gpt-3.5-turbo-instruct", prompt="What's the weather in SF?"
+            model="gpt-3.5-turbo-instruct",
+            prompt=["What's the weather in SF?", "How is Manchester?"],
         )
         print(response)
+        assert len(response.choices) == 2
         response_str = response["choices"][0]["text"]
-        # print(response.choices[0])
-        # print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
