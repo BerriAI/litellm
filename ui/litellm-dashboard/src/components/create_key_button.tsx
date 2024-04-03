@@ -145,20 +145,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
                     </Option>
-                  {team && team.models ? (
-                    team.models.map((model: string) => (
-                      <Option key={model} value={model}>
-                        {model}
-                      </Option>
-                    ))
-                  ) : (
-                    userModels.map((model: string) => (
-                      <Option key={model} value={model}>
-                        {model}
-                      </Option>
-                    ))
-                  )}
-
+                    {team && team.models ? (
+                      team.models.includes("all-proxy-models") ? (
+                        userModels.map((model: string) => (
+                          (
+                            <Option key={model} value={model}>
+                              {model}
+                            </Option>
+                          )
+                        ))
+                      ) : (
+                        team.models.map((model: string) => (
+                          <Option key={model} value={model}>
+                            {model}
+                          </Option>
+                        ))
+                      )
+                    ) : (
+                      userModels.map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    )}
 
                 </Select>
               </Form.Item>
