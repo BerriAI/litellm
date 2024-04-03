@@ -51,7 +51,7 @@ from litellm.proxy.proxy_server import (
     user_info,
     info_key_fn,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
+from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -1141,9 +1141,9 @@ def test_call_with_key_over_budget(prisma_client):
             from litellm.caching import Cache
 
             litellm.cache = Cache()
-            import time
+            import time, uuid
 
-            request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
+            request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
 
             resp = ModelResponse(
                 id=request_id,
@@ -1176,7 +1176,11 @@ def test_call_with_key_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-            await asyncio.sleep(10)
+            await update_spend(
+                prisma_client=prisma_client,
+                db_writer_client=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
             # test spend_log was written and we can read it
             spend_logs = await view_spend_logs(request_id=request_id)
 
@@ -1202,7 +1206,10 @@ def test_call_with_key_over_budget(prisma_client):
     except Exception as e:
         # print(f"Error - {str(e)}")
         traceback.print_exc()
-        error_detail = e.message
+        if hasattr(e, "message"):
+            error_detail = e.message
+        else:
+            error_detail = str(e)
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
 
@@ -1251,9 +1258,9 @@ def test_call_with_key_over_model_budget(prisma_client):
             from litellm.caching import Cache
 
             litellm.cache = Cache()
-            import time
+            import time, uuid
 
-            request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
+            request_id = f"chatcmpl-{uuid.uuid4()}"
 
             resp = ModelResponse(
                 id=request_id,
@@ -1286,7 +1293,11 @@ def test_call_with_key_over_model_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-            await asyncio.sleep(10)
+            await update_spend(
+                prisma_client=prisma_client,
+                db_writer_client=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
             # test spend_log was written and we can read it
             spend_logs = await view_spend_logs(request_id=request_id)
 
@@ -1344,9 +1355,9 @@ async def test_call_with_key_never_over_budget(prisma_client):
             _PROXY_track_cost_callback as track_cost_callback,
         )
         from litellm import ModelResponse, Choices, Message, Usage
-        import time
+        import time, uuid
 
-        request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
+        request_id = f"chatcmpl-{uuid.uuid4()}"
 
         resp = ModelResponse(
             id=request_id,
@@ -1381,7 +1392,11 @@ async def test_call_with_key_never_over_budget(prisma_client):
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
-        await asyncio.sleep(5)
+        await update_spend(
+            prisma_client=prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
         print("result from user auth with new key", result)
@@ -1421,9 +1436,9 @@ async def test_call_with_key_over_budget_stream(prisma_client):
             _PROXY_track_cost_callback as track_cost_callback,
         )
         from litellm import ModelResponse, Choices, Message, Usage
-        import time
+        import time, uuid
 
-        request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
+        request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
         resp = ModelResponse(
             id=request_id,
             choices=[
@@ -1457,7 +1472,11 @@ async def test_call_with_key_over_budget_stream(prisma_client):
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
-        await asyncio.sleep(5)
+        await update_spend(
+            prisma_client=prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
         print("result from user auth with new key", result)
