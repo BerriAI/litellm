@@ -115,11 +115,17 @@ const Team: React.FC<TeamProps> = ({
                   <Input />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
+                  <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                      All Models on Proxy
+                    </Select2.Option>
                   <Select2
                     mode="multiple"
                     placeholder="Select models"
                     style={{ width: "100%" }}
                   >
+                    <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                      All Models on Proxy
+                    </Select2.Option>
                     {userModels && userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {model}
@@ -216,15 +222,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleModelSelection = (selectedModels: string[]) => {
-    if (selectedModels.includes("all_models")) {
-      // Select all models except "All Models"
-      const allModelsExceptAll = userModels.filter(model => model !== "all");
-      form.setFieldsValue({
-        models: allModelsExceptAll
-      });
-    }
-  };
+
   
 
   const confirmDelete = async () => {
@@ -365,8 +363,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                             {Array.isArray(team.models) ? (
                               <div style={{ display: "flex", flexDirection: "column" }}>
                                 {team.models.length === 0 ? (
-                                  <Badge size={"xs"} className="mb-1" color="purple">
-                                    <Text>All Models</Text>
+                                  <Badge size={"xs"} className="mb-1" color="blue">
+                                    <Text>all-proxy-models</Text>
                                   </Badge>
                                 ) : (
                                   team.models.map((model: string, index: number) => (
@@ -484,10 +482,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     mode="multiple"
                     placeholder="Select models"
                     style={{ width: "100%" }}
-                    onChange={(selectedModels) => handleModelSelection(selectedModels)}
                   >
-                    <Select2.Option key="all_models" value="all_models">
-                      All Models
+                    <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                      All Models on Proxy
                     </Select2.Option>
                     {userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
