@@ -213,6 +213,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
   const handleEditClick = (token: any) => {
     console.log("handleEditClick:", token);
+
+    // set token.token to token.token_id if token_id is not null
+    if (token.token_id !== null) {
+      token.token = token.token_id;
+    }
     setSelectedToken(token);
     setEditModalVisible(true);
   };
