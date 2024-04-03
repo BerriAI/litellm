@@ -227,6 +227,33 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     index: int
 
 
+class HiddenParams(OpenAIObject):
+    original_response: Optional[str] = None
+    model_id: Optional[str] = None  # used in Router for individual deployments
+
+    class Config:
+        extra = "allow"
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
+    def json(self, **kwargs):
+        try:
+            return self.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
+
+
 class ChatCompletionMessageToolCall(OpenAIObject):
     def __init__(
         self,
@@ -729,7 +756,7 @@ class TextCompletionResponse(OpenAIObject):
     choices: List[TextChoices]
     usage: Optional[Usage]
     _response_ms: Optional[int] = None
-    _hidden_params: Optional[dict] = None
+    _hidden_params: HiddenParams
 
     def __init__(
         self,
@@ -792,9 +819,7 @@ class TextCompletionResponse(OpenAIObject):
             self._response_ms = response_ms
         else:
             self._response_ms = None
-        self._hidden_params = (
-            {}
-        )  # used in case users want to access the original model response
+        self._hidden_params = HiddenParams()
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1179,7 +1204,8 @@ class Logging:
 
             # User Logging -> if you pass in a custom logging function
             print_verbose(
-                f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n"
+                f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n",
+                log_level="INFO",
             )
             if self.logger_fn and callable(self.logger_fn):
                 try:
