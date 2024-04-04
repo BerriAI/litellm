@@ -3,7 +3,6 @@ openai
 python-dotenv
 tiktoken
 importlib_metadata
-baseten
 cohere
 redis
 anthropic
