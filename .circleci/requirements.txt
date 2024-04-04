@@ -8,6 +8,6 @@ cohere
 redis
 anthropic
 orjson
-pydantic
+pydantic==1.10.14
 google-cloud-aiplatform==1.43.0
 redisvl==0.0.7 # semantic caching
