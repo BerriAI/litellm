@@ -7,15 +7,6 @@ jobs:
 
     steps:
       - checkout
-      - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
-          command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
-            else
-              echo "No changes to litellm or pyproject.toml. Skipping tests."
-              circleci step halt
-            fi
       - restore_cache:
           keys:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
@@ -71,6 +62,15 @@ jobs:
               exit 1
             fi
             cd ..
+      - run:
+          name: Check if litellm dir was updated or if pyproject.toml was modified
+          command: |
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
+              echo "litellm updated"
+            else
+              echo "No changes to litellm or pyproject.toml. Skipping tests."
+              circleci step halt
+            fi
       - run:
           name: Run prisma ./entrypoint.sh
           command: |
