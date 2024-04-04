@@ -1033,7 +1033,7 @@ class OpenAITextCompletion(BaseLLM):
             ):
                 prompt = messages[0]["content"]
             else:
-                prompt = " ".join([message["content"] for message in messages])  # type: ignore
+                prompt = [message["content"] for message in messages]  # type: ignore
 
             # don't send max retries to the api, if set
 

@@ -6090,6 +6090,7 @@ async def update_team(
 
     if data.team_id is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+    verbose_proxy_logger.debug("/team/update - %s", data)
 
     existing_team_row = await prisma_client.get_data(
         team_id=data.team_id, table_name="team", query_type="find_unique"
@@ -6140,7 +6141,7 @@ async def update_team(
     ## Get diff
     if existing_team_row.members_with_roles is not None:
         for user in existing_team_row.members_with_roles:
-            if user["user_id"] not in new_user_id_list:
+            if user["user_id"] not in new_user_id_list and len(new_user_id_list) > 0:
                 deleted_user_id_list.append(user["user_id"])
 
     ## SET UPDATED LIST
