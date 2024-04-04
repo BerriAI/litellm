@@ -129,6 +129,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item
                 label="Team ID"
                 name="team_id"
+                hidden={true}
                 initialValue={team ? team["team_id"] : null}
                 valuePropName="team_id"
                 className="mt-8"
@@ -136,7 +137,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <Input value={team ? team["team_alias"] : ""} disabled />
               </Form.Item>
 
-              <Form.Item label="Models" name="models">
+              <Form.Item 
+                label="Models" 
+                name="models"
+                rules={[{ required: true, message: 'Please select a model' }]}
+                help="required"
+              >
                 <Select
                   mode="multiple"
                   placeholder="Select models"
