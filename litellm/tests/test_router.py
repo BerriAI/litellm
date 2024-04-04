@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
+from litellm.router import Deployment, LiteLLM_Params, ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -1193,3 +1194,37 @@ async def test_router_amoderation():
     )
 
     print("moderation result", result)
+
+
+def test_router_add_deployment():
+    initial_model_list = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {
+                "model": "openai/my-fake-model",
+                "api_key": "my-fake-key",
+                "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
+            },
+        },
+    ]
+    router = Router(model_list=initial_model_list)
+
+    init_model_id_list = router.get_model_ids()
+
+    print(f"init_model_id_list: {init_model_id_list}")
+
+    router.add_deployment(
+        deployment=Deployment(
+            model_name="gpt-instruct",
+            litellm_params=LiteLLM_Params(model="gpt-3.5-turbo-instruct"),
+            model_info=ModelInfo(),
+        )
+    )
+
+    new_model_id_list = router.get_model_ids()
+
+    print(f"new_model_id_list: {new_model_id_list}")
+
+    assert len(new_model_id_list) > len(init_model_id_list)
+
+    assert new_model_id_list[1] != new_model_id_list[0]
