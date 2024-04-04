@@ -3132,6 +3132,8 @@ def client(original_function):
                                 target=logging_obj.success_handler,
                                 args=(cached_result, start_time, end_time, cache_hit),
                             ).start()
+                        cache_key = kwargs.get("preset_cache_key", None)
+                        cached_result._hidden_params["cache_key"] = cache_key
                         return cached_result
                     elif (
                         call_type == CallTypes.aembedding.value
