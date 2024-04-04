@@ -181,7 +181,7 @@ def test_weighted_selection_router_tpm_as_router_param():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_weighted_selection_router_tpm_as_router_param()
+# test_weighted_selection_router_tpm_as_router_param()
 
 
 def test_weighted_selection_router_rpm_as_router_param():
@@ -433,7 +433,7 @@ def test_usage_based_routing():
 
             selection_counts[response["model"]] += 1
 
-        # print("selection counts", selection_counts)
+        print("selection counts", selection_counts)
 
         total_requests = sum(selection_counts.values())
 
