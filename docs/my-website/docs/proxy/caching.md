@@ -265,32 +265,6 @@ litellm_settings:
     supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
 ```
 
-
-### Turn on `batch_redis_requests` 
-
-**What it does?**
-When a request is made:
-
-- Check if a key starting with `litellm:<hashed_api_key>:<call_type>:` exists in-memory, if no - get the last 100 cached requests for this key and store it
-
-- New requests are stored with this `litellm:..` as the namespace
-
-**Why?**
-Reduce number of redis GET requests. This improved latency by 46% in prod load tests. 
-
-**Usage**
-
-```yaml
-litellm_settings:
-  cache: true
-  cache_params:
-    type: redis
-    ... # remaining redis args (host, port, etc.)
-  callbacks: ["batch_redis_requests"] # 👈 KEY CHANGE!
-```
-
-[**SEE CODE**](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/batch_redis_get.py)
-
 ### Turn on / off caching per request.  
 
 The proxy support 3 cache-controls:
@@ -383,6 +357,87 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+
+### Deleting Cache Keys - `/cache/delete` 
+In order to delete a cache key, send a request to `/cache/delete` with the `keys` you want to delete
+
+Example 
+```shell
+curl -X POST "http://0.0.0.0:4000/cache/delete" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{"keys": ["586bf3f3c1bf5aecb55bd9996494d3bbc69eb58397163add6d49537762a7548d", "key2"]}'
+```
+
+```shell
+# {"status":"success"}
+```
+
+#### Viewing Cache Keys from responses
+You can view the cache_key in the response headers, on cache hits the cache key is sent as the `x-litellm-cache-key` response headers
+```shell
+curl -i --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "user": "ishan",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what is litellm"
+        }
+    ],
+}'
+```
+
+Response from litellm proxy 
+```json
+date: Thu, 04 Apr 2024 17:37:21 GMT
+content-type: application/json
+x-litellm-cache-key: 586bf3f3c1bf5aecb55bd9996494d3bbc69eb58397163add6d49537762a7548d
+
+{
+    "id": "chatcmpl-9ALJTzsBlXR9zTxPvzfFFtFbFtG6T",
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "I'm sorr.."
+                "role": "assistant"
+            }
+        }
+    ],
+    "created": 1712252235,
+}
+             
+```
+
+
+### Turn on `batch_redis_requests` 
+
+**What it does?**
+When a request is made:
+
+- Check if a key starting with `litellm:<hashed_api_key>:<call_type>:` exists in-memory, if no - get the last 100 cached requests for this key and store it
+
+- New requests are stored with this `litellm:..` as the namespace
+
+**Why?**
+Reduce number of redis GET requests. This improved latency by 46% in prod load tests. 
+
+**Usage**
+
+```yaml
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    ... # remaining redis args (host, port, etc.)
+  callbacks: ["batch_redis_requests"] # 👈 KEY CHANGE!
+```
+
+[**SEE CODE**](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/batch_redis_get.py)
 
 ## Supported `cache_params` on proxy config.yaml
 
