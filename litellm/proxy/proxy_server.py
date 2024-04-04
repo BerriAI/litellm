@@ -6800,6 +6800,13 @@ async def add_new_model(
                     "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 }
             )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Set `store_model_in_db: true` in general_settings on your config.yaml"
+                },
+            )
         return {"message": "Model added successfully"}
 
     except Exception as e:
