@@ -11,6 +11,7 @@ import {
   adminTopKeysCall,
   adminTopModelsCall,
   teamSpendLogsCall,
+  tagsSpendLogsCall
 } from "./networking";
 import { start } from "repl";
 
@@ -139,6 +140,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topModels, setTopModels] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
   const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
+  const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
 
@@ -217,6 +219,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
             })
 
             setTotalSpendPerTeam(total_spend_per_team);
+
+            //get top tags
+            const top_tags = await tagsSpendLogsCall(accessToken);
+            setTopTagsData(top_tags.top_10_tags);
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -273,6 +279,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabList className="mt-2">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
+           <Tab>Tag Based Usage</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -355,6 +362,34 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Card>
 
               <Title>Daily Spend Per Team</Title>
+                <BarChart
+                  className="h-72"
+                  data={teamSpendData}
+                  showLegend={true}
+                  index="date"
+                  categories={uniqueTeamIds}
+                  yAxisWidth={80}
+                  
+                  stack={true}
+                />
+              </Card>
+              </Col>
+              <Col numColSpan={2}>
+              </Col>
+            </Grid>
+            </TabPanel>
+            <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
+              <Col numColSpan={2}>
+              <Card className="mb-2">
+              <Title>Total Spend Per Tag</Title>
+                <BarList
+                  data={topTagsData}
+                />
+              </Card>
+              <Card>
+
+              <Title>Daily Spend Per Tag</Title>
                 <BarChart
                   className="h-72"
                   data={teamSpendData}

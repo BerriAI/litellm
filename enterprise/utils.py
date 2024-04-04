@@ -1,5 +1,6 @@
 # Enterprise Proxy Util Endpoints
 from litellm._logging import verbose_logger
+import collections
 
 
 async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
@@ -15,6 +16,43 @@ async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
     )
 
     return response
+
+
+async def ui_get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
+    response = await prisma_client.db.query_raw(
+        """
+        SELECT
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        DATE(s."startTime") AS spend_date,
+        COUNT(*) AS log_count,
+        SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs" s
+        WHERE s."startTime" >= current_date - interval '30 days'
+        GROUP BY individual_request_tag, spend_date
+        ORDER BY spend_date;
+        """
+    )
+
+    # print("tags - spend")
+    # print(response)
+    # Bar Chart 1 - Spend per tag - Top 10 tags by spend
+    total_spend_per_tag = collections.defaultdict(float)
+    for row in response:
+        tag_name = row["individual_request_tag"]
+        tag_spend = row["total_spend"]
+
+        total_spend_per_tag[tag_name] += tag_spend
+
+    # get top 10 tags
+    top_10_tags = sorted(total_spend_per_tag.items(), key=lambda x: x[1], reverse=True)[
+        :10
+    ]
+    # convert to ui format
+    ui_top_10_tags = [{"name": tag[0], "value": tag[1]} for tag in top_10_tags]
+
+    # Bar Chart 2 - Daily Spend per tag
+
+    return {"top_10_tags": ui_top_10_tags, "daily_spend_per_tag": total_spend_per_tag}
 
 
 async def view_spend_logs_from_clickhouse(
