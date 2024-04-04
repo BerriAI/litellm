@@ -8,11 +8,17 @@ import TabItem from '@theme/TabItem';
 </a>
 
 ## Pre-requisites
-* `pip install google-cloud-aiplatform`
+* `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
 * Authentication: 
     * run `gcloud auth application-default login` See [Google Cloud Docs](https://cloud.google.com/docs/authentication/external/set-up-adc)
-    * Alternatively you can set `application_default_credentials.json`
+    * Alternatively you can set `GOOGLE_APPLICATION_CREDENTIALS`
 
+    Here's how: [**Jump to Code**](#extra)
+
+      - Create a service account on GCP
+      - Export the credentials as a json
+      - load the json and json.dump the json as a string
+      - store the json string in your environment as `GOOGLE_APPLICATION_CREDENTIALS`
 
 ## Sample Usage
 ```python
@@ -298,3 +304,43 @@ print(response)
 | code-bison@001   | `completion('code-bison@001', messages)` |
 | code-gecko@001   | `completion('code-gecko@001', messages)` |
 | code-gecko@latest| `completion('code-gecko@latest', messages)` |
+
+
+## Extra
+
+Here's the code for storing your service account credentials as `GOOGLE_APPLICATION_CREDENTIALS` environment variable:
+
+
+```python
+def load_vertex_ai_credentials():
+  # Define the path to the vertex_key.json file
+  print("loading vertex ai credentials")
+  filepath = os.path.dirname(os.path.abspath(__file__))
+  vertex_key_path = filepath + "/vertex_key.json"
+
+  # Read the existing content of the file or create an empty dictionary
+  try:
+      with open(vertex_key_path, "r") as file:
+          # Read the file content
+          print("Read vertexai file path")
+          content = file.read()
+
+          # If the file is empty or not valid JSON, create an empty dictionary
+          if not content or not content.strip():
+              service_account_key_data = {}
+          else:
+              # Attempt to load the existing JSON content
+              file.seek(0)
+              service_account_key_data = json.load(file)
+  except FileNotFoundError:
+      # If the file doesn't exist, create an empty dictionary
+      service_account_key_data = {}
+
+  # Create a temporary file
+  with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+      # Write the updated content to the temporary file
+      json.dump(service_account_key_data, temp_file, indent=2)
+
+  # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+  os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+```
