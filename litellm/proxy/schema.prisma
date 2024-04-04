@@ -39,6 +39,7 @@ model LiteLLM_ProxyModelTable {
   updated_by String
 }
 
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String
