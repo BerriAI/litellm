@@ -54,6 +54,7 @@ litellm_settings:
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
+  store_model_in_db: True
   proxy_budget_rescheduler_min_time: 60
   proxy_budget_rescheduler_max_time: 64
   proxy_batch_write_at: 1
