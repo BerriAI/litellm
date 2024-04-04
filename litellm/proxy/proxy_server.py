@@ -6833,6 +6833,7 @@ async def add_new_model(
     description="v2 - returns all the models set on the config.yaml, shows 'user_access' = True if the user has access to the model. Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def model_info_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -7036,37 +7037,40 @@ async def model_info_v1(
 async def delete_model(model_info: ModelInfoDelete):
     global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config
     try:
-        if not os.path.exists(user_config_file_path):
-            raise HTTPException(status_code=404, detail="Config file does not exist.")
+        """
+        [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 
-        # Load existing config
-        config = await proxy_config.get_config()
+        - Check if id in db
+        - Delete
+        """
 
-        # If model_list is not in the config, nothing can be deleted
-        if len(config.get("model_list", [])) == 0:
+        global prisma_client
+
+        if prisma_client is None:
             raise HTTPException(
-                status_code=400, detail="No model list available in the config."
+                status_code=500,
+                detail={
+                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
+                },
             )
 
-        # Check if the model with the specified model_id exists
-        model_to_delete = None
-
-        for model in config["model_list"]:
-            if model.get("model_info", {}).get("id", None) == model_info.id:
-                model_to_delete = model
-                break
-
-        # If the model was not found, return an error
-        if model_to_delete is None:
-            raise HTTPException(
-                status_code=400, detail="Model with given model_id not found."
+        # update DB
+        if general_settings.get("store_model_in_db", False) == True:
+            """
+            - store model_list in db
+            - store keys separately
+            """
+            # encrypt litellm params #
+            await prisma_client.db.litellm_proxymodeltable.delete(
+                where={"model_id": model_info.id}
             )
-
-        # Remove model from the list and save the updated config
-        config["model_list"].remove(model_to_delete)
-
-        # Save updated config
-        config = await proxy_config.save_config(new_config=config)
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Set `store_model_in_db: true` in general_settings on your config.yaml"
+                },
+            )
         return {"message": "Model deleted successfully"}
 
     except Exception as e:
