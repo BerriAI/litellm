@@ -3440,7 +3440,10 @@ async def chat_completion(
         if (
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
-            custom_headers = {"x-litellm-model-id": model_id}
+            custom_headers = {
+                "x-litellm-model-id": model_id,
+                "x-litellm-cache-key": cache_key,
+            }
             selected_data_generator = select_data_generator(
                 response=response, user_api_key_dict=user_api_key_dict
             )
