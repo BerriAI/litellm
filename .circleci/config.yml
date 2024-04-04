@@ -41,6 +41,7 @@ jobs:
             pip install openai
             pip install prisma            
             pip install "httpx==0.24.1"
+            pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
             pip install "aiodynamo==23.10.1"
