@@ -413,6 +413,20 @@ class ProxyLogging:
                     ) as response:
                         if response.status == 200:
                             pass
+            elif client == "ms_teams":
+                ms_teams_webhook_url = os.getenv("MS_TEAMS_WEBHOOK_URL", None)
+                if ms_teams_webhook_url is None:
+                    raise Exception("Missing MS_TEAMS_WEBHOOK_URL from environment")
+                payload = {"text": formatted_message}
+                headers = {"Content-type": "application/json"}
+                async with aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(ssl=False)
+                ) as session:
+                    async with session.post(
+                        ms_teams_webhook_url, json=payload, headers=headers
+                    ) as response:
+                        if response.status == 200:
+                            pass                        
             elif client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:
                     litellm.utils.sentry_sdk_instance.capture_message(formatted_message)

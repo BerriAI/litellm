@@ -115,6 +115,7 @@ capture_exception = None
 add_breadcrumb = None
 posthog = None
 slack_app = None
+ms_teams_app = None
 alerts_channel = None
 heliconeLogger = None
 athinaLogger = None
@@ -6302,7 +6303,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
 
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, ms_teams_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger
 
     try:
         for callback in callback_list:
@@ -6356,6 +6357,19 @@ def set_callbacks(callback_list, function_id=None):
                 )
                 alerts_channel = os.environ["SLACK_API_CHANNEL"]
                 print_verbose(f"Initialized Slack App: {slack_app}")
+            elif callback == "ms_teams":
+                try:
+                    import pymsteams
+                except ImportError:
+                    print_verbose("Package 'pymsteams' is missing. Installing it...")
+                    subprocess.check_call(
+                        [sys.executable, "-m", "pip", "install", "pymsteams"]
+                    )
+                    import pymsteams
+                ms_teams_app = pymsteams.connectorcard(
+                    os.environ.get("MS_TEAMS_WEBHOOK_URL")
+                )
+                print_verbose(f"Initialized Teams App: {ms_teams_app}")                
             elif callback == "traceloop":
                 traceloopLogger = TraceloopLogger()
             elif callback == "athina":
@@ -6407,7 +6421,7 @@ def set_callbacks(callback_list, function_id=None):
 
 # NOTE: DEPRECATING this in favor of using failure_handler() in Logging:
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, ms_teams_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger
     try:
         # print_verbose(f"handle_failure args: {args}")
         # print_verbose(f"handle_failure kwargs: {kwargs}")
@@ -6435,6 +6449,20 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     slack_app.client.chat_postMessage(
                         channel=alerts_channel, text=slack_msg
                     )
+                elif callback == "ms_teams":
+                    ms_teams_app.title("LiteLLM Failure")
+                    ms_teams_msg = []
+                    if len(kwargs) > 0:
+                        for key in kwargs:
+                            ms_teams_msg.append(f"{key}: {kwargs[key]}")
+                    if len(args) > 0:
+                        for i, arg in enumerate(args):
+                            ms_teams_msg.append(f"LiteLLM_Args_{str(i)}: {arg}")
+                    for detail in additional_details:
+                        ms_teams_msg.append(f"{detail}: {additional_details[detail]}")
+                    ms_teams_msg.append(f"Traceback: {traceback_exception}")
+                    ms_teams_app.text("\n".join(ms_teams_msg))
+                    assert ms_teams_app.send()                    
                 elif callback == "sentry":
                     capture_exception(exception)
                 elif callback == "posthog":
