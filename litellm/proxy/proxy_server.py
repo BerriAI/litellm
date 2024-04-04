@@ -3437,15 +3437,18 @@ async def chat_completion(
 
         # Post Call Processing
         data["litellm_status"] = "success"  # used for alerting
-        if hasattr(response, "_hidden_params"):
-            model_id = response._hidden_params.get("model_id", None) or ""
-        else:
-            model_id = ""
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
 
         if (
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
-            custom_headers = {"x-litellm-model-id": model_id}
+            custom_headers = {
+                "x-litellm-model-id": model_id,
+                "x-litellm-cache-key": cache_key,
+            }
             selected_data_generator = select_data_generator(
                 response=response, user_api_key_dict=user_api_key_dict
             )
@@ -3456,6 +3459,7 @@ async def chat_completion(
             )
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -8203,6 +8207,51 @@ async def cache_ping():
         raise HTTPException(
             status_code=503,
             detail=f"Service Unhealthy ({str(e)}).Cache parameters: {litellm_cache_params}.specific_cache_params: {specific_cache_params}",
+        )
+
+
+@router.post(
+    "/cache/delete",
+    tags=["caching"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def cache_delete(request: Request):
+    """
+    Endpoint for deleting a key from the cache. All responses from litellm proxy have `x-litellm-cache-key` in the headers
+
+    Parameters:
+    - **keys**: *Optional[List[str]]* - A list of keys to delete from the cache. Example {"keys": ["key1", "key2"]}
+
+    ```shell
+    curl -X POST "http://0.0.0.0:4000/cache/delete" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{"keys": ["key1", "key2"]}'
+    ```
+
+    """
+    try:
+        if litellm.cache is None:
+            raise HTTPException(
+                status_code=503, detail="Cache not initialized. litellm.cache is None"
+            )
+
+        request_data = await request.json()
+        keys = request_data.get("keys", None)
+
+        if litellm.cache.type == "redis":
+            await litellm.cache.delete_cache_keys(keys=keys)
+            return {
+                "status": "success",
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cache type {litellm.cache.type} does not support deleting a key. only `redis` is supported",
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cache Delete Failed({str(e)})",
         )
 
 
