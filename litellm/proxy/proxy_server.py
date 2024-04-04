@@ -3432,10 +3432,10 @@ async def chat_completion(
 
         # Post Call Processing
         data["litellm_status"] = "success"  # used for alerting
-        if hasattr(response, "_hidden_params"):
-            model_id = response._hidden_params.get("model_id", None) or ""
-        else:
-            model_id = ""
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
 
         if (
             "stream" in data and data["stream"] == True
@@ -3451,6 +3451,7 @@ async def chat_completion(
             )
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
