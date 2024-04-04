@@ -215,7 +215,7 @@ class ProxyChatCompletionRequest(LiteLLMBase):
 
 
 class ModelInfoDelete(LiteLLMBase):
-    id: Optional[str]
+    id: str
 
 
 class ModelInfo(LiteLLMBase):
