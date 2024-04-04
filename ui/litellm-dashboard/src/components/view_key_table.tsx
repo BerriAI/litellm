@@ -63,6 +63,7 @@ interface ItemData {
   tpm_limit: string | null;
   rpm_limit: string | null;
   token: string;
+  token_id: string | null;
   id: number;
   team_id: string;
   metadata: any;
@@ -215,9 +216,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     console.log("handleEditClick:", token);
 
     // set token.token to token.token_id if token_id is not null
-    if (token.token_id !== null) {
-      token.token = token.token_id;
+    if (token.token == null) {
+      if (token.token_id !== null) {
+        token.token = token.token_id;
+      }
     }
+
     setSelectedToken(token);
     setEditModalVisible(true);
   };
