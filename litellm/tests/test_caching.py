@@ -689,6 +689,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
         raise e
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_s3_cache_acompletion_stream_azure():
     import asyncio
@@ -767,6 +768,7 @@ async def test_s3_cache_acompletion_stream_azure():
 # test_s3_cache_acompletion_stream_azure()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_s3_cache_acompletion_azure():
     import asyncio
