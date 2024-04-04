@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     Member,
 )
 from litellm.caching import DualCache, RedisCache
+from litellm.router import Deployment, ModelInfo, LiteLLM_Params
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
@@ -2181,6 +2182,32 @@ async def update_spend(
                 raise e
 
 
+# class Models:
+#     """
+#     Need a class to maintain state of models / router across calls to check if new deployments need to be added
+#     """
+
+#     def __init__(
+#         self,
+#         router: litellm.Router,
+#         llm_model_list: list,
+#         prisma_client: PrismaClient,
+#         proxy_logging_obj: ProxyLogging,
+#         master_key: str,
+#     ) -> None:
+#         self.router = router
+#         self.llm_model_list = llm_model_list
+#         self.prisma_client = prisma_client
+#         self.proxy_logging_obj = proxy_logging_obj
+#         self.master_key = master_key
+
+#     def get_router(self) -> litellm.Router:
+#         return self.router
+
+#     def get_model_list(self) -> list:
+#         return self.llm_model_list
+
+
 async def _read_request_body(request):
     """
     Asynchronous function to read the request body and parse it as JSON or literal data.
@@ -2316,6 +2343,45 @@ def _is_user_proxy_admin(user_id_information=None):
         return True
 
     return False
+
+
+def encrypt_value(value: str, master_key: str):
+    import hashlib
+    import nacl.secret
+    import nacl.utils
+
+    # get 32 byte master key #
+    hash_object = hashlib.sha256(master_key.encode())
+    hash_bytes = hash_object.digest()
+
+    # initialize secret box #
+    box = nacl.secret.SecretBox(hash_bytes)
+
+    # encode message #
+    value_bytes = value.encode("utf-8")
+
+    encrypted = box.encrypt(value_bytes)
+
+    return encrypted
+
+
+def decrypt_value(value: bytes, master_key: str) -> str:
+    import hashlib
+    import nacl.secret
+    import nacl.utils
+
+    # get 32 byte master key #
+    hash_object = hashlib.sha256(master_key.encode())
+    hash_bytes = hash_object.digest()
+
+    # initialize secret box #
+    box = nacl.secret.SecretBox(hash_bytes)
+
+    # Convert the bytes object to a string
+    plaintext = box.decrypt(value)
+
+    plaintext = plaintext.decode("utf-8")  # type: ignore
+    return plaintext  # type: ignore
 
 
 # LiteLLM Admin UI - Non SSO Login
