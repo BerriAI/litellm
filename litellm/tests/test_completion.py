@@ -1762,6 +1762,7 @@ def test_customprompt_together_ai():
 # test_customprompt_together_ai()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_completion_sagemaker():
     try:
         litellm.set_verbose = True
@@ -1791,6 +1792,7 @@ def test_completion_sagemaker():
 # test_completion_sagemaker()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
 async def test_acompletion_sagemaker():
     try:
