@@ -1005,7 +1005,7 @@ def test_reading_keys_os_environ():
             assert client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert client.timeout == (
+            assert client.timeout == int(
                 os.environ["AZURE_TIMEOUT"]
             ), f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("sync client set correctly!")
@@ -1017,7 +1017,7 @@ def test_reading_keys_os_environ():
             assert stream_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_client.timeout == (
+            assert stream_client.timeout == int(
                 os.environ["AZURE_STREAM_TIMEOUT"]
             ), f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("sync stream client set correctly!")
@@ -1102,7 +1102,7 @@ def test_reading_openai_keys_os_environ():
             assert client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert client.timeout == (
+            assert client.timeout == int(
                 os.environ["AZURE_TIMEOUT"]
             ), f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("sync client set correctly!")
@@ -1113,7 +1113,7 @@ def test_reading_openai_keys_os_environ():
             assert stream_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_client.timeout == (
+            assert stream_client.timeout == int(
                 os.environ["AZURE_STREAM_TIMEOUT"]
             ), f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("sync stream client set correctly!")
