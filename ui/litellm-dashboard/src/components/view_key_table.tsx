@@ -63,6 +63,7 @@ interface ItemData {
   tpm_limit: string | null;
   rpm_limit: string | null;
   token: string;
+  token_id: string | null;
   id: number;
   team_id: string;
   metadata: any;
@@ -215,9 +216,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     console.log("handleEditClick:", token);
 
     // set token.token to token.token_id if token_id is not null
-    if (token.token_id !== null) {
-      token.token = token.token_id;
+    if (token.token == null) {
+      if (token.token_id !== null) {
+        token.token = token.token_id;
+      }
     }
+
     setSelectedToken(token);
     setEditModalVisible(true);
   };
@@ -295,13 +299,19 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   
 
-  const handleDelete = async (token: string) => {
+  const handleDelete = async (token: any) => {
+    console.log("handleDelete:", token);
+    if (token.token == null) {
+      if (token.token_id !== null) {
+        token.token = token.token_id;
+      }
+    }
     if (data == null) {
       return;
     }
 
     // Set the key to delete and open the confirmation modal
-    setKeyToDelete(token);
+    setKeyToDelete(token.token);
     localStorage.removeItem("userData" + userID);
     setIsDeleteModalOpen(true);
   };
@@ -593,7 +603,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     onClick={() => handleEditClick(item)}
                   />
                   <Icon
-                    onClick={() => handleDelete(item.token)}
+                    onClick={() => handleDelete(item)}
                     icon={TrashIcon}
                     size="sm"
                   />
