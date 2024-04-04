@@ -217,10 +217,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
           <ViewKeyTable
             userID={userID}
+            userRole={userRole}
             accessToken={accessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
             data={keys}
-            userModels={userModels}
             setData={setKeys}
           />
           <CreateKey
