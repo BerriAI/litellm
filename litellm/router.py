@@ -73,8 +73,15 @@ class LiteLLM_Params(BaseModel):
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
-    max_retries: Optional[int] = 2  # follows openai default of 2
+    max_retries: int = 2  # follows openai default of 2
     organization: Optional[str] = None  # for openai orgs
+
+    def __init__(self, max_retries: Optional[Union[int, str]] = None, **params):
+        if max_retries is None:
+            max_retries = 2
+        elif isinstance(max_retries, str):
+            max_retries = int(max_retries)  # cast to int
+        super().__init__(max_retries=max_retries, **params)
 
     class Config:
         extra = "allow"
@@ -2145,6 +2152,12 @@ class Router:
         for model in original_model_list:
             _model_name = model.pop("model_name")
             _litellm_params = model.pop("litellm_params")
+            ## check if litellm params in os.environ
+            if isinstance(_litellm_params, dict):
+                for k, v in _litellm_params.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        _litellm_params[k] = litellm.get_secret(v)
+
             _model_info = model.pop("model_info", {})
             deployment = Deployment(
                 **model,
