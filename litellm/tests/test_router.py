@@ -980,7 +980,7 @@ def test_reading_keys_os_environ():
             assert async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert async_client.timeout == (
+            assert async_client.timeout == int(
                 os.environ["AZURE_TIMEOUT"]
             ), f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("async client set correctly!")
@@ -993,7 +993,7 @@ def test_reading_keys_os_environ():
             assert stream_async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_async_client.timeout == (
+            assert stream_async_client.timeout == int(
                 os.environ["AZURE_STREAM_TIMEOUT"]
             ), f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("async stream client set correctly!")
@@ -1079,7 +1079,7 @@ def test_reading_openai_keys_os_environ():
             assert async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert async_client.timeout == (
+            assert async_client.timeout == int(
                 os.environ["AZURE_TIMEOUT"]
             ), f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("async client set correctly!")
@@ -1091,7 +1091,7 @@ def test_reading_openai_keys_os_environ():
             assert stream_async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_async_client.timeout == (
+            assert stream_async_client.timeout == int(
                 os.environ["AZURE_STREAM_TIMEOUT"]
             ), f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
             print("async stream client set correctly!")
