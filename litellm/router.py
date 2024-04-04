@@ -2143,12 +2143,17 @@ class Router:
         import os
 
         for model in original_model_list:
+            _model_name = model.pop("model_name")
+            _litellm_params = model.pop("litellm_params")
+            _model_info = model.pop("model_info", {})
             deployment = Deployment(
-                model_name=model["model_name"],
-                litellm_params=model["litellm_params"],
-                model_info=model.get("model_info", {}),
+                **model,
+                model_name=_model_name,
+                litellm_params=_litellm_params,
+                model_info=_model_info,
             )
-            self._add_deployment(deployment=deployment)
+
+            deployment = self._add_deployment(deployment=deployment)
 
             model = deployment.to_json(exclude_none=True)
 
@@ -2157,7 +2162,7 @@ class Router:
         verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
         self.model_names = [m["model_name"] for m in model_list]
 
-    def _add_deployment(self, deployment: Deployment):
+    def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
 
         #### DEPLOYMENT NAMES INIT ########
@@ -2194,7 +2199,7 @@ class Router:
         # Check if user is trying to use model_name == "*"
         # this is a catch all model for their specific api key
         if deployment.model_name == "*":
-            self.default_deployment = deployment
+            self.default_deployment = deployment.to_json(exclude_none=True)
 
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources = deployment.litellm_params.get("dataSources", [])
@@ -2213,6 +2218,8 @@ class Router:
 
         # init OpenAI, Azure clients
         self.set_client(model=deployment.to_json(exclude_none=True))
+
+        return deployment
 
     def add_deployment(self, deployment: Deployment):
         # check if deployment already exists
@@ -2450,6 +2457,7 @@ class Router:
             model = litellm.model_alias_map[
                 model
             ]  # update the model to the actual value if an alias has been passed in
+
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments
