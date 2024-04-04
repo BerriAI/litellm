@@ -186,5 +186,6 @@ async def test_delete_models():
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
         await add_models(session=session, model_id=model_id)
+        await asyncio.sleep(60)
         await chat_completion(session=session, key=key)
         await delete_model(session=session, model_id=model_id)
