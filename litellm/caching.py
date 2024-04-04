@@ -347,6 +347,12 @@ class RedisCache(BaseCache):
                 traceback.print_exc()
                 raise e
 
+    async def delete_cache_keys(self, keys):
+        _redis_client = self.init_async_client()
+        # keys is a list, unpack it so it gets passed as individual elements to delete
+        async with _redis_client as redis_client:
+            await redis_client.delete(*keys)
+
     def client_list(self):
         client_list = self.redis_client.client_list()
         return client_list
@@ -1406,6 +1412,11 @@ class Cache:
     async def ping(self):
         if hasattr(self.cache, "ping"):
             return await self.cache.ping()
+        return None
+
+    async def delete_cache_keys(self, keys):
+        if hasattr(self.cache, "delete_cache_keys"):
+            return await self.cache.delete_cache_keys(keys)
         return None
 
     async def disconnect(self):

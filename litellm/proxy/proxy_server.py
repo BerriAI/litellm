@@ -8202,6 +8202,51 @@ async def cache_ping():
         )
 
 
+@router.post(
+    "/cache/delete",
+    tags=["caching"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def cache_delete(request: Request):
+    """
+    Endpoint for deleting a key from the cache. All responses from litellm proxy have `x-litellm-cache-key` in the headers
+
+    Parameters:
+    - **keys**: *Optional[List[str]]* - A list of keys to delete from the cache. Example {"keys": ["key1", "key2"]}
+
+    ```shell
+    curl -X POST "http://0.0.0.0:4000/cache/delete" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{"keys": ["key1", "key2"]}'
+    ```
+
+    """
+    try:
+        if litellm.cache is None:
+            raise HTTPException(
+                status_code=503, detail="Cache not initialized. litellm.cache is None"
+            )
+
+        request_data = await request.json()
+        keys = request_data.get("keys", None)
+
+        if litellm.cache.type == "redis":
+            await litellm.cache.delete_cache_keys(keys=keys)
+            return {
+                "status": "success",
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cache type {litellm.cache.type} does not support deleting a key. only `redis` is supported",
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cache Delete Failed({str(e)})",
+        )
+
+
 @router.get(
     "/cache/redis/info",
     tags=["caching"],
