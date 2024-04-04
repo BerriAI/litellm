@@ -337,7 +337,9 @@ def test_router_get_available_deployments():
     ## CHECK WHAT'S SELECTED ##
     # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
     print(router.get_available_deployment(model="azure-model"))
-    assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == 2
+    assert (
+        router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
+    )
 
 
 # test_router_get_available_deployments()

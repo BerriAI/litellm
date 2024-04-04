@@ -173,6 +173,7 @@ def test_router_get_available_deployments():
         num_retries=3,
     )  # type: ignore
 
+    print(f"router id's: {router.get_model_ids()}")
     ## DEPLOYMENT 1 ##
     deployment_id = 1
     kwargs = {
@@ -214,7 +215,9 @@ def test_router_get_available_deployments():
 
     ## CHECK WHAT'S SELECTED ##
     # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
-    assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == 2
+    assert (
+        router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
+    )
 
 
 # test_get_available_deployments()

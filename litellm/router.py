@@ -37,9 +37,11 @@ class ModelInfo(BaseModel):
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
 
-    def __init__(self, id: Optional[str] = None, **params):
+    def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
+        elif isinstance(id, int):
+            id = str(id)
         super().__init__(id=id, **params)
 
     class Config:
