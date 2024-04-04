@@ -299,13 +299,19 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   
 
-  const handleDelete = async (token: string) => {
+  const handleDelete = async (token: any) => {
+    console.log("handleDelete:", token);
+    if (token.token == null) {
+      if (token.token_id !== null) {
+        token.token = token.token_id;
+      }
+    }
     if (data == null) {
       return;
     }
 
     // Set the key to delete and open the confirmation modal
-    setKeyToDelete(token);
+    setKeyToDelete(token.token);
     localStorage.removeItem("userData" + userID);
     setIsDeleteModalOpen(true);
   };
@@ -597,7 +603,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     onClick={() => handleEditClick(item)}
                   />
                   <Icon
-                    onClick={() => handleDelete(item.token)}
+                    onClick={() => handleDelete(item)}
                     icon={TrashIcon}
                     size="sm"
                   />
