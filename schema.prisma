@@ -27,6 +27,18 @@ model LiteLLM_BudgetTable {
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
 }
 
+// Models on proxy
+model LiteLLM_ProxyModelTable {
+  model_id String @id @default(uuid())
+  model_name String 
+  litellm_params Json
+  model_info Json? 
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+}
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String
