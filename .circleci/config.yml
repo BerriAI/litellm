@@ -7,7 +7,23 @@ jobs:
 
     steps:
       - checkout
-
+      - run:
+          name: Black Formatting
+          command: |
+            cd litellm
+            python -m pip install black
+            python -m black .
+            cd ..
+      - run:
+          name: Linting Testing
+          command: |
+            cd litellm
+            python -m pip install types-requests types-setuptools types-redis
+            if ! python -m mypy . --ignore-missing-imports; then
+              echo "mypy detected errors"
+              exit 1
+            fi
+            cd ..
       - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
           command: |
@@ -62,24 +78,6 @@ jobs:
             chmod +x entrypoint.sh
             ./entrypoint.sh
             set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            python -m pip install black
-            python -m black .
-            cd ..
-      - run:
-          name: Linting Testing
-          command: |
-            cd litellm
-            python -m pip install types-requests types-setuptools types-redis
-            if ! python -m mypy . --ignore-missing-imports; then
-              echo "mypy detected errors"
-              exit 1
-            fi
-            cd ..
-  
 
       # Run pytest and generate JUnit XML report
       - run:
