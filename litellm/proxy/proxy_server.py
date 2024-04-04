@@ -2393,6 +2393,11 @@ class ProxyConfig:
             if llm_router is None:
                 raise Exception("No router initialized")
 
+            if master_key is None or not isinstance(master_key, str):
+                raise Exception(
+                    f"Master key is not initialized or formatted. master_key={master_key}"
+                )
+
             new_models = await prisma_client.db.litellm_proxymodeltable.find_many(
                 take=10, order={"updated_at": "desc"}
             )
