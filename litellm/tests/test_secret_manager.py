@@ -14,6 +14,7 @@ from litellm import get_secret
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_aws_secret_manager():
     load_aws_secret_manager(use_aws_secret_manager=True)
 
