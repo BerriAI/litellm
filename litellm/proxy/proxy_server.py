@@ -6794,9 +6794,7 @@ async def add_new_model(
             - store keys separately
             """
             # encrypt litellm params #
-            _litellm_params_dict = model_params.litellm_params.model_dump(
-                exclude_none=True
-            )
+            _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
             for k, v in _litellm_params_dict.items():
                 if isinstance(v, str):
                     encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
