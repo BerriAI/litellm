@@ -263,6 +263,7 @@ jobs:
               const response = await github.rest.repos.createRelease({
                 draft: false,
                 generate_release_notes: true,
+                target_commitish: ${{ github.event.inputs.commit_hash}}
                 name: process.env.RELEASE_TAG,
                 owner: context.repo.owner,
                 prerelease: false,
