@@ -1,4 +1,4 @@
-import { BarChart, BarList, Card, Title } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 
@@ -11,6 +11,7 @@ import {
   adminTopKeysCall,
   adminTopModelsCall,
   teamSpendLogsCall,
+  tagsSpendLogsCall
 } from "./networking";
 import { start } from "repl";
 
@@ -139,6 +140,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topModels, setTopModels] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
   const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
+  const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
 
@@ -217,6 +219,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
             })
 
             setTotalSpendPerTeam(total_spend_per_team);
+
+            //get top tags
+            const top_tags = await tagsSpendLogsCall(accessToken);
+            setTopTagsData(top_tags.top_10_tags);
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -273,6 +279,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabList className="mt-2">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
+           <Tab>Tag Based Usage</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -365,6 +372,47 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   
                   stack={true}
                 />
+              </Card>
+              </Col>
+              <Col numColSpan={2}>
+              </Col>
+            </Grid>
+            </TabPanel>
+            <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
+              <Col numColSpan={2}>
+
+              <Card>
+              <Title>Spend Per Tag - Last 30 Days</Title>
+              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Tag</TableHeaderCell>
+                    <TableHeaderCell>Spend</TableHeaderCell>
+                    <TableHeaderCell>Requests</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {topTagsData.map((tag) => (
+                    <TableRow key={tag.name}>
+                      <TableCell>{tag.name}</TableCell>
+                      <TableCell>{tag.value}</TableCell>
+                      <TableCell>{tag.log_count}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+                {/* <BarChart
+                  className="h-72"
+                  data={teamSpendData}
+                  showLegend={true}
+                  index="date"
+                  categories={uniqueTeamIds}
+                  yAxisWidth={80}
+                  
+                  stack={true}
+                /> */}
               </Card>
               </Col>
               <Col numColSpan={2}>
