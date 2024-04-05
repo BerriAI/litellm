@@ -28,6 +28,11 @@ model_list:
       model: mistral/Mistral-large-dfgfj
       api_base: https://Mistral-large-dfgfj-serverless.eastus2.inference.ai.azure.com/v1/
       api_key: JGbKodRcTp****
+  - model_name: command-r-plus
+    litellm_params:
+        model: azure/command-r-plus
+        api_key: os.environ/AZURE_COHERE_API_KEY
+        api_base: os.environ/AZURE_COHERE_API_BASE
 ```
 
 ## Supported Models
