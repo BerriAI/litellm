@@ -55,7 +55,9 @@ class VertexAIAnthropicConfig:
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
-    max_tokens: Optional[int] = litellm.max_tokens
+    max_tokens: Optional[int] = (
+        4096  # anthropic max - setting this doesn't impact response, but is required by anthropic.
+    )
     system: Optional[str] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -69,6 +71,8 @@ class VertexAIAnthropicConfig:
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
+            if key == "max_tokens" and value is None:
+                value = self.max_tokens
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
@@ -158,8 +162,6 @@ def completion(
             message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
         )
     try:
-        import google.auth  # type: ignore
-        from google.auth.transport.requests import Request
         from anthropic import AnthropicVertex
 
         ## Load Config
@@ -224,6 +226,58 @@ def completion(
         else:
             vertex_ai_client = client
 
+        if acompletion == True:
+            """
+            - async streaming
+            - async completion
+            """
+            if stream is not None and stream == True:
+                return async_streaming(
+                    model=model,
+                    messages=messages,
+                    data=data,
+                    print_verbose=print_verbose,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    optional_params=optional_params,
+                    client=client,
+                )
+            else:
+                return async_completion(
+                    model=model,
+                    messages=messages,
+                    data=data,
+                    print_verbose=print_verbose,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    optional_params=optional_params,
+                    client=client,
+                )
+        if stream is not None and stream == True:
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key=None,
+                additional_args={
+                    "complete_input_dict": optional_params,
+                },
+            )
+            response = vertex_ai_client.messages.create(**data, stream=True)  # type: ignore
+            return response
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+            },
+        )
+
         message = vertex_ai_client.messages.create(**data)  # type: ignore
         text_content = message.content[0].text
         ## TOOL CALLING - OUTPUT PARSE
@@ -267,3 +321,115 @@ def completion(
         return model_response
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
+
+
+async def async_completion(
+    model: str,
+    messages: list,
+    data: dict,
+    model_response: ModelResponse,
+    print_verbose: Callable,
+    logging_obj,
+    vertex_project=None,
+    vertex_location=None,
+    optional_params=None,
+    client=None,
+):
+    from anthropic import AsyncAnthropicVertex
+
+    if client is None:
+        vertex_ai_client = AsyncAnthropicVertex(
+            project_id=vertex_project, region=vertex_location
+        )
+    else:
+        vertex_ai_client = client
+
+    ## LOGGING
+    logging_obj.pre_call(
+        input=messages,
+        api_key=None,
+        additional_args={
+            "complete_input_dict": optional_params,
+        },
+    )
+    message = await vertex_ai_client.messages.create(**data)  # type: ignore
+    text_content = message.content[0].text
+    ## TOOL CALLING - OUTPUT PARSE
+    if text_content is not None and contains_tag("invoke", text_content):
+        function_name = extract_between_tags("tool_name", text_content)[0]
+        function_arguments_str = extract_between_tags("invoke", text_content)[0].strip()
+        function_arguments_str = f"<invoke>{function_arguments_str}</invoke>"
+        function_arguments = parse_xml_params(function_arguments_str)
+        _message = litellm.Message(
+            tool_calls=[
+                {
+                    "id": f"call_{uuid.uuid4()}",
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                        "arguments": json.dumps(function_arguments),
+                    },
+                }
+            ],
+            content=None,
+        )
+        model_response.choices[0].message = _message  # type: ignore
+    else:
+        model_response.choices[0].message.content = text_content  # type: ignore
+    model_response.choices[0].finish_reason = map_finish_reason(message.stop_reason)
+
+    ## CALCULATING USAGE
+    prompt_tokens = message.usage.input_tokens
+    completion_tokens = message.usage.output_tokens
+
+    model_response["created"] = int(time.time())
+    model_response["model"] = model
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    model_response.usage = usage
+    return model_response
+
+
+async def async_streaming(
+    model: str,
+    messages: list,
+    data: dict,
+    model_response: ModelResponse,
+    print_verbose: Callable,
+    logging_obj,
+    vertex_project=None,
+    vertex_location=None,
+    optional_params=None,
+    client=None,
+):
+    from anthropic import AsyncAnthropicVertex
+
+    if client is None:
+        vertex_ai_client = AsyncAnthropicVertex(
+            project_id=vertex_project, region=vertex_location
+        )
+    else:
+        vertex_ai_client = client
+
+    ## LOGGING
+    logging_obj.pre_call(
+        input=messages,
+        api_key=None,
+        additional_args={
+            "complete_input_dict": optional_params,
+        },
+    )
+    response = await vertex_ai_client.messages.create(**data, stream=True)  # type: ignore
+    logging_obj.post_call(input=messages, api_key=None, original_response=response)
+
+    streamwrapper = CustomStreamWrapper(
+        completion_stream=response,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        logging_obj=logging_obj,
+    )
+
+    return streamwrapper

@@ -12,6 +12,7 @@ import pytest, asyncio
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout, acompletion
 from litellm import RateLimitError
+from litellm.tests.test_streaming import streaming_format_tests
 import json
 import os
 import tempfile
@@ -100,6 +101,90 @@ def test_vertex_ai_anthropic():
         vertex_ai_location=vertex_ai_location,
     )
     print("\nModel Response", response)
+
+
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
+def test_vertex_ai_anthropic_streaming():
+    load_vertex_ai_credentials()
+
+    # litellm.set_verbose = True
+
+    model = "claude-3-sonnet@20240229"
+
+    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_location = "asia-southeast1"
+
+    response = completion(
+        model="vertex_ai/" + model,
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.7,
+        vertex_ai_project=vertex_ai_project,
+        vertex_ai_location=vertex_ai_location,
+        stream=True,
+    )
+    # print("\nModel Response", response)
+    for chunk in response:
+        print(f"chunk: {chunk}")
+
+    # raise Exception("it worked!")
+
+
+# test_vertex_ai_anthropic_streaming()
+
+
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
+@pytest.mark.asyncio
+async def test_vertex_ai_anthropic_async():
+    load_vertex_ai_credentials()
+
+    model = "claude-3-sonnet@20240229"
+
+    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_location = "asia-southeast1"
+
+    response = await acompletion(
+        model="vertex_ai/" + model,
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.7,
+        vertex_ai_project=vertex_ai_project,
+        vertex_ai_location=vertex_ai_location,
+    )
+    print(f"Model Response: {response}")
+
+
+# asyncio.run(test_vertex_ai_anthropic_async())
+
+
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
+@pytest.mark.asyncio
+async def test_vertex_ai_anthropic_async_streaming():
+    load_vertex_ai_credentials()
+
+    model = "claude-3-sonnet@20240229"
+
+    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_location = "asia-southeast1"
+
+    response = await acompletion(
+        model="vertex_ai/" + model,
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.7,
+        vertex_ai_project=vertex_ai_project,
+        vertex_ai_location=vertex_ai_location,
+        stream=True,
+    )
+
+    async for chunk in response:
+        print(f"chunk: {chunk}")
+
+
+# asyncio.run(test_vertex_ai_anthropic_async_streaming())
 
 
 def test_vertex_ai():

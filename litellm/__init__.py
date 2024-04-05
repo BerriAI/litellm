@@ -269,6 +269,7 @@ vertex_code_chat_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
 vertex_embedding_models: List = []
+vertex_anthropic_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
@@ -302,6 +303,9 @@ for key, value in model_cost.items():
         vertex_code_chat_models.append(key)
     elif value.get("litellm_provider") == "vertex_ai-embedding-models":
         vertex_embedding_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_anthropic_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
