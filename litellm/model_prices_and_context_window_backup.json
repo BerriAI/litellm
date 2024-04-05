@@ -2724,4 +2724,5 @@
         "litellm_provider": "voyage",
         "mode": "embedding"
     }
+
 }
