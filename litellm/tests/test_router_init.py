@@ -252,24 +252,31 @@ def test_stream_timeouts_router():
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "timeout": 200,  # regular calls will not timeout, stream calls will
-                    "stream_timeout": 0.000_001,
+                    "stream_timeout": 10,
                 },
             },
         ]
         router = Router(model_list=model_list)
 
         print("PASSED !")
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hello, write a 20 pg essay"}],
+            "stream": True,
+        }
         selected_client = router._get_client(
             deployment=router.model_list[0],
-            kwargs={
-                "model": "gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": "hello, write a 20 pg essay"}],
-                "stream": True,
-            },
+            kwargs=data,
             client_type=None,
         )
         print("Select client timeout", selected_client.timeout)
-        assert selected_client.timeout == 0.000_001
+        assert selected_client.timeout == 10
+
+        # make actual call
+        response = router.completion(**data)
+
+        for chunk in response:
+            print(f"chunk: {chunk}")
     except openai.APITimeoutError as e:
         print(
             "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
