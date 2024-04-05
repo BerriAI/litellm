@@ -52,7 +52,7 @@ class AnthropicConfig:
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,  # You can pass in a value yourself or use the default value 4096
+        max_tokens: Optional[int] = 4096,  # You can pass in a value yourself or use the default value 4096
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
