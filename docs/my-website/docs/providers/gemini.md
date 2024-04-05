@@ -100,4 +100,3 @@ print(content)
 | gemini-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
 | gemini-1.5-pro       | `completion('gemini/gemini-1.5-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
 | gemini-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-1.5-pro-vision       | `completion('gemini/gemini-1.5-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |

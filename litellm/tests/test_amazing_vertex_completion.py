@@ -84,6 +84,24 @@ async def get_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
+def test_vertex_ai_anthropic():
+    load_vertex_ai_credentials()
+
+    model = "claude-3-sonnet@20240229"
+
+    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_location = "asia-southeast1"
+
+    response = completion(
+        model="vertex_ai/" + model,
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.7,
+        vertex_ai_project=vertex_ai_project,
+        vertex_ai_location=vertex_ai_location,
+    )
+    print("\nModel Response", response)
+
+
 def test_vertex_ai():
     import random
 
@@ -111,7 +129,6 @@ def test_vertex_ai():
                 "text-bison@001",
                 "gemini-1.5-pro",
                 "gemini-1.5-pro-preview-0215",
-                "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
                 continue
@@ -164,7 +181,6 @@ def test_vertex_ai_stream():
                 "text-bison@001",
                 "gemini-1.5-pro",
                 "gemini-1.5-pro-preview-0215",
-                "gemini-1.5-pro-vision",
             ]:
                 # our account does not have access to this model
                 continue
@@ -218,7 +234,6 @@ async def test_async_vertexai_response():
             "text-bison@001",
             "gemini-1.5-pro",
             "gemini-1.5-pro-preview-0215",
-            "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
             continue
@@ -263,7 +278,6 @@ async def test_async_vertexai_streaming_response():
             "text-bison@001",
             "gemini-1.5-pro",
             "gemini-1.5-pro-preview-0215",
-            "gemini-1.5-pro-vision",
         ]:
             # our account does not have access to this model
             continue
