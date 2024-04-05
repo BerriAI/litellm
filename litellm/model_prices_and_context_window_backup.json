@@ -1007,7 +1007,7 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
-        "litellm_provider": "vertex_ai",
+        "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat"
     },
     "vertex_ai/claude-3-haiku@20240307": {
@@ -1015,7 +1015,7 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000125,
-        "litellm_provider": "vertex_ai",
+        "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat"
     },
     "textembedding-gecko": {
