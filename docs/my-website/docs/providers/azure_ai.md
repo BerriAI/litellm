@@ -6,8 +6,8 @@ The `azure/` prefix sends this to Azure
 ```python
 import litellm
 response = litellm.completion(
-    model="azure/<your-deployment-name>",
-    api_base="https://Cohere-command-r-plus-gylpd-serverless.eastus2.inference.ai.azure.com/v1/"
+    model="azure/command-r-plus",
+    api_base="<your-deployment-base>/v1/"
     api_key="eskk******"
     messages=[{"role": "user", "content": "What is the meaning of life?"}],
 )
