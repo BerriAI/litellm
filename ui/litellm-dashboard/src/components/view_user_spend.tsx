@@ -70,7 +70,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
 
     return (
         <>
-      <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend</p>
+      <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend (across all teams)</p>
       <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">${roundedSpend}</p>
         
     </>
