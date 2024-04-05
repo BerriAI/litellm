@@ -137,6 +137,7 @@ async def test_add_models():
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
         await add_models(session=session)
+        await asyncio.sleep(60)
         await chat_completion(session=session, key=key)
 
 
