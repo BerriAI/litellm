@@ -9,6 +9,9 @@ on:
         description: "Build Stable version"
         type: boolean
         default: false
+      commit_hash:
+        description: "Commit hash"
+        required: true
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -106,7 +109,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
         with:
-          context: https://github.com/BerriAI/litellm.git#26f5823c4ec4806aba82d8c48dc9816713ffc214
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           push: true
           tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ env.type_release }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
@@ -142,7 +145,7 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: .
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           file: Dockerfile.database
           push: true
           tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ env.type_release }} 
@@ -179,7 +182,7 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: .
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           file: ./litellm-js/spend-logs/Dockerfile
           push: true
           tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ env.type_release }}
