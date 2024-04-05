@@ -27,8 +27,10 @@ jobs:
         id: set-release-type
         run: |
           if [ "${{ github.event.inputs.stable }}" == "true" ]; then
+            echo "stable release"
             echo "type_release=stable" >> $GITHUB_ENV
           else
+            echo "latest release"
             echo "type_release=latest" >> $GITHUB_ENV
           fi
 
@@ -142,7 +144,7 @@ jobs:
           context: .
           file: Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.stable && 'stable' || 'latest' }}
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ env.type_release }} 
           labels: ${{ steps.meta-database.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
