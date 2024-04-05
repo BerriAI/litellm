@@ -15,6 +15,7 @@ import time, random
 import pytest
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_s3_logging():
     # all s3 requests need to be in one test function
     # since we are modifying stdout, and pytests runs tests in parallel
@@ -124,6 +125,7 @@ def test_s3_logging():
 # test_s3_logging()
 
 
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_s3_logging_async():
     # this tests time added to make s3 logging calls, vs just acompletion calls
     try:
