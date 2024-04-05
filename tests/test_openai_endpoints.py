@@ -6,6 +6,14 @@ import aiohttp, openai
 from openai import OpenAI
 
 
+def response_header_check(response):
+    """
+    - assert if response headers < 4kb (nginx limit).
+    """
+    headers_size = sum(len(k) + len(v) for k, v in response.raw_headers)
+    assert headers_size < 4096, "Response headers exceed the 4kb limit"
+
+
 async def generate_key(session):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -23,6 +31,11 @@ async def generate_key(session):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_header_check(
+            response
+        )  # calling the function to check response headers
+
         return await response.json()
 
 
@@ -43,6 +56,10 @@ async def new_user(session):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_header_check(
+            response
+        )  # calling the function to check response headers
         return await response.json()
 
 
@@ -69,7 +86,90 @@ async def chat_completion(session, key):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_header_check(
+            response
+        )  # calling the function to check response headers
+
         return await response.json()
+
+
+async def completion(session, key):
+    url = "http://0.0.0.0:4000/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {"model": "gpt-4", "prompt": "Hello!"}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_header_check(
+            response
+        )  # calling the function to check response headers
+
+        response = await response.json()
+
+        return response
+
+
+async def embeddings(session, key):
+    url = "http://0.0.0.0:4000/embeddings"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": "text-embedding-ada-002",
+        "input": ["hello world"],
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_header_check(
+            response
+        )  # calling the function to check response headers
+
+
+async def image_generation(session, key):
+    url = "http://0.0.0.0:4000/images/generations"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": "dall-e-2",
+        "prompt": "A cute baby sea otter",
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            if (
+                "Connection error" in response_text
+            ):  # OpenAI endpoint returns a connection error
+                return
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_header_check(
+            response
+        )  # calling the function to check response headers
 
 
 @pytest.mark.asyncio
@@ -105,25 +205,6 @@ async def test_chat_completion_old_key():
             await chat_completion(session=session, key=key)
 
 
-async def completion(session, key):
-    url = "http://0.0.0.0:4000/completions"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    data = {"model": "gpt-4", "prompt": "Hello!"}
-
-    async with session.post(url, headers=headers, json=data) as response:
-        status = response.status
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-
-        response = await response.json()
-
-        return response
-
-
 @pytest.mark.asyncio
 async def test_completion():
     """
@@ -151,28 +232,6 @@ async def test_completion():
     )
 
 
-async def embeddings(session, key):
-    url = "http://0.0.0.0:4000/embeddings"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    data = {
-        "model": "text-embedding-ada-002",
-        "input": ["hello world"],
-    }
-
-    async with session.post(url, headers=headers, json=data) as response:
-        status = response.status
-        response_text = await response.text()
-
-        print(response_text)
-        print()
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-
-
 @pytest.mark.asyncio
 async def test_embeddings():
     """
@@ -188,32 +247,6 @@ async def test_embeddings():
         key_gen = await new_user(session=session)
         key_2 = key_gen["key"]
         await embeddings(session=session, key=key_2)
-
-
-async def image_generation(session, key):
-    url = "http://0.0.0.0:4000/images/generations"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    data = {
-        "model": "dall-e-2",
-        "prompt": "A cute baby sea otter",
-    }
-
-    async with session.post(url, headers=headers, json=data) as response:
-        status = response.status
-        response_text = await response.text()
-
-        print(response_text)
-        print()
-
-        if status != 200:
-            if (
-                "Connection error" in response_text
-            ):  # OpenAI endpoint returns a connection error
-                return
-            raise Exception(f"Request did not return a 200 status code: {status}")
 
 
 @pytest.mark.asyncio
