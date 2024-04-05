@@ -474,6 +474,16 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "azure/command-r-plus": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "azure/ada": {
         "max_tokens": 8191,
         "max_input_tokens": 8191,

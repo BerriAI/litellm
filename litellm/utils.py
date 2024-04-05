@@ -5588,6 +5588,18 @@ def get_llm_provider(
         dynamic_api_key = None
         # check if llm provider provided
 
+        # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
+        # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
+        if model.split("/", 1)[0] == "azure":
+            model_name = model.split("/", 1)[1]
+            if (
+                model_name in litellm.cohere_chat_models
+                or f"mistral/{model_name}" in litellm.mistral_chat_models
+            ):
+                custom_llm_provider = "openai"
+                model = model_name
+                return model, custom_llm_provider, dynamic_api_key, api_base
+
         if custom_llm_provider:
             return model, custom_llm_provider, dynamic_api_key, api_base
 
