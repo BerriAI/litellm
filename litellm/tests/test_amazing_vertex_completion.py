@@ -428,7 +428,8 @@ def test_gemini_pro_vision():
         # DO Not DELETE this ASSERT
         # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
         assert prompt_tokens == 263  # the gemini api returns 263 to us
-
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass
