@@ -1,4 +1,4 @@
-import { BarChart, BarList, Card, Title } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 
@@ -379,18 +379,31 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
               <Col numColSpan={2}>
-              <Card className="mb-2">
-              <Title>Total Spend Per Tag</Title>
-                <BarList
-                  data={topTagsData}
-                />
-              </Card>
-              <Card>
 
-              <Title>Daily Spend Per Tag</Title>
-                <BarChart
+              <Card>
+              <Title>Spend Per Tag - Last 30 Days</Title>
+              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags">here</a></Text>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Tag</TableHeaderCell>
+                    <TableHeaderCell>Spend</TableHeaderCell>
+                    <TableHeaderCell>Requests</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {topTagsData.map((tag) => (
+                    <TableRow key={tag.name}>
+                      <TableCell>{tag.name}</TableCell>
+                      <TableCell>{tag.value}</TableCell>
+                      <TableCell>{tag.log_count}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+                {/* <BarChart
                   className="h-72"
                   data={teamSpendData}
                   showLegend={true}
@@ -399,7 +412,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   yAxisWidth={80}
                   
                   stack={true}
-                />
+                /> */}
               </Card>
               </Col>
               <Col numColSpan={2}>
