@@ -3217,7 +3217,6 @@ async def completion(
         ):  # use generate_responses to stream responses
             custom_headers = {
                 "x-litellm-model-id": model_id,
-                "x-litellm-original-response": original_response,
             }
             selected_data_generator = select_data_generator(
                 response=response, user_api_key_dict=user_api_key_dict
@@ -3230,7 +3229,6 @@ async def completion(
             )
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
-        fastapi_response.headers["x-litellm-original-response"] = original_response
         return response
     except Exception as e:
         verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
