@@ -59,7 +59,6 @@ def test_completion_azure_command_r():
 
         response = completion(
             model="azure/command-r-plus",
-            model_id="Cohere-command-r-plus-gylpd",
             api_base=os.getenv("AZURE_COHERE_API_BASE"),
             api_key=os.getenv("AZURE_COHERE_API_KEY"),
             messages=[{"role": "user", "content": "What is the meaning of life?"}],
