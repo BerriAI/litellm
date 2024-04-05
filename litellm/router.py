@@ -1767,6 +1767,11 @@ class Router:
             or "ft:gpt-3.5-turbo" in model_name
             or model_name in litellm.open_ai_embedding_models
         ):
+            if custom_llm_provider == "azure":
+                if litellm.utils._is_non_openai_azure_model(model_name):
+                    custom_llm_provider = "openai"
+                    # remove azure prefx from model_name
+                    model_name = model_name.replace("azure/", "")
             # glorified / complicated reading of configs
             # user can pass vars directly or they can pas os.environ/AZURE_API_KEY, in which case we will read the env
             # we do this here because we init clients for Azure, OpenAI and we need to set the right key
