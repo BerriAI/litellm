@@ -7,7 +7,6 @@ from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
 import httpx
 import dotenv
 
-print("IMPORT LITELLM on Ishaan's commit")  # noqa
 
 dotenv.load_dotenv()
 #############################################
