@@ -85,6 +85,9 @@ async def get_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
 def test_vertex_ai_anthropic():
     load_vertex_ai_credentials()
 
