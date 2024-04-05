@@ -148,6 +148,7 @@ def completion(
 ):
     try:
         import vertexai
+        from anthropic import AnthropicVertex
     except:
         raise VertexAIError(
             status_code=400,
@@ -162,7 +163,6 @@ def completion(
             message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
         )
     try:
-        from anthropic import AnthropicVertex
 
         ## Load Config
         config = litellm.VertexAIAnthropicConfig.get_config()
