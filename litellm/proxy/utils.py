@@ -2182,32 +2182,6 @@ async def update_spend(
                 raise e
 
 
-# class Models:
-#     """
-#     Need a class to maintain state of models / router across calls to check if new deployments need to be added
-#     """
-
-#     def __init__(
-#         self,
-#         router: litellm.Router,
-#         llm_model_list: list,
-#         prisma_client: PrismaClient,
-#         proxy_logging_obj: ProxyLogging,
-#         master_key: str,
-#     ) -> None:
-#         self.router = router
-#         self.llm_model_list = llm_model_list
-#         self.prisma_client = prisma_client
-#         self.proxy_logging_obj = proxy_logging_obj
-#         self.master_key = master_key
-
-#     def get_router(self) -> litellm.Router:
-#         return self.router
-
-#     def get_model_list(self) -> list:
-#         return self.llm_model_list
-
-
 async def _read_request_body(request):
     """
     Asynchronous function to read the request body and parse it as JSON or literal data.
