@@ -187,7 +187,7 @@ def completion(
         # Format rest of message according to anthropic guidelines
         try:
             messages = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="anthropic"
+                model=model, messages=messages, custom_llm_provider="anthropic_xml"
             )
         except Exception as e:
             raise VertexAIError(status_code=400, message=str(e))
