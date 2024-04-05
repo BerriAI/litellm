@@ -9,6 +9,11 @@ jobs:
       - checkout
 
       - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+
+      - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
           command: |
             if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
@@ -293,7 +298,7 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\"}}"
+              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"stable\":false, \"commit_hash\":\"$CIRCLE_SHA1\"}}"
 
 workflows:
   version: 2
