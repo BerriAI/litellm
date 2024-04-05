@@ -1,5 +1,21 @@
 # Azure AI Studio
 
+## Sample Usage
+Call Azure Command R Plus in the OpenAI Format
+- model=`azure/command-r-plus`. The `azure/` prefix sends this to Azure. The `command-r-plus` indicates the base model being called
+- `model_id` = This is your deployment name on Azure AI studio
+
+```python
+import litellm
+response = litellm.completion(
+    model="azure/command-r-plus",
+    model_id="Cohere-command-r-plus-gylpd",
+    api_base="https://Cohere-command-r-plus-gylpd-serverless.eastus2.inference.ai.azure.com/v1/"
+    api_key="eskk******"
+    messages=[{"role": "user", "content": "What is the meaning of life?"}],
+)
+```
+
 ## Using Mistral models deployed on Azure AI Studio
 
 ### Sample Usage - setting env vars 
