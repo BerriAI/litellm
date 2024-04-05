@@ -10,7 +10,8 @@ jobs:
 
       - run:
           name: Show git commit hash
-          command: echo "Git commit hash: $CIRCLE_SHA1"
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
 
       - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
