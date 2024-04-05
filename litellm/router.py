@@ -110,6 +110,11 @@ class Deployment(BaseModel):
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
 
+    def __init__(self, model_info: Optional[ModelInfo] = None, **params):
+        if model_info is None:
+            model_info = ModelInfo()
+        super().__init__(model_info=model_info, **params)
+
     def to_json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)  # noqa
