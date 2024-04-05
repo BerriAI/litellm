@@ -6,6 +6,45 @@ import { message } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
+export interface Model {
+  model_name: string;
+  litellm_params: Object;
+  model_info: Object | null;
+}
+
+export const modelCreateCall = async (
+  accessToken: string,
+  formValues: Model
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/new` : `/model/new`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to create key: " + errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
+
 export const keyCreateCall = async (
   accessToken: string,
   userID: string,
