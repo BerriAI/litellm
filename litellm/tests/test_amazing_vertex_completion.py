@@ -521,6 +521,8 @@ def test_gemini_pro_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
             pass
