@@ -207,6 +207,8 @@ def map_finish_reason(
         return "stop"
     elif finish_reason == "max_tokens":  # anthropic
         return "length"
+    elif finish_reason == "tool_use":  # anthropic
+        return "tool_calls"
     return finish_reason
 
 

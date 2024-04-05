@@ -746,7 +746,7 @@ def completion(
                     ]
                 # Format rest of message according to anthropic guidelines
                 messages = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="anthropic"
+                    model=model, messages=messages, custom_llm_provider="anthropic_xml"
                 )
                 ## LOAD CONFIG
                 config = litellm.AmazonAnthropicClaude3Config.get_config()
@@ -1108,6 +1108,7 @@ def completion(
 
             raise BedrockError(status_code=500, message=traceback.format_exc())
 
+
 class ModelResponseIterator:
     def __init__(self, model_response):
         self.model_response = model_response
@@ -1132,6 +1133,7 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         self.is_done = True
         return self.model_response
+
 
 def _embedding_func_single(
     model: str,
