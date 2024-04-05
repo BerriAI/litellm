@@ -2,18 +2,12 @@ import os, types
 import json
 from enum import Enum
 import requests, copy
-import time, uuid
+import time
 from typing import Callable, Optional, List
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
 import litellm
-from .prompt_templates.factory import (
-    contains_tag,
-    prompt_factory,
-    custom_prompt,
-    construct_tool_use_system_prompt,
-    extract_between_tags,
-    parse_xml_params,
-)
+from .prompt_templates.factory import prompt_factory, custom_prompt
+
 import httpx
 
 
