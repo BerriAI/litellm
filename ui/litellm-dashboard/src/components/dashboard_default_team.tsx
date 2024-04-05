@@ -6,11 +6,27 @@ interface DashboardTeamProps {
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
 }
 
+type TeamInterface = {
+  models: any[];
+  team_id: null;
+  team_alias: String
+}
+
 const DashboardTeam: React.FC<DashboardTeamProps> = ({
   teams,
   setSelectedTeam,
 }) => {
-  const [value, setValue] = useState("");
+  const defaultTeam: TeamInterface = {
+    models: [],
+    team_id: null,
+    team_alias: "Default Team"
+  }
+
+
+  const [value, setValue] = useState(defaultTeam);
+
+  const updatedTeams = teams ? [...teams, defaultTeam] : [defaultTeam];
+
 
   return (
     <div className="mt-5 mb-5">
@@ -19,9 +35,12 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
         If you belong to multiple teams, this setting controls which team is
         used by default when creating new API Keys.
       </Text>
-      {teams && teams.length > 0 ? (
+      <Text className="mt-3 mb-3">
+      <b>Default Team:</b> If no team_id is set for a key, it will be grouped under here.
+    </Text>
+      {updatedTeams && updatedTeams.length > 0 ? (
         <Select defaultValue="0">
-          {teams.map((team: any, index) => (
+          {updatedTeams.map((team: any, index) => (
             <SelectItem
               key={index}
               value={String(index)}

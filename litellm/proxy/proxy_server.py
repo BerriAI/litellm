@@ -2407,12 +2407,13 @@ class ProxyConfig:
                 if isinstance(_litellm_params, dict):
                     # decrypt values
                     for k, v in _litellm_params.items():
-                        # decode base64
-                        decoded_b64 = base64.b64decode(v)
-                        # decrypt value
-                        _litellm_params[k] = decrypt_value(
-                            value=decoded_b64, master_key=master_key
-                        )
+                        if isinstance(v, str):
+                            # decode base64
+                            decoded_b64 = base64.b64decode(v)
+                            # decrypt value
+                            _litellm_params[k] = decrypt_value(
+                                value=decoded_b64, master_key=master_key
+                            )
                     _litellm_params = LiteLLM_Params(**_litellm_params)
                 else:
                     verbose_proxy_logger.error(
@@ -6837,7 +6838,7 @@ async def info_budget(data: BudgetRequest):
     dependencies=[Depends(user_api_key_auth)],
 )
 async def add_new_model(
-    model_params: ModelParams,
+    model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key
@@ -6861,15 +6862,17 @@ async def add_new_model(
             - store keys separately
             """
             # encrypt litellm params #
-            for k, v in model_params.litellm_params.items():
-                encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
-                model_params.litellm_params[k] = base64.b64encode(
-                    encrypted_value
-                ).decode("utf-8")
+            _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
+            for k, v in _litellm_params_dict.items():
+                if isinstance(v, str):
+                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
+                    model_params.litellm_params[k] = base64.b64encode(
+                        encrypted_value
+                    ).decode("utf-8")
             await prisma_client.db.litellm_proxymodeltable.create(
                 data={
                     "model_name": model_params.model_name,
-                    "litellm_params": json.dumps(model_params.litellm_params),  # type: ignore
+                    "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
                     "model_info": model_params.model_info.model_dump_json(  # type: ignore
                         exclude_none=True
                     ),
@@ -6920,10 +6923,18 @@ async def model_info_v2(
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config
 
+    if llm_model_list is None or not isinstance(llm_model_list, list):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Invalid llm model list. llm_model_list={llm_model_list}"
+            },
+        )
+
     # Load existing config
     config = await proxy_config.get_config()
 
-    all_models = config.get("model_list", [])
+    all_models = llm_model_list
     if user_model is not None:
         # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
         all_models += [user_model]
