@@ -384,7 +384,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
               <Card>
               <Title>Spend Per Tag - Last 30 Days</Title>
-              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags">here</a></Text>
+              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
               <Table>
                 <TableHead>
                   <TableRow>
