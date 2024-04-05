@@ -2415,9 +2415,10 @@ class ProxyConfig:
                         )
                     _litellm_params = LiteLLM_Params(**_litellm_params)
                 else:
-                    raise Exception(
+                    verbose_proxy_logger.error(
                         f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
                     )
+                    continue  # skip to next model
 
                 if m.model_info is not None and isinstance(m.model_info, dict):
                     if "id" not in m.model_info:
@@ -2436,7 +2437,7 @@ class ProxyConfig:
 
             llm_model_list = llm_router.get_model_list()
         except Exception as e:
-            raise e
+            verbose_proxy_logger.error("{}".format(str(e)))
 
 
 proxy_config = ProxyConfig()
