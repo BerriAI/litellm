@@ -18,6 +18,23 @@ env:
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
+  determine-release-type:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set release type
+        id: set-release-type
+        run: |
+          if [ "${{ github.event.inputs.stable }}" == "true" ]; then
+            echo "stable release"
+            echo "type_release=stable" >> $GITHUB_ENV
+          else
+            echo "latest release"
+            echo "type_release=latest" >> $GITHUB_ENV
+          fi
+          echo "type_release value: $type_release"
+        env:
+          ACTIONS_ALLOW_ENV_MARK: true
+
   docker-hub-deploy:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
@@ -91,7 +108,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.stable && 'stable' || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ env.type_release }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
           
@@ -128,7 +145,7 @@ jobs:
           context: .
           file: Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.stable && 'stable' || 'latest' }}
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ env.type_release }} 
           labels: ${{ steps.meta-database.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
@@ -165,8 +182,7 @@ jobs:
           context: .
           file: ./litellm-js/spend-logs/Dockerfile
           push: true
-          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.stable && 'stable' || 'latest' }}
-          labels: ${{ steps.meta-spend-logs.outputs.labels }} 
+          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ env.type_release }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:

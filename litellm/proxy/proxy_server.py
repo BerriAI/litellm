@@ -2416,9 +2416,10 @@ class ProxyConfig:
                             )
                     _litellm_params = LiteLLM_Params(**_litellm_params)
                 else:
-                    raise Exception(
+                    verbose_proxy_logger.error(
                         f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
                     )
+                    continue  # skip to next model
 
                 if m.model_info is not None and isinstance(m.model_info, dict):
                     if "id" not in m.model_info:
@@ -2437,7 +2438,7 @@ class ProxyConfig:
 
             llm_model_list = llm_router.get_model_list()
         except Exception as e:
-            raise e
+            verbose_proxy_logger.error("{}".format(str(e)))
 
 
 proxy_config = ProxyConfig()
@@ -4732,6 +4733,73 @@ async def view_spend_tags(
         GROUP BY individual_request_tag;
         """
         response = await get_spend_by_tags(
+            start_date=start_date, end_date=end_date, prisma_client=prisma_client
+        )
+
+        return response
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/spend/tags Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/spend/tags Error" + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
+    "/global/spend/tags",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def global_view_spend_tags(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
+    """
+    LiteLLM Enterprise - View Spend Per Request Tag. Used by LiteLLM UI
+
+    Example Request:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/tags" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Spend with Start Date and End Date
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
+-H "Authorization: Bearer sk-1234"
+    ```
+    """
+
+    from enterprise.utils import ui_get_spend_by_tags
+
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        response = await ui_get_spend_by_tags(
             start_date=start_date, end_date=end_date, prisma_client=prisma_client
         )
 
