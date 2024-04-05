@@ -260,6 +260,7 @@ open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
 cohere_chat_models: List = []
+mistral_chat_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
@@ -285,6 +286,8 @@ for key, value in model_cost.items():
         cohere_models.append(key)
     elif value.get("litellm_provider") == "cohere_chat":
         cohere_chat_models.append(key)
+    elif value.get("litellm_provider") == "mistral":
+        mistral_chat_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
