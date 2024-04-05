@@ -5579,7 +5579,7 @@ def get_llm_provider(
             model_name = model.split("/", 1)[1]
             if (
                 model_name in litellm.cohere_chat_models
-                or model_name in litellm.mistral_chat_models
+                or f"mistral/{model_name}" in litellm.mistral_chat_models
             ):
                 custom_llm_provider = "openai"
                 model = model_name
