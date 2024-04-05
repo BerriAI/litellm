@@ -3,6 +3,11 @@
 ## Sample Usage
 The `azure/` prefix sends this to Azure
 
+Ensure you add `/v1` to your api_base. Your Azure AI studio `api_base` passed to litellm should look something like this
+```python
+api_base = "https://Mistral-large-dfgfj-serverless.eastus2.inference.ai.azure.com/v1/"
+```
+
 ```python
 import litellm
 response = litellm.completion(
@@ -13,7 +18,7 @@ response = litellm.completion(
 )
 ```
 
-### Sample Usage - LiteLLM Proxy
+## Sample Usage - LiteLLM Proxy
 
 Set this on your litellm proxy config.yaml
 ```yaml
