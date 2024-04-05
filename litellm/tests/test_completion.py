@@ -53,6 +53,25 @@ def test_completion_custom_provider_model_name():
 # test_completion_custom_provider_model_name()
 
 
+def test_completion_azure_command_r():
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="azure/command-r-plus",
+            model_id="Cohere-command-r-plus-gylpd",
+            api_base=os.getenv("AZURE_COHERE_API_BASE"),
+            api_key=os.getenv("AZURE_COHERE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )
+
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_claude():
     litellm.set_verbose = True
     litellm.cache = None
