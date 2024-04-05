@@ -20,8 +20,6 @@ env:
 jobs:
   determine-release-type:
     runs-on: ubuntu-latest
-    outputs:
-      type_release: ${{ steps.set-release-type.outputs.type_release }}
     steps:
       - name: Set release type
         id: set-release-type
@@ -33,6 +31,9 @@ jobs:
             echo "latest release"
             echo "type_release=latest" >> $GITHUB_ENV
           fi
+          echo "type_release value: $type_release"
+        env:
+          ACTIONS_ALLOW_ENV_MARK: true
 
   docker-hub-deploy:
     if: github.repository == 'BerriAI/litellm'
