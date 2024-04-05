@@ -556,7 +556,9 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
         )
 
 
-def convert_to_anthropic_tool_result(message: dict) -> str:
+# The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
+# ------------------------------------------------------------------------------
+def convert_to_anthropic_tool_result_xml(message: dict) -> str:
     """
     OpenAI message with a tool result looks like:
     {
@@ -606,7 +608,7 @@ def convert_to_anthropic_tool_result(message: dict) -> str:
     return anthropic_tool_result
 
 
-def convert_to_anthropic_tool_invoke(tool_calls: list) -> str:
+def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
     invokes = ""
     for tool in tool_calls:
         if tool["type"] != "function":
@@ -631,7 +633,7 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> str:
     return anthropic_tool_invoke
 
 
-def anthropic_messages_pt(messages: list):
+def anthropic_messages_pt_xml(messages: list):
     """
     format messages for anthropic
     1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
@@ -695,6 +697,185 @@ def anthropic_messages_pt(messages: list):
                 )
 
             assistant_content.append({"type": "text", "text": assistant_text})
+            msg_i += 1
+
+        if assistant_content:
+            new_messages.append({"role": "assistant", "content": assistant_content})
+
+    if new_messages[0]["role"] != "user":
+        if litellm.modify_params:
+            new_messages.insert(
+                0, {"role": "user", "content": [{"type": "text", "text": "."}]}
+            )
+        else:
+            raise Exception(
+                "Invalid first message. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, "
+            )
+
+    if new_messages[-1]["role"] == "assistant":
+        for content in new_messages[-1]["content"]:
+            if isinstance(content, dict) and content["type"] == "text":
+                content["text"] = content[
+                    "text"
+                ].rstrip()  # no trailing whitespace for final assistant message
+
+    return new_messages
+
+
+# ------------------------------------------------------------------------------
+
+
+def convert_to_anthropic_tool_result(message: dict) -> dict:
+    """
+    OpenAI message with a tool result looks like:
+    {
+        "tool_call_id": "tool_1",
+        "role": "tool",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    },
+    """
+
+    """
+    Anthropic tool_results look like:
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+                "content": "ConnectionError: the weather service API is not available (HTTP 500)",
+                # "is_error": true
+            }
+        ]
+    }
+    """
+    tool_call_id = message.get("tool_call_id")
+    content = message.get("content")
+
+    # We can't determine from openai message format whether it's a successful or
+    # error call result so default to the successful result template
+    anthropic_tool_result = {
+        "type": "tool_result",
+        "tool_use_id": tool_call_id,
+        "content": content,
+    }
+
+    return anthropic_tool_result
+
+
+def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
+    """
+    OpenAI tool invokes:
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "get_current_weather",
+            "arguments": "{\n\"location\": \"Boston, MA\"\n}"
+          }
+        }
+      ]
+    },
+    """
+
+    """
+    Anthropic tool invokes:
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<thinking>To answer this question, I will: 1. Use the get_weather tool to get the current weather in San Francisco. 2. Use the get_time tool to get the current time in the America/Los_Angeles timezone, which covers San Francisco, CA.</thinking>"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01A09q90qw90lq917835lq9",
+          "name": "get_weather",
+          "input": {"location": "San Francisco, CA"}
+        }
+      ]
+    }
+    """
+    anthropic_tool_invoke = [
+        {
+            "type": "tool_use",
+            "id": tool["id"],
+            "name": tool["function"]["name"],
+            "input": json.loads(tool["function"]["arguments"]),
+        }
+        for tool in tool_calls
+        if tool["type"] == "function"
+    ]
+
+    return anthropic_tool_invoke
+
+
+def anthropic_messages_pt(messages: list):
+    """
+    format messages for anthropic
+    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
+    2. The first message always needs to be of role "user"
+    3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
+    4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
+    5. System messages are a separate param to the Messages API
+    6. Ensure we only accept role, content. (message.name is not supported)
+    """
+    # add role=tool support to allow function call result/error submission
+    user_message_types = {"user", "tool"}
+    # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
+    new_messages = []
+    msg_i = 0
+    while msg_i < len(messages):
+        user_content = []
+        ## MERGE CONSECUTIVE USER CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
+            if isinstance(messages[msg_i]["content"], list):
+                for m in messages[msg_i]["content"]:
+                    if m.get("type", "") == "image_url":
+                        user_content.append(
+                            {
+                                "type": "image",
+                                "source": convert_to_anthropic_image_obj(
+                                    m["image_url"]["url"]
+                                ),
+                            }
+                        )
+                    elif m.get("type", "") == "text":
+                        user_content.append({"type": "text", "text": m["text"]})
+            elif messages[msg_i]["role"] == "tool":
+                # OpenAI's tool message content will always be a string
+                user_content.append(convert_to_anthropic_tool_result(messages[msg_i]))
+            else:
+                user_content.append(
+                    {"type": "text", "text": messages[msg_i]["content"]}
+                )
+
+            msg_i += 1
+
+        if user_content:
+            new_messages.append({"role": "user", "content": user_content})
+
+        assistant_content = []
+        ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+            assistant_text = (
+                messages[msg_i].get("content") or ""
+            )  # either string or none
+            if assistant_text:
+                assistant_content.append({"type": "text", "text": assistant_text})
+
+            if messages[msg_i].get(
+                "tool_calls", []
+            ):  # support assistant tool invoke convertion
+                assistant_content.extend(
+                    convert_to_anthropic_tool_invoke(messages[msg_i]["tool_calls"])
+                )
+
             msg_i += 1
 
         if assistant_content:
@@ -1081,6 +1262,8 @@ def prompt_factory(
         if model == "claude-instant-1" or model == "claude-2":
             return anthropic_pt(messages=messages)
         return anthropic_messages_pt(messages=messages)
+    elif custom_llm_provider == "anthropic_xml":
+        return anthropic_messages_pt_xml(messages=messages)
     elif custom_llm_provider == "together_ai":
         prompt_format, chat_template = get_model_info(token=api_key, model=model)
         return format_prompt_togetherai(
