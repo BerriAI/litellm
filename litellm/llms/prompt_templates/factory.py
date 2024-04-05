@@ -556,7 +556,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
         )
 
 
-def convert_to_anthropic_tool_result(message: dict) -> str:
+def convert_to_anthropic_tool_result(message: dict) -> dict:
     """
     OpenAI message with a tool result looks like:
     {
@@ -569,64 +569,79 @@ def convert_to_anthropic_tool_result(message: dict) -> str:
 
     """
     Anthropic tool_results look like:
-    
-    [Successful results]
-    <function_results>
-    <result>
-    <tool_name>get_current_weather</tool_name>
-    <stdout>
-    function result goes here
-    </stdout>
-    </result>
-    </function_results>
-
-    [Error results]
-    <function_results>
-    <error>
-    error message goes here
-    </error>
-    </function_results>
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+                "content": "ConnectionError: the weather service API is not available (HTTP 500)",
+                # "is_error": true
+            }
+        ]
+    }
     """
-    name = message.get("name")
+    tool_call_id = message.get("tool_call_id")
     content = message.get("content")
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
-    anthropic_tool_result = (
-        "<function_results>\n"
-        "<result>\n"
-        f"<tool_name>{name}</tool_name>\n"
-        "<stdout>\n"
-        f"{content}\n"
-        "</stdout>\n"
-        "</result>\n"
-        "</function_results>"
-    )
+    anthropic_tool_result = {
+        "type": "tool_result",
+        "tool_use_id": tool_call_id,
+        "content": content,
+    }
 
     return anthropic_tool_result
 
 
-def convert_to_anthropic_tool_invoke(tool_calls: list) -> str:
-    invokes = ""
-    for tool in tool_calls:
-        if tool["type"] != "function":
-            continue
+def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
+    """
+    OpenAI tool invokes:
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "get_current_weather",
+            "arguments": "{\n\"location\": \"Boston, MA\"\n}"
+          }
+        }
+      ]
+    },
+    """
 
-        tool_name = tool["function"]["name"]
-        parameters = "".join(
-            f"<{param}>{val}</{param}>\n"
-            for param, val in json.loads(tool["function"]["arguments"]).items()
-        )
-        invokes += (
-            "<invoke>\n"
-            f"<tool_name>{tool_name}</tool_name>\n"
-            "<parameters>\n"
-            f"{parameters}"
-            "</parameters>\n"
-            "</invoke>\n"
-        )
-
-    anthropic_tool_invoke = f"<function_calls>\n{invokes}</function_calls>"
+    """
+    Anthropic tool invokes:
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "<thinking>To answer this question, I will: 1. Use the get_weather tool to get the current weather in San Francisco. 2. Use the get_time tool to get the current time in the America/Los_Angeles timezone, which covers San Francisco, CA.</thinking>"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01A09q90qw90lq917835lq9",
+          "name": "get_weather",
+          "input": {"location": "San Francisco, CA"}
+        }
+      ]
+    }
+    """
+    anthropic_tool_invoke = [
+        {
+            "type": "tool_use",
+            "id": tool["id"],
+            "name": tool["function"]["name"],
+            "input": json.loads(tool["function"]["arguments"]),
+        }
+        for tool in tool_calls
+        if tool["type"] == "function"
+    ]
 
     return anthropic_tool_invoke
 
@@ -663,17 +678,12 @@ def anthropic_messages_pt(messages: list):
                         )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
+            elif messages[msg_i]["role"] == "tool":
+                # OpenAI's tool message content will always be a string
+                user_content.append(convert_to_anthropic_tool_result(messages[msg_i]))
             else:
-                # Tool message content will always be a string
                 user_content.append(
-                    {
-                        "type": "text",
-                        "text": (
-                            convert_to_anthropic_tool_result(messages[msg_i])
-                            if messages[msg_i]["role"] == "tool"
-                            else messages[msg_i]["content"]
-                        ),
-                    }
+                    {"type": "text", "text": messages[msg_i]["content"]}
                 )
 
             msg_i += 1
@@ -687,14 +697,16 @@ def anthropic_messages_pt(messages: list):
             assistant_text = (
                 messages[msg_i].get("content") or ""
             )  # either string or none
+            if assistant_text:
+                assistant_content.append({"type": "text", "text": assistant_text})
+
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
-                assistant_text += convert_to_anthropic_tool_invoke(
-                    messages[msg_i]["tool_calls"]
+                assistant_content.extend(
+                    convert_to_anthropic_tool_invoke(messages[msg_i]["tool_calls"])
                 )
 
-            assistant_content.append({"type": "text", "text": assistant_text})
             msg_i += 1
 
         if assistant_content:
