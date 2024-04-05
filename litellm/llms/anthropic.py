@@ -37,12 +37,12 @@ class AnthropicError(Exception):
 
 class AnthropicConfig:
     """
-    Reference: https://docs.anthropic.com/claude/reference/complete_post
+    Reference: https://docs.anthropic.com/claude/reference/messages_post
 
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens: Optional[int] = litellm.max_tokens  # anthropic requires a default
+    max_tokens: Optional[int] = 4096  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default) 
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -52,7 +52,7 @@ class AnthropicConfig:
 
     def __init__(
         self,
-        max_tokens: Optional[int] = 256,  # anthropic requires a default
+        max_tokens: Optional[int] = None,  # You can pass in a value yourself or use the default value 4096
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
