@@ -37,22 +37,27 @@ async def ui_get_spend_by_tags(start_date=None, end_date=None, prisma_client=Non
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
     total_spend_per_tag = collections.defaultdict(float)
+    total_requests_per_tag = collections.defaultdict(int)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]
 
         total_spend_per_tag[tag_name] += tag_spend
+        total_requests_per_tag[tag_name] += row["log_count"]
 
-    # get top 10 tags
-    top_10_tags = sorted(total_spend_per_tag.items(), key=lambda x: x[1], reverse=True)[
-        :10
-    ]
+    sorted_tags = sorted(total_spend_per_tag.items(), key=lambda x: x[1], reverse=True)
     # convert to ui format
-    ui_top_10_tags = [{"name": tag[0], "value": tag[1]} for tag in top_10_tags]
+    ui_tags = []
+    for tag in sorted_tags:
+        ui_tags.append(
+            {
+                "name": tag[0],
+                "value": tag[1],
+                "log_count": total_requests_per_tag[tag[0]],
+            }
+        )
 
-    # Bar Chart 2 - Daily Spend per tag
-
-    return {"top_10_tags": ui_top_10_tags, "daily_spend_per_tag": total_spend_per_tag}
+    return {"top_10_tags": ui_tags}
 
 
 async def view_spend_logs_from_clickhouse(
