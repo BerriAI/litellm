@@ -30,6 +30,7 @@ jobs:
             echo "type_release=stable" >> $GITHUB_ENV
           else
             echo "type_release=latest" >> $GITHUB_ENV
+          fi
 
   docker-hub-deploy:
     if: github.repository == 'BerriAI/litellm'
