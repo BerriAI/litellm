@@ -309,7 +309,7 @@ print(response)
 
 ## Extra
 
-### Auth'ing as `GOOGLE_APPLICATION_CREDENTIALS`
+### Using `GOOGLE_APPLICATION_CREDENTIALS`
 Here's the code for storing your service account credentials as `GOOGLE_APPLICATION_CREDENTIALS` environment variable:
 
 
@@ -352,7 +352,7 @@ def load_vertex_ai_credentials():
 
 1. Figure out the Service Account bound to the Google Cloud Run service
 
-<Image img={require('../img/gcp_acc_1.png')} />
+<Image img={require('../../img/gcp_acc_1.png')} />
 
 2. Get the FULL EMAIL address of the corresponding Service Account
 
@@ -360,11 +360,11 @@ def load_vertex_ai_credentials():
 
 Click `Add Principal`
 
-<Image img={require('../img/gcp_acc_2.png')}>
+<Image img={require('../../img/gcp_acc_2.png')}/>
 
 4. Specify the Service Account as the principal and Vertex AI User as the role
 
-<Image img={require('../img/gcp_acc_2.png')}>
+<Image img={require('../../img/gcp_acc_3.png')}/>
 
 Once that's done, when you deploy the new container in the Google Cloud Run service, LiteLLM will have automatic access to all Vertex AI endpoints.
 
