@@ -609,6 +609,7 @@ def completion(
         "cache",
         "no-log",
         "base_model",
+        "stream_timeout",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
