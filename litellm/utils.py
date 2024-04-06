@@ -2499,7 +2499,7 @@ def client(original_function):
                 ):
                     rules_obj.pre_call_rules(
                         input="".join(
-                            m["content"]
+                            m.get("content", "")
                             for m in messages
                             if isinstance(m["content"], str)
                         ),
