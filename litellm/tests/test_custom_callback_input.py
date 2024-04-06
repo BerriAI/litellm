@@ -75,7 +75,6 @@ class CompletionCustomHandler(
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
         try:
-            print(f"kwargs: {kwargs}")
             self.states.append("post_api_call")
             ## START TIME
             assert isinstance(start_time, datetime)
@@ -167,6 +166,8 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["api_base"], str)
+            assert isinstance(kwargs["cache_hit"], Optional[bool])
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
@@ -265,8 +266,10 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["messages"], list)
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["api_base"], str)
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["cache_hit"], Optional[bool])
             assert isinstance(kwargs["user"], (str, type(None)))
             assert isinstance(kwargs["input"], (list, dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
@@ -651,8 +654,8 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
+@pytest.mark.skip(reason="Vertex AI Hanging")
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping on this PR to test other stuff")
 async def test_async_chat_vertex_ai_stream():
     try:
         load_vertex_ai_credentials()
