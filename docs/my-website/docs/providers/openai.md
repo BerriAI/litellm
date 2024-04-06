@@ -44,7 +44,11 @@ export OPENAI_API_KEY=""
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
-      model: gpt-3.5-turbo
+      model: openai/gpt-3.5-turbo                          # The `openai/` prefix will call openai.chat.completions.create
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-3.5-turbo-instruct
+    litellm_params:
+      model: text-completion-openai/gpt-3.5-turbo-instruct # The `text-completion-openai/` prefix will call openai.completions.create
       api_key: os.environ/OPENAI_API_KEY
 ```
 </TabItem>
