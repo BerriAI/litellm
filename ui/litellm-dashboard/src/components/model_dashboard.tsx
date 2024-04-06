@@ -168,7 +168,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     let modelName: string  = "";
     // Iterate through the key-value pairs in formValues
     for (const [key, value] of Object.entries(formValues)) {
-      console.log(`key: ${key}, value: ${value}`)
       if (key == "model_name") {
         modelName = value
       }
@@ -185,8 +184,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         modelInfoObj[key] = value;
       }
     }
-
-    console.log(`final new model: ${modelName}`)
 
     const new_model: Model = {  
       "model_name": modelName,
@@ -311,53 +308,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 tickGap={5}
               />
         </Card>
-        {/* {userRole === "Admin" &&
-        pendingRequests &&
-        pendingRequests.length > 0 ? (
-          <Card>
-            <Table>
-              <TableHead>
-                <Title>Pending Requests</Title>
-                <TableRow>
-                  <TableCell>
-                    <Title>User ID</Title>
-                  </TableCell>
-                  <TableCell>
-                    <Title>Requested Models</Title>
-                  </TableCell>
-                  <TableCell>
-                    <Title>Justification</Title>
-                  </TableCell>
-                  <TableCell>
-                    <Title>Justification</Title>
-                  </TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {pendingRequests.map((request: any) => (
-                  <TableRow key={request.request_id}>
-                    <TableCell>
-                      <p>{request.user_id}</p>
-                    </TableCell>
-                    <TableCell>
-                      <p>{request.models[0]}</p>
-                    </TableCell>
-                    <TableCell>
-                      <p>{request.justification}</p>
-                    </TableCell>
-                    <TableCell>
-                      <p>{request.user_id}</p>
-                    </TableCell>
-                    <Button>Approve</Button>
-                    <Button variant="secondary" className="ml-2">
-                      Deny
-                    </Button>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Card>
-        ) : null} */}
       </Grid>
       </TabPanel>
       <TabPanel className="h-full">
@@ -366,21 +316,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       </Card> */}
       <Title2 level={2}>Add new model</Title2>
       <Card>
-        <Form.Item required={true} label="Provider:" name="custom_llm_provider" tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc." labelCol={{ span: 10 }} labelAlign="left">
-        <Select value={selectedProvider.toString()}>
-          {providers.map((provider, index) => (
-              <SelectItem
-                key={index}
-                value={provider}
-                onClick={() => {
-                  setSelectedProvider(provider);
-                }}
-              >
-                {provider}
-              </SelectItem>
-            ))}
-        </Select>
-        </Form.Item>
         <Form
           form={form}
           onFinish={handleOk}
@@ -389,14 +324,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           labelAlign="left"
         >
               <>
-              <Form.Item required={true} label="Public Model Name" name="model_name" tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name." className="mb-0">
+              <Form.Item rules={[{ required: true, message: 'Required' }]} label="Provider:" name="custom_llm_provider" tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc." labelCol={{ span: 10 }} labelAlign="left">
+              <Select value={selectedProvider.toString()}>
+                {providers.map((provider, index) => (
+                    <SelectItem
+                      key={index}
+                      value={provider}
+                      onClick={() => {
+                        setSelectedProvider(provider);
+                      }}
+                    >
+                      {provider}
+                    </SelectItem>
+                  ))}
+              </Select>
+              </Form.Item>
+              <Form.Item rules={[{ required: true, message: 'Required' }]} label="Public Model Name" name="model_name" tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name." className="mb-0">
                   <TextInput placeholder="gpt-3.5-turbo"/>
                 </Form.Item>
                 <Row>
                 <Col span={10}></Col>
                 <Col span={10}><Text className="mb-3 mt-1">Model name your users will pass in. Also used for <Link href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config" target="_blank">loadbalancing.</Link></Text></Col>
                 </Row>
-                <Form.Item required={true} label="LiteLLM Model Name" name="model" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
+                <Form.Item rules={[{ required: true, message: 'Required' }]} label="LiteLLM Model Name" name="model" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
                   <TextInput placeholder="gpt-3.5-turbo-0125"/>
                 </Form.Item>
                 <Row>
@@ -406,7 +356,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 
                 {
                   selectedProvider != "Amazon Bedrock" && <Form.Item
-                  required={true}
+                  rules={[{ required: true, message: 'Required' }]}
                     label="API Key"
                     name="api_key"
                   >
@@ -415,7 +365,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 }
                 {
                   selectedProvider == "Azure OpenAI" && <Form.Item
-                  required={true}
+                  rules={[{ required: true, message: 'Required' }]}
                   label="API Base"
                   name="api_base"
                 >
@@ -424,7 +374,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 }
                 {
                   selectedProvider == "Azure OpenAI" && <Form.Item
-                  required={true}
+                  rules={[{ required: true, message: 'Required' }]}
                   label="API Version"
                   name="api_version"
                 >
@@ -442,7 +392,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 }
                 {
                   selectedProvider == "Amazon Bedrock" && <Form.Item
-                  required={true}
+                  rules={[{ required: true, message: 'Required' }]}
                   label="AWS Access Key ID"
                   name="aws_access_key_id"
                   tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
@@ -452,7 +402,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 }
                 {
                   selectedProvider == "Amazon Bedrock" && <Form.Item
-                  required={true}
+                  rules={[{ required: true, message: 'Required' }]}
                   label="AWS Secret Access Key"
                   name="aws_secret_access_key"
                   tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
@@ -462,7 +412,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 }
                 {
                   selectedProvider == "Amazon Bedrock" && <Form.Item
-                  required={true}
+                  rules={[{ required: true, message: 'Required' }]}
                   label="AWS Region Name"
                   name="aws_region_name"
                   tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
