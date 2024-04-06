@@ -487,8 +487,13 @@ async def test_acompletion_gemini_stream():
             raise Exception("Empty response received")
     except litellm.APIError as e:
         pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        if "429 Resource has been exhausted" in str(e):
+            pass
+        else:
+            pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_acompletion_gemini_stream())
