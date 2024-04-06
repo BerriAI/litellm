@@ -240,7 +240,9 @@ export const userInfoCall = async (
   accessToken: String,
   userID: String | null,
   userRole: String,
-  viewAll: Boolean = false
+  viewAll: Boolean = false,
+  page: number | null, 
+  page_size: number | null
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
@@ -248,8 +250,8 @@ export const userInfoCall = async (
       url = `${url}?user_id=${userID}`;
     }
     console.log("in userInfoCall viewAll=", viewAll);
-    if (viewAll) {
-      url = `${url}?view_all=true`;
+    if (viewAll && page && page_size) {
+      url = `${url}?view_all=true&page=${page}&page_size=${page_size}`;
     }
     //message.info("Requesting user data");
     const response = await fetch(url, {
