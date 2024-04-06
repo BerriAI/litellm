@@ -394,7 +394,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Form.Item>
                 <Row>
                 <Col span={10}></Col>
-                <Col span={10}><Text className="mb-3 mt-1">Model name your users will pass in</Text></Col>
+                <Col span={10}><Text className="mb-3 mt-1">Model name your users will pass in. Also used for <Link href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config" target="_blank">loadbalancing.</Link></Text></Col>
                 </Row>
                 <Form.Item required={true} label="LiteLLM Model Name" name="model" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
                   <TextInput placeholder="gpt-3.5-turbo-0125"/>
@@ -410,7 +410,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     label="API Key"
                     name="api_key"
                   >
-                    <TextInput placeholder="sk-"/>
+                    <TextInput placeholder="sk-" type="password"/>
                   </Form.Item>
                 }
                 {
