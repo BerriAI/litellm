@@ -98,6 +98,7 @@ model LiteLLM_TeamTable {
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
 		user_id    String @id
+    user_alias String? 
     team_id    String?
     teams    String[] @default([])
     user_role  String?

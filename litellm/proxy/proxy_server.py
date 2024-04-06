@@ -2619,7 +2619,7 @@ async def generate_key_helper_fn(
                 # do not create a key for litellm_proxy_budget_name or if table name is set to just 'user'
                 # we only need to ensure this exists in the user table
                 # the LiteLLM_VerificationToken table will increase in size if we don't do this check
-                return key_data
+                return user_data
 
             ## CREATE KEY
             verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
@@ -2665,9 +2665,15 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
     try:
         if prisma_client:
             # Assuming 'db' is your Prisma Client instance
-            deleted_tokens = await prisma_client.delete_data(
-                tokens=tokens, user_id=user_id
-            )
+            # check if admin making request - don't filter by user-id
+            if user_id == litellm_proxy_admin_name:
+                deleted_tokens = await prisma_client.delete_data(tokens=tokens)
+            # else
+            else:
+                deleted_tokens = await prisma_client.delete_data(
+                    tokens=tokens, user_id=user_id
+                )
+
         else:
             raise Exception
     except Exception as e:
@@ -4427,7 +4433,7 @@ async def delete_key_fn(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in."
+                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={len(keys)}, Deleted keys ={number_deleted_keys['deleted_keys']}"
                 },
             )
 
@@ -5397,12 +5403,14 @@ async def new_user(data: NewUserRequest):
 
     Parameters:
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
+    - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
     - user_email: Optional[str] - Specify a user email.
     - user_role: Optional[str] - Specify a user role - "admin", "app_owner", "app_user"
     - max_budget: Optional[float] - Specify max budget for a given user.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
     - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)
+    - auto_create_key: bool - Default=True. Flag used for returning a key as part of the /user/new response
 
     Returns:
     - key: (str) The generated api key for the user
@@ -5423,10 +5431,15 @@ async def new_user(data: NewUserRequest):
                 )
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
+    auto_create_key = data_json.pop("auto_create_key", True)
+    if auto_create_key == False:
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
     response = await generate_key_helper_fn(**data_json)
     return NewUserResponse(
-        key=response["token"],
-        expires=response["expires"],
+        key=response.get("token", ""),
+        expires=response.get("expires", None),
         user_id=response["user_id"],
         max_budget=response["max_budget"],
     )
