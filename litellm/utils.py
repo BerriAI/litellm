@@ -4810,57 +4810,38 @@ def get_optional_params(
                 optional_params["stop_sequences"] = stop
         if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
-    elif custom_llm_provider == "vertex_ai" and (
-        model in litellm.vertex_chat_models
-        or model in litellm.vertex_code_chat_models
-        or model in litellm.vertex_text_models
-        or model in litellm.vertex_code_text_models
-        or model in litellm.vertex_language_models
-        or model in litellm.vertex_embedding_models
-        or model in litellm.vertex_vision_models
-    ):
+    elif custom_llm_provider == "vertex_ai":
         print_verbose(f"(start) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK")
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
+        if (
+            model in litellm.vertex_chat_models
+            or model in litellm.vertex_code_chat_models
+            or model in litellm.vertex_text_models
+            or model in litellm.vertex_code_text_models
+            or model in litellm.vertex_language_models
+            or model in litellm.vertex_embedding_models
+            or model in litellm.vertex_vision_models
+        ):
+            ## check if unsupported param passed in
+            supported_params = get_supported_openai_params(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            _check_valid_arg(supported_params=supported_params)
 
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
-        if max_tokens is not None:
-            optional_params["max_output_tokens"] = max_tokens
-        if tools is not None and isinstance(tools, list):
-            from vertexai.preview import generative_models
-
-            gtool_func_declarations = []
-            for tool in tools:
-                gtool_func_declaration = generative_models.FunctionDeclaration(
-                    name=tool["function"]["name"],
-                    description=tool["function"].get("description", ""),
-                    parameters=tool["function"].get("parameters", {}),
-                )
-                gtool_func_declarations.append(gtool_func_declaration)
-            optional_params["tools"] = [
-                generative_models.Tool(function_declarations=gtool_func_declarations)
-            ]
+            optional_params = litellm.VertexAIConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+            )
+        elif model in litellm.vertex_anthropic_models:
+            supported_params = get_supported_openai_params(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            _check_valid_arg(supported_params=supported_params)
+            optional_params = litellm.VertexAIAnthropicConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+            )
         print_verbose(
             f"(end) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK - optional_params: {optional_params}"
-        )
-    elif (
-        custom_llm_provider == "vertex_ai" and model in litellm.vertex_anthropic_models
-    ):
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.VertexAIAnthropicConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
         )
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
@@ -7687,7 +7668,7 @@ def exception_type(
                     )
                 elif (
                     "429 Quota exceeded" in error_str
-                    or "IndexError: list index out of range"
+                    or "IndexError: list index out of range" in error_str
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(

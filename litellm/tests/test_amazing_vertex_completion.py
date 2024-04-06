@@ -77,6 +77,7 @@ async def get_response():
                 },
                 {"role": "user", "content": prompt},
             ],
+            timeout=10,
         )
         return response
     except litellm.UnprocessableEntityError as e:
@@ -85,51 +86,67 @@ async def get_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
 def test_vertex_ai_anthropic():
-    load_vertex_ai_credentials()
+    try:
+        import random
 
-    model = "claude-3-sonnet@20240229"
+        load_vertex_ai_credentials()
 
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
+        vertex_ai_project = "adroit-crow-413218"
+        models = ["claude-3-sonnet@20240229", "claude-3-haiku@20240307"]
 
-    response = completion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-    )
-    print("\nModel Response", response)
+        model = random.sample(models, 1)[0]
+        location = ""
+        if model == "claude-3-sonnet@20240229":
+            location = random.sample(["us-central1", "asia-southeast1"], 1)[0]
+        elif model == "claude-3-haiku@20240307":
+            location = random.sample(["us-central1", "europe-west4"], 1)[0]
+        vertex_ai_location = location
+
+        response = completion(
+            model="vertex_ai/" + model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            timeout=10,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+        )
+        print("\nModel Response", response)
+    except litellm.RateLimitError as e:
+        pass
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
 def test_vertex_ai_anthropic_streaming():
+    import random
+
     load_vertex_ai_credentials()
+    try:
+        # litellm.set_verbose = True
 
-    # litellm.set_verbose = True
+        models = ["claude-3-sonnet@20240229", "claude-3-haiku@20240307"]
+        vertex_ai_project = "adroit-crow-413218"
+        model = random.sample(models, 1)[0]
+        location = ""
+        if model == "claude-3-sonnet@20240229":
+            location = random.sample(["us-central1", "asia-southeast1"], 1)[0]
+        elif model == "claude-3-haiku@20240307":
+            location = random.sample(["us-central1", "europe-west4"], 1)[0]
+        vertex_ai_location = location
 
-    model = "claude-3-sonnet@20240229"
-
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
-
-    response = completion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-        stream=True,
-    )
-    # print("\nModel Response", response)
-    for chunk in response:
-        print(f"chunk: {chunk}")
+        response = completion(
+            model="vertex_ai/" + model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+            stream=True,
+            timeout=10,
+        )
+        # print("\nModel Response", response)
+        for chunk in response:
+            print(f"chunk: {chunk}")
+    except litellm.RateLimitError as e:
+        pass
 
     # raise Exception("it worked!")
 
@@ -137,54 +154,75 @@ def test_vertex_ai_anthropic_streaming():
 # test_vertex_ai_anthropic_streaming()
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
 @pytest.mark.asyncio
 async def test_vertex_ai_anthropic_async():
+    import random
+
     load_vertex_ai_credentials()
+    try:
 
-    model = "claude-3-sonnet@20240229"
+        models = ["claude-3-sonnet@20240229", "claude-3-haiku@20240307"]
 
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
+        model = random.sample(models, 1)[0]
+        location = ""
+        if model == "claude-3-sonnet@20240229":
+            location = random.sample(["us-central1", "asia-southeast1"], 1)[0]
+        elif model == "claude-3-haiku@20240307":
+            location = random.sample(["us-central1", "europe-west4"], 1)[0]
+        vertex_ai_location = location
 
-    response = await acompletion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-    )
-    print(f"Model Response: {response}")
+        vertex_ai_project = "adroit-crow-413218"
+
+        response = await acompletion(
+            model="vertex_ai/" + model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+            timeout=10,
+        )
+        print(f"Model Response: {response}")
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # asyncio.run(test_vertex_ai_anthropic_async())
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
 @pytest.mark.asyncio
 async def test_vertex_ai_anthropic_async_streaming():
+    import random
+
     load_vertex_ai_credentials()
+    try:
+        vertex_ai_project = "adroit-crow-413218"
+        models = ["claude-3-sonnet@20240229", "claude-3-haiku@20240307"]
 
-    model = "claude-3-sonnet@20240229"
+        model = random.sample(models, 1)[0]
+        location = ""
+        if model == "claude-3-sonnet@20240229":
+            location = random.sample(["us-central1", "asia-southeast1"], 1)[0]
+        elif model == "claude-3-haiku@20240307":
+            location = random.sample(["us-central1", "europe-west4"], 1)[0]
+        vertex_ai_location = location
 
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
+        response = await acompletion(
+            model="vertex_ai/" + model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+            stream=True,
+            timeout=10,
+        )
 
-    response = await acompletion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-        stream=True,
-    )
+        async for chunk in response:
+            print(f"chunk: {chunk}")
 
-    async for chunk in response:
-        print(f"chunk: {chunk}")
+    except litellm.RateLimitError as e:
+        pass
 
 
 # asyncio.run(test_vertex_ai_anthropic_async_streaming())
@@ -201,7 +239,7 @@ def test_vertex_ai():
         + litellm.vertex_code_text_models
     )
     litellm.set_verbose = False
-    vertex_ai_project = "reliablekeys"
+    # vertex_ai_project = "reliablekeys"
     # litellm.vertex_project = "reliablekeys"
 
     test_models = random.sample(test_models, 1)
@@ -225,7 +263,6 @@ def test_vertex_ai():
                 model=model,
                 messages=[{"role": "user", "content": "hi"}],
                 temperature=0.7,
-                vertex_ai_project=vertex_ai_project,
             )
             print("\nModel Response", response)
             print(response)
@@ -247,7 +284,7 @@ def test_vertex_ai():
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "reliablekeys"
+    # litellm.vertex_project = "reliablekeys"
     import random
 
     test_models = (
@@ -510,9 +547,15 @@ def test_gemini_pro_function_calling():
         }
     ]
 
+    vertex_location = "northamerica-northeast1"
+
     messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
     completion = litellm.completion(
-        model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
+        model="gemini-pro",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+        vertex_location=vertex_location,
     )
     print(f"completion: {completion}")
     assert completion.choices[0].message.content is None

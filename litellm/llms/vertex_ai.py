@@ -1,3 +1,9 @@
+"""
+For claude-3 on vertex ai 
+
+Go to `vertex_ai_anthropic.py`
+"""
+
 import os, types
 import json
 from enum import Enum
@@ -24,9 +30,11 @@ class VertexAIError(Exception):
 
 class VertexAIConfig:
     """
-    Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
+    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini?hl=en
 
     The class `VertexAIConfig` provides configuration for the VertexAI's API interface. Below are the parameters:
+
+    - `safety_settings` (list): The safety settings to apply for a request - e.g. [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
 
     - `temperature` (float): This controls the degree of randomness in token selection.
 
@@ -39,6 +47,26 @@ class VertexAIConfig:
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
+    safety_settings: list = (
+        [  # override this default, either via `completion(...safety_settings=[..])` or VertexAIConfig(safetySettings=[])
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE",
+            },
+        ]
+    )
     temperature: Optional[float] = None
     max_output_tokens: Optional[int] = None
     top_p: Optional[float] = None
@@ -46,6 +74,7 @@ class VertexAIConfig:
 
     def __init__(
         self,
+        safety_settings: Optional[dict] = None,
         temperature: Optional[float] = None,
         max_output_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -73,6 +102,44 @@ class VertexAIConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "max_tokens":
+                optional_params["max_output_tokens"] = value
+            if param == "tools" and isinstance(value, list):
+                from vertexai.preview import generative_models
+
+                gtool_func_declarations = []
+                for tool in value:
+                    gtool_func_declaration = generative_models.FunctionDeclaration(
+                        name=tool["function"]["name"],
+                        description=tool["function"].get("description", ""),
+                        parameters=tool["function"].get("parameters", {}),
+                    )
+                    gtool_func_declarations.append(gtool_func_declaration)
+                optional_params["tools"] = [
+                    generative_models.Tool(
+                        function_declarations=gtool_func_declarations
+                    )
+                ]
+        return optional_params
 
 
 import asyncio
@@ -269,7 +336,6 @@ def completion(
             status_code=400,
             message="vertexai import failed please run `pip install google-cloud-aiplatform`",
         )
-
     if not (
         hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
     ):

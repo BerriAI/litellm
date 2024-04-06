@@ -4,7 +4,11 @@ import os
 import pytest
 import random
 from typing import Any
+import sys
 
+sys.path.insert(
+    0, os.path.abspath("../")
+)  # Adds the parent directory to the system path
 from pydantic import BaseModel
 from litellm import utils, Router
 
