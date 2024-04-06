@@ -77,6 +77,13 @@ class LiteLLM_Params(BaseModel):
     )
     max_retries: int = 2  # follows openai default of 2
     organization: Optional[str] = None  # for openai orgs
+    ## VERTEX AI ##
+    vertex_project: Optional[str] = None
+    vertex_location: Optional[str] = None
+    ## AWS BEDROCK / SAGEMAKER ##
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region_name: Optional[str] = None
 
     def __init__(self, max_retries: Optional[Union[int, str]] = None, **params):
         if max_retries is None:
@@ -2262,6 +2269,13 @@ class Router:
         # add to model names
         self.model_names.append(deployment.model_name)
         return
+
+    def get_deployment(self, model_id: str):
+        for model in self.model_list:
+            if "model_info" in model and "id" in model["model_info"]:
+                if model_id == model["model_info"]["id"]:
+                    return model
+        return None
 
     def get_model_ids(self):
         ids = []
