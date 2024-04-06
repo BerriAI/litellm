@@ -306,6 +306,8 @@ class LangFuseLogger:
                     tags.append(f"cache_hit:{kwargs['cache_hit']}")
                 trace_params.update({"tags": tags})
 
+            print_verbose(f"trace_params: {trace_params}")
+
             trace = self.Langfuse.trace(**trace_params)
 
             generation_id = None
@@ -324,13 +326,17 @@ class LangFuseLogger:
                 # just log `litellm-{call_type}` as the generation name
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
+            system_fingerprint = response_obj.get("system_fingerprint", None)
+            if system_fingerprint is not None:
+                optional_params["system_fingerprint"] = system_fingerprint
+
             generation_params = {
                 "name": generation_name,
                 "id": metadata.get("generation_id", generation_id),
-                "startTime": start_time,
-                "endTime": end_time,
+                "start_time": start_time,
+                "end_time": end_time,
                 "model": kwargs["model"],
-                "modelParameters": optional_params,
+                "model_parameters": optional_params,
                 "input": input,
                 "output": output,
                 "usage": usage,
@@ -342,12 +348,14 @@ class LangFuseLogger:
                 generation_params["prompt"] = metadata.get("prompt", None)
 
             if output is not None and isinstance(output, str) and level == "ERROR":
-                generation_params["statusMessage"] = output
+                generation_params["status_message"] = output
 
             if supports_completion_start_time:
                 generation_params["completion_start_time"] = kwargs.get(
                     "completion_start_time", None
                 )
+
+            print_verbose(f"generation_params: {generation_params}")
 
             trace.generation(**generation_params)
         except Exception as e:
