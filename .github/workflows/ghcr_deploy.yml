@@ -242,18 +242,20 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
           script: |
+            const commitHash = "${{ github.event.inputs.commit_hash}}";
+            console.log("Commit Hash:", commitHash); // Add this line for debugging
             try {
               const response = await github.rest.repos.createRelease({
                 draft: false,
                 generate_release_notes: true,
-                target_commitish: ${{ github.event.inputs.commit_hash}},
+                target_commitish: commitHash,
                 name: process.env.RELEASE_TAG,
                 owner: context.repo.owner,
                 prerelease: false,
                 repo: context.repo.repo,
                 tag_name: process.env.RELEASE_TAG,
               });
-
+      
               core.exportVariable('RELEASE_ID', response.data.id);
               core.exportVariable('RELEASE_UPLOAD_URL', response.data.upload_url);
             } catch (error) {
