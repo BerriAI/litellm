@@ -14,7 +14,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 from litellm import Router
-import litellm
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.caching import DualCache
 
@@ -173,10 +172,36 @@ def test_get_available_deployments():
     )
 
 
-# test_get_available_deployments()
+async def _deploy(lowest_latency_logger, deployment_id, tokens_used, duration):
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/chatgpt-v-2",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": tokens_used}}
+    time.sleep(duration)
+    end_time = time.time()
+    lowest_latency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
 
 
-def test_get_available_endpoints_tpm_rpm_check():
+async def _gather_deploy(all_deploys):
+    return await asyncio.gather(*[_deploy(*t) for t in all_deploys])
+
+
+@pytest.mark.parametrize(
+    "ans_rpm", [1, 5]
+)  # 1 should produce nothing, 10 should select first
+def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     """
     Pass in list of 2 valid models
 
@@ -185,16 +210,68 @@ def test_get_available_endpoints_tpm_rpm_check():
     assert that only the valid model is returned
     """
     test_cache = DualCache()
+    ans = "1234"
+    non_ans_rpm = 3
+    assert ans_rpm != non_ans_rpm, "invalid test"
+    if ans_rpm < non_ans_rpm:
+        ans = None
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "azure/chatgpt-v-2"},
-            "model_info": {"id": "1234", "rpm": 10},
+            "model_info": {"id": "1234", "rpm": ans_rpm},
         },
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "azure/chatgpt-v-2"},
-            "model_info": {"id": "5678", "rpm": 3},
+            "model_info": {"id": "5678", "rpm": non_ans_rpm},
+        },
+    ]
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+    model_group = "gpt-3.5-turbo"
+    d1 = [(lowest_latency_logger, "1234", 50, 0.01)] * non_ans_rpm
+    d2 = [(lowest_latency_logger, "5678", 50, 0.01)] * non_ans_rpm
+    asyncio.run(_gather_deploy([*d1, *d2]))
+    ## CHECK WHAT'S SELECTED ##
+    d_ans = lowest_latency_logger.get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
+    )
+    print(d_ans)
+    assert (d_ans and d_ans["model_info"]["id"]) == ans
+
+
+# test_get_available_endpoints_tpm_rpm_check_async()
+
+
+@pytest.mark.parametrize(
+    "ans_rpm", [1, 5]
+)  # 1 should produce nothing, 10 should select first
+def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
+    """
+    Pass in list of 2 valid models
+
+    Update cache with 1 model clearly being at tpm/rpm limit
+
+    assert that only the valid model is returned
+    """
+    test_cache = DualCache()
+    ans = "1234"
+    non_ans_rpm = 3
+    assert ans_rpm != non_ans_rpm, "invalid test"
+    if ans_rpm < non_ans_rpm:
+        ans = None
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "model_info": {"id": "1234", "rpm": ans_rpm},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
     lowest_latency_logger = LowestLatencyLoggingHandler(
@@ -212,10 +289,10 @@ def test_get_available_endpoints_tpm_rpm_check():
             "model_info": {"id": deployment_id},
         }
     }
-    for _ in range(3):
+    for _ in range(non_ans_rpm):
         start_time = time.time()
         response_obj = {"usage": {"total_tokens": 50}}
-        time.sleep(0.05)
+        time.sleep(0.01)
         end_time = time.time()
         lowest_latency_logger.log_success_event(
             response_obj=response_obj,
@@ -234,10 +311,10 @@ def test_get_available_endpoints_tpm_rpm_check():
             "model_info": {"id": deployment_id},
         }
     }
-    for _ in range(3):
+    for _ in range(non_ans_rpm):
         start_time = time.time()
         response_obj = {"usage": {"total_tokens": 20}}
-        time.sleep(2)
+        time.sleep(0.5)
         end_time = time.time()
         lowest_latency_logger.log_success_event(
             response_obj=response_obj,
@@ -247,17 +324,11 @@ def test_get_available_endpoints_tpm_rpm_check():
         )
 
     ## CHECK WHAT'S SELECTED ##
-    print(
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )
+    d_ans = lowest_latency_logger.get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
     )
-    assert (
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )["model_info"]["id"]
-        == "1234"
-    )
+    print(d_ans)
+    assert (d_ans and d_ans["model_info"]["id"]) == ans
 
 
 def test_router_get_available_deployments():
