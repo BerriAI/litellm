@@ -38,6 +38,7 @@ export const modelCreateCall = async (
 
     const data = await response.json();
     console.log("API Response:", data);
+    message.success("Model created successfully. Wait 60s and refresh.")
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
