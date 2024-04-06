@@ -490,3 +490,63 @@ def test_init_clients_azure_command_r_plus():
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_text_completion_with_organization():
+    try:
+        print("Testing Text OpenAI with organization")
+        model_list = [
+            {
+                "model_name": "openai-bad-org",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": os.getenv("OPENAI_API_KEY", None),
+                    "organization": "org-ikDc4ex8NB",
+                },
+            },
+            {
+                "model_name": "openai-good-org",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": os.getenv("OPENAI_API_KEY", None),
+                    "organization": os.getenv("OPENAI_ORGANIZATION", None),
+                },
+            },
+        ]
+
+        router = Router(model_list=model_list)
+
+        print(router.model_list)
+        print(router.model_list[0])
+
+        openai_client = router._get_client(
+            deployment=router.model_list[0],
+            kwargs={"input": ["hello"], "model": "openai-bad-org"},
+        )
+        print(vars(openai_client))
+
+        assert openai_client.organization == "org-ikDc4ex8NB"
+
+        # bad org raises error
+
+        try:
+            response = await router.atext_completion(
+                model="openai-bad-org",
+                prompt="this is a test",
+            )
+            pytest.fail("Request should have failed - This organization does not exist")
+        except Exception as e:
+            print("Got exception: " + str(e))
+            assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+        # good org works
+        response = await router.atext_completion(
+            model="openai-good-org",
+            prompt="this is a test",
+            max_tokens=5,
+        )
+        print("working response: ", response)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
