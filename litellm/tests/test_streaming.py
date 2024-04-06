@@ -472,7 +472,7 @@ async def test_acompletion_gemini_stream():
         print(f"type of response at the top: {response}")
         complete_response = ""
         idx = 0
-        # Add any assertions here to check the response
+        # Add any assertions here to check, the response
         async for chunk in response:
             print(f"chunk in acompletion gemini: {chunk}")
             print(chunk.choices[0].delta)
