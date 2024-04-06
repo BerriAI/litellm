@@ -3441,12 +3441,14 @@ async def chat_completion(
         )  # run the moderation check in parallel to the actual llm api call
         response = responses[1]
 
-        # Post Call Processing
-        data["litellm_status"] = "success"  # used for alerting
-
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
+
+        # Post Call Processing
+        if llm_router is not None:
+            data["deployment"] = llm_router.get_deployment(model_id=model_id)
+        data["litellm_status"] = "success"  # used for alerting
 
         if (
             "stream" in data and data["stream"] == True
