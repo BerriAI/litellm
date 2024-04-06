@@ -1060,6 +1060,7 @@ def completion(
                 api_key=api_key,
                 api_base=api_base,
                 acompletion=acompletion,
+                client=client,  # pass AsyncOpenAI, OpenAI client
                 logging_obj=logging,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
