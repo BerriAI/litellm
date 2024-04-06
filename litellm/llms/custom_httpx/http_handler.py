@@ -1,5 +1,5 @@
 import httpx, asyncio
-from typing import Optional
+from typing import Optional, Union
 
 
 class AsyncHTTPHandler:
@@ -25,7 +25,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[dict] = None,
+        data: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
     ):
