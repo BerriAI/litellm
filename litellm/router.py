@@ -1769,6 +1769,7 @@ class Router:
             or custom_llm_provider == "azure"
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "openai"
+            or custom_llm_provider == "text-completion-openai"
             or "ft:gpt-3.5-turbo" in model_name
             or model_name in litellm.open_ai_embedding_models
         ):
