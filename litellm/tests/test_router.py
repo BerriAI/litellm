@@ -1228,3 +1228,35 @@ def test_router_add_deployment():
     assert len(new_model_id_list) > len(init_model_id_list)
 
     assert new_model_id_list[1] != new_model_id_list[0]
+
+
+@pytest.mark.asyncio
+async def test_router_text_completion_client():
+    # This tests if we re-use the Async OpenAI client
+    # This test fails when we create a new Async OpenAI client per request
+    try:
+        model_list = [
+            {
+                "model_name": "fake-openai-endpoint",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": os.getenv("OPENAI_API_KEY", None),
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+            }
+        ]
+        router = Router(model_list=model_list, debug_level="DEBUG", set_verbose=True)
+        tasks = []
+        for _ in range(300):
+            tasks.append(
+                router.atext_completion(
+                    model="fake-openai-endpoint",
+                    prompt="hello from litellm test",
+                )
+            )
+
+        # Execute all coroutines concurrently
+        responses = await asyncio.gather(*tasks)
+        print(responses)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
