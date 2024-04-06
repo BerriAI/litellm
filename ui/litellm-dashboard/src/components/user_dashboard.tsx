@@ -123,7 +123,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       } else {
         const fetchData = async () => {
           try {
-            const response = await userInfoCall(accessToken, userID, userRole);
+            const response = await userInfoCall(accessToken, userID, userRole, false, null, null);
             console.log(
               `received teams in user dashboard: ${Object.keys(
                 response
