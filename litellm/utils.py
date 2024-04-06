@@ -1207,7 +1207,7 @@ class Logging:
             # User Logging -> if you pass in a custom logging function
             print_verbose(
                 f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n",
-                log_level="INFO",
+                log_level="DEBUG",
             )
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -10575,28 +10575,26 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
 
         args_str = ", ".join(map(repr, args))
         kwargs_str = ", ".join(f"{key}={repr(value)}" for key, value in kwargs.items())
-        print_verbose("\n", log_level="INFO")  # new line before
-        print_verbose("\033[92mRequest to litellm:\033[0m", log_level="INFO")
+        print_verbose(
+            "\n",
+        )  # new line before
+        print_verbose(
+            "\033[92mRequest to litellm:\033[0m",
+        )
         if args and kwargs:
             print_verbose(
-                f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m",
-                log_level="INFO",
+                f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m"
             )
         elif args:
             print_verbose(
-                f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m",
-                log_level="INFO",
+                f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m"
             )
         elif kwargs:
             print_verbose(
-                f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m",
-                log_level="INFO",
+                f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m"
             )
         else:
-            print_verbose(
-                f"\033[92mlitellm.{original_function.__name__}()\033[0m",
-                log_level="INFO",
-            )
+            print_verbose(f"\033[92mlitellm.{original_function.__name__}()\033[0m")
         print_verbose("\n")  # new line after
     except:
         # This should always be non blocking
