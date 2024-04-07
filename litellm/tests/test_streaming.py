@@ -846,7 +846,7 @@ async def test_claude_3_streaming_finish_reason():
             max_tokens=10,
         )
         complete_response = ""
-        # Add any assertions here to check the response
+        # Add any assertions here to-check the response
         num_finish_reason = 0
         async for chunk in response:
             print(f"chunk: {chunk}")
