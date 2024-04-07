@@ -4,6 +4,14 @@ import os
 import pytest
 import random
 from typing import Any
+import sys
+from dotenv import load_dotenv
+
+load_dotenv()
+
+sys.path.insert(
+    0, os.path.abspath("../")
+)  # Adds the parent directory to the system path
 
 from pydantic import BaseModel
 from litellm import utils, Router
@@ -35,6 +43,7 @@ def router_factory():
         return Router(
             model_list=model_list,
             routing_strategy=routing_strategy,
+            enable_pre_call_checks=True,
             debug_level="DEBUG",
         )
 
@@ -115,15 +124,23 @@ def test_rate_limit(
         ExpectNoException: Signfies that no other error has happened. A NOP
     """
     # Can send more messages then we're going to; so don't expect a rate limit error
+    args = locals()
+    print(f"args: {args}")
     expected_exception = (
         ExpectNoException if num_try_send <= num_allowed_send else ValueError
     )
 
+    # if (
+    #     num_try_send > num_allowed_send and sync_mode == False
+    # ):  # async calls are made simultaneously - the check for collision would need to happen before the router call
+    #     return
+
     list_of_messages = generate_list_of_messages(max(num_try_send, num_allowed_send))
     rpm, tpm = calculate_limits(list_of_messages[:num_allowed_send])
     list_of_messages = list_of_messages[:num_try_send]
-    router = router_factory(rpm, tpm, routing_strategy)
+    router: Router = router_factory(rpm, tpm, routing_strategy)
 
+    print(f"router: {router.model_list}")
     with pytest.raises(expected_exception) as excinfo:  # asserts correct type raised
         if sync_mode:
             results = sync_call(router, list_of_messages)
