@@ -831,22 +831,25 @@ def test_bedrock_claude_3_streaming():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_claude_3_streaming_finish_reason():
+@pytest.mark.asyncio
+async def test_claude_3_streaming_finish_reason():
     try:
         litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "Be helpful"},
             {"role": "user", "content": "What do you know?"},
         ]
-        response: ModelResponse = completion(  # type: ignore
+        response: ModelResponse = await litellm.acompletion(  # type: ignore
             model="claude-3-opus-20240229",
             messages=messages,
             stream=True,
+            max_tokens=10,
         )
         complete_response = ""
-        # Add any assertions here to check the response
+        # Add any assertions here to-check the response
         num_finish_reason = 0
-        for idx, chunk in enumerate(response):
+        async for chunk in response:
+            print(f"chunk: {chunk}")
             if isinstance(chunk, ModelResponse):
                 if chunk.choices[0].finish_reason is not None:
                     num_finish_reason += 1
@@ -2285,7 +2288,7 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
-        # raise Exception("it worked!")
+        # raise Exception("it worked! ")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
