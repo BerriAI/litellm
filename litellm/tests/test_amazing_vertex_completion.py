@@ -201,8 +201,8 @@ def test_vertex_ai():
         + litellm.vertex_code_text_models
     )
     litellm.set_verbose = False
-    vertex_ai_project = "reliablekeys"
-    # litellm.vertex_project = "reliablekeys"
+    vertex_ai_project = "adroit-crow-413218"
+    # litellm.vertex_project = "adroit-crow-413218"
 
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
@@ -247,7 +247,7 @@ def test_vertex_ai():
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "reliablekeys"
+    litellm.vertex_project = "adroit-crow-413218"
     import random
 
     test_models = (
