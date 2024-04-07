@@ -2409,8 +2409,22 @@ class Router:
 
             ## RPM CHECK ##
             _litellm_params = deployment.get("litellm_params", {})
-            _model_id = deployment.get("model_info", {}).get("id", "")
-            _deployment_rpm = self.cache.get_cache(key=_model_id, local_only=True)
+            model_id = deployment.get("model_info", {}).get("id", "")
+            ### get local router cache ###
+            current_request_cache_local = (
+                self.cache.get_cache(key=model_id, local_only=True) or 0
+            )
+            ### get usage-based routing cache ###
+            current_minute = datetime.now().strftime("%H-%M")
+            rpm_key = f"{deployment['model_name']}:rpm:{current_minute}"
+            model_group_cache = (
+                self.cache.get_cache(key=rpm_key, local_only=True) or {}
+            )  # check the redis + in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
+            model_group_cache[model_id] = model_group_cache.get(model_id, 0)
+
+            current_request = max(
+                current_request_cache_local, model_group_cache[model_id]
+            )
 
             if (
                 isinstance(_litellm_params, dict)
@@ -2418,8 +2432,7 @@ class Router:
             ):
                 if (
                     isinstance(_litellm_params["rpm"], int)
-                    and _deployment_rpm is not None
-                    and _litellm_params["rpm"] <= _deployment_rpm
+                    and _litellm_params["rpm"] <= current_request
                 ):
                     invalid_model_indices.append(idx)
                     _rate_limit_error = True
