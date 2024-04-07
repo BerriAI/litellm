@@ -5,9 +5,6 @@ import sys, os, asyncio
 import traceback
 import time, pytest
 from pydantic import BaseModel
-import nest_asyncio
-
-nest_asyncio.apply()
 
 sys.path.insert(
     0, os.path.abspath("../..")
