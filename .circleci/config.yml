@@ -42,7 +42,6 @@ jobs:
             pip install lunary==0.2.5
             pip install "langfuse==2.7.3"
             pip install numpydoc
-            pip install nest-asyncio==1.6.0
             pip install traceloop-sdk==0.0.69
             pip install openai
             pip install prisma            
