@@ -22,6 +22,13 @@ class AsyncHTTPHandler:
         # Close the client when you're done with it
         await self.client.aclose()
 
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self):
+        # close the client when exiting
+        await self.client.aclose()
+
     async def get(
         self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None
     ):
