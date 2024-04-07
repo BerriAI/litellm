@@ -13,7 +13,6 @@ import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
-from litellm import LiteLLM_Params
 import itertools
 import random, uuid, requests
 from functools import wraps
@@ -54,6 +53,7 @@ os.environ["TIKTOKEN_CACHE_DIR"] = (
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from ._logging import verbose_logger
+from .types.router import LiteLLM_Params
 from .integrations.traceloop import TraceloopLogger
 from .integrations.athina import AthinaLogger
 from .integrations.helicone import HeliconeLogger
