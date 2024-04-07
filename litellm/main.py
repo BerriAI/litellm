@@ -1197,19 +1197,6 @@ def completion(
                     logging_obj=logging,
                     headers=headers,
                 )
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] == True
-                and not isinstance(response, CustomStreamWrapper)
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    response,
-                    model,
-                    custom_llm_provider="anthropic",
-                    logging_obj=logging,
-                )
-
             if optional_params.get("stream", False) or acompletion == True:
                 ## LOGGING
                 logging.post_call(
