@@ -39,7 +39,6 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 from .llms import (
-    anthropic,
     anthropic_text,
     together_ai,
     ai21,
@@ -68,6 +67,7 @@ from .llms import (
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
+from .llms.anthropic import AnthropicChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -99,6 +99,7 @@ from litellm.utils import (
 dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
+anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
@@ -304,6 +305,7 @@ async def acompletion(
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
+            or custom_llm_provider == "anthropic"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -1180,10 +1182,11 @@ def completion(
                     or get_secret("ANTHROPIC_API_BASE")
                     or "https://api.anthropic.com/v1/messages"
                 )
-                response = anthropic.completion(
+                response = anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,
                     api_base=api_base,
+                    acompletion=acompletion,
                     custom_prompt_dict=litellm.custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,
@@ -1195,19 +1198,6 @@ def completion(
                     logging_obj=logging,
                     headers=headers,
                 )
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] == True
-                and not isinstance(response, CustomStreamWrapper)
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    response,
-                    model,
-                    custom_llm_provider="anthropic",
-                    logging_obj=logging,
-                )
-
             if optional_params.get("stream", False) or acompletion == True:
                 ## LOGGING
                 logging.post_call(
