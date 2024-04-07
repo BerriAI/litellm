@@ -222,7 +222,7 @@ response = completion(
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
 | gpt-3.5-turbo-instruct | `response = completion(model="gpt-3.5-turbo-instruct", messages=messages)` |
-| gpt-3.5-turbo-instruct-0914 | `response = completion(model="gpt-3.5-turbo-instruct-091", messages=messages)` |
+| gpt-3.5-turbo-instruct-0914 | `response = completion(model="gpt-3.5-turbo-instruct-0914", messages=messages)` |
 | text-davinci-003    | `response = completion(model="text-davinci-003", messages=messages)` |
 | ada-001             | `response = completion(model="ada-001", messages=messages)` |
 | curie-001           | `response = completion(model="curie-001", messages=messages)` |
