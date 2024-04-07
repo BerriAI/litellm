@@ -65,22 +65,3 @@ async def test_get_api_base():
         message=slow_message + request_info,
         level="Low",
     )
-
-
-@pytest.mark.asyncio
-async def test_request_taking_too_long():
-    """
-    - attach request_taking_too_long as a success callback to litellm
-    - unit test kwargs for azure call vs. vertex ai call -> ensure api base constructed correctly for both
-    """
-    import time
-
-    _pl = ProxyLogging(user_api_key_cache=DualCache())
-    litellm.success_callback = [_pl.response_taking_too_long_callback]
-
-    response = await litellm.acompletion(
-        model="azure/chatgpt-v-2",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-
-    raise Exception("it worked!")
