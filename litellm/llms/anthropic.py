@@ -105,9 +105,6 @@ def validate_environment(api_key, user_headers):
 class AnthropicChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
-        self.async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
-        )
 
     def process_response(
         self,
@@ -258,6 +255,9 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
+        self.async_handler = AsyncHTTPHandler(
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        )
         response = await self.async_handler.post(
             api_base, headers=headers, data=json.dumps(data)
         )
@@ -296,6 +296,9 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
+        self.async_handler = AsyncHTTPHandler(
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        )
         response = await self.async_handler.post(
             api_base, headers=headers, data=json.dumps(data)
         )
