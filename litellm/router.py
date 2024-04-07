@@ -524,7 +524,7 @@ class Router:
             )
 
             # debug how often this deployment picked
-            self._print_deployment_metrics(deployment=deployment)
+            self._track_deployment_metrics(deployment=deployment)
 
             kwargs.setdefault("metadata", {}).update(
                 {
@@ -583,7 +583,7 @@ class Router:
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
             )
             # debug how often this deployment picked
-            self._print_deployment_metrics(deployment=deployment, response=response)
+            self._track_deployment_metrics(deployment=deployment, response=response)
 
             return response
         except Exception as e:
@@ -1683,6 +1683,24 @@ class Router:
         except Exception as e:
             raise e
 
+    def _update_usage(self, deployment_id: str):
+        """
+        Update deployment rpm for that minute
+        """
+        rpm_key = deployment_id
+
+        request_count = self.cache.get_cache(key=rpm_key, local_only=True)
+        if request_count is None:
+            request_count = 1
+            self.cache.set_cache(
+                key=rpm_key, value=request_count, local_only=True, ttl=60
+            )  # only store for 60s
+        else:
+            request_count += 1
+            self.cache.set_cache(
+                key=rpm_key, value=request_count, local_only=True
+            )  # don't change existing ttl
+
     def _set_cooldown_deployments(self, deployment: Optional[str] = None):
         """
         Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -2389,9 +2407,10 @@ class Router:
                     _context_window_error = True
                     continue
 
-            ## TPM/RPM CHECK ##
+            ## RPM CHECK ##
             _litellm_params = deployment.get("litellm_params", {})
             _model_id = deployment.get("model_info", {}).get("id", "")
+            _deployment_rpm = self.cache.get_cache(key=_model_id, local_only=True)
 
             if (
                 isinstance(_litellm_params, dict)
@@ -2399,9 +2418,8 @@ class Router:
             ):
                 if (
                     isinstance(_litellm_params["rpm"], int)
-                    and _model_id in self.deployment_stats
-                    and _litellm_params["rpm"]
-                    <= self.deployment_stats[_model_id]["num_requests"]
+                    and _deployment_rpm is not None
+                    and _litellm_params["rpm"] <= _deployment_rpm
                 ):
                     invalid_model_indices.append(idx)
                     _rate_limit_error = True
@@ -2590,7 +2608,7 @@ class Router:
         )
         return deployment
 
-    def _print_deployment_metrics(self, deployment, response=None):
+    def _track_deployment_metrics(self, deployment, response=None):
         try:
             litellm_params = deployment["litellm_params"]
             api_base = litellm_params.get("api_base", "")
@@ -2601,6 +2619,7 @@ class Router:
 
                 # update self.deployment_stats
                 if model_id is not None:
+                    self._update_usage(model_id)  # update in-memory cache for tracking
                     if model_id in self.deployment_stats:
                         # only update num_requests
                         self.deployment_stats[model_id]["num_requests"] += 1
@@ -2648,7 +2667,7 @@ class Router:
                     "self.deployment_stats: \n%s", formatted_stats
                 )
         except Exception as e:
-            verbose_router_logger.error(f"Error in _print_deployment_metrics: {str(e)}")
+            verbose_router_logger.error(f"Error in _track_deployment_metrics: {str(e)}")
 
     def flush_cache(self):
         litellm.cache = None
