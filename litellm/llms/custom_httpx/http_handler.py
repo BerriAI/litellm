@@ -1,15 +1,21 @@
 import httpx, asyncio
-from typing import Optional, Union
+from typing import Optional, Union, Mapping, Any
+
+# https://www.python-httpx.org/advanced/timeouts
+_DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 
 
 class AsyncHTTPHandler:
-    def __init__(self, concurrent_limit=1000):
+    def __init__(
+        self, timeout: httpx.Timeout = _DEFAULT_TIMEOUT, concurrent_limit=1000
+    ):
         # Create a client with a connection pool
         self.client = httpx.AsyncClient(
+            timeout=timeout,
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
                 max_keepalive_connections=concurrent_limit,
-            )
+            ),
         )
 
     async def close(self):
@@ -25,12 +31,15 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,
+        data: Optional[Union[dict, str]] = None,  # type: ignore
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
     ):
         response = await self.client.post(
-            url, data=data, params=params, headers=headers
+            url,
+            data=data,  # type: ignore
+            params=params,
+            headers=headers,
         )
         return response
 
