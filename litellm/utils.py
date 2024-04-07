@@ -13,6 +13,7 @@ import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
+from litellm import LiteLLM_Params
 import itertools
 import random, uuid, requests
 from functools import wraps
@@ -75,7 +76,6 @@ from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
 from .caching import S3Cache, RedisSemanticCache, RedisCache
-from .router import LiteLLM_Params
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
