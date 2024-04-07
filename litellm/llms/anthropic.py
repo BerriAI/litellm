@@ -9,14 +9,17 @@ import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-async_handler = AsyncHTTPHandler()
-
 import httpx
 
 
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman: "
     AI_PROMPT = "\n\nAssistant: "
+
+    # constants from https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_constants.py
+
+
+async_handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
 
 class AnthropicError(Exception):
@@ -230,6 +233,42 @@ def process_response(
     return model_response
 
 
+async def acompletion_stream_function(
+    model: str,
+    messages: list,
+    api_base: str,
+    custom_prompt_dict: dict,
+    model_response: ModelResponse,
+    print_verbose: Callable,
+    encoding,
+    api_key,
+    logging_obj,
+    stream,
+    _is_function_call,
+    data=None,
+    optional_params=None,
+    litellm_params=None,
+    logger_fn=None,
+    headers={},
+):
+    response = await async_handler.post(
+        api_base, headers=headers, data=json.dumps(data)
+    )
+
+    if response.status_code != 200:
+        raise AnthropicError(status_code=response.status_code, message=response.text)
+
+    completion_stream = response.aiter_lines()
+
+    streamwrapper = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model=model,
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+    return streamwrapper
+
+
 async def acompletion_function(
     model: str,
     messages: list,
@@ -356,8 +395,29 @@ def completion(
     )
     print_verbose(f"_is_function_call: {_is_function_call}")
     if acompletion == True:
-        if optional_params.get("stream", False):
-            pass
+        if (
+            stream and not _is_function_call
+        ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
+            print_verbose("makes async anthropic streaming POST request")
+            data["stream"] = stream
+            return acompletion_stream_function(
+                model=model,
+                messages=messages,
+                data=data,
+                api_base=api_base,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                _is_function_call=_is_function_call,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=headers,
+            )
         else:
             return acompletion_function(
                 model=model,
@@ -396,7 +456,15 @@ def completion(
                     status_code=response.status_code, message=response.text
                 )
 
-            return response.iter_lines()
+            completion_stream = response.iter_lines()
+            streaming_response = CustomStreamWrapper(
+                completion_stream=completion_stream,
+                model=model,
+                custom_llm_provider="anthropic",
+                logging_obj=logging_obj,
+            )
+            return streaming_response
+
         else:
             response = requests.post(api_base, headers=headers, data=json.dumps(data))
             if response.status_code != 200:
