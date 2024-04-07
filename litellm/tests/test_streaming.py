@@ -26,6 +26,9 @@ litellm.logging = False
 litellm.set_verbose = True
 litellm.num_retries = 3
 litellm.cache = None
+import nest_asyncio
+
+nest_asyncio.apply()
 
 score = 0
 
