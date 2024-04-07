@@ -2288,7 +2288,7 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
-        # raise Exception("it worked!")
+        # raise Exception("it worked! ")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
