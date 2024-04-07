@@ -157,7 +157,7 @@ def get_ollama_response(
     if format is not None:
         data["format"] = format
     if images is not None:
-        data["images"] = images
+        data["images"] = [image.split(",")[-1] if image.startswith("data:") else image for image in images]
 
     ## LOGGING
     logging_obj.pre_call(
