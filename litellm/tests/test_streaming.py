@@ -664,7 +664,7 @@ def test_vertex_ai_stream():
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "reliablekeys"
+    litellm.vertex_project = "adroit-crow-413218"
     import random
 
     test_models = ["gemini-1.0-pro"]
