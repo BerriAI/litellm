@@ -6902,7 +6902,7 @@ async def add_new_model(
             raise HTTPException(
                 status_code=500,
                 detail={
-                    "error": "Set `store_model_in_db: true` in general_settings on your config.yaml"
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
         return {"message": "Model added successfully"}
@@ -7174,7 +7174,7 @@ async def delete_model(model_info: ModelInfoDelete):
             raise HTTPException(
                 status_code=500,
                 detail={
-                    "error": "Set `store_model_in_db: true` in general_settings on your config.yaml"
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
         return {"message": "Model deleted successfully"}
