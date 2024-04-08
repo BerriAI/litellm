@@ -1836,11 +1836,6 @@ class ProxyConfig:
         # Load existing config
         backup_config = await self.get_config()
 
-        # Save the updated config
-        ## YAML
-        with open(f"{user_config_file_path}", "w") as config_file:
-            yaml.dump(new_config, config_file, default_flow_style=False)
-
         # update Router - verifies if this is a valid config
         try:
             (
@@ -1862,22 +1857,17 @@ class ProxyConfig:
         - Do not write restricted params like 'api_key' to the database
         - if api_key is passed, save that to the local environment or connected secret manage (maybe expose `litellm.save_secret()`)
         """
-        if (
-            prisma_client is not None
-            and litellm.get_secret("SAVE_CONFIG_TO_DB", default_value=False) == True
+        if prisma_client is not None and (
+            general_settings.get("store_model_in_db", False) == True
         ):
-            ### KEY REMOVAL ###
-            models = new_config.get("model_list", [])
-            for m in models:
-                if m.get("litellm_params", {}).get("api_key", None) is not None:
-                    # pop the key
-                    api_key = m["litellm_params"].pop("api_key")
-                    # store in local env
-                    key_name = f"LITELLM_MODEL_KEY_{uuid.uuid4()}"
-                    os.environ[key_name] = api_key
-                    # save the key name (not the value)
-                    m["litellm_params"]["api_key"] = f"os.environ/{key_name}"
+            # if using - db for config - models are in ModelTable
+            new_config.pop("model_list", None)
             await prisma_client.insert_data(data=new_config, table_name="config")
+        else:
+            # Save the updated config - if user is not using a dB
+            ## YAML
+            with open(f"{user_config_file_path}", "w") as config_file:
+                yaml.dump(new_config, config_file, default_flow_style=False)
 
     async def load_team_config(self, team_id: str):
         """
@@ -7916,8 +7906,10 @@ async def update_config(config_info: ConfigYAML):
 
     Currently supports modifying General Settings + LiteLLM settings
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
+        import base64
+
         # Load existing config
         config = await proxy_config.get_config()
 
@@ -7937,9 +7929,17 @@ async def update_config(config_info: ConfigYAML):
 
         if config_info.environment_variables is not None:
             config.setdefault("environment_variables", {})
-            updated_environment_variables = config_info.environment_variables
+            _updated_environment_variables = config_info.environment_variables
+
+            # encrypt updated_environment_variables #
+            for k, v in _updated_environment_variables.items():
+                if isinstance(v, str):
+                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
+                    _updated_environment_variables[k] = base64.b64encode(
+                        encrypted_value
+                    ).decode("utf-8")
             config["environment_variables"] = {
-                **updated_environment_variables,
+                **_updated_environment_variables,
                 **config["environment_variables"],
             }
 
