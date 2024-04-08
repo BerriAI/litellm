@@ -118,6 +118,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     let input_cost = "Undefined";
     let output_cost = "Undefined";
     let max_tokens = "Undefined";
+    let cleanedLitellmParams = {};
 
     // Check if litellm_model_name is null or undefined
     if (litellm_model_name) {
@@ -139,11 +140,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       output_cost = model_info?.output_cost_per_token;
       max_tokens = model_info?.max_tokens;
     }
+
+    // let cleanedLitellmParams == litellm_params without model, api_base
+    if (curr_model?.litellm_params) {
+      cleanedLitellmParams = Object.fromEntries(
+        Object.entries(curr_model?.litellm_params).filter(
+          ([key]) => key !== "model" && key !== "api_base"
+        )
+      );
+    } 
+
     modelData.data[i].provider = provider;
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
     modelData.data[i].max_tokens = max_tokens;
     modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
+    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
     all_models_on_proxy.push(curr_model.model_name);
 
@@ -261,7 +273,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   )
                 }
                 <TableHeaderCell>
-                  Access
+                  Extra litellm Params
                 </TableHeaderCell>
                 <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
@@ -282,15 +294,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }
 
                   <TableCell>
-                    {model.user_access ? (
-                      <Badge color={"green"}>Yes</Badge>
-                    ) : (
-                      <RequestAccess
-                        userModels={all_models_on_proxy}
-                        accessToken={accessToken}
-                        userID={userID}
-                      ></RequestAccess>
-                    )}
+                    <pre>
+                    {JSON.stringify(model.cleanedLitellmParams, null, 2)}
+                    </pre>
                   </TableCell>
 
                   <TableCell>{model.input_cost}</TableCell>
