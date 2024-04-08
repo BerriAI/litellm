@@ -33,6 +33,7 @@ import {
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
+import TextArea from "antd/es/input/TextArea";
 
 const { Title: Title2, Link } = Typography;
 
@@ -182,6 +183,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       if (key === "base_model") {
         // Add key-value pair to model_info dictionary
         modelInfoObj[key] = value;
+      }
+
+
+      if (key == "litellm_extra_params") {
+        console.log("litellm_extra_params:", value);
+        let litellmExtraParams = {};
+        try {
+          litellmExtraParams = JSON.parse(value);
+        }
+        catch (error) {
+          message.error("Failed to parse LiteLLM Extra Paras: " + error);
+          throw new Error("Failed to parse litellm_extra_params: " + error);
+        }
+        for (const [key, value] of Object.entries(litellmExtraParams)) {
+          litellmParamsObj[key] = value;
+        }
       }
     }
 
@@ -420,6 +437,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <TextInput placeholder="us-east-1"/>
                 </Form.Item>
                 }
+                <Form.Item label="LiteLLM Params" name="litellm_extra_params" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
+                <TextArea
+                  rows={4}
+                  placeholder='{
+                    "rpm": 100,
+                    "timeout": 0,
+                    "stream_timeout": 0
+                  }'
+                />
+
+                </Form.Item>
+                <Row>
+                <Col span={10}></Col>
+                <Col span={10}><Text className="mb-3 mt-1">Pass JSON of litellm supported params <Link href="https://docs.litellm.ai/docs/completion/input" target="_blank">litellm.completion() call</Link></Text></Col>
+                </Row>
+
               </>
               <div style={{ textAlign: "center", marginTop: "10px" }}>
                 <Button2 htmlType="submit">Add Model</Button2>
