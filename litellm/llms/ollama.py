@@ -120,6 +120,31 @@ class OllamaConfig:
             and v is not None
         }
 
+# ollama wants plain base64 jpeg files as images.  strip any leading dataURI
+# and convert to jpeg.
+def _convert_image(image):
+    import base64, io
+    try:
+        from PIL import Image
+    except:
+        raise Exception(
+            "ollama image conversion failed please run `pip install Pillow`"
+        )
+
+    orig = image
+    if image.startswith("data:"):
+        image = image.split(",")[-1]
+    try:
+        image_data = Image.open(io.BytesIO(base64.b64decode(image)))
+        if image_data.format == "JPEG":
+            return image
+    except:
+        return orig
+    jpeg_image = io.BytesIO()
+    image_data.convert("RGB").save(jpeg_image, "JPEG")
+    jpeg_image.seek(0)
+    return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
+
 
 # ollama implementation
 def get_ollama_response(
@@ -157,7 +182,7 @@ def get_ollama_response(
     if format is not None:
         data["format"] = format
     if images is not None:
-        data["images"] = [image.split(",")[-1] if image.startswith("data:") else image for image in images]
+        data["images"] = [_convert_image(image) for image in images]
 
     ## LOGGING
     logging_obj.pre_call(
