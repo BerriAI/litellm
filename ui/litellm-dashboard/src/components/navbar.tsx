@@ -69,17 +69,24 @@ const Navbar: React.FC<NavbarProps> = ({
       </div>
       <div className="text-right mx-4 my-2 absolute top-0 right-0 flex items-center justify-end space-x-2">
       {showSSOBanner ? (
-          <Button size="xs" className="p-2">
+          
+        <div style={{
+          // border: '1px solid #391085',
+          padding: '6px',
+          borderRadius: '8px', // Added border-radius property
+        }}
+      >
           <a
             href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
             target="_blank"
             style={{
-              "fontSize": "14px"
+              "fontSize": "14px",
+              "textDecoration": "underline"
             }}
           >
             Request hosted proxy
           </a>
-          </Button>
+          </div>
         ) : null}
 
         <div style={{
