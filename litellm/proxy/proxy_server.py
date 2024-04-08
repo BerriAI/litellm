@@ -2337,6 +2337,7 @@ class ProxyConfig:
         _store_model_in_db = litellm.get_secret(
             "STORE_MODEL_IN_DB", None
         )  # feature flag for `/model/new`
+        verbose_proxy_logger.info(f"'STORE_MODEL_IN_DB'={_store_model_in_db}")
         if _store_model_in_db is not None and _store_model_in_db == True:
             general_settings["store_model_in_db"] = True
         router_params: dict = {
