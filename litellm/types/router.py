@@ -12,6 +12,9 @@ class ModelConfig(BaseModel):
     tpm: int
     rpm: int
 
+    class Config:
+        protected_namespaces = ()     
+
 
 class RouterConfig(BaseModel):
     model_list: List[ModelConfig]
@@ -144,7 +147,7 @@ class Deployment(BaseModel):
     class Config:
         extra = "allow"
         protected_namespaces = ()      
-        
+
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
