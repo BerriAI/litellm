@@ -32,6 +32,7 @@ const Navbar: React.FC<NavbarProps> = ({
 }) => {
   console.log("User ID:", userID);
   console.log("userEmail:", userEmail);
+  console.log("showSSOBanner:", showSSOBanner);
 
   // const userColors = require('./ui_colors.json') || {};
   const isLocal = process.env.NODE_ENV === "development";
@@ -67,13 +68,18 @@ const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
       <div className="text-right mx-4 my-2 absolute top-0 right-0 flex items-center justify-end space-x-2">
-        {showSSOBanner ? (
+      {showSSOBanner ? (
+          <Button size="xs" className="p-2">
           <a
-            href="https://docs.litellm.ai/docs/proxy/ui#setup-ssoauth-for-ui"
+            href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
             target="_blank"
-            className="mr-2"
+            style={{
+              "fontSize": "14px"
+            }}
           >
+            Request hosted proxy
           </a>
+          </Button>
         ) : null}
 
         <div style={{
