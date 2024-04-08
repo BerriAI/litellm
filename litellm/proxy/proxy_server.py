@@ -7956,6 +7956,25 @@ async def update_config(config_info: ConfigYAML):
                 **config["litellm_settings"],
             }
 
+            # if litellm.success_callback in updated_litellm_settings and config["litellm_settings"]
+            if (
+                "success_callback" in updated_litellm_settings
+                and "success_callback" in config["litellm_settings"]
+            ):
+
+                # check both success callback are lists
+                if isinstance(
+                    config["litellm_settings"]["success_callback"], list
+                ) and isinstance(updated_litellm_settings["success_callback"], list):
+                    combined_success_callback = (
+                        config["litellm_settings"]["success_callback"]
+                        + updated_litellm_settings["success_callback"]
+                    )
+                    combined_success_callback = list(set(combined_success_callback))
+                    config["litellm_settings"][
+                        "success_callback"
+                    ] = combined_success_callback
+
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
