@@ -33,6 +33,7 @@ import {
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
+import TextArea from "antd/es/input/TextArea";
 
 const { Title: Title2, Link } = Typography;
 
@@ -117,6 +118,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     let input_cost = "Undefined";
     let output_cost = "Undefined";
     let max_tokens = "Undefined";
+    let cleanedLitellmParams = {};
 
     // Check if litellm_model_name is null or undefined
     if (litellm_model_name) {
@@ -138,11 +140,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       output_cost = model_info?.output_cost_per_token;
       max_tokens = model_info?.max_tokens;
     }
+
+    // let cleanedLitellmParams == litellm_params without model, api_base
+    if (curr_model?.litellm_params) {
+      cleanedLitellmParams = Object.fromEntries(
+        Object.entries(curr_model?.litellm_params).filter(
+          ([key]) => key !== "model" && key !== "api_base"
+        )
+      );
+    } 
+
     modelData.data[i].provider = provider;
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
     modelData.data[i].max_tokens = max_tokens;
     modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
+    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
     all_models_on_proxy.push(curr_model.model_name);
 
@@ -182,6 +195,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       if (key === "base_model") {
         // Add key-value pair to model_info dictionary
         modelInfoObj[key] = value;
+      }
+
+
+      if (key == "litellm_extra_params") {
+        console.log("litellm_extra_params:", value);
+        let litellmExtraParams = {};
+        try {
+          litellmExtraParams = JSON.parse(value);
+        }
+        catch (error) {
+          message.error("Failed to parse LiteLLM Extra Paras: " + error);
+          throw new Error("Failed to parse litellm_extra_params: " + error);
+        }
+        for (const [key, value] of Object.entries(litellmExtraParams)) {
+          litellmParamsObj[key] = value;
+        }
       }
     }
 
@@ -244,7 +273,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   )
                 }
                 <TableHeaderCell>
-                  Access
+                  Extra litellm Params
                 </TableHeaderCell>
                 <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
@@ -265,15 +294,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }
 
                   <TableCell>
-                    {model.user_access ? (
-                      <Badge color={"green"}>Yes</Badge>
-                    ) : (
-                      <RequestAccess
-                        userModels={all_models_on_proxy}
-                        accessToken={accessToken}
-                        userID={userID}
-                      ></RequestAccess>
-                    )}
+                    <pre>
+                    {JSON.stringify(model.cleanedLitellmParams, null, 2)}
+                    </pre>
                   </TableCell>
 
                   <TableCell>{model.input_cost}</TableCell>
@@ -420,6 +443,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <TextInput placeholder="us-east-1"/>
                 </Form.Item>
                 }
+                <Form.Item label="LiteLLM Params" name="litellm_extra_params" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
+                <TextArea
+                  rows={4}
+                  placeholder='{
+                    "rpm": 100,
+                    "timeout": 0,
+                    "stream_timeout": 0
+                  }'
+                />
+
+                </Form.Item>
+                <Row>
+                <Col span={10}></Col>
+                <Col span={10}><Text className="mb-3 mt-1">Pass JSON of litellm supported params <Link href="https://docs.litellm.ai/docs/completion/input" target="_blank">litellm.completion() call</Link></Text></Col>
+                </Row>
+
               </>
               <div style={{ textAlign: "center", marginTop: "10px" }}>
                 <Button2 htmlType="submit">Add Model</Button2>
