@@ -1809,17 +1809,15 @@ class ProxyConfig:
             }
 
         ## DB
-        if (
-            prisma_client is not None
-            and litellm.get_secret("SAVE_CONFIG_TO_DB", False) == True
+        if prisma_client is not None and (
+            general_settings.get("store_model_in_db", False) == True
         ):
-            prisma_setup(database_url=None)  # in case it's not been connected yet
             _tasks = []
             keys = [
-                "model_list",
                 "general_settings",
                 "router_settings",
                 "litellm_settings",
+                "environment_variables",
             ]
             for k in keys:
                 response = prisma_client.get_generic_data(
@@ -1828,6 +1826,12 @@ class ProxyConfig:
                 _tasks.append(response)
 
             responses = await asyncio.gather(*_tasks)
+            for response in responses:
+                if response is not None:
+                    param_name = getattr(response, "param_name", None)
+                    param_value = getattr(response, "param_value", None)
+                    if param_name is not None and param_value is not None:
+                        config[param_name] = param_value
 
         return config
 
@@ -7962,6 +7966,48 @@ async def update_config(config_info: ConfigYAML):
                 message="This is a test", level="Low"
             )
         return {"message": "Config updated successfully"}
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.get(
+    "/get/config/callbacks",
+    tags=["config.yaml"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_config():
+    """
+    For Admin UI - allows admin to view config via UI
+
+    """
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
+    try:
+
+        config_data = await proxy_config.get_config()
+        _environment_variables = config_data.get("environment_variables", {})
+        config_data = config_data["litellm_settings"]
+
+        # only store the keys and return the values as sk...***
+        for key, value in _environment_variables.items():
+            _environment_variables[key] = value[:5] + "*****"
+        config_data["environment_variables"] = _environment_variables
+        return {"data": config_data, "status": "success"}
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):
