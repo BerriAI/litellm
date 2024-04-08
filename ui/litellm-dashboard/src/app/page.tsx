@@ -164,6 +164,9 @@ const CreateKeyPage = () => {
             />
           ) : page == "settings" ? (
             <Settings
+              userID={userID}
+              userRole={userRole}
+              accessToken={accessToken}
             />
           ) : (
             <Usage
