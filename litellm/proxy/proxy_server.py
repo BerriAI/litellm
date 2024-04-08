@@ -2333,7 +2333,12 @@ class ProxyConfig:
                 "background_health_checks", False
             )
             health_check_interval = general_settings.get("health_check_interval", 300)
-
+        ## check env ##
+        _store_model_in_db = litellm.get_secret(
+            "STORE_MODEL_IN_DB", None
+        )  # feature flag for `/model/new`
+        if _store_model_in_db is not None and _store_model_in_db == True:
+            general_settings["store_model_in_db"] = True
         router_params: dict = {
             "cache_responses": litellm.cache
             != None,  # cache if user passed in cache values
