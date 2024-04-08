@@ -339,6 +339,7 @@ export const modelInfoCall = async (
     }
 
     const data = await response.json();
+    console.log("modelInfoCall:", data);
     //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
