@@ -31,12 +31,12 @@ const Settings: React.FC<SettingsPageProps> = ({
  return (
    <div className="w-full mx-4">
      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
-       <Card>
-       <Title>Settings</Title>
-
-        <Grid numItems={2}>
+        
+       <Card className="h-[15vh]">
+       
+        <Grid numItems={2} className="mt-2">
             <Col>
-            <Subtitle>Logging Callbacks</Subtitle>
+            <Title>Logging Callbacks</Title>
             </Col>
             <Col>
             <div>
@@ -53,11 +53,13 @@ const Settings: React.FC<SettingsPageProps> = ({
             </Col>
 
         
-        </Grid>
-        <Button>Add Callback</Button>
-
-         
+        </Grid>  
+        <Col>
+       <Button size="xs" className="mt-2">Add Callback</Button>
+       </Col>       
        </Card>
+
+       
      </Grid>
    </div>
  );
