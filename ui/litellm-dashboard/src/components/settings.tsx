@@ -1,68 +1,157 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Subtitle, Table, TableHead, TableRow, Badge, TableHeaderCell, TableCell, TableBody, Metric, Text, Grid, Button, Col, } from "@tremor/react";
+import {
+  Card,
+  Title,
+  Subtitle,
+  Table,
+  TableHead,
+  TableRow,
+  Badge,
+  TableHeaderCell,
+  TableCell,
+  TableBody,
+  Metric,
+  Text,
+  Grid,
+  Button,
+  Col,
+} from "@tremor/react";
 import { getCallbacksCall } from "./networking";
+import { Modal, Form, Input, Select, Button as Button2 } from "antd";
 
 interface SettingsPageProps {
-    accessToken: string | null;
-    userRole: string | null;
-    userID: string | null;
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
 }
 
 const Settings: React.FC<SettingsPageProps> = ({
-    accessToken,
-    userRole,
-    userID,
-  }) => {
- const [callbacks, setCallbacks] = useState(["None"]);
+  accessToken,
+  userRole,
+  userID,
+}) => {
+  const [callbacks, setCallbacks] = useState(["None"]);
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [form] = Form.useForm();
 
- useEffect(() => {
+  useEffect(() => {
     if (!accessToken || !userRole || !userID) {
       return;
     }
-   getCallbacksCall(accessToken, userID, userRole).then((data) => {
-     console.log("callbacks",data);
-     let callbacks_data = data.data;
-     let callback_names = callbacks_data.success_callback // ["callback1", "callback2"]
+    getCallbacksCall(accessToken, userID, userRole).then((data) => {
+      console.log("callbacks", data);
+      let callbacks_data = data.data;
+      let callback_names = callbacks_data.success_callback; // ["callback1", "callback2"]
+      setCallbacks(callback_names);
+    });
+  }, [accessToken, userRole, userID]);
 
-     setCallbacks(callback_names);
-   });
- }, [accessToken, userRole, userID]);
+  const handleAddCallback = () => {
+    console.log("Add callback clicked");
+    setIsModalVisible(true);
+  };
 
- return (
-   <div className="w-full mx-4">
-     <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
-        
-       <Card className="h-[15vh]">
-       
-        <Grid numItems={2} className="mt-2">
+  const handleCancel = () => {
+    setIsModalVisible(false);
+    form.resetFields();
+  };
+
+  const handleOk = () => {
+    // Handle form submission
+    form.validateFields().then((values) => {
+      // Call API to add the callback
+      console.log("Callback values:", values);
+      setIsModalVisible(false);
+      form.resetFields();
+    });
+  };
+
+  return (
+    <div className="w-full mx-4">
+      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
+        <Card className="h-[15vh]">
+          <Grid numItems={2} className="mt-2">
             <Col>
-            <Title>Logging Callbacks</Title>
+              <Title>Logging Callbacks</Title>
             </Col>
             <Col>
-            <div>
-            {callbacks.length === 0 ? (
-                <Badge>None</Badge>
-            ) : (
-                callbacks.map((callback, index) => (
-                <Badge key={index} color={"sky"}>
-                    {callback}
-                </Badge>
-                ))
-            )}
-            </div>
+              <div>
+                {callbacks.length === 0 ? (
+                  <Badge>None</Badge>
+                ) : (
+                  callbacks.map((callback, index) => (
+                    <Badge key={index} color={"sky"}>
+                      {callback}
+                    </Badge>
+                  ))
+                )}
+              </div>
             </Col>
+          </Grid>
+          <Col>
+            <Button size="xs" className="mt-2" onClick={handleAddCallback}>
+              Add Callback
+            </Button>
+          </Col>
+        </Card>
+      </Grid>
 
-        
-        </Grid>  
-        <Col>
-       <Button size="xs" className="mt-2">Add Callback</Button>
-       </Col>       
-       </Card>
+      <Modal
+        title="Add Callback"
+        visible={isModalVisible}
+        onOk={handleOk}
+        width={800}
+        onCancel={handleCancel}
+        footer={null}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            label="Callback"
+            name="callback"
+            rules={[{ required: true, message: "Please select a callback" }]}
+          >
+            <Select>
+              <Select.Option value="langfuse">langfuse</Select.Option>
+              <Select.Option value="slack">slack</Select.Option>
+            </Select>
+          </Form.Item>
 
-       
-     </Grid>
-   </div>
- );
+          <Form.Item
+            label="LANGFUSE_PUBLIC_KEY"
+            name="langfusePublicKey"
+            rules={[
+              { required: true, message: "Please enter the public key" },
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+
+          <Form.Item
+            label="LANGFUSE_PRIVATE_KEY"
+            name="langfusePrivateKey"
+            rules={[
+              { required: true, message: "Please enter the private key" },
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+
+          <Form.Item
+            label="LANGFUSE_CLOUD_URL"
+            name="langfuseCloudUrl"
+            rules={[{ required: true, message: "Please enter the cloud URL" }]}
+          >
+            <Input.Password />
+          </Form.Item>
+
+
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button2 htmlType="submit">Save</Button2>
+          </div>
+        </Form>
+      </Modal>
+    </div>
+  );
 };
 
 export default Settings;
