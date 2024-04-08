@@ -3174,7 +3174,13 @@ def client(original_function):
                             for val in non_null_list:
                                 idx, cr = val  # (idx, cr) tuple
                                 if cr is not None:
-                                    final_embedding_cached_response.data[idx] = cr
+                                    final_embedding_cached_response.data[idx] = (
+                                        Embedding(
+                                            embedding=cr["embedding"],
+                                            index=idx,
+                                            object="embedding",
+                                        )
+                                    )
                         if len(remaining_list) == 0:
                             # LOG SUCCESS
                             cache_hit = True
