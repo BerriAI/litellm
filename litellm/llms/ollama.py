@@ -136,7 +136,7 @@ def _convert_image(image):
         image = image.split(",")[-1]
     try:
         image_data = Image.open(io.BytesIO(base64.b64decode(image)))
-        if image_data.format == "JPEG":
+        if image_data.format in ["JPEG", "PNG"]:
             return image
     except:
         return orig
