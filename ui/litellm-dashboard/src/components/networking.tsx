@@ -1009,22 +1009,25 @@ export const teamMemberAddCall = async (
 
 export const userUpdateUserCall = async (
   accessToken: string,
-  formValues: any // Assuming formValues is an object
+  formValues: any, // Assuming formValues is an object
+  userRole: string | null
 ) => {
   try {
     console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
 
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/update` : `/user/update`;
+    let response_body = {...formValues};
+    if (userRole !== null) {
+      response_body["user_role"] = userRole;
+    }
+    response_body = JSON.stringify(response_body);
     const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        user_role: "proxy_admin_viewer",
-        ...formValues, // Include formValues in the request body
-      }),
+      body: response_body,
     });
 
     if (!response.ok) {

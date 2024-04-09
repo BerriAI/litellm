@@ -161,6 +161,7 @@ const CreateKeyPage = () => {
               setTeams={setTeams}
               searchParams={searchParams}
               accessToken={accessToken}
+              showSSOBanner={showSSOBanner}
             />
           ) : page == "settings" ? (
             <Settings
