@@ -64,7 +64,7 @@ google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
-llm_guard_mode: Literal["all", "key-specific"] = "all"
+llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 ##################
 logging: bool = True
 caching: bool = (
