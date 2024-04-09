@@ -2440,6 +2440,7 @@ class ProxyConfig:
                 new_models = await prisma_client.db.litellm_proxymodeltable.find_many(
                     take=10, order={"updated_at": "desc"}
                 )
+                verbose_proxy_logger.debug(f"new_models: {new_models}")
 
                 for m in new_models:
                     _litellm_params = m.litellm_params
@@ -2476,6 +2477,24 @@ class ProxyConfig:
                     )
 
             llm_model_list = llm_router.get_model_list()
+
+            # check if user set any callbacks in Config Table
+            config_data = await proxy_config.get_config()
+            litellm_settings = config_data.get("litellm_settings", {}) or {}
+            success_callbacks = litellm_settings.get("success_callback", None)
+            _added_callback = False
+            if success_callbacks is not None and isinstance(success_callbacks, list):
+                for success_callback in success_callbacks:
+                    if success_callback not in litellm.success_callback:
+                        litellm.success_callback.append(success_callback)
+                        _added_callback = True
+            if _added_callback:
+                # we need to set env variables too
+                environment_variables = config_data.get("environment_variables", None)
+                for k, v in environment_variables.items():
+                    decoded_b64 = base64.b64decode(v)
+                    value = decrypt_value(value=decoded_b64, master_key=master_key)
+                    os.environ[k] = value
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
@@ -3084,7 +3103,10 @@ async def startup_event():
         )
 
         ### ADD NEW MODELS ###
-        store_model_in_db = litellm.get_secret("STORE_MODEL_IN_DB", store_model_in_db)
+        store_model_in_db = (
+            litellm.get_secret("STORE_MODEL_IN_DB", store_model_in_db)
+            or store_model_in_db
+        )
         if store_model_in_db == True:
             scheduler.add_job(
                 proxy_config.add_deployment,
