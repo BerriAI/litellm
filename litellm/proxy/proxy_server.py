@@ -3000,6 +3000,9 @@ async def startup_event():
 
     ## JWT AUTH ##
     if general_settings.get("litellm_jwtauth", None) is not None:
+        for k, v in general_settings["litellm_jwtauth"].items():
+            if isinstance(v, str) and v.startswith("os.environ/"):
+                general_settings["litellm_jwtauth"][k] = litellm.get_secret(v)
         litellm_jwtauth = LiteLLM_JWTAuth(**general_settings["litellm_jwtauth"])
     else:
         litellm_jwtauth = LiteLLM_JWTAuth()
