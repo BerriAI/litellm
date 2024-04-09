@@ -235,31 +235,25 @@ curl 'http://0.0.0.0:4000/key/generate' \
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change.
 
 Here's how to modify the repo locally:
-Step 1: Clone the repo
-
-```
-git clone https://github.com/BerriAI/litellm.git
-```
-
-Step 2: Navigate into the project, and install dependencies:
-
-```
-cd litellm
-poetry install
-```
-
-Step 3: Test your change:
-
-```
-cd litellm/tests # pwd: Documents/litellm/litellm/tests
-poetry run flake8
-poetry run pytest .
-```
-
-Step 4: Submit a PR with your changes! 🚀
-
-- push your fork to your GitHub repo
-- submit a PR from there
+1. Clone the repo:
+    ```bash
+    git clone https://github.com/BerriAI/litellm.git
+    cd litellm  # navigate into the project
+    ```
+2. Setup environment:
+   ```bash
+   poetry install 
+   pre-commit install
+   ```
+3. Test your change:
+   ```bash
+   cd litellm/tests # pwd: Documents/litellm/litellm/tests
+   poetry run flake8
+   poetry run pytest .
+   ```
+4. Submit a PR with your changes! 🚀
+   - push your fork to your GitHub repo
+   - submit a PR from there
 
 # Enterprise
 For companies that need better security, user management and professional support
