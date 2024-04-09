@@ -176,58 +176,67 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
 
   const handleSubmit = async (formValues: Record<string, any>) => {
-    const litellmParamsObj: Record<string, any>  = {};
-    const modelInfoObj: Record<string, any>  = {};
-    let modelName: string  = "";
-    // Iterate through the key-value pairs in formValues
-    for (const [key, value] of Object.entries(formValues)) {
-      if (key == "model_name") {
-        modelName = value
-      }
-
-      // Check if key is any of the specified API related keys
-      if (key === "api_key" || key === "model" || key === "api_base" || key === "api_version" || key.startsWith("aws_")) {
-        // Add key-value pair to litellm_params dictionary
-        litellmParamsObj[key] = value;
-      }
-
-      // Check if key is "base_model"
-      if (key === "base_model") {
-        // Add key-value pair to model_info dictionary
-        modelInfoObj[key] = value;
-      }
+    try {
 
 
-      if (key == "litellm_extra_params") {
-        console.log("litellm_extra_params:", value);
-        let litellmExtraParams = {};
-        try {
-          litellmExtraParams = JSON.parse(value);
+      const litellmParamsObj: Record<string, any>  = {};
+      const modelInfoObj: Record<string, any>  = {};
+      let modelName: string  = "";
+      // Iterate through the key-value pairs in formValues
+      for (const [key, value] of Object.entries(formValues)) {
+        if (key == "model_name") {
+          modelName = value
         }
-        catch (error) {
-          message.error("Failed to parse LiteLLM Extra Paras: " + error);
-          throw new Error("Failed to parse litellm_extra_params: " + error);
-        }
-        for (const [key, value] of Object.entries(litellmExtraParams)) {
+
+        // Check if key is any of the specified API related keys
+        if (key === "api_key" || key === "model" || key === "api_base" || key === "api_version" || key.startsWith("aws_")) {
+          // Add key-value pair to litellm_params dictionary
           litellmParamsObj[key] = value;
         }
+
+        // Check if key is "base_model"
+        if (key === "base_model") {
+          // Add key-value pair to model_info dictionary
+          modelInfoObj[key] = value;
+        }
+
+
+        if (key == "litellm_extra_params") {
+          console.log("litellm_extra_params:", value);
+          let litellmExtraParams = {};
+          if (value && value != undefined) {
+            try {
+              litellmExtraParams = JSON.parse(value);
+            }
+            catch (error) {
+              message.error("Failed to parse LiteLLM Extra Params: " + error);
+              throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            for (const [key, value] of Object.entries(litellmExtraParams)) {
+              litellmParamsObj[key] = value;
+            }
+          }
+        }
       }
-    }
 
-    const new_model: Model = {  
-      "model_name": modelName,
-      "litellm_params": litellmParamsObj,
-      "model_info": modelInfoObj
-    }
+      const new_model: Model = {  
+        "model_name": modelName,
+        "litellm_params": litellmParamsObj,
+        "model_info": modelInfoObj
+      }
 
-    
+      
 
-    const response: any = await modelCreateCall(
-      accessToken,
-      new_model
-    );
+      const response: any = await modelCreateCall(
+        accessToken,
+        new_model
+      );
+      form.resetFields();
 
-    console.log(`response for model create call: ${response["data"]}`);
+      console.log(`response for model create call: ${response["data"]}`);
+      } catch (error) {
+        message.error("Failed to create model: " + error);
+      }
   }
 
   const handleOk = () => {
@@ -235,7 +244,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         .validateFields()
         .then((values) => {
           handleSubmit(values);
-          form.resetFields();
+          // form.resetFields();
         })
         .catch((error) => {
           console.error("Validation failed:", error);
