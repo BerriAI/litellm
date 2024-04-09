@@ -44,6 +44,7 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
     """
 
     max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
