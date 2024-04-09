@@ -74,7 +74,7 @@ curl --location 'http://localhost:4000/key/generate' \
 # Returns {..'key': 'my-new-key'}
 ```
 
-**2. Test it!**
+**3. Test it!**
 
 ```bash
 curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
@@ -87,6 +87,76 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
     }'
 ```
 
+#### Turn on/off per request
+
+**1. Update config**
+```yaml
+litellm_settings:
+    callbacks: ["llmguard_moderations"]
+    llm_guard_mode: "request-specific"
+```
+
+**2. Create new key**
+
+```bash
+curl --location 'http://localhost:4000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+    "models": ["fake-openai-endpoint"],
+}'
+
+# Returns {..'key': 'my-new-key'}
+```
+
+**3. Test it!**
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={ # pass in any provider-specific param, if not supported by openai, https://docs.litellm.ai/docs/completion/input#provider-specific-params
+        "metadata": {
+            "permissions": {
+                "enable_llm_guard_check": True # 👈 KEY CHANGE
+            },
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="Curl Request">
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer my-new-key' \ # 👈 TEST KEY
+--data '{"model": "fake-openai-endpoint", "messages": [
+        {"role": "system", "content": "Be helpful"},
+        {"role": "user", "content": "What do you know?"}
+    ]
+    }'
+```
+
+</TabItem>
+</Tabs>
 
 ### Content Moderation with LlamaGuard 
 
