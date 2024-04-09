@@ -3,7 +3,11 @@ import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
 from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
-from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
+from litellm.proxy._types import (
+    KeyManagementSystem,
+    KeyManagementSettings,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 import httpx
 import dotenv
 
@@ -172,7 +176,7 @@ dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
-upperbound_key_generate_params: Optional[Dict] = None
+upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
