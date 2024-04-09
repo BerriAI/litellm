@@ -111,7 +111,10 @@ def test_llm_guard_key_specific_mode():
         api_key=_api_key,
     )
 
-    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict)
+    request_data = {}
+    should_proceed = llm_guard.should_proceed(
+        user_api_key_dict=user_api_key_dict, data=request_data
+    )
 
     assert should_proceed == False
 
