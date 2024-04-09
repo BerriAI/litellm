@@ -52,6 +52,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<any | null>(
     teams ? teams[0] : null
@@ -174,7 +175,23 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchData();
       }
     }
+    
   }, [userID, token, accessToken, keys, userRole]);
+
+  useEffect(() => {
+    // This code will run every time selectedTeam changes
+    if (keys !== null && selectedTeam !== null) {
+      let sum = 0;
+      for (const key of keys) {
+        console.log(`key in team keys: ${key.team_id}`)
+        console.log(`selected team: ${selectedTeam.team_id}`)
+        if (key.team_id !== null && key.team_id === selectedTeam.team_id) {
+          sum += key.spend;
+      }
+      }
+      setTeamSpend(sum);
+  }
+  }, [selectedTeam]);
 
   if (userID == null || token == null) {
     // Now you can construct the full URL
@@ -204,7 +221,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }
 
   console.log("inside user dashboard, selected team", selectedTeam);
-
+  console.log(`teamSpend: ${teamSpend}`)
   return (
       <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -213,6 +230,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userID={userID}
             userRole={userRole}
             accessToken={accessToken}
+            userSpend={teamSpend}
           />
 
           <ViewKeyTable
