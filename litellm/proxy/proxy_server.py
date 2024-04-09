@@ -1835,26 +1835,8 @@ class ProxyConfig:
         return config
 
     async def save_config(self, new_config: dict):
-        global prisma_client, llm_router, user_config_file_path, llm_model_list, general_settings
+        global prisma_client, general_settings, user_config_file_path
         # Load existing config
-        backup_config = await self.get_config()
-
-        # update Router - verifies if this is a valid config
-        try:
-            (
-                llm_router,
-                llm_model_list,
-                general_settings,
-            ) = await proxy_config.load_config(
-                router=llm_router, config_file_path=user_config_file_path
-            )
-        except Exception as e:
-            traceback.print_exc()
-            # Revert to old config instead
-            with open(f"{user_config_file_path}", "w") as config_file:
-                yaml.dump(backup_config, config_file, default_flow_style=False)
-            raise HTTPException(status_code=400, detail="Invalid config passed in")
-
         ## DB - writes valid config to db
         """
         - Do not write restricted params like 'api_key' to the database
@@ -7975,8 +7957,6 @@ async def update_config(config_info: ConfigYAML):
 
         # Load existing config
         config = await proxy_config.get_config()
-
-        backup_config = copy.deepcopy(config)
         verbose_proxy_logger.debug("Loaded config: %s", config)
 
         # update the general settings
