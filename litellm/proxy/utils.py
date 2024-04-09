@@ -461,7 +461,12 @@ class ProxyLogging:
         """
         ### ALERTING ###
         if isinstance(original_exception, HTTPException):
-            error_message = original_exception.detail
+            if isinstance(original_exception.detail, str):
+                error_message = original_exception.detail
+            elif isinstance(original_exception.detail, dict):
+                error_message = json.dumps(original_exception.detail)
+            else:
+                error_message = str(original_exception)
         else:
             error_message = str(original_exception)
         if isinstance(traceback_str, str):
@@ -1159,13 +1164,26 @@ class PrismaClient:
                 return new_verification_token
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
-                new_user_row = await self.db.litellm_usertable.upsert(
-                    where={"user_id": data["user_id"]},
-                    data={
-                        "create": {**db_data},  # type: ignore
-                        "update": {},  # don't do anything if it already exists
-                    },
-                )
+                try:
+                    new_user_row = await self.db.litellm_usertable.upsert(
+                        where={"user_id": data["user_id"]},
+                        data={
+                            "create": {**db_data},  # type: ignore
+                            "update": {},  # don't do anything if it already exists
+                        },
+                    )
+                except Exception as e:
+                    if (
+                        "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
+                        in str(e)
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"Foreign Key Constraint failed. Organization ID={db_data['organization_id']} does not exist in LiteLLM_OrganizationTable"
+                            },
+                        )
+                    raise e
                 verbose_proxy_logger.info("Data Inserted into User Table")
                 return new_user_row
             elif table_name == "team":
