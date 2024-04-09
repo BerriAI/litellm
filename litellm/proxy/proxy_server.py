@@ -4311,9 +4311,11 @@ async def generate_key_fn(
                         "rpm_limit",
                     ]:
                         if value > litellm.upperbound_key_generate_params[key]:
-                            # directly compare floats/ints
-                            setattr(
-                                data, key, litellm.upperbound_key_generate_params[key]
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={litellm.upperbound_key_generate_params[key]}"
+                                },
                             )
                     elif key == "budget_duration":
                         # budgets are in 1s, 1m, 1h, 1d, 1m (30s, 30m, 30h, 30d, 30m)
@@ -4323,8 +4325,11 @@ async def generate_key_fn(
                         )
                         user_set_budget_duration = _duration_in_seconds(duration=value)
                         if user_set_budget_duration > upperbound_budget_duration:
-                            setattr(
-                                data, key, litellm.upperbound_key_generate_params[key]
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "error": f"Budget duration is over max limit set in config - user_value={user_set_budget_duration}; max_value={upperbound_budget_duration}"
+                                },
                             )
 
         # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
