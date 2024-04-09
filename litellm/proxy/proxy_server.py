@@ -7917,16 +7917,36 @@ async def auth_callback(request: Request):
                     "user_email": getattr(user_info, "user_id", user_email),
                 }
                 user_role = getattr(user_info, "user_role", None)
-            elif litellm.default_user_params is not None and isinstance(
-                litellm.default_user_params, dict
-            ):
-                user_defined_values = {
-                    "models": litellm.default_user_params.get("models", user_id_models),
-                    "user_id": litellm.default_user_params.get("user_id", user_id),
-                    "user_email": litellm.default_user_params.get(
-                        "user_email", user_email
-                    ),
-                }
+
+            else:
+                ## check if user-email in db ##
+                user_info = await prisma_client.db.litellm_usertable.find_first(
+                    where={"user_email": user_email}
+                )
+                if user_info is not None:
+                    user_defined_values = {
+                        "models": getattr(user_info, "models", user_id_models),
+                        "user_id": getattr(user_info, "user_id", user_id),
+                        "user_email": getattr(user_info, "user_id", user_email),
+                    }
+                    user_role = getattr(user_info, "user_role", None)
+
+                    # update id
+                    await prisma_client.db.litellm_usertable.update_many(
+                        where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
+                    )
+                elif litellm.default_user_params is not None and isinstance(
+                    litellm.default_user_params, dict
+                ):
+                    user_defined_values = {
+                        "models": litellm.default_user_params.get(
+                            "models", user_id_models
+                        ),
+                        "user_id": litellm.default_user_params.get("user_id", user_id),
+                        "user_email": litellm.default_user_params.get(
+                            "user_email", user_email
+                        ),
+                    }
     except Exception as e:
         pass
 
