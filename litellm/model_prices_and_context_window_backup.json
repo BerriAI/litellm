@@ -66,6 +66,28 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "gpt-4-turbo": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "gpt-4-turbo-2024-04-09": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
     "gpt-4-1106-preview": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
