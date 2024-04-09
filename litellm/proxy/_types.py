@@ -38,6 +38,17 @@ class LiteLLMBase(BaseModel):
         protected_namespaces = ()
 
 
+class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
+    """
+    Set default upperbound to max budget a key called via `/key/generate` can be.
+    """
+
+    max_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+
 class LiteLLMRoutes(enum.Enum):
     openai_routes: List = [  # chat completions
         "/openai/deployments/{model}/chat/completions",
