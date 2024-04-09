@@ -6999,17 +6999,6 @@ async def model_info_v2(
     if len(user_api_key_dict.models) > 0:
         user_models = user_api_key_dict.models
 
-    # for all models check if the user has access, and mark it as "user_access": `True` or `False`
-    for model in all_models:
-        model_name = model.get("model_name", None)
-        if model_name is not None:
-            user_has_access = model_name in user_models
-            if (
-                user_models == []
-            ):  # if user_api_key_dict.models == [], user has access to all models
-                user_has_access = True
-            model["user_access"] = user_has_access
-
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for model in all_models:
         # provided model_info in config.yaml
