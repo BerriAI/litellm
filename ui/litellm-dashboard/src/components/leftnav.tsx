@@ -63,6 +63,11 @@ const Sidebar: React.FC<SidebarProps> = ({
             Test Key
             </Text>
           </Menu.Item>
+          <Menu.Item key="2" onClick={() => setPage("models")}>
+          <Text>
+            Models
+            </Text>
+          </Menu.Item>
           {userRole == "Admin" ? (
             <Menu.Item key="6" onClick={() => setPage("teams")}>
               <Text>
@@ -82,11 +87,6 @@ const Sidebar: React.FC<SidebarProps> = ({
               </Text>
             </Menu.Item>
           ) : null}
-          <Menu.Item key="2" onClick={() => setPage("models")}>
-          <Text>
-            Models
-            </Text>
-          </Menu.Item>
           <Menu.Item key="8" onClick={() => setPage("settings")}>
           <Text>
             Settings

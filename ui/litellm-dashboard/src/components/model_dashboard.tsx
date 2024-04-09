@@ -387,7 +387,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Form.Item>
                 }
                 {
-                  selectedProvider == "Azure OpenAI" && <Form.Item
+                  (selectedProvider == "Azure OpenAI" || selectedProvider == "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)") && <Form.Item
                   rules={[{ required: true, message: 'Required' }]}
                   label="API Base"
                   name="api_base"
@@ -443,7 +443,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <TextInput placeholder="us-east-1"/>
                 </Form.Item>
                 }
-                <Form.Item label="LiteLLM Params" name="litellm_extra_params" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
+                <Form.Item label="LiteLLM Params" name="litellm_extra_params" tooltip="Optional litellm params used for making a litellm.completion() call." className="mb-0">
                 <TextArea
                   rows={4}
                   placeholder='{
