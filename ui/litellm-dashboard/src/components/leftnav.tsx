@@ -87,6 +87,11 @@ const Sidebar: React.FC<SidebarProps> = ({
             Models
             </Text>
           </Menu.Item>
+          <Menu.Item key="8" onClick={() => setPage("settings")}>
+          <Text>
+            Settings
+          </Text>
+          </Menu.Item>
           {userRole == "Admin" ? (
             <Menu.Item key="7" onClick={() => setPage("admin-panel")}>
               <Text>

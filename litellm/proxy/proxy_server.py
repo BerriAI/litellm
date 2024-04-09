@@ -305,6 +305,7 @@ litellm_master_key_hash = None
 disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
+store_model_in_db: bool = False
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -554,9 +555,6 @@ async def user_api_key_auth(
             )
 
             return _user_api_key_obj
-        elif route.startswith("/config/"):
-            raise Exception(f"Only admin can modify config")
-
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
@@ -1077,6 +1075,7 @@ async def user_api_key_auth(
                 "/sso",
                 "/login",
                 "/key",
+                "/config",
                 "/spend",
                 "/user",
                 "/model/info",
@@ -1809,17 +1808,15 @@ class ProxyConfig:
             }
 
         ## DB
-        if (
-            prisma_client is not None
-            and litellm.get_secret("SAVE_CONFIG_TO_DB", False) == True
+        if prisma_client is not None and (
+            general_settings.get("store_model_in_db", False) == True
         ):
-            prisma_setup(database_url=None)  # in case it's not been connected yet
             _tasks = []
             keys = [
-                "model_list",
                 "general_settings",
                 "router_settings",
                 "litellm_settings",
+                "environment_variables",
             ]
             for k in keys:
                 response = prisma_client.get_generic_data(
@@ -1828,6 +1825,12 @@ class ProxyConfig:
                 _tasks.append(response)
 
             responses = await asyncio.gather(*_tasks)
+            for response in responses:
+                if response is not None:
+                    param_name = getattr(response, "param_name", None)
+                    param_value = getattr(response, "param_value", None)
+                    if param_name is not None and param_value is not None:
+                        config[param_name] = param_value
 
         return config
 
@@ -1835,11 +1838,6 @@ class ProxyConfig:
         global prisma_client, llm_router, user_config_file_path, llm_model_list, general_settings
         # Load existing config
         backup_config = await self.get_config()
-
-        # Save the updated config
-        ## YAML
-        with open(f"{user_config_file_path}", "w") as config_file:
-            yaml.dump(new_config, config_file, default_flow_style=False)
 
         # update Router - verifies if this is a valid config
         try:
@@ -1862,22 +1860,17 @@ class ProxyConfig:
         - Do not write restricted params like 'api_key' to the database
         - if api_key is passed, save that to the local environment or connected secret manage (maybe expose `litellm.save_secret()`)
         """
-        if (
-            prisma_client is not None
-            and litellm.get_secret("SAVE_CONFIG_TO_DB", default_value=False) == True
+        if prisma_client is not None and (
+            general_settings.get("store_model_in_db", False) == True
         ):
-            ### KEY REMOVAL ###
-            models = new_config.get("model_list", [])
-            for m in models:
-                if m.get("litellm_params", {}).get("api_key", None) is not None:
-                    # pop the key
-                    api_key = m["litellm_params"].pop("api_key")
-                    # store in local env
-                    key_name = f"LITELLM_MODEL_KEY_{uuid.uuid4()}"
-                    os.environ[key_name] = api_key
-                    # save the key name (not the value)
-                    m["litellm_params"]["api_key"] = f"os.environ/{key_name}"
+            # if using - db for config - models are in ModelTable
+            new_config.pop("model_list", None)
             await prisma_client.insert_data(data=new_config, table_name="config")
+        else:
+            # Save the updated config - if user is not using a dB
+            ## YAML
+            with open(f"{user_config_file_path}", "w") as config_file:
+                yaml.dump(new_config, config_file, default_flow_style=False)
 
     async def load_team_config(self, team_id: str):
         """
@@ -1928,7 +1921,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -2268,6 +2261,10 @@ class ProxyConfig:
 
             if master_key is not None and isinstance(master_key, str):
                 litellm_master_key_hash = master_key
+            ### STORE MODEL IN DB ### feature flag for `/model/new`
+            store_model_in_db = general_settings.get("store_model_in_db", False)
+            if store_model_in_db is None:
+                store_model_in_db = False
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
@@ -2333,7 +2330,6 @@ class ProxyConfig:
                 "background_health_checks", False
             )
             health_check_interval = general_settings.get("health_check_interval", 300)
-
         router_params: dict = {
             "cache_responses": litellm.cache
             != None,  # cache if user passed in cache values
@@ -2390,55 +2386,100 @@ class ProxyConfig:
         import base64
 
         try:
-            if llm_router is None:
-                raise Exception("No router initialized")
-
             if master_key is None or not isinstance(master_key, str):
                 raise Exception(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
+            verbose_proxy_logger.debug(f"llm_router: {llm_router}")
+            if llm_router is None:
+                new_models = (
+                    await prisma_client.db.litellm_proxymodeltable.find_many()
+                )  # get all models in db
+                verbose_proxy_logger.debug(f"new_models: {new_models}")
+                _model_list: list = []
+                for m in new_models:
+                    _litellm_params = m.litellm_params
+                    if isinstance(_litellm_params, dict):
+                        # decrypt values
+                        for k, v in _litellm_params.items():
+                            if isinstance(v, str):
+                                # decode base64
+                                decoded_b64 = base64.b64decode(v)
+                                # decrypt value
+                                _litellm_params[k] = decrypt_value(
+                                    value=decoded_b64, master_key=master_key
+                                )
+                        _litellm_params = LiteLLM_Params(**_litellm_params)
+                    else:
+                        verbose_proxy_logger.error(
+                            f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                        )
+                        continue  # skip to next model
 
-            new_models = await prisma_client.db.litellm_proxymodeltable.find_many(
-                take=10, order={"updated_at": "desc"}
-            )
+                    if m.model_info is not None and isinstance(m.model_info, dict):
+                        if "id" not in m.model_info:
+                            m.model_info["id"] = m.model_id
+                        _model_info = RouterModelInfo(**m.model_info)
+                    else:
+                        _model_info = RouterModelInfo(id=m.model_id)
 
-            for m in new_models:
-                _litellm_params = m.litellm_params
-                if isinstance(_litellm_params, dict):
-                    # decrypt values
-                    for k, v in _litellm_params.items():
-                        if isinstance(v, str):
-                            # decode base64
-                            decoded_b64 = base64.b64decode(v)
-                            # decrypt value
-                            _litellm_params[k] = decrypt_value(
-                                value=decoded_b64, master_key=master_key
-                            )
-                    _litellm_params = LiteLLM_Params(**_litellm_params)
-                else:
-                    verbose_proxy_logger.error(
-                        f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                    _model_list.append(
+                        Deployment(
+                            model_name=m.model_name,
+                            litellm_params=_litellm_params,
+                            model_info=_model_info,
+                        ).to_json(exclude_none=True)
                     )
-                    continue  # skip to next model
-
-                if m.model_info is not None and isinstance(m.model_info, dict):
-                    if "id" not in m.model_info:
-                        m.model_info["id"] = m.model_id
-                    _model_info = RouterModelInfo(**m.model_info)
-                else:
-                    _model_info = RouterModelInfo(id=m.model_id)
-
-                llm_router.add_deployment(
-                    deployment=Deployment(
-                        model_name=m.model_name,
-                        litellm_params=_litellm_params,
-                        model_info=_model_info,
-                    )
+                verbose_proxy_logger.debug(f"_model_list: {_model_list}")
+                llm_router = litellm.Router(model_list=_model_list)
+                verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
+                verbose_proxy_logger.debug(
+                    f"llm_router model list: {llm_router.model_list}"
                 )
+            else:
+                new_models = await prisma_client.db.litellm_proxymodeltable.find_many(
+                    take=10, order={"updated_at": "desc"}
+                )
+
+                for m in new_models:
+                    _litellm_params = m.litellm_params
+                    if isinstance(_litellm_params, dict):
+                        # decrypt values
+                        for k, v in _litellm_params.items():
+                            if isinstance(v, str):
+                                # decode base64
+                                decoded_b64 = base64.b64decode(v)
+                                # decrypt value
+                                _litellm_params[k] = decrypt_value(
+                                    value=decoded_b64, master_key=master_key
+                                )
+                        _litellm_params = LiteLLM_Params(**_litellm_params)
+                    else:
+                        verbose_proxy_logger.error(
+                            f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                        )
+                        continue  # skip to next model
+
+                    if m.model_info is not None and isinstance(m.model_info, dict):
+                        if "id" not in m.model_info:
+                            m.model_info["id"] = m.model_id
+                        _model_info = RouterModelInfo(**m.model_info)
+                    else:
+                        _model_info = RouterModelInfo(id=m.model_id)
+
+                    llm_router.add_deployment(
+                        deployment=Deployment(
+                            model_name=m.model_name,
+                            litellm_params=_litellm_params,
+                            model_info=_model_info,
+                        )
+                    )
 
             llm_model_list = llm_router.get_model_list()
         except Exception as e:
-            verbose_proxy_logger.error("{}".format(str(e)))
+            verbose_proxy_logger.error(
+                "{}\nTraceback:{}".format(str(e), traceback.format_exc())
+            )
 
 
 proxy_config = ProxyConfig()
@@ -2894,7 +2935,7 @@ def on_backoff(details):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db
     import json
 
     ### LOAD MASTER KEY ###
@@ -3043,7 +3084,8 @@ async def startup_event():
         )
 
         ### ADD NEW MODELS ###
-        if general_settings.get("store_model_in_db", False) == True:
+        store_model_in_db = litellm.get_secret("STORE_MODEL_IN_DB", store_model_in_db)
+        if store_model_in_db == True:
             scheduler.add_job(
                 proxy_config.add_deployment,
                 "interval",
@@ -6854,7 +6896,7 @@ async def add_new_model(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key
+    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db
     try:
         import base64
 
@@ -6869,7 +6911,7 @@ async def add_new_model(
             )
 
         # update DB
-        if general_settings.get("store_model_in_db", False) == True:
+        if store_model_in_db == True:
             """
             - store model_list in db
             - store keys separately
@@ -6897,7 +6939,7 @@ async def add_new_model(
             raise HTTPException(
                 status_code=500,
                 detail={
-                    "error": "Set `store_model_in_db: true` in general_settings on your config.yaml"
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
         return {"message": "Model added successfully"}
@@ -7156,7 +7198,7 @@ async def delete_model(model_info: ModelInfoDelete):
             )
 
         # update DB
-        if general_settings.get("store_model_in_db", False) == True:
+        if store_model_in_db == True:
             """
             - store model_list in db
             - store keys separately
@@ -7169,7 +7211,7 @@ async def delete_model(model_info: ModelInfoDelete):
             raise HTTPException(
                 status_code=500,
                 detail={
-                    "error": "Set `store_model_in_db: true` in general_settings on your config.yaml"
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
         return {"message": "Model deleted successfully"}
@@ -7916,8 +7958,10 @@ async def update_config(config_info: ConfigYAML):
 
     Currently supports modifying General Settings + LiteLLM settings
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
+        import base64
+
         # Load existing config
         config = await proxy_config.get_config()
 
@@ -7937,9 +7981,17 @@ async def update_config(config_info: ConfigYAML):
 
         if config_info.environment_variables is not None:
             config.setdefault("environment_variables", {})
-            updated_environment_variables = config_info.environment_variables
+            _updated_environment_variables = config_info.environment_variables
+
+            # encrypt updated_environment_variables #
+            for k, v in _updated_environment_variables.items():
+                if isinstance(v, str):
+                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
+                    _updated_environment_variables[k] = base64.b64encode(
+                        encrypted_value
+                    ).decode("utf-8")
             config["environment_variables"] = {
-                **updated_environment_variables,
+                **_updated_environment_variables,
                 **config["environment_variables"],
             }
 
@@ -7952,6 +8004,25 @@ async def update_config(config_info: ConfigYAML):
                 **config["litellm_settings"],
             }
 
+            # if litellm.success_callback in updated_litellm_settings and config["litellm_settings"]
+            if (
+                "success_callback" in updated_litellm_settings
+                and "success_callback" in config["litellm_settings"]
+            ):
+
+                # check both success callback are lists
+                if isinstance(
+                    config["litellm_settings"]["success_callback"], list
+                ) and isinstance(updated_litellm_settings["success_callback"], list):
+                    combined_success_callback = (
+                        config["litellm_settings"]["success_callback"]
+                        + updated_litellm_settings["success_callback"]
+                    )
+                    combined_success_callback = list(set(combined_success_callback))
+                    config["litellm_settings"][
+                        "success_callback"
+                    ] = combined_success_callback
+
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
@@ -7962,6 +8033,43 @@ async def update_config(config_info: ConfigYAML):
                 message="This is a test", level="Low"
             )
         return {"message": "Config updated successfully"}
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.get(
+    "/get/config/callbacks",
+    tags=["config.yaml"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_config():
+    """
+    For Admin UI - allows admin to view config via UI
+
+    """
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
+    try:
+
+        config_data = await proxy_config.get_config()
+        config_data = config_data.get("litellm_settings", {})
+
+        return {"data": config_data, "status": "success"}
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):

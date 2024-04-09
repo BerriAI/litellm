@@ -339,6 +339,7 @@ export const modelInfoCall = async (
     }
 
     const data = await response.json();
+    console.log("modelInfoCall:", data);
     //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -1118,4 +1119,86 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
     throw error;
   }
 };
+
+
+
+export const getCallbacksCall = async (
+  accessToken: String,
+  userID: String,
+  userRole: String
+) => {
+  /**
+   * Get all the models user has access to
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/config/callbacks` : `/get/config/callbacks`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+
+
+
+
+
+
+export const setCallbacksCall = async (
+  accessToken: String,
+  formValues: Record<string, any>
+) => {
+  /**
+   * Set callbacks on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/update` : `/config/update`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to set callbacks:", error);
+    throw error;
+  }
+};
+
 

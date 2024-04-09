@@ -4,7 +4,7 @@ from enum import Enum
 import requests
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 import httpx
@@ -162,8 +162,15 @@ def completion(
             raise AnthropicError(
                 status_code=response.status_code, message=response.text
             )
+        completion_stream = response.iter_lines()
+        stream_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="anthropic",
+            logging_obj=logging_obj,
+        )
+        return stream_response
 
-        return response.iter_lines()
     else:
         response = requests.post(api_base, headers=headers, data=json.dumps(data))
         if response.status_code != 200:
