@@ -2390,11 +2390,12 @@ class ProxyConfig:
                 raise Exception(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-
+            verbose_proxy_logger.debug(f"llm_router: {llm_router}")
             if llm_router is None:
                 new_models = (
                     await prisma_client.db.litellm_proxymodeltable.find_many()
                 )  # get all models in db
+                verbose_proxy_logger.debug(f"new_models: {new_models}")
                 _model_list: list = []
                 for m in new_models:
                     _litellm_params = m.litellm_params
@@ -2429,8 +2430,12 @@ class ProxyConfig:
                             model_info=_model_info,
                         ).to_json(exclude_none=True)
                     )
-
+                verbose_proxy_logger.debug(f"_model_list: {_model_list}")
                 llm_router = litellm.Router(model_list=_model_list)
+                verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
+                verbose_proxy_logger.debug(
+                    f"llm_router model list: {llm_router.model_list}"
+                )
             else:
                 new_models = await prisma_client.db.litellm_proxymodeltable.find_many(
                     take=10, order={"updated_at": "desc"}
