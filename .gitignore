@@ -47,3 +47,4 @@ litellm/proxy/vertex_key.json
 **/.vim/
 /node_modules
 kub.yaml
+loadtest_kub.yaml
