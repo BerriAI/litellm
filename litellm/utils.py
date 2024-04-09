@@ -236,6 +236,7 @@ class HiddenParams(OpenAIObject):
 
     class Config:
         extra = "allow"
+        protected_namespaces = ()      
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
