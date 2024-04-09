@@ -8001,10 +8001,12 @@ async def update_config(config_info: ConfigYAML):
                     _updated_environment_variables[k] = base64.b64encode(
                         encrypted_value
                     ).decode("utf-8")
-            config["environment_variables"] = {
-                **_updated_environment_variables,
-                **config["environment_variables"],
-            }
+
+            _existing_env_variables = config["environment_variables"]
+
+            for k, v in _updated_environment_variables.items():
+                # overwrite existing env variables with updated values
+                _existing_env_variables[k] = _updated_environment_variables[k]
 
         # update the litellm settings
         if config_info.litellm_settings is not None:
