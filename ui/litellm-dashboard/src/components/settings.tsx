@@ -70,8 +70,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         payload = {
           environment_variables: {
             LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
-            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
-            LANGFUSE_HOST: values.langfuseCloudUrl ,
+            LANGFUSE_SECRET_KEY: values.langfusePrivateKey
           },
           litellm_settings: {
             success_callback: [values.callback]
@@ -165,15 +164,7 @@ const Settings: React.FC<SettingsPageProps> = ({
             <Input.Password />
           </Form.Item>
 
-          <Form.Item
-            label="LANGFUSE_CLOUD_URL"
-            name="langfuseCloudUrl"
-            rules={[{ required: true, message: "Please enter the cloud URL" }]}
-          >
-            <Input.Password />
-          </Form.Item>
-
-
+        
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Save</Button2>
           </div>
