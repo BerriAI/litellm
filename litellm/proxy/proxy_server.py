@@ -2553,6 +2553,8 @@ async def generate_key_helper_fn(
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
+    teams: Optional[list] = None,
+    organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
 ):
     global prisma_client, custom_db_client, user_api_key_cache, litellm_proxy_admin_name
@@ -2600,6 +2602,7 @@ async def generate_key_helper_fn(
             "user_email": user_email,
             "user_id": user_id,
             "team_id": team_id,
+            "organization_id": organization_id,
             "user_role": user_role,
             "spend": spend,
             "models": models,
@@ -2610,6 +2613,8 @@ async def generate_key_helper_fn(
             "budget_reset_at": reset_at,
             "allowed_cache_controls": allowed_cache_controls,
         }
+        if teams is not None:
+            user_data["teams"] = teams
         key_data = {
             "token": token,
             "key_alias": key_alias,
@@ -2710,6 +2715,8 @@ async def generate_key_helper_fn(
             await custom_db_client.insert_data(value=key_data, table_name="key")
     except Exception as e:
         traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "Internal Server Error."},
@@ -5470,6 +5477,8 @@ async def new_user(data: NewUserRequest):
     Parameters:
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
+    - teams: Optional[list] - specify a list of team id's a user belongs to.
+    - organization_id: Optional[str] - specify the org a user belongs to.
     - user_email: Optional[str] - Specify a user email.
     - user_role: Optional[str] - Specify a user role - "admin", "app_owner", "app_user"
     - max_budget: Optional[float] - Specify max budget for a given user.
