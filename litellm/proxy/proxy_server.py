@@ -2181,6 +2181,18 @@ class ProxyConfig:
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
                     )
                     setattr(litellm, key, value)
+                elif key == "upperbound_key_generate_params":
+                    if value is not None and isinstance(value, dict):
+                        for _k, _v in value.items():
+                            if isinstance(_v, str) and _v.startswith("os.environ/"):
+                                value[_k] = litellm.get_secret(_v)
+                        litellm.upperbound_key_generate_params = (
+                            LiteLLM_UpperboundKeyGenerateParams(**value)
+                        )
+                    else:
+                        raise Exception(
+                            f"Invalid value set for upperbound_key_generate_params - value={value}"
+                        )
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -4302,7 +4314,11 @@ async def generate_key_fn(
             for elem in data:
                 # if key in litellm.upperbound_key_generate_params, use the min of value and litellm.upperbound_key_generate_params[key]
                 key, value = elem
-                if value is not None and key in litellm.upperbound_key_generate_params:
+                if (
+                    value is not None
+                    and getattr(litellm.upperbound_key_generate_params, key, None)
+                    is not None
+                ):
                     # if value is float/int
                     if key in [
                         "max_budget",
@@ -4310,18 +4326,20 @@ async def generate_key_fn(
                         "tpm_limit",
                         "rpm_limit",
                     ]:
-                        if value > litellm.upperbound_key_generate_params[key]:
+                        if value > getattr(litellm.upperbound_key_generate_params, key):
                             raise HTTPException(
                                 status_code=400,
                                 detail={
-                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={litellm.upperbound_key_generate_params[key]}"
+                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={getattr(litellm.upperbound_key_generate_params, key)}"
                                 },
                             )
                     elif key == "budget_duration":
                         # budgets are in 1s, 1m, 1h, 1d, 1m (30s, 30m, 30h, 30d, 30m)
                         # compare the duration in seconds and max duration in seconds
                         upperbound_budget_duration = _duration_in_seconds(
-                            duration=litellm.upperbound_key_generate_params[key]
+                            duration=getattr(
+                                litellm.upperbound_key_generate_params, key
+                            )
                         )
                         user_set_budget_duration = _duration_in_seconds(duration=value)
                         if user_set_budget_duration > upperbound_budget_duration:
