@@ -554,9 +554,6 @@ async def user_api_key_auth(
             )
 
             return _user_api_key_obj
-        elif route.startswith("/config/"):
-            raise Exception(f"Only admin can modify config")
-
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
@@ -1077,6 +1074,7 @@ async def user_api_key_auth(
                 "/sso",
                 "/login",
                 "/key",
+                "/config",
                 "/spend",
                 "/user",
                 "/model/info",
@@ -8025,13 +8023,8 @@ async def get_config():
     try:
 
         config_data = await proxy_config.get_config()
-        _environment_variables = config_data.get("environment_variables", {})
-        config_data = config_data["litellm_settings"]
+        config_data = config_data.get("litellm_settings", {})
 
-        # only store the keys and return the values as sk...***
-        for key, value in _environment_variables.items():
-            _environment_variables[key] = value[:5] + "*****"
-        config_data["environment_variables"] = _environment_variables
         return {"data": config_data, "status": "success"}
     except Exception as e:
         traceback.print_exc()

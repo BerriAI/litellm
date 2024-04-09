@@ -16,8 +16,9 @@ import {
   Button,
   Col,
 } from "@tremor/react";
-import { getCallbacksCall } from "./networking";
+import { getCallbacksCall, setCallbacksCall } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2 } from "antd";
+import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 
 interface SettingsPageProps {
   accessToken: string | null;
@@ -30,7 +31,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   userRole,
   userID,
 }) => {
-  const [callbacks, setCallbacks] = useState(["None"]);
+  const [callbacks, setCallbacks] = useState<string[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
 
@@ -57,10 +58,36 @@ const Settings: React.FC<SettingsPageProps> = ({
   };
 
   const handleOk = () => {
+    if (!accessToken) {
+      return;
+    }
     // Handle form submission
     form.validateFields().then((values) => {
       // Call API to add the callback
+      let payload;
       console.log("Callback values:", values);
+      if (values.callback === 'langfuse') {
+        payload = {
+          environment_variables: {
+            LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
+            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
+            LANGFUSE_HOST: values.langfuseCloudUrl ,
+          },
+          litellm_settings: {
+            success_callback: [values.callback]
+          }
+        };
+        setCallbacksCall(accessToken, payload);
+
+        // add langfuse to callbacks
+        setCallbacks(callbacks ? [...callbacks, values.callback] : [values.callback]);
+
+
+      } else {
+        payload = {
+          error: 'Invalid callback value'
+        };
+      }
       setIsModalVisible(false);
       form.resetFields();
     });
@@ -75,17 +102,19 @@ const Settings: React.FC<SettingsPageProps> = ({
               <Title>Logging Callbacks</Title>
             </Col>
             <Col>
-              <div>
-                {callbacks.length === 0 ? (
-                  <Badge>None</Badge>
+            <div>
+            {!callbacks ? (
+                <Badge color={"red"}>None</Badge>
+                ) : callbacks.length === 0 ? (
+                <Badge>None</Badge>
                 ) : (
-                  callbacks.map((callback, index) => (
+                callbacks.map((callback, index) => (
                     <Badge key={index} color={"sky"}>
-                      {callback}
+                    {callback}
                     </Badge>
-                  ))
+                ))
                 )}
-              </div>
+            </div>
             </Col>
           </Grid>
           <Col>
@@ -104,7 +133,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         onCancel={handleCancel}
         footer={null}
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" onFinish={handleOk}>
           <Form.Item
             label="Callback"
             name="callback"
