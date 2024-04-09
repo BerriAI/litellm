@@ -6900,7 +6900,7 @@ async def add_new_model(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db
+    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db, proxy_logging_obj
     try:
         import base64
 
@@ -6939,6 +6939,11 @@ async def add_new_model(
                     "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 }
             )
+
+            await proxy_config.add_deployment(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+            )
+
         else:
             raise HTTPException(
                 status_code=500,
