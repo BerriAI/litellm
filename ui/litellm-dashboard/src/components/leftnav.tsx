@@ -46,8 +46,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
   }
   return (
-    <Layout style={{ minHeight: "100vh", maxWidth: "100px" }}>
-      <Sider width={100}>
+    <Layout style={{ minHeight: "100vh", maxWidth: "120px" }}>
+      <Sider width={120}>
         <Menu
           mode="inline"
           defaultSelectedKeys={defaultSelectedKey ? defaultSelectedKey : ["1"]}
@@ -89,7 +89,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           ) : null}
           <Menu.Item key="8" onClick={() => setPage("settings")}>
           <Text>
-            Settings
+            Integrations
           </Text>
           </Menu.Item>
           {userRole == "Admin" ? (

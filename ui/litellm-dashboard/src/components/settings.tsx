@@ -34,6 +34,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [callbacks, setCallbacks] = useState<string[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
+  const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -55,6 +56,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   const handleCancel = () => {
     setIsModalVisible(false);
     form.resetFields();
+    setSelectedCallback(null);
   };
 
   const handleOk = () => {
@@ -64,8 +66,8 @@ const Settings: React.FC<SettingsPageProps> = ({
     // Handle form submission
     form.validateFields().then((values) => {
       // Call API to add the callback
+      console.log("Form values:", values);
       let payload;
-      console.log("Callback values:", values);
       if (values.callback === 'langfuse') {
         payload = {
           environment_variables: {
@@ -80,8 +82,19 @@ const Settings: React.FC<SettingsPageProps> = ({
 
         // add langfuse to callbacks
         setCallbacks(callbacks ? [...callbacks, values.callback] : [values.callback]);
+      } else if (values.callback === 'slack') {
+        payload = {
+          litellm_settings: {
+            success_callback: [values.callback]
+          },
+          environment_variables: {
+            SLACK_WEBHOOK_URL: values.slackWebhookUrl
+          }
+        };
+        setCallbacksCall(accessToken, payload);
 
-
+        // add slack to callbacks
+        setCallbacks(callbacks ? [...callbacks, values.callback] : [values.callback]);
       } else {
         payload = {
           error: 'Invalid callback value'
@@ -89,7 +102,12 @@ const Settings: React.FC<SettingsPageProps> = ({
       }
       setIsModalVisible(false);
       form.resetFields();
+      setSelectedCallback(null);
     });
+  };
+
+  const handleCallbackChange = (value: string) => {
+    setSelectedCallback(value);
   };
 
   return (
@@ -138,33 +156,48 @@ const Settings: React.FC<SettingsPageProps> = ({
             name="callback"
             rules={[{ required: true, message: "Please select a callback" }]}
           >
-            <Select>
+            <Select onChange={handleCallbackChange}>
               <Select.Option value="langfuse">langfuse</Select.Option>
-              <Select.Option value="slack">slack</Select.Option>
+              <Select.Option value="slack">slack alerting</Select.Option>
             </Select>
           </Form.Item>
 
-          <Form.Item
-            label="LANGFUSE_PUBLIC_KEY"
-            name="langfusePublicKey"
-            rules={[
-              { required: true, message: "Please enter the public key" },
-            ]}
-          >
-            <Input.Password />
-          </Form.Item>
+          {selectedCallback === 'langfuse' && (
+            <>
+              <Form.Item
+                label="LANGFUSE_PUBLIC_KEY"
+                name="langfusePublicKey"
+                rules={[
+                  { required: true, message: "Please enter the public key" },
+                ]}
+              >
+                <Input.Password />
+              </Form.Item>
 
-          <Form.Item
-            label="LANGFUSE_PRIVATE_KEY"
-            name="langfusePrivateKey"
-            rules={[
-              { required: true, message: "Please enter the private key" },
-            ]}
-          >
-            <Input.Password />
-          </Form.Item>
+              <Form.Item
+                label="LANGFUSE_PRIVATE_KEY"
+                name="langfusePrivateKey"
+                rules={[
+                  { required: true, message: "Please enter the private key" },
+                ]}
+              >
+                <Input.Password />
+              </Form.Item>
+            </>
+          )}
 
-        
+          {selectedCallback === 'slack' && (
+            <Form.Item
+              label="SLACK_WEBHOOK_URL"
+              name="slackWebhookUrl"
+              rules={[
+                { required: true, message: "Please enter the Slack webhook URL" },
+              ]}
+            >
+              <Input />
+            </Form.Item>
+          )}
+
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Save</Button2>
           </div>
