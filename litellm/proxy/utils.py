@@ -1180,7 +1180,7 @@ class PrismaClient:
                         raise HTTPException(
                             status_code=400,
                             detail={
-                                "error": f"Foreign Key Constraint failed. Organization ID={db_data['organization_id']} does not exist in LiteLLM_OrganizationTable"
+                                "error": f"Foreign Key Constraint failed. Organization ID={db_data['organization_id']} does not exist in LiteLLM_OrganizationTable. Create via `/organization/new`."
                             },
                         )
                     raise e
