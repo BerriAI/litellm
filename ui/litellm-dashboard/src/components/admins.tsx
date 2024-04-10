@@ -376,6 +376,56 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         </Col>
       </Grid>
+      <Grid>
+      <Title level={4}>Add SSO </Title>
+      <Card>
+      <Form
+    form={form}
+    onFinish={handleMemberUpdate}
+    labelCol={{ span: 8 }}
+    wrapperCol={{ span: 16 }}
+    labelAlign="left"
+  >
+    <>
+    <Form.Item
+        label="PROXY_BASE_URL"
+        name="proxy_base_url"
+        rules={[
+          { required: true, message: "Please enter the public key" },
+        ]}
+      >
+      <Input />
+      </Form.Item>
+      
+
+      <Form.Item
+        label="GOOGLE_CLIENT_ID"
+        name="google_client_id"
+        rules={[
+          { required: true, message: "Please enter the public key" },
+        ]}
+      >
+      <Input.Password />
+      </Form.Item>
+
+      <Form.Item
+        label="GOOGLE_CLIENT_SECRET"
+        name="google_client_secret"
+        rules={[
+          { required: true, message: "Please enter the private key" },
+        ]}
+      >
+        <Input.Password />
+        </Form.Item>
+    </>
+    <div style={{ textAlign: "right", marginTop: "10px" }}>
+      <Button2 htmlType="submit">Update role</Button2>
+    </div>
+  </Form>
+
+      </Card>
+
+      </Grid>
     </div>
   );
 };
