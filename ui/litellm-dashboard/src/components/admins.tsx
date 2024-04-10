@@ -40,6 +40,7 @@ import {
   Member,
   userGetAllUsersCall,
   User,
+  setCallbacksCall,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -56,6 +57,33 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isAddAdminModalVisible, setIsAddAdminModalVisible] = useState(false);
   const [isUpdateMemberModalVisible, setIsUpdateModalModalVisible] = useState(false);
+  const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
+  const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
+
+const handleAddSSOOk = () => {
+  setIsAddSSOModalVisible(false);
+  form.resetFields();
+};
+
+const handleAddSSOCancel = () => {
+  setIsAddSSOModalVisible(false);
+  form.resetFields();
+};
+
+const handleShowInstructions = (formValues: Record<string, any>) => {
+  setIsAddSSOModalVisible(false);
+  setIsInstructionsModalVisible(true);
+  // Optionally, you can call handleSSOUpdate here with the formValues
+  // handleSSOUpdate(formValues);
+};
+
+const handleInstructionsOk = () => {
+  setIsInstructionsModalVisible(false);
+};
+
+const handleInstructionsCancel = () => {
+  setIsInstructionsModalVisible(false);
+};
 
   const roles = ["proxy_admin", "proxy_admin_viewer"]
 
@@ -284,6 +312,20 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       console.error("Error creating the key:", error);
     }
   };
+
+  const handleSSOUpdate = async (formValues: Record<string, any>) => {
+    if (accessToken == null) {
+      return;
+    }
+    let payload = {
+      environment_variables: {
+        PROXY_BASE_URL: formValues.proxy_base_url,
+        GOOGLE_CLIENT_ID: formValues.google_client_id,
+        GOOGLE_CLIENT_SECRET: formValues.google_client_secret,
+      },
+    };
+    setCallbacksCall(accessToken, payload);
+  }
   console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2 mt-2 p-8">
@@ -376,6 +418,84 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         </Col>
       </Grid>
+      <Grid>
+  <Title level={4}>Add SSO</Title>
+  <div className="flex justify-start mb-4">
+    <Button onClick={() => setIsAddSSOModalVisible(true)}>Add SSO</Button>
+    <Modal
+      title="Add SSO"
+      visible={isAddSSOModalVisible}
+      width={800}
+      footer={null}
+      onOk={handleAddSSOOk}
+      onCancel={handleAddSSOCancel}
+    >
+
+        <Form
+          form={form}
+          onFinish={handleShowInstructions}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+          <>
+            <Form.Item
+              label="PROXY BASE URL"
+              name="proxy_base_url"
+              rules={[{ required: true, message: "Please enter the public key" }]}
+            >
+              <Input />
+            </Form.Item>
+
+            <Form.Item
+              label="GOOGLE CLIENT ID"
+              name="google_client_id"
+              rules={[{ required: true, message: "Please enter the public key" }]}
+            >
+              <Input.Password />
+            </Form.Item>
+
+            <Form.Item
+              label="GOOGLE CLIENT SECRET"
+              name="google_client_secret"
+              rules={[{ required: true, message: "Please enter the private key" }]}
+            >
+              <Input.Password />
+            </Form.Item>
+          </>
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button2 htmlType="submit">Save</Button2>
+          </div>
+        </Form>
+
+    </Modal>
+    <Modal
+      title="SSO Setup Instructions"
+      visible={isInstructionsModalVisible}
+      width={800}
+      footer={null}
+      onOk={handleInstructionsOk}
+      onCancel={handleInstructionsCancel}
+    >
+      <p>Follow these steps to complete the SSO setup:</p>
+      <Text className="mt-2">
+        1. DO NOT Exit this TAB
+      </Text>
+      <Text className="mt-2">
+        2. Open a new tab, visit your proxy base url
+      </Text>
+      <Text className="mt-2">
+        3. Confirm your SSO is configured correctly and you can login on the new Tab
+      </Text>
+      <Text className="mt-2">
+        4. If Step 3 is successful, you can close this tab
+      </Text>
+      <div style={{ textAlign: "right", marginTop: "10px" }}>
+        <Button2 onClick={handleInstructionsOk}>Done</Button2>
+    </div>
+    </Modal>
+  </div>
+</Grid>
     </div>
   );
 };
