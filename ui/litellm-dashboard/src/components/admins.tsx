@@ -61,6 +61,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
 
 const handleAddSSOOk = () => {
+  
   setIsAddSSOModalVisible(false);
   form.resetFields();
 };
@@ -71,10 +72,11 @@ const handleAddSSOCancel = () => {
 };
 
 const handleShowInstructions = (formValues: Record<string, any>) => {
+  handleAdminCreate(formValues);
+  handleSSOUpdate(formValues);
   setIsAddSSOModalVisible(false);
   setIsInstructionsModalVisible(true);
   // Optionally, you can call handleSSOUpdate here with the formValues
-  // handleSSOUpdate(formValues);
 };
 
 const handleInstructionsOk = () => {
@@ -439,10 +441,17 @@ const handleInstructionsCancel = () => {
           labelAlign="left"
         >
           <>
+          <Form.Item
+              label="Admin Email"
+              name="user_email"
+              rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
+            >
+              <Input />
+            </Form.Item>
             <Form.Item
               label="PROXY BASE URL"
               name="proxy_base_url"
-              rules={[{ required: true, message: "Please enter the public key" }]}
+              rules={[{ required: true, message: "Please enter the proxy base url" }]}
             >
               <Input />
             </Form.Item>
@@ -450,7 +459,7 @@ const handleInstructionsCancel = () => {
             <Form.Item
               label="GOOGLE CLIENT ID"
               name="google_client_id"
-              rules={[{ required: true, message: "Please enter the public key" }]}
+              rules={[{ required: true, message: "Please enter the google client id" }]}
             >
               <Input.Password />
             </Form.Item>
@@ -458,7 +467,7 @@ const handleInstructionsCancel = () => {
             <Form.Item
               label="GOOGLE CLIENT SECRET"
               name="google_client_secret"
-              rules={[{ required: true, message: "Please enter the private key" }]}
+              rules={[{ required: true, message: "Please enter the google client secret" }]}
             >
               <Input.Password />
             </Form.Item>
