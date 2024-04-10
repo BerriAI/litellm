@@ -136,56 +136,20 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             traceback.print_exc()
             pass
 
-    async def async_get_available_deployments(
+    def _common_checks_available_deployment(
         self,
         model_group: str,
         healthy_deployments: list,
+        tpm_keys: list,
+        tpm_values: list,
+        rpm_keys: list,
+        rpm_values: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
     ):
         """
-        Async implementation of get deployments.
-
-        Reduces time to retrieve the tpm/rpm values from cache
+        Common checks for get available deployment, across sync + async implementations
         """
-        pass
-
-    def get_available_deployments(
-        self,
-        model_group: str,
-        healthy_deployments: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-    ):
-        """
-        Returns a deployment with the lowest TPM/RPM usage.
-        """
-        # get list of potential deployments
-        verbose_router_logger.debug(
-            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
-        )
-
-        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
-        tpm_keys = []
-        rpm_keys = []
-        for m in healthy_deployments:
-            if isinstance(m, dict):
-                id = m.get("model_info", {}).get(
-                    "id"
-                )  # a deployment should always have an 'id'. this is set in router.py
-                tpm_key = "{}:tpm:{}".format(id, current_minute)
-                rpm_key = "{}:rpm:{}".format(id, current_minute)
-
-                tpm_keys.append(tpm_key)
-                rpm_keys.append(rpm_key)
-
-        tpm_values = self.router_cache.batch_get_cache(
-            keys=tpm_keys
-        )  # [1, 2, None, ..]
-        rpm_values = self.router_cache.batch_get_cache(
-            keys=rpm_keys
-        )  # [1, 2, None, ..]
-
         tpm_dict = {}  # {model_id: 1, ..}
         for idx, key in enumerate(tpm_keys):
             tpm_dict[tpm_keys[idx]] = tpm_values[idx]
@@ -259,3 +223,99 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 deployment = _deployment
         print_verbose("returning picked lowest tpm/rpm deployment.")
         return deployment
+
+    async def async_get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+    ):
+        """
+        Async implementation of get deployments.
+
+        Reduces time to retrieve the tpm/rpm values from cache
+        """
+        # get list of potential deployments
+        verbose_router_logger.debug(
+            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
+        )
+
+        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
+        tpm_keys = []
+        rpm_keys = []
+        for m in healthy_deployments:
+            if isinstance(m, dict):
+                id = m.get("model_info", {}).get(
+                    "id"
+                )  # a deployment should always have an 'id'. this is set in router.py
+                tpm_key = "{}:tpm:{}".format(id, current_minute)
+                rpm_key = "{}:rpm:{}".format(id, current_minute)
+
+                tpm_keys.append(tpm_key)
+                rpm_keys.append(rpm_key)
+
+        tpm_values = await self.router_cache.async_batch_get_cache(
+            keys=tpm_keys
+        )  # [1, 2, None, ..]
+        rpm_values = await self.router_cache.async_batch_get_cache(
+            keys=rpm_keys
+        )  # [1, 2, None, ..]
+
+        return self._common_checks_available_deployment(
+            model_group=model_group,
+            healthy_deployments=healthy_deployments,
+            tpm_keys=tpm_keys,
+            tpm_values=tpm_values,
+            rpm_keys=rpm_keys,
+            rpm_values=rpm_values,
+            messages=messages,
+            input=input,
+        )
+
+    def get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+    ):
+        """
+        Returns a deployment with the lowest TPM/RPM usage.
+        """
+        # get list of potential deployments
+        verbose_router_logger.debug(
+            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
+        )
+
+        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
+        tpm_keys = []
+        rpm_keys = []
+        for m in healthy_deployments:
+            if isinstance(m, dict):
+                id = m.get("model_info", {}).get(
+                    "id"
+                )  # a deployment should always have an 'id'. this is set in router.py
+                tpm_key = "{}:tpm:{}".format(id, current_minute)
+                rpm_key = "{}:rpm:{}".format(id, current_minute)
+
+                tpm_keys.append(tpm_key)
+                rpm_keys.append(rpm_key)
+
+        tpm_values = self.router_cache.batch_get_cache(
+            keys=tpm_keys
+        )  # [1, 2, None, ..]
+        rpm_values = self.router_cache.batch_get_cache(
+            keys=rpm_keys
+        )  # [1, 2, None, ..]
+
+        return self._common_checks_available_deployment(
+            model_group=model_group,
+            healthy_deployments=healthy_deployments,
+            tpm_keys=tpm_keys,
+            tpm_values=tpm_values,
+            rpm_keys=rpm_keys,
+            rpm_values=rpm_values,
+            messages=messages,
+            input=input,
+        )
