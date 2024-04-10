@@ -236,7 +236,7 @@ class HiddenParams(OpenAIObject):
 
     class Config:
         extra = "allow"
-        protected_namespaces = ()      
+        protected_namespaces = ()
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -1990,9 +1990,6 @@ class Logging:
                             else:
                                 litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    print_verbose(
-                        f"Running Async success callback: {callback}; self.stream: {self.stream}; async_complete_streaming_response: {self.model_call_details.get('async_complete_streaming_response', None)} result={result}"
-                    )
                     if self.stream == True:
                         if (
                             "async_complete_streaming_response"
@@ -2376,7 +2373,6 @@ def client(original_function):
             if litellm.use_client or (
                 "use_client" in kwargs and kwargs["use_client"] == True
             ):
-                print_verbose(f"litedebugger initialized")
                 if "lite_debugger" not in litellm.input_callback:
                     litellm.input_callback.append("lite_debugger")
                 if "lite_debugger" not in litellm.success_callback:
