@@ -417,7 +417,7 @@ def completion(
             return async_completion(**data)
 
         if mode == "vision":
-            print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
+            print_verbose("\nMaking VertexAI Gemini Pro / Pro Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
             tools = optional_params.pop("tools", None)
             prompt, images = _gemini_vision_convert_messages(messages=messages)
