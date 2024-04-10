@@ -7925,6 +7925,7 @@ async def auth_callback(request: Request):
                     "models": getattr(user_info, "models", []),
                     "user_id": getattr(user_info, "user_id", user_id),
                     "user_email": getattr(user_info, "user_id", user_email),
+                    "user_role": getattr(user_info, "user_role", None),
                 }
                 user_role = getattr(user_info, "user_role", None)
 
