@@ -6,7 +6,8 @@ from typing import Callable, Optional
 from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
 import litellm
 import sys, httpx
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from .prompt_templates.factory import prompt_factory, custom_prompt, get_system_prompt
+from packaging.version import Version
 
 
 class GeminiError(Exception):
@@ -103,6 +104,13 @@ class TextStreamer:
                 break
 
 
+def supports_system_instruction():
+    import google.generativeai as genai
+
+    gemini_pkg_version = Version(genai.__version__)
+    return gemini_pkg_version >= Version("0.5.0")
+
+
 def completion(
     model: str,
     messages: list,
@@ -124,7 +132,7 @@ def completion(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
         )
     genai.configure(api_key=api_key)
-
+    system_prompt = ""
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
@@ -135,6 +143,7 @@ def completion(
             messages=messages,
         )
     else:
+        system_prompt, messages = get_system_prompt(messages=messages)
         prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="gemini"
         )
@@ -166,7 +175,11 @@ def completion(
     )
     ## COMPLETION CALL
     try:
-        _model = genai.GenerativeModel(f"models/{model}")
+        _params = {"model_name": "models/{}".format(model)}
+        _system_instruction = supports_system_instruction()
+        if _system_instruction and len(system_prompt) > 0:
+            _params["system_instruction"] = system_prompt
+        _model = genai.GenerativeModel(**_params)
         if stream == True:
             if acompletion == True:
 
@@ -213,11 +226,12 @@ def completion(
                 encoding=encoding,
             )
         else:
-            response = _model.generate_content(
-                contents=prompt,
-                generation_config=genai.types.GenerationConfig(**inference_params),
-                safety_settings=safety_settings,
-            )
+            params = {
+                "contents": prompt,
+                "generation_config": genai.types.GenerationConfig(**inference_params),
+                "safety_settings": safety_settings,
+            }
+            response = _model.generate_content(**params)
     except Exception as e:
         raise GeminiError(
             message=str(e),
