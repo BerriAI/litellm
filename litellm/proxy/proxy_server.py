@@ -1283,6 +1283,20 @@ async def _PROXY_track_cost_callback(
         verbose_proxy_logger.debug("error in tracking cost callback - %s", e)
 
 
+def _set_spend_logs_payload(
+    payload: dict, prisma_client: PrismaClient, spend_logs_url: Optional[str] = None
+):
+    if prisma_client is not None and spend_logs_url is not None:
+        if isinstance(payload["startTime"], datetime):
+            payload["startTime"] = payload["startTime"].isoformat()
+        if isinstance(payload["endTime"], datetime):
+            payload["endTime"] = payload["endTime"].isoformat()
+        prisma_client.spend_log_transactions.append(payload)
+    elif prisma_client is not None:
+        prisma_client.spend_log_transactions.append(payload)
+    return prisma_client
+
+
 async def update_database(
     token,
     response_cost,
@@ -1295,6 +1309,7 @@ async def update_database(
     end_time=None,
 ):
     try:
+        global prisma_client
         verbose_proxy_logger.info(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
         )
@@ -1453,26 +1468,22 @@ async def update_database(
         ### UPDATE SPEND LOGS ###
         async def _insert_spend_log_to_db():
             try:
-                # Helper to generate payload to log
-                payload = get_logging_payload(
-                    kwargs=kwargs,
-                    response_obj=completion_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
+                global prisma_client
+                if prisma_client is not None:
+                    # Helper to generate payload to log
+                    payload = get_logging_payload(
+                        kwargs=kwargs,
+                        response_obj=completion_response,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
 
-                payload["spend"] = response_cost
-                if (
-                    prisma_client is not None
-                    and os.getenv("SPEND_LOGS_URL", None) is not None
-                ):
-                    if isinstance(payload["startTime"], datetime):
-                        payload["startTime"] = payload["startTime"].isoformat()
-                    if isinstance(payload["endTime"], datetime):
-                        payload["endTime"] = payload["endTime"].isoformat()
-                    prisma_client.spend_log_transactions.append(payload)
-                elif prisma_client is not None:
-                    prisma_client.spend_log_transactions.append(payload)
+                    payload["spend"] = response_cost
+                    prisma_client = _set_spend_logs_payload(
+                        payload=payload,
+                        spend_logs_url=os.getenv("SPEND_LOGS_URL"),
+                        prisma_client=prisma_client,
+                    )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Update Spend Logs DB failed to execute - {str(e)}\n{traceback.format_exc()}"
