@@ -1470,7 +1470,7 @@ async def update_database(
                         payload["startTime"] = payload["startTime"].isoformat()
                     if isinstance(payload["endTime"], datetime):
                         payload["endTime"] = payload["endTime"].isoformat()
-                    prisma_client.spend_log_transactons.append(payload)
+                    prisma_client.spend_log_transactions.append(payload)
                 elif prisma_client is not None:
                     prisma_client.spend_log_transactions.append(payload)
             except Exception as e:
