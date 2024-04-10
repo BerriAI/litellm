@@ -21,6 +21,7 @@ from collections import defaultdict
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
@@ -273,6 +274,12 @@ class Router:
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
+        elif routing_strategy == "usage-based-routing-v2":
+            self.lowesttpm_logger_v2 = LowestTPMLoggingHandler_v2(
+                router_cache=self.cache, model_list=self.model_list
+            )
+            if isinstance(litellm.callbacks, list):
+                litellm.callbacks.append(self.lowesttpm_logger_v2)  # type: ignore
         elif routing_strategy == "latency-based-routing":
             self.lowestlatency_logger = LowestLatencyLoggingHandler(
                 router_cache=self.cache,
@@ -2506,7 +2513,16 @@ class Router:
                 messages=messages,
                 input=input,
             )
-
+        elif (
+            self.routing_strategy == "usage-based-routing-v2"
+            and self.lowesttpm_logger_v2 is not None
+        ):
+            deployment = self.lowesttpm_logger_v2.get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,
+                messages=messages,
+                input=input,
+            )
         if deployment is None:
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, No deployment available"
