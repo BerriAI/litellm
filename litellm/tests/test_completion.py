@@ -975,6 +975,19 @@ def test_completion_text_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio
+async def test_completion_text_openai_async():
+    try:
+        # litellm.set_verbose =True
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo-instruct", messages=messages
+        )
+        print(response["choices"][0]["message"]["content"])
+    except Exception as e:
+        print(e)
+        pytest.fail(f"Error occurred: {e}")
+
+
 def custom_callback(
     kwargs,  # kwargs to completion
     completion_response,  # response from completion
