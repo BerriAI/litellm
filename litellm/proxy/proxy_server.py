@@ -2494,7 +2494,7 @@ class ProxyConfig:
                         litellm.success_callback.append(success_callback)
                         _added_callback = True
             # we need to set env variables too
-            environment_variables = config_data.get("environment_variables", None)
+            environment_variables = config_data.get("environment_variables", {})
             for k, v in environment_variables.items():
                 decoded_b64 = base64.b64decode(v)
                 value = decrypt_value(value=decoded_b64, master_key=master_key)
