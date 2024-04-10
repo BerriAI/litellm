@@ -1632,9 +1632,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-7b-chat"
+    model_name = "replicate/meta/llama-2-70b-chat"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-7b-chat",
+        model="replicate/meta/llama-2-70b-chat",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -1660,6 +1660,7 @@ def test_replicate_custom_prompt_dict():
                 "content": "what is yc write 1 paragraph",
             }
         ],
+        repetition_penalty=0.1,
         num_retries=3,
     )
     print(f"response: {response}")
