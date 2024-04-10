@@ -40,6 +40,7 @@ import {
   Member,
   userGetAllUsersCall,
   User,
+  setCallbacksCall,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -284,6 +285,20 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       console.error("Error creating the key:", error);
     }
   };
+
+  const handleSSOUpdate = async (formValues: Record<string, any>) => {
+    if (accessToken == null) {
+      return;
+    }
+    let payload = {
+      environment_variables: {
+        PROXY_BASE_URL: formValues.proxy_base_url,
+        GOOGLE_CLIENT_ID: formValues.google_client_id,
+        GOOGLE_CLIENT_SECRET: formValues.google_client_secret,
+      },
+    };
+    setCallbacksCall(accessToken, payload);
+  }
   console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2 mt-2 p-8">
@@ -381,7 +396,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       <Card>
       <Form
     form={form}
-    onFinish={handleMemberUpdate}
+    onFinish={handleSSOUpdate}
     labelCol={{ span: 8 }}
     wrapperCol={{ span: 16 }}
     labelAlign="left"
