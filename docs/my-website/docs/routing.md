@@ -117,7 +117,10 @@ import asyncio
 model_list = [{ ... }]
 
 # init router
-router = Router(model_list=model_list, routing_strategy="latency-based-routing") # 👈 set routing strategy
+router = Router(model_list=model_list,
+				routing_strategy="latency-based-routing",# 👈 set routing strategy
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
 
 ## CALL 1+2
 tasks = []
@@ -257,8 +260,9 @@ router = Router(model_list=model_list,
                 redis_host=os.environ["REDIS_HOST"], 
 				redis_password=os.environ["REDIS_PASSWORD"], 
 				redis_port=os.environ["REDIS_PORT"], 
-                routing_strategy="usage-based-routing")
-
+                routing_strategy="usage-based-routing"
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
 
 response = await router.acompletion(model="gpt-3.5-turbo", 
 				messages=[{"role": "user", "content": "Hey, how's it going?"}]
@@ -555,7 +559,11 @@ router = Router(model_list: Optional[list] = None,
 
 ## Pre-Call Checks (Context Window)
 
-Enable pre-call checks to filter out deployments with context window limit < messages for a call.
+Enable pre-call checks to filter out:
+1. deployments with context window limit < messages for a call.
+2. deployments that have exceeded rate limits when making concurrent calls. (eg. `asyncio.gather(*[
+        router.acompletion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
+    ])`)
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
