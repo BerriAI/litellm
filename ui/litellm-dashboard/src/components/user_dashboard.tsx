@@ -18,6 +18,7 @@ type UserSpendData = {
   max_budget?: number | null;
 };
 
+
 interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
@@ -183,14 +184,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     if (keys !== null && selectedTeam !== null && selectedTeam !== undefined) {
       let sum = 0;
       for (const key of keys) {
-        console.log(`key in team keys: ${key.team_id}`)
-        console.log(`selected team: ${selectedTeam.team_id}`)
-        if (key.team_id !== null && key.team_id === selectedTeam.team_id) {
+        if (selectedTeam.hasOwnProperty('team_id') && key.team_id !== null && key.team_id === selectedTeam.team_id) {
           sum += key.spend;
-      }
+        }
       }
       setTeamSpend(sum);
-  }
+    } else if (keys !== null) {
+      // sum the keys which don't have team-id set (default team)
+      let sum = 0 
+      for (const key of keys) {
+        sum += key.spend;
+      }
+      setTeamSpend(sum);
+    }
   }, [selectedTeam]);
 
   if (userID == null || token == null) {
