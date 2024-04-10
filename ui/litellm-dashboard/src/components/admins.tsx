@@ -434,7 +434,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         </Form.Item>
     </>
     <div style={{ textAlign: "right", marginTop: "10px" }}>
-      <Button2 htmlType="submit">Update role</Button2>
+      <Button2 htmlType="submit">Save</Button2>
     </div>
   </Form>
 
