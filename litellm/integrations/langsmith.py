@@ -53,6 +53,8 @@ class LangsmithLogger:
                 value = kwargs[key]
                 if key == "start_time" or key == "end_time":
                     pass
+                elif type(value) == datetime.datetime:
+                    new_kwargs[key] = value.isoformat()
                 elif type(value) != dict:
                     new_kwargs[key] = value
 

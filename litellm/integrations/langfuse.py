@@ -1,11 +1,9 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import dotenv, os
-import requests
-import requests
-from datetime import datetime
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
+import copy
 import traceback
 from packaging.version import Version
 from litellm._logging import verbose_logger
@@ -19,7 +17,7 @@ class LangFuseLogger:
             from langfuse import Langfuse
         except Exception as e:
             raise Exception(
-                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
+                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
             )
         # Instance variables
         self.secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
@@ -82,11 +80,15 @@ class LangFuseLogger:
             metadata = (
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
-            prompt = [kwargs.get("messages")]
-            optional_params = kwargs.get("optional_params", {})
+            optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
-            optional_params.pop("functions", None)
-            optional_params.pop("tools", None)
+            prompt = {"messages": kwargs.get("messages")}
+            functions = optional_params.pop("functions", None)
+            tools = optional_params.pop("tools", None)
+            if functions is not None:
+                prompt["functions"] = functions
+            if tools is not None:
+                prompt["tools"] = tools
 
             # langfuse only accepts str, int, bool, float for logging
             for param, value in optional_params.items():
@@ -116,6 +118,11 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj["choices"][0]["message"].json()
+            elif response_obj is not None and isinstance(
+                response_obj, litellm.TextCompletionResponse
+            ):
+                input = prompt
+                output = response_obj.choices[0].text
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
@@ -203,8 +210,8 @@ class LangFuseLogger:
                 endTime=end_time,
                 model=kwargs["model"],
                 modelParameters=optional_params,
-                input=input,
-                output=output,
+                prompt=input,
+                completion=output,
                 usage={
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
@@ -240,17 +247,18 @@ class LangFuseLogger:
 
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
+            print(f"response_obj: {response_obj}")
             if supports_tags:
                 metadata_tags = metadata.get("tags", [])
                 tags = metadata_tags
 
-            generation_name = metadata.get("generation_name", None)
-            if generation_name is None:
-                # just log `litellm-{call_type}` as the generation name
-                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+            trace_name = metadata.get("trace_name", None)
+            if trace_name is None:
+                # just log `litellm-{call_type}` as the trace name
+                trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             trace_params = {
-                "name": generation_name,
+                "name": trace_name,
                 "input": input,
                 "user_id": metadata.get("trace_user_id", user_id),
                 "id": metadata.get("trace_id", None),
@@ -304,11 +312,18 @@ class LangFuseLogger:
             usage = None
             if response_obj is not None and response_obj.get("id", None) is not None:
                 generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+                print(f"getting usage, cost={cost}")
                 usage = {
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
                 }
+                print(f"constructed usage - {usage}")
+            generation_name = metadata.get("generation_name", None)
+            if generation_name is None:
+                # just log `litellm-{call_type}` as the generation name
+                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+
             generation_params = {
                 "name": generation_name,
                 "id": metadata.get("generation_id", generation_id),

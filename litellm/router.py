@@ -29,44 +29,10 @@ from litellm.utils import ModelResponse, CustomStreamWrapper
 import copy
 from litellm._logging import verbose_router_logger
 import logging
+from litellm.types.router import Deployment, ModelInfo, LiteLLM_Params
 
 
 class Router:
-    """
-    Example usage:
-    ```python
-    from litellm import Router
-    model_list = [
-    {
-        "model_name": "azure-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "azure/<your-deployment-name-1>",
-            "api_key": <your-api-key>,
-            "api_version": <your-api-version>,
-            "api_base": <your-api-base>
-        },
-    },
-    {
-        "model_name": "azure-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "azure/<your-deployment-name-2>",
-            "api_key": <your-api-key>,
-            "api_version": <your-api-version>,
-            "api_base": <your-api-base>
-        },
-    },
-    {
-        "model_name": "openai-gpt-3.5-turbo", # model alias
-        "litellm_params": { # params for litellm completion/embedding call
-            "model": "gpt-3.5-turbo",
-            "api_key": <your-api-key>,
-        },
-    ]
-
-    router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
-    ```
-    """
-
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
@@ -98,6 +64,7 @@ class Router:
         fallbacks: List = [],
         context_window_fallbacks: List = [],
         model_group_alias: Optional[dict] = {},
+        enable_pre_call_checks: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         allowed_fails: Optional[
             int
@@ -131,6 +98,7 @@ class Router:
             debug_level (Literal["DEBUG", "INFO"]): Debug level for logging. Defaults to "INFO".
             fallbacks (List): List of fallback options. Defaults to [].
             context_window_fallbacks (List): List of context window fallback options. Defaults to [].
+            enable_pre_call_checks (boolean): Filter out deployments which are outside context window limits for a given prompt
             model_group_alias (Optional[dict]): Alias for model groups. Defaults to {}.
             retry_after (int): Minimum time to wait before retrying a failed request. Defaults to 0.
             allowed_fails (Optional[int]): Number of allowed fails before adding to cooldown. Defaults to None.
@@ -140,9 +108,43 @@ class Router:
 
         Returns:
             Router: An instance of the litellm.Router class.
+
+        Example Usage:
+        ```python
+        from litellm import Router
+        model_list = [
+        {
+            "model_name": "azure-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "azure/<your-deployment-name-1>",
+                "api_key": <your-api-key>,
+                "api_version": <your-api-version>,
+                "api_base": <your-api-base>
+            },
+        },
+        {
+            "model_name": "azure-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "azure/<your-deployment-name-2>",
+                "api_key": <your-api-key>,
+                "api_version": <your-api-version>,
+                "api_base": <your-api-base>
+            },
+        },
+        {
+            "model_name": "openai-gpt-3.5-turbo", # model alias
+            "litellm_params": { # params for litellm completion/embedding call
+                "model": "gpt-3.5-turbo",
+                "api_key": <your-api-key>,
+            },
+        ]
+
+        router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
+        ```
         """
         self.set_verbose = set_verbose
         self.debug_level = debug_level
+        self.enable_pre_call_checks = enable_pre_call_checks
         if self.set_verbose == True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -190,6 +192,8 @@ class Router:
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
 
+        self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
+
         if model_list:
             model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
@@ -227,7 +231,7 @@ class Router:
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
-        self.chat = litellm.Chat(params=default_litellm_params)
+        self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
         # default litellm args
         self.default_litellm_params = default_litellm_params
@@ -251,7 +255,6 @@ class Router:
             }
         }
         """
-
         ### ROUTING SETUP ###
         if routing_strategy == "least-busy":
             self.leastbusy_logger = LeastBusyLoggingHandler(
@@ -283,8 +286,8 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
-        verbose_router_logger.debug(
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n"
+        verbose_router_logger.info(
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}"
         )
 
     def print_deployment(self, deployment: dict):
@@ -409,9 +412,9 @@ class Router:
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            if self.set_verbose == True and self.debug_level == "DEBUG":
-                # debug how often this deployment picked
-                self._print_deployment_metrics(deployment=deployment)
+
+            # debug how often this deployment picked
+            self._track_deployment_metrics(deployment=deployment)
 
             kwargs.setdefault("metadata", {}).update(
                 {
@@ -469,9 +472,9 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
             )
-            if self.set_verbose == True and self.debug_level == "DEBUG":
-                # debug how often this deployment picked
-                self._print_deployment_metrics(deployment=deployment, response=response)
+            # debug how often this deployment picked
+            self._track_deployment_metrics(deployment=deployment, response=response)
+
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -1145,11 +1148,13 @@ class Router:
             original_exception = e
             fallback_model_group = None
             try:
+                verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
-                    hasattr(e, "status_code") and e.status_code == 400
+                    hasattr(e, "status_code")
+                    and e.status_code == 400
+                    and not isinstance(e, litellm.ContextWindowExceededError)
                 ):  # don't retry a malformed request
                     raise e
-                verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
                     isinstance(e, litellm.ContextWindowExceededError)
                     and context_window_fallbacks is not None
@@ -1238,7 +1243,7 @@ class Router:
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
-                and context_window_fallbacks is None
+                and context_window_fallbacks is not None
             ) or (
                 isinstance(original_exception, openai.RateLimitError)
                 and fallbacks is not None
@@ -1343,6 +1348,13 @@ class Router:
             original_exception = e
             verbose_router_logger.debug(f"An exception occurs {original_exception}")
             try:
+                if (
+                    hasattr(e, "status_code")
+                    and e.status_code == 400
+                    and not isinstance(e, litellm.ContextWindowExceededError)
+                ):  # don't retry a malformed request
+                    raise e
+
                 verbose_router_logger.debug(
                     f"Trying to fallback b/w models. Initial model group: {model_group}"
                 )
@@ -1432,7 +1444,7 @@ class Router:
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
-                and context_window_fallbacks is None
+                and context_window_fallbacks is not None
             ) or (
                 isinstance(original_exception, openai.RateLimitError)
                 and fallbacks is not None
@@ -1561,6 +1573,24 @@ class Router:
         except Exception as e:
             raise e
 
+    def _update_usage(self, deployment_id: str):
+        """
+        Update deployment rpm for that minute
+        """
+        rpm_key = deployment_id
+
+        request_count = self.cache.get_cache(key=rpm_key, local_only=True)
+        if request_count is None:
+            request_count = 1
+            self.cache.set_cache(
+                key=rpm_key, value=request_count, local_only=True, ttl=60
+            )  # only store for 60s
+        else:
+            request_count += 1
+            self.cache.set_cache(
+                key=rpm_key, value=request_count, local_only=True
+            )  # don't change existing ttl
+
     def _set_cooldown_deployments(self, deployment: Optional[str] = None):
         """
         Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -1645,11 +1675,18 @@ class Router:
             model_name in litellm.open_ai_chat_completion_models
             or custom_llm_provider in litellm.openai_compatible_providers
             or custom_llm_provider == "azure"
+            or custom_llm_provider == "azure_text"
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "openai"
+            or custom_llm_provider == "text-completion-openai"
             or "ft:gpt-3.5-turbo" in model_name
             or model_name in litellm.open_ai_embedding_models
         ):
+            if custom_llm_provider == "azure":
+                if litellm.utils._is_non_openai_azure_model(model_name):
+                    custom_llm_provider = "openai"
+                    # remove azure prefx from model_name
+                    model_name = model_name.replace("azure/", "")
             # glorified / complicated reading of configs
             # user can pass vars directly or they can pas os.environ/AZURE_API_KEY, in which case we will read the env
             # we do this here because we init clients for Azure, OpenAI and we need to set the right key
@@ -2029,70 +2066,133 @@ class Router:
                 )  # cache for 1 hr
 
     def set_model_list(self, model_list: list):
-        self.model_list = copy.deepcopy(model_list)
+        original_model_list = copy.deepcopy(model_list)
+        self.model_list = []
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
         import os
 
-        for model in self.model_list:
-            #### MODEL ID INIT ########
-            model_info = model.get("model_info", {})
-            model_info["id"] = model_info.get("id", str(uuid.uuid4()))
-            model["model_info"] = model_info
-            #### DEPLOYMENT NAMES INIT ########
-            self.deployment_names.append(model["litellm_params"]["model"])
-            ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########
-            # for get_available_deployment, we use the litellm_param["rpm"]
-            # in this snippet we also set rpm to be a litellm_param
-            if (
-                model["litellm_params"].get("rpm") is None
-                and model.get("rpm") is not None
-            ):
-                model["litellm_params"]["rpm"] = model.get("rpm")
-            if (
-                model["litellm_params"].get("tpm") is None
-                and model.get("tpm") is not None
-            ):
-                model["litellm_params"]["tpm"] = model.get("tpm")
+        for model in original_model_list:
+            _model_name = model.pop("model_name")
+            _litellm_params = model.pop("litellm_params")
+            ## check if litellm params in os.environ
+            if isinstance(_litellm_params, dict):
+                for k, v in _litellm_params.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        _litellm_params[k] = litellm.get_secret(v)
 
-            #### VALIDATE MODEL ########
-            # check if model provider in supported providers
-            (
-                _model,
-                custom_llm_provider,
-                dynamic_api_key,
-                api_base,
-            ) = litellm.get_llm_provider(
-                model=model["litellm_params"]["model"],
-                custom_llm_provider=model["litellm_params"].get(
-                    "custom_llm_provider", None
-                ),
+            _model_info = model.pop("model_info", {})
+            deployment = Deployment(
+                **model,
+                model_name=_model_name,
+                litellm_params=_litellm_params,
+                model_info=_model_info,
             )
 
-            # Azure GPT-Vision Enhancements, users can pass os.environ/
-            data_sources = model.get("litellm_params", {}).get("dataSources", [])
+            deployment = self._add_deployment(deployment=deployment)
 
-            for data_source in data_sources:
-                params = data_source.get("parameters", {})
-                for param_key in ["endpoint", "key"]:
-                    # if endpoint or key set for Azure GPT Vision Enhancements, check if it's an env var
-                    if param_key in params and params[param_key].startswith(
-                        "os.environ/"
-                    ):
-                        env_name = params[param_key].replace("os.environ/", "")
-                        params[param_key] = os.environ.get(env_name, "")
+            model = deployment.to_json(exclude_none=True)
 
-            # done reading model["litellm_params"]
-            if custom_llm_provider not in litellm.provider_list:
-                raise Exception(f"Unsupported provider - {custom_llm_provider}")
-
-            # init OpenAI, Azure clients
-            self.set_client(model=model)
+            self.model_list.append(model)
 
         verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
         self.model_names = [m["model_name"] for m in model_list]
 
+    def _add_deployment(self, deployment: Deployment) -> Deployment:
+        import os
+
+        #### DEPLOYMENT NAMES INIT ########
+        self.deployment_names.append(deployment.litellm_params.model)
+        ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########
+        # for get_available_deployment, we use the litellm_param["rpm"]
+        # in this snippet we also set rpm to be a litellm_param
+        if (
+            deployment.litellm_params.rpm is None
+            and getattr(deployment, "rpm", None) is not None
+        ):
+            deployment.litellm_params.rpm = getattr(deployment, "rpm")
+
+        if (
+            deployment.litellm_params.tpm is None
+            and getattr(deployment, "tpm", None) is not None
+        ):
+            deployment.litellm_params.tpm = getattr(deployment, "tpm")
+
+        #### VALIDATE MODEL ########
+        # check if model provider in supported providers
+        (
+            _model,
+            custom_llm_provider,
+            dynamic_api_key,
+            api_base,
+        ) = litellm.get_llm_provider(
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.get(
+                "custom_llm_provider", None
+            ),
+        )
+
+        # Check if user is trying to use model_name == "*"
+        # this is a catch all model for their specific api key
+        if deployment.model_name == "*":
+            self.default_deployment = deployment.to_json(exclude_none=True)
+
+        # Azure GPT-Vision Enhancements, users can pass os.environ/
+        data_sources = deployment.litellm_params.get("dataSources", [])
+
+        for data_source in data_sources:
+            params = data_source.get("parameters", {})
+            for param_key in ["endpoint", "key"]:
+                # if endpoint or key set for Azure GPT Vision Enhancements, check if it's an env var
+                if param_key in params and params[param_key].startswith("os.environ/"):
+                    env_name = params[param_key].replace("os.environ/", "")
+                    params[param_key] = os.environ.get(env_name, "")
+
+        # done reading model["litellm_params"]
+        if custom_llm_provider not in litellm.provider_list:
+            raise Exception(f"Unsupported provider - {custom_llm_provider}")
+
+        # init OpenAI, Azure clients
+        self.set_client(model=deployment.to_json(exclude_none=True))
+
+        return deployment
+
+    def add_deployment(self, deployment: Deployment):
+        # check if deployment already exists
+
+        if deployment.model_info.id in self.get_model_ids():
+            return
+
+        # add to model list
+        _deployment = deployment.to_json(exclude_none=True)
+        self.model_list.append(_deployment)
+
+        # initialize client
+        self._add_deployment(deployment=deployment)
+
+        # add to model names
+        self.model_names.append(deployment.model_name)
+        return
+
+    def get_deployment(self, model_id: str):
+        for model in self.model_list:
+            if "model_info" in model and "id" in model["model_info"]:
+                if model_id == model["model_info"]["id"]:
+                    return model
+        return None
+
+    def get_model_ids(self):
+        ids = []
+        for model in self.model_list:
+            if "model_info" in model and "id" in model["model_info"]:
+                id = model["model_info"]["id"]
+                ids.append(id)
+        return ids
+
     def get_model_names(self):
         return self.model_names
+
+    def get_model_list(self):
+        return self.model_list
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
@@ -2150,6 +2250,120 @@ class Router:
                     client = self.cache.get_cache(key=cache_key)
                 return client
 
+    def _pre_call_checks(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: List[Dict[str, str]],
+    ):
+        """
+        Filter out model in model group, if:
+
+        - model context window < message length
+        - [TODO] function call and model doesn't support function calling
+        """
+        verbose_router_logger.debug(
+            f"Starting Pre-call checks for deployments in model={model}"
+        )
+
+        _returned_deployments = copy.deepcopy(healthy_deployments)
+
+        invalid_model_indices = []
+
+        try:
+            input_tokens = litellm.token_counter(messages=messages)
+        except Exception as e:
+            return _returned_deployments
+
+        _context_window_error = False
+        _rate_limit_error = False
+
+        ## get model group RPM ##
+        current_minute = datetime.now().strftime("%H-%M")
+        rpm_key = f"{model}:rpm:{current_minute}"
+        model_group_cache = (
+            self.cache.get_cache(key=rpm_key, local_only=True) or {}
+        )  # check the redis + in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
+        for idx, deployment in enumerate(_returned_deployments):
+            # see if we have the info for this model
+            try:
+                base_model = deployment.get("model_info", {}).get("base_model", None)
+                if base_model is None:
+                    base_model = deployment.get("litellm_params", {}).get(
+                        "base_model", None
+                    )
+                model = base_model or deployment.get("litellm_params", {}).get(
+                    "model", None
+                )
+                model_info = litellm.get_model_info(model=model)
+            except:
+                continue
+
+            if (
+                isinstance(model_info, dict)
+                and model_info.get("max_input_tokens", None) is not None
+            ):
+                if (
+                    isinstance(model_info["max_input_tokens"], int)
+                    and input_tokens > model_info["max_input_tokens"]
+                ):
+                    invalid_model_indices.append(idx)
+                    _context_window_error = True
+                    continue
+
+            ## RPM CHECK ##
+            _litellm_params = deployment.get("litellm_params", {})
+            model_id = deployment.get("model_info", {}).get("id", "")
+            ### get local router cache ###
+            current_request_cache_local = (
+                self.cache.get_cache(key=model_id, local_only=True) or 0
+            )
+            ### get usage based cache ###
+            model_group_cache[model_id] = model_group_cache.get(model_id, 0)
+
+            current_request = max(
+                current_request_cache_local, model_group_cache[model_id]
+            )
+
+            if (
+                isinstance(_litellm_params, dict)
+                and _litellm_params.get("rpm", None) is not None
+            ):
+                if (
+                    isinstance(_litellm_params["rpm"], int)
+                    and _litellm_params["rpm"] <= current_request
+                ):
+                    invalid_model_indices.append(idx)
+                    _rate_limit_error = True
+                    continue
+
+        if len(invalid_model_indices) == len(_returned_deployments):
+            """
+            - no healthy deployments available b/c context window checks or rate limit error
+
+            - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
+            """
+
+            if _rate_limit_error == True:  # allow generic fallback logic to take place
+                raise ValueError(
+                    f"No deployments available for selected model, passed model={model}"
+                )
+            elif _context_window_error == True:
+                raise litellm.ContextWindowExceededError(
+                    message="Context Window exceeded for given call",
+                    model=model,
+                    llm_provider="",
+                    response=httpx.Response(
+                        status_code=400,
+                        request=httpx.Request("GET", "https://example.com"),
+                    ),
+                )
+        if len(invalid_model_indices) > 0:
+            for idx in reversed(invalid_model_indices):
+                _returned_deployments.pop(idx)
+
+        return _returned_deployments
+
     def get_available_deployment(
         self,
         model: str,
@@ -2182,6 +2396,13 @@ class Router:
             )
             model = self.model_group_alias[model]
 
+        if model not in self.model_names and self.default_deployment is not None:
+            updated_deployment = copy.deepcopy(
+                self.default_deployment
+            )  # self.default_deployment
+            updated_deployment["litellm_params"]["model"] = model
+            return updated_deployment
+
         ## get healthy deployments
         ### get all deployments
         healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
@@ -2209,6 +2430,12 @@ class Router:
         for deployment in deployments_to_remove:
             healthy_deployments.remove(deployment)
 
+        # filter pre-call checks
+        if self.enable_pre_call_checks and messages is not None:
+            healthy_deployments = self._pre_call_checks(
+                model=model, healthy_deployments=healthy_deployments, messages=messages
+            )
+
         verbose_router_logger.debug(
             f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}"
         )
@@ -2218,6 +2445,7 @@ class Router:
             model = litellm.model_alias_map[
                 model
             ]  # update the model to the actual value if an alias has been passed in
+
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments
@@ -2292,7 +2520,7 @@ class Router:
         )
         return deployment
 
-    def _print_deployment_metrics(self, deployment, response=None):
+    def _track_deployment_metrics(self, deployment, response=None):
         try:
             litellm_params = deployment["litellm_params"]
             api_base = litellm_params.get("api_base", "")
@@ -2303,6 +2531,7 @@ class Router:
 
                 # update self.deployment_stats
                 if model_id is not None:
+                    self._update_usage(model_id)  # update in-memory cache for tracking
                     if model_id in self.deployment_stats:
                         # only update num_requests
                         self.deployment_stats[model_id]["num_requests"] += 1
@@ -2339,15 +2568,18 @@ class Router:
                             "num_successes": 1,
                             "avg_latency": response_ms,
                         }
-            from pprint import pformat
+            if self.set_verbose == True and self.debug_level == "DEBUG":
+                from pprint import pformat
 
-            # Assuming self.deployment_stats is your dictionary
-            formatted_stats = pformat(self.deployment_stats)
+                # Assuming self.deployment_stats is your dictionary
+                formatted_stats = pformat(self.deployment_stats)
 
-            # Assuming verbose_router_logger is your logger
-            verbose_router_logger.info("self.deployment_stats: \n%s", formatted_stats)
+                # Assuming verbose_router_logger is your logger
+                verbose_router_logger.info(
+                    "self.deployment_stats: \n%s", formatted_stats
+                )
         except Exception as e:
-            verbose_router_logger.error(f"Error in _print_deployment_metrics: {str(e)}")
+            verbose_router_logger.error(f"Error in _track_deployment_metrics: {str(e)}")
 
     def flush_cache(self):
         litellm.cache = None

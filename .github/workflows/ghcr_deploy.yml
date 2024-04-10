@@ -5,15 +5,24 @@ on:
     inputs:
       tag:
         description: "The tag version you want to build"
+      release_type:
+        description: "The release type you want to build. Can be 'latest', 'stable', 'dev'"
+        type: string
+        default: "latest"
+      commit_hash:
+        description: "Commit hash"
+        required: true
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  CHART_NAME: litellm-helm
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
   docker-hub-deploy:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       -
@@ -41,6 +50,13 @@ jobs:
           push: true
           file: Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
+      -
+        name: Build and push litellm-spend-logs image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          file: ./litellm-js/spend-logs/Dockerfile
+          tags: litellm/litellm-spend_logs:${{ github.event.inputs.tag || 'latest' }}
       
   build-and-push-image:
     runs-on: ubuntu-latest
@@ -76,9 +92,9 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
         with:
-          context: .
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
           
@@ -112,12 +128,101 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: .
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           file: Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-latest 
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
           labels: ${{ steps.meta-database.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+  
+  build-and-push-image-spend-logs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for spend-logs Dockerfile
+        id: meta-spend-logs
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-spend_logs
+      # Configure multi platform Docker builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
+
+      - name: Build and push Database Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
+          file: ./litellm-js/spend-logs/Dockerfile
+          push: true
+          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+
+  build-and-push-helm-chart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: lowercase github.repository_owner
+        run: |
+          echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
+      - name: Get LiteLLM Latest Tag
+        id: current_app_tag
+        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+
+      - name: Get last published chart version
+        id: current_version
+        shell: bash
+        run: |
+          CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} 2>/dev/null || true)
+          if [ -z "${CHART_LIST}" ]; then
+            echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
+          else
+            printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
+          fi
+        env:
+          HELM_EXPERIMENTAL_OCI: '1'
+
+      # Automatically update the helm chart version one "patch" level
+      - name: Bump release version
+        id: bump_version
+        uses: christian-draeger/increment-semantic-version@1.1.0
+        with:
+          current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
+          version-fragment: 'bug'
+
+      - uses: ./.github/actions/helm-oci-chart-releaser
+        with:
+          name: ${{ env.CHART_NAME }}
+          repository: ${{ env.REPO_OWNER }}
+          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
+          app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
+          path: deploy/charts/${{ env.CHART_NAME }}
+          registry: ${{ env.REGISTRY }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
+          update_dependencies: true
 
   release:
     name: "New LiteLLM Release"
@@ -137,17 +242,20 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
           script: |
+            const commitHash = "${{ github.event.inputs.commit_hash}}";
+            console.log("Commit Hash:", commitHash); // Add this line for debugging
             try {
               const response = await github.rest.repos.createRelease({
                 draft: false,
                 generate_release_notes: true,
+                target_commitish: commitHash,
                 name: process.env.RELEASE_TAG,
                 owner: context.repo.owner,
                 prerelease: false,
                 repo: context.repo.repo,
                 tag_name: process.env.RELEASE_TAG,
               });
-
+      
               core.exportVariable('RELEASE_ID', response.data.id);
               core.exportVariable('RELEASE_UPLOAD_URL', response.data.upload_url);
             } catch (error) {
@@ -189,4 +297,3 @@ jobs:
               }
             ]
           }' $WEBHOOK_URL
-

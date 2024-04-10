@@ -146,7 +146,7 @@ def test_cooldown_same_model_name():
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
-                    "tpm": 0.000001,
+                    "tpm": 1,
                 },
             },
         ]
@@ -181,4 +181,4 @@ def test_cooldown_same_model_name():
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
 
-test_cooldown_same_model_name()
+# test_cooldown_same_model_name()

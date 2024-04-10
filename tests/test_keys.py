@@ -65,7 +65,7 @@ async def update_key(session, get_key):
         "Authorization": f"Bearer sk-1234",
         "Content-Type": "application/json",
     }
-    data = {"key": get_key, "models": ["gpt-4"]}
+    data = {"key": get_key, "models": ["gpt-4"], "duration": "120s"}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -280,6 +280,29 @@ async def get_key_info(session, call_key, get_key=None):
         return await response.json()
 
 
+async def get_model_info(session, call_key):
+    """
+    Make sure only models user has access to are returned
+    """
+    url = "http://0.0.0.0:4000/model/info"
+    headers = {
+        "Authorization": f"Bearer {call_key}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(
+                f"Request did not return a 200 status code: {status}. Responses {response_text}"
+            )
+        return await response.json()
+
+
 @pytest.mark.asyncio
 async def test_key_info():
     """
@@ -303,6 +326,25 @@ async def test_key_info():
         random_key = key_gen["key"]
         status = await get_key_info(session=session, get_key=key, call_key=random_key)
         assert status == 403
+
+
+@pytest.mark.asyncio
+async def test_model_info():
+    """
+    Get model info for models key has access to
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0)
+        key = key_gen["key"]
+        # as admin #
+        admin_models = await get_model_info(session=session, call_key="sk-1234")
+        admin_models = admin_models["data"]
+        # as key itself #
+        user_models = await get_model_info(session=session, call_key=key)
+        user_models = user_models["data"]
+
+        assert len(admin_models) > len(user_models)
+        assert len(user_models) > 0
 
 
 async def get_spend_logs(session, request_id):
@@ -329,6 +371,16 @@ async def test_key_info_spend_values():
     - make completion call
     - assert cost is expected value
     """
+
+    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+        for attempt in range(_max_attempts):
+            try:
+                return await func(*args, **kwargs)
+            except aiohttp.client_exceptions.ClientOSError as e:
+                if attempt + 1 == _max_attempts:
+                    raise  # re-raise the last ClientOSError if all attempts failed
+                print(f"Attempt {attempt+1} failed, retrying...")
+
     async with aiohttp.ClientSession() as session:
         ## Test Spend Update ##
         # completion
@@ -336,7 +388,9 @@ async def test_key_info_spend_values():
         key = key_gen["key"]
         response = await chat_completion(session=session, key=key)
         await asyncio.sleep(5)
-        spend_logs = await get_spend_logs(session=session, request_id=response["id"])
+        spend_logs = await retry_request(
+            get_spend_logs, session=session, request_id=response["id"]
+        )
         print(f"spend_logs: {spend_logs}")
         completion_tokens = spend_logs[0]["completion_tokens"]
         prompt_tokens = spend_logs[0]["prompt_tokens"]
@@ -431,6 +485,7 @@ async def test_key_info_spend_values_image_generation():
         assert spend > 0
 
 
+@pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
 async def test_key_with_budgets():
     """

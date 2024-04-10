@@ -10,6 +10,7 @@ from litellm.utils import (
     convert_to_model_response_object,
     Usage,
     TranscriptionResponse,
+    TextCompletionResponse,
 )
 from typing import Callable, Optional
 import aiohttp, requests
@@ -199,6 +200,43 @@ class OpenAITextCompletionConfig:
             )
             and v is not None
         }
+
+    def convert_to_chat_model_response_object(
+        self,
+        response_object: Optional[TextCompletionResponse] = None,
+        model_response_object: Optional[ModelResponse] = None,
+    ):
+        try:
+            ## RESPONSE OBJECT
+            if response_object is None or model_response_object is None:
+                raise ValueError("Error in response object format")
+            choice_list = []
+            for idx, choice in enumerate(response_object["choices"]):
+                message = Message(
+                    content=choice["text"],
+                    role="assistant",
+                )
+                choice = Choices(
+                    finish_reason=choice["finish_reason"], index=idx, message=message
+                )
+                choice_list.append(choice)
+            model_response_object.choices = choice_list
+
+            if "usage" in response_object:
+                model_response_object.usage = response_object["usage"]
+
+            if "id" in response_object:
+                model_response_object.id = response_object["id"]
+
+            if "model" in response_object:
+                model_response_object.model = response_object["model"]
+
+            model_response_object._hidden_params["original_response"] = (
+                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            )
+            return model_response_object
+        except Exception as e:
+            raise e
 
 
 class OpenAIChatCompletion(BaseLLM):
@@ -785,10 +823,10 @@ class OpenAIChatCompletion(BaseLLM):
         optional_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
+        max_retries: int,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
-        max_retries=None,
         logging_obj=None,
         atranscription: bool = False,
     ):
@@ -962,40 +1000,6 @@ class OpenAITextCompletion(BaseLLM):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def convert_to_model_response_object(
-        self,
-        response_object: Optional[dict] = None,
-        model_response_object: Optional[ModelResponse] = None,
-    ):
-        try:
-            ## RESPONSE OBJECT
-            if response_object is None or model_response_object is None:
-                raise ValueError("Error in response object format")
-            choice_list = []
-            for idx, choice in enumerate(response_object["choices"]):
-                message = Message(content=choice["text"], role="assistant")
-                choice = Choices(
-                    finish_reason=choice["finish_reason"], index=idx, message=message
-                )
-                choice_list.append(choice)
-            model_response_object.choices = choice_list
-
-            if "usage" in response_object:
-                model_response_object.usage = response_object["usage"]
-
-            if "id" in response_object:
-                model_response_object.id = response_object["id"]
-
-            if "model" in response_object:
-                model_response_object.model = response_object["model"]
-
-            model_response_object._hidden_params["original_response"] = (
-                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
-            )
-            return model_response_object
-        except Exception as e:
-            raise e
-
     def completion(
         self,
         model_response: ModelResponse,
@@ -1010,6 +1014,8 @@ class OpenAITextCompletion(BaseLLM):
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
+        client=None,
+        organization: Optional[str] = None,
         headers: Optional[dict] = None,
     ):
         super().completion()
@@ -1020,8 +1026,6 @@ class OpenAITextCompletion(BaseLLM):
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message=f"Missing model or messages")
 
-            api_base = f"{api_base}/completions"
-
             if (
                 len(messages) > 0
                 and "content" in messages[0]
@@ -1029,12 +1033,12 @@ class OpenAITextCompletion(BaseLLM):
             ):
                 prompt = messages[0]["content"]
             else:
-                prompt = " ".join([message["content"] for message in messages])  # type: ignore
+                prompt = [message["content"] for message in messages]  # type: ignore
 
             # don't send max retries to the api, if set
-            optional_params.pop("max_retries", None)
 
             data = {"model": model, "prompt": prompt, **optional_params}
+            max_retries = data.pop("max_retries", 2)
             ## LOGGING
             logging_obj.pre_call(
                 input=messages,
@@ -1050,38 +1054,53 @@ class OpenAITextCompletion(BaseLLM):
                     return self.async_streaming(
                         logging_obj=logging_obj,
                         api_base=api_base,
+                        api_key=api_key,
                         data=data,
                         headers=headers,
                         model_response=model_response,
                         model=model,
                         timeout=timeout,
+                        max_retries=max_retries,
+                        client=client,
+                        organization=organization,
                     )
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, prompt=prompt, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout)  # type: ignore
+                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, prompt=prompt, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
             elif optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
                     api_base=api_base,
+                    api_key=api_key,
                     data=data,
                     headers=headers,
                     model_response=model_response,
                     model=model,
                     timeout=timeout,
+                    max_retries=max_retries,  # type: ignore
+                    client=client,
+                    organization=organization,
                 )
             else:
-                response = httpx.post(
-                    url=f"{api_base}", json=data, headers=headers, timeout=timeout
-                )
-                if response.status_code != 200:
-                    raise OpenAIError(
-                        status_code=response.status_code, message=response.text
+                if client is None:
+                    openai_client = OpenAI(
+                        api_key=api_key,
+                        base_url=api_base,
+                        http_client=litellm.client_session,
+                        timeout=timeout,
+                        max_retries=max_retries,  # type: ignore
+                        organization=organization,
                     )
+                else:
+                    openai_client = client
 
+                response = openai_client.completions.create(**data)  # type: ignore
+
+                response_json = response.model_dump()
                 ## LOGGING
                 logging_obj.post_call(
                     input=prompt,
                     api_key=api_key,
-                    original_response=response,
+                    original_response=response_json,
                     additional_args={
                         "headers": headers,
                         "api_base": api_base,
@@ -1089,10 +1108,7 @@ class OpenAITextCompletion(BaseLLM):
                 )
 
                 ## RESPONSE OBJECT
-                return self.convert_to_model_response_object(
-                    response_object=response.json(),
-                    model_response_object=model_response,
-                )
+                return TextCompletionResponse(**response_json)
         except Exception as e:
             raise e
 
@@ -1107,101 +1123,112 @@ class OpenAITextCompletion(BaseLLM):
         api_key: str,
         model: str,
         timeout: float,
+        max_retries=None,
+        organization: Optional[str] = None,
+        client=None,
     ):
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            try:
-                response = await client.post(
-                    api_base,
-                    json=data,
-                    headers=headers,
-                    timeout=litellm.request_timeout,
-                )
-                response_json = response.json()
-                if response.status_code != 200:
-                    raise OpenAIError(
-                        status_code=response.status_code, message=response.text
-                    )
-
-                ## LOGGING
-                logging_obj.post_call(
-                    input=prompt,
+        try:
+            if client is None:
+                openai_aclient = AsyncOpenAI(
                     api_key=api_key,
-                    original_response=response,
-                    additional_args={
-                        "headers": headers,
-                        "api_base": api_base,
-                    },
+                    base_url=api_base,
+                    http_client=litellm.aclient_session,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    organization=organization,
                 )
+            else:
+                openai_aclient = client
 
-                ## RESPONSE OBJECT
-                return self.convert_to_model_response_object(
-                    response_object=response_json, model_response_object=model_response
-                )
-            except Exception as e:
-                raise e
+            response = await openai_aclient.completions.create(**data)
+            response_json = response.model_dump()
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                original_response=response,
+                additional_args={
+                    "headers": headers,
+                    "api_base": api_base,
+                },
+            )
+            ## RESPONSE OBJECT
+            response_obj = TextCompletionResponse(**response_json)
+            response_obj._hidden_params.original_response = json.dumps(response_json)
+            return response_obj
+        except Exception as e:
+            raise e
 
     def streaming(
         self,
         logging_obj,
-        api_base: str,
+        api_key: str,
         data: dict,
         headers: dict,
         model_response: ModelResponse,
         model: str,
         timeout: float,
+        api_base: Optional[str] = None,
+        max_retries=None,
+        client=None,
+        organization=None,
     ):
-        with httpx.stream(
-            url=f"{api_base}",
-            json=data,
-            headers=headers,
-            method="POST",
-            timeout=timeout,
-        ) as response:
-            if response.status_code != 200:
-                raise OpenAIError(
-                    status_code=response.status_code, message=response.text
-                )
-
-            streamwrapper = CustomStreamWrapper(
-                completion_stream=response.iter_lines(),
-                model=model,
-                custom_llm_provider="text-completion-openai",
-                logging_obj=logging_obj,
+        if client is None:
+            openai_client = OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=litellm.client_session,
+                timeout=timeout,
+                max_retries=max_retries,  # type: ignore
+                organization=organization,
             )
-            for transformed_chunk in streamwrapper:
-                yield transformed_chunk
+        else:
+            openai_client = client
+        response = openai_client.completions.create(**data)
+        streamwrapper = CustomStreamWrapper(
+            completion_stream=response,
+            model=model,
+            custom_llm_provider="text-completion-openai",
+            logging_obj=logging_obj,
+        )
+
+        for chunk in streamwrapper:
+            yield chunk
 
     async def async_streaming(
         self,
         logging_obj,
-        api_base: str,
+        api_key: str,
         data: dict,
         headers: dict,
         model_response: ModelResponse,
         model: str,
         timeout: float,
+        api_base: Optional[str] = None,
+        client=None,
+        max_retries=None,
+        organization=None,
     ):
-        client = httpx.AsyncClient()
-        async with client.stream(
-            url=f"{api_base}",
-            json=data,
-            headers=headers,
-            method="POST",
-            timeout=timeout,
-        ) as response:
-            try:
-                if response.status_code != 200:
-                    raise OpenAIError(
-                        status_code=response.status_code, message=response.text
-                    )
+        if client is None:
+            openai_client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=litellm.aclient_session,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+            )
+        else:
+            openai_client = client
 
-                streamwrapper = CustomStreamWrapper(
-                    completion_stream=response.aiter_lines(),
-                    model=model,
-                    custom_llm_provider="text-completion-openai",
-                    logging_obj=logging_obj,
-                )
-                async for transformed_chunk in streamwrapper:
-                    yield transformed_chunk
-            except Exception as e:
-                raise e
+        response = await openai_client.completions.create(**data)
+
+        streamwrapper = CustomStreamWrapper(
+            completion_stream=response,
+            model=model,
+            custom_llm_provider="text-completion-openai",
+            logging_obj=logging_obj,
+        )
+
+        async for transformed_chunk in streamwrapper:
+            yield transformed_chunk

@@ -16,18 +16,13 @@ from importlib import resources
 import shutil
 
 telemetry = None
-default_num_workers = 1
-try:
-    default_num_workers = os.cpu_count() or 1
-    if default_num_workers is not None and default_num_workers > 0:
-        default_num_workers -= 1
-except:
-    pass
 
 
 def append_query_params(url, params):
-    print(f"url: {url}")
-    print(f"params: {params}")
+    from litellm._logging import verbose_proxy_logger
+
+    verbose_proxy_logger.debug(f"url: {url}")
+    verbose_proxy_logger.debug(f"params: {params}")
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
     parsed_query.update(params)
@@ -64,7 +59,7 @@ def is_port_in_use(port):
 @click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
-    default=default_num_workers,
+    default=1,
     help="Number of gunicorn workers to spin up",
     envvar="NUM_WORKERS",
 )
@@ -229,16 +224,14 @@ def run_server(
     ssl_keyfile_path,
     ssl_certfile_path,
 ):
-    global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry, ProxyConfig
+        from proxy_server import app, save_worker_config, ProxyConfig
     else:
         try:
             from .proxy_server import (
                 app,
                 save_worker_config,
-                usage_telemetry,
                 ProxyConfig,
             )
         except ImportError as e:
@@ -250,10 +243,8 @@ def run_server(
                 from proxy_server import (
                     app,
                     save_worker_config,
-                    usage_telemetry,
                     ProxyConfig,
                 )
-    feature_telemetry = usage_telemetry
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")

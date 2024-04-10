@@ -194,7 +194,7 @@ def test_img_gen(client_no_auth):
 
 
 #### ADDITIONAL
-# @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
+@pytest.mark.skip(reason="test via docker tests. Requires prisma client.")
 def test_add_new_model(client_no_auth):
     global headers
     try:

@@ -76,7 +76,6 @@ Click on your personal dashboard link. Here's how you can find it 👇
 
 Oh! Looks like our request was made successfully. Let's click on it and see exactly what got sent to the LLM provider. 
 
-<Image img={require('../../img/dashboard_log_row.png')} alt="Dashboard Log Row" />    
 
 
 

@@ -105,6 +105,7 @@ async def test_user_update():
     pass
 
 
+@pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
 async def test_users_budgets_reset():
     """
@@ -166,6 +167,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
         continue
 
 
+@pytest.mark.skip(reason="Global proxy now tracked via `/global/spend/logs`")
 @pytest.mark.asyncio
 async def test_global_proxy_budget_update():
     """

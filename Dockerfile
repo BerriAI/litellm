@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.9
+ARG LITELLM_BUILD_IMAGE=python:3.11.8-slim
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.9-slim
+ARG LITELLM_RUNTIME_IMAGE=python:3.11.8-slim
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE as builder
 
@@ -38,6 +38,11 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
 RUN pip install redisvl==0.0.7 --no-deps
 
+# ensure pyjwt is used, not jwt
+RUN pip uninstall jwt -y
+RUN pip uninstall PyJWT -y
+RUN pip install PyJWT --no-cache-dir
+
 # Build Admin UI
 RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 
@@ -65,5 +70,4 @@ EXPOSE 4000/tcp
 ENTRYPOINT ["litellm"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs 
-# CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--detailed_debug"]
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--run_gunicorn", "--num_workers", "1"]
+CMD ["--port", "4000"]

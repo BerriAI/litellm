@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall } from "./networking";
+import { keyDeleteCall, getTotalSpendCall } from "./networking";
 import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import { DonutChart } from "@tremor/react";
 import {
@@ -17,6 +17,7 @@ import {
   Title,
   Icon,
 } from "@tremor/react";
+import { Statistic } from "antd"
 import { spendUsersCall }  from "./networking";
 
 
@@ -28,45 +29,59 @@ interface UserSpendData {
   }
 interface ViewUserSpendProps {
     userID: string | null;
-    userSpendData: UserSpendData | null; // Use the UserSpendData interface here
     userRole: string | null;
-    accessToken: string;
+    accessToken: string | null;
+    userSpend: number | null;  
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userSpendData, userRole, accessToken }) => {
-    console.log("User SpendData:", userSpendData);
-    const [spend, setSpend] = useState(userSpendData?.spend);
-    const [maxBudget, setMaxBudget] = useState(userSpendData?.max_budget || null);
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend }) => {
+    console.log(`userSpend: ${userSpend}`)
+    let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
+    const [maxBudget, setMaxBudget] = useState(0.0);
+    useEffect(() => {
+      const fetchData = async () => {
+        if (!accessToken || !userID || !userRole) {
+          return;
+        }
+        if (userRole === "Admin" && userSpend == null) {
+          try {
+            const globalSpend = await getTotalSpendCall(accessToken);
+            if (globalSpend) {
+              if (globalSpend.spend) {
+                setSpend(globalSpend.spend);
+              } else {
+                setSpend(0.0);
+              }
+              if (globalSpend.max_budget) {
+                setMaxBudget(globalSpend.max_budget);
+              } else {
+                setMaxBudget(0.0);
+              }
+            }
+          } catch (error) {
+            console.error("Error fetching global spend data:", error);
+          }
+        }
+      };
+    
+      fetchData();
+    }, [userRole, accessToken]);
 
     useEffect(() => {
-        const fetchData = async () => {
-            if (userRole === "Admin") {
-                try {
-                    const data = await spendUsersCall(accessToken, "litellm-proxy-budget");
-                    console.log("Result from callSpendUsers:", data);
-                    const total_budget = data[0]
-                    setSpend(total_budget?.spend);
-                    setMaxBudget(total_budget?.max_budget || null);
-                } catch (error) {
-                    console.error("Failed to get spend for user", error);
-                }
-            }
-        };
-
-        fetchData();
-    }, [userRole, accessToken, userID]);
+      if (userSpend !== null) {
+        setSpend(userSpend)
+      }
+    }, [userSpend])
 
     const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
 
+    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
+
+    console.log(`spend in view user spend: ${spend}`)
     return (
         <>
-      <Card className="mx-auto mb-4">
-        <Metric>
-          ${spend}
-        </Metric>
-        <Title>
-            / {displayMaxBudget}
-        </Title>
-      </Card>
+      <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend </p>
+      <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">${roundedSpend}</p>
+        
     </>
     )
 }

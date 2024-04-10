@@ -128,19 +128,6 @@ async def chat_completion(session, key):
 
 
 @pytest.mark.asyncio
-async def test_add_models():
-    """
-    Add model
-    Call new model
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await add_models(session=session)
-        await chat_completion(session=session, key=key)
-
-
-@pytest.mark.asyncio
 async def test_get_models():
     """
     Get models user has access to
@@ -177,14 +164,16 @@ async def delete_model(session, model_id="123"):
 
 
 @pytest.mark.asyncio
-async def test_delete_models():
+async def test_add_and_delete_models():
     """
-    Get models user has access to
+    Add model
+    Call new model
     """
-    model_id = "12345"
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
+        model_id = "1234"
         await add_models(session=session, model_id=model_id)
+        await asyncio.sleep(60)
         await chat_completion(session=session, key=key)
         await delete_model(session=session, model_id=model_id)

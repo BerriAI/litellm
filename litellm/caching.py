@@ -13,6 +13,7 @@ import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any, BinaryIO
 from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
+import traceback
 
 
 def print_verbose(print_statement):
@@ -35,6 +36,9 @@ class BaseCache:
         raise NotImplementedError
 
     async def async_get_cache(self, key, **kwargs):
+        raise NotImplementedError
+
+    async def batch_cache_write(self, result, *args, **kwargs):
         raise NotImplementedError
 
     async def disconnect(self):
@@ -95,8 +99,17 @@ class InMemoryCache(BaseCache):
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
-    def __init__(self, host=None, port=None, password=None, **kwargs):
+    def __init__(
+        self,
+        host=None,
+        port=None,
+        password=None,
+        redis_flush_size=100,
+        namespace: Optional[str] = None,
+        **kwargs,
+    ):
         from ._redis import get_redis_client, get_redis_connection_pool
+        import redis
 
         redis_kwargs = {}
         if host is not None:
@@ -109,7 +122,25 @@ class RedisCache(BaseCache):
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
-        self.async_redis_conn_pool = get_redis_connection_pool()
+        self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
+
+        if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+            parsed_kwargs = redis.connection.parse_url(redis_kwargs["url"])
+            redis_kwargs.update(parsed_kwargs)
+            self.redis_kwargs.update(parsed_kwargs)
+            # pop url
+            self.redis_kwargs.pop("url")
+
+        # redis namespaces
+        self.namespace = namespace
+        # for high traffic, we store the redis results in memory and then batch write to redis
+        self.redis_batch_writing_buffer: list = []
+        self.redis_flush_size = redis_flush_size
+        self.redis_version = "Unknown"
+        try:
+            self.redis_version = self.redis_client.info()["redis_version"]
+        except Exception as e:
+            pass
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
@@ -118,9 +149,21 @@ class RedisCache(BaseCache):
             connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
         )
 
+    def check_and_fix_namespace(self, key: str) -> str:
+        """
+        Make sure each key starts with the given namespace
+        """
+        if self.namespace is not None and not key.startswith(self.namespace):
+            key = self.namespace + ":" + key
+
+        return key
+
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
-        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+        print_verbose(
+            f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
+        )
+        key = self.check_and_fix_namespace(key=key)
         try:
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
@@ -129,22 +172,37 @@ class RedisCache(BaseCache):
                 f"LiteLLM Caching: set() - Got exception from REDIS : {str(e)}"
             )
 
+    async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
+        keys = []
+        _redis_client = self.init_async_client()
+        async with _redis_client as redis_client:
+            async for key in redis_client.scan_iter(match=pattern + "*", count=count):
+                keys.append(key)
+                if len(keys) >= count:
+                    break
+        return keys
+
     async def async_set_cache(self, key, value, **kwargs):
         _redis_client = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         async with _redis_client as redis_client:
             ttl = kwargs.get("ttl", None)
             print_verbose(
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
             try:
-                await redis_client.set(
-                    name=key, value=json.dumps(value), ex=ttl, get=True
+                await redis_client.set(name=key, value=json.dumps(value), ex=ttl)
+                print_verbose(
+                    f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
                 )
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
-                print_verbose(
-                    f"LiteLLM Redis Caching: async set() - Got exception from REDIS : {str(e)}"
+                verbose_logger.error(
+                    "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                    str(e),
+                    value,
                 )
+                traceback.print_exc()
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         """
@@ -156,6 +214,7 @@ class RedisCache(BaseCache):
                 async with redis_client.pipeline(transaction=True) as pipe:
                     # Iterate through each key-value pair in the cache_list and set them in the pipeline.
                     for cache_key, cache_value in cache_list:
+                        cache_key = self.check_and_fix_namespace(key=cache_key)
                         print_verbose(
                             f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
                         )
@@ -171,9 +230,28 @@ class RedisCache(BaseCache):
             # Optionally, you could process 'results' to make sure that all set operations were successful.
             return results
         except Exception as e:
-            print_verbose(f"Error occurred in pipeline write - {str(e)}")
-            # NON blocking - notify users Redis is throwing an exception
-            logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS %s, Writing value=%s",
+                str(e),
+                cache_value,
+            )
+            traceback.print_exc()
+
+    async def batch_cache_write(self, key, value, **kwargs):
+        print_verbose(
+            f"in batch cache writing for redis buffer size={len(self.redis_batch_writing_buffer)}",
+        )
+        key = self.check_and_fix_namespace(key=key)
+        self.redis_batch_writing_buffer.append((key, value))
+        if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
+            await self.flush_cache_buffer()
+
+    async def flush_cache_buffer(self):
+        print_verbose(
+            f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}"
+        )
+        await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)
+        self.redis_batch_writing_buffer = []
 
     def _get_cache_logic(self, cached_response: Any):
         """
@@ -193,6 +271,7 @@ class RedisCache(BaseCache):
 
     def get_cache(self, key, **kwargs):
         try:
+            key = self.check_and_fix_namespace(key=key)
             print_verbose(f"Get Redis Cache: key: {key}")
             cached_response = self.redis_client.get(key)
             print_verbose(
@@ -206,9 +285,10 @@ class RedisCache(BaseCache):
 
     async def async_get_cache(self, key, **kwargs):
         _redis_client = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         async with _redis_client as redis_client:
             try:
-                print_verbose(f"Get Redis Cache: key: {key}")
+                print_verbose(f"Get Async Redis Cache: key: {key}")
                 cached_response = await redis_client.get(key)
                 print_verbose(
                     f"Got Async Redis Cache: key: {key}, cached_response {cached_response}"
@@ -217,14 +297,78 @@ class RedisCache(BaseCache):
                 return response
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
+                print_verbose(
+                    f"LiteLLM Caching: async get() - Got exception from REDIS: {str(e)}"
+                )
+
+    async def async_get_cache_pipeline(self, key_list) -> dict:
+        """
+        Use Redis for bulk read operations
+        """
+        _redis_client = await self.init_async_client()
+        key_value_dict = {}
+        try:
+            async with _redis_client as redis_client:
+                async with redis_client.pipeline(transaction=True) as pipe:
+                    # Queue the get operations in the pipeline for all keys.
+                    for cache_key in key_list:
+                        cache_key = self.check_and_fix_namespace(key=cache_key)
+                        pipe.get(cache_key)  # Queue GET command in pipeline
+
+                    # Execute the pipeline and await the results.
+                    results = await pipe.execute()
+
+            # Associate the results back with their keys.
+            # 'results' is a list of values corresponding to the order of keys in 'key_list'.
+            key_value_dict = dict(zip(key_list, results))
+
+            decoded_results = {
+                k.decode("utf-8"): self._get_cache_logic(v)
+                for k, v in key_value_dict.items()
+            }
+
+            return decoded_results
+        except Exception as e:
+            print_verbose(f"Error occurred in pipeline read - {str(e)}")
+            return key_value_dict
+
+    async def ping(self):
+        _redis_client = self.init_async_client()
+        async with _redis_client as redis_client:
+            print_verbose(f"Pinging Async Redis Cache")
+            try:
+                response = await redis_client.ping()
+                print_verbose(f"Redis Cache PING: {response}")
+            except Exception as e:
+                # NON blocking - notify users Redis is throwing an exception
+                print_verbose(
+                    f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
+                )
                 traceback.print_exc()
-                logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
+                raise e
+
+    async def delete_cache_keys(self, keys):
+        _redis_client = self.init_async_client()
+        # keys is a list, unpack it so it gets passed as individual elements to delete
+        async with _redis_client as redis_client:
+            await redis_client.delete(*keys)
+
+    def client_list(self):
+        client_list = self.redis_client.client_list()
+        return client_list
+
+    def info(self):
+        info = self.redis_client.info()
+        return info
 
     def flush_cache(self):
         self.redis_client.flushall()
 
+    def flushall(self):
+        self.redis_client.flushall()
+
     async def disconnect(self):
-        pass
+        await self.async_redis_conn_pool.disconnect(inuse_connections=True)
 
     def delete_cache(self, key):
         self.redis_client.delete(key)
@@ -698,6 +842,8 @@ class DualCache(BaseCache):
         self,
         in_memory_cache: Optional[InMemoryCache] = None,
         redis_cache: Optional[RedisCache] = None,
+        default_in_memory_ttl: Optional[float] = None,
+        default_redis_ttl: Optional[float] = None,
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
@@ -705,11 +851,19 @@ class DualCache(BaseCache):
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
 
+        self.default_in_memory_ttl = (
+            default_in_memory_ttl or litellm.default_in_memory_ttl
+        )
+        self.default_redis_ttl = default_redis_ttl or litellm.default_redis_ttl
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
             print_verbose(f"set cache: key: {key}; value: {value}")
             if self.in_memory_cache is not None:
+                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                    kwargs["ttl"] = self.default_in_memory_ttl
+
                 self.in_memory_cache.set_cache(key, value, **kwargs)
 
             if self.redis_cache is not None and local_only == False:
@@ -725,7 +879,6 @@ class DualCache(BaseCache):
             if self.in_memory_cache is not None:
                 in_memory_result = self.in_memory_cache.get_cache(key, **kwargs)
 
-                print_verbose(f"in_memory_result: {in_memory_result}")
                 if in_memory_result is not None:
                     result = in_memory_result
 
@@ -777,6 +930,17 @@ class DualCache(BaseCache):
         except Exception as e:
             traceback.print_exc()
 
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+        try:
+            if self.in_memory_cache is not None:
+                await self.in_memory_cache.async_set_cache(key, value, **kwargs)
+
+            if self.redis_cache is not None and local_only == False:
+                await self.redis_cache.async_set_cache(key, value, **kwargs)
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
+            traceback.print_exc()
+
     def flush_cache(self):
         if self.in_memory_cache is not None:
             self.in_memory_cache.flush_cache()
@@ -799,6 +963,9 @@ class Cache:
         port: Optional[str] = None,
         password: Optional[str] = None,
         namespace: Optional[str] = None,
+        ttl: Optional[float] = None,
+        default_in_memory_ttl: Optional[float] = None,
+        default_in_redis_ttl: Optional[float] = None,
         similarity_threshold: Optional[float] = None,
         supported_call_types: Optional[
             List[
@@ -833,6 +1000,7 @@ class Cache:
         s3_path: Optional[str] = None,
         redis_semantic_cache_use_async=False,
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_flush_size=None,
         **kwargs,
     ):
         """
@@ -855,7 +1023,9 @@ class Cache:
             None. Cache is set as a litellm param
         """
         if type == "redis":
-            self.cache: BaseCache = RedisCache(host, port, password, **kwargs)
+            self.cache: BaseCache = RedisCache(
+                host, port, password, redis_flush_size, **kwargs
+            )
         elif type == "redis-semantic":
             self.cache = RedisSemanticCache(
                 host,
@@ -892,6 +1062,19 @@ class Cache:
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
+        self.redis_flush_size = redis_flush_size
+        self.ttl = ttl
+
+        if self.type == "local" and default_in_memory_ttl is not None:
+            self.ttl = default_in_memory_ttl
+
+        if (
+            self.type == "redis" or self.type == "redis-semantic"
+        ) and default_in_redis_ttl is not None:
+            self.ttl = default_in_redis_ttl
+
+        if self.namespace is not None and isinstance(self.cache, RedisCache):
+            self.cache.namespace = self.namespace
 
     def get_cache_key(self, *args, **kwargs):
         """
@@ -1000,6 +1183,10 @@ class Cache:
         print_verbose(f"Hashed cache key (SHA-256): {hash_hex}")
         if self.namespace is not None:
             hash_hex = f"{self.namespace}:{hash_hex}"
+            print_verbose(f"Hashed Key with Namespace: {hash_hex}")
+        elif kwargs.get("metadata", {}).get("redis_namespace", None) is not None:
+            _namespace = kwargs.get("metadata", {}).get("redis_namespace", None)
+            hash_hex = f"{_namespace}:{hash_hex}"
             print_verbose(f"Hashed Key with Namespace: {hash_hex}")
         return hash_hex
 
@@ -1127,6 +1314,9 @@ class Cache:
                 if isinstance(result, OpenAIObject):
                     result = result.model_dump_json()
 
+                ## DEFAULT TTL ##
+                if self.ttl is not None:
+                    kwargs["ttl"] = self.ttl
                 ## Get Cache-Controls ##
                 if kwargs.get("cache", None) is not None and isinstance(
                     kwargs.get("cache"), dict
@@ -1134,6 +1324,7 @@ class Cache:
                     for k, v in kwargs.get("cache").items():
                         if k == "ttl":
                             kwargs["ttl"] = v
+
                 cached_data = {"timestamp": time.time(), "response": result}
                 return cache_key, cached_data, kwargs
             else:
@@ -1167,10 +1358,14 @@ class Cache:
         Async implementation of add_cache
         """
         try:
-            cache_key, cached_data, kwargs = self._add_cache_logic(
-                result=result, *args, **kwargs
-            )
-            await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
+            if self.type == "redis" and self.redis_flush_size is not None:
+                # high traffic - fill in results in memory and then flush
+                await self.batch_cache_write(result, *args, **kwargs)
+            else:
+                cache_key, cached_data, kwargs = self._add_cache_logic(
+                    result=result, *args, **kwargs
+                )
+                await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             traceback.print_exc()
@@ -1207,6 +1402,22 @@ class Cache:
         except Exception as e:
             print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             traceback.print_exc()
+
+    async def batch_cache_write(self, result, *args, **kwargs):
+        cache_key, cached_data, kwargs = self._add_cache_logic(
+            result=result, *args, **kwargs
+        )
+        await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
+
+    async def ping(self):
+        if hasattr(self.cache, "ping"):
+            return await self.cache.ping()
+        return None
+
+    async def delete_cache_keys(self, keys):
+        if hasattr(self.cache, "delete_cache_keys"):
+            return await self.cache.delete_cache_keys(keys)
+        return None
 
     async def disconnect(self):
         if hasattr(self.cache, "disconnect"):

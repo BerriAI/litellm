@@ -59,7 +59,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           accessToken,
           null,
           userRole,
-          true
+          true,
+          currentPage,
+          defaultPageSize
         );
         console.log("user data response:", userDataResponse);
         setUserData(userDataResponse);
@@ -68,7 +70,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       }
     };
 
-    if (accessToken && token && userRole && userID && !userData) {
+    if (accessToken && token && userRole && userID) {
       fetchData();
     }
 
@@ -88,7 +90,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     ) {
       fetchEndUserSpend();
     }
-  }, [accessToken, token, userRole, userID]);
+  }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
     return <div>Loading...</div>;
@@ -111,7 +113,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   function renderPagination() {
     if (!userData) return null;
 
-    const totalPages = Math.ceil(userData.length / defaultPageSize);
+    // const totalPages = Math.ceil(userData.length / defaultPageSize);
     const startItem = (currentPage - 1) * defaultPageSize + 1;
     const endItem = Math.min(currentPage * defaultPageSize, userData.length);
 
@@ -130,8 +132,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </button>
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage(currentPage + 1)}
+            // disabled={currentPage === totalPages}
+            onClick={() => {
+              setCurrentPage(currentPage + 1);
+            }}
           >
             Next &rarr;
           </button>
@@ -142,7 +146,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-10 h-[75vh] w-full">
+      <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
         <CreateUser userID={userID} accessToken={accessToken} />
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
           <TabGroup>

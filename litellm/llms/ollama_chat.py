@@ -20,7 +20,7 @@ class OllamaError(Exception):
 
 class OllamaChatConfig:
     """
-    Reference: https://github.com/jmorganca/ollama/blob/main/docs/api.md#parameters
+    Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 
     The class `OllamaConfig` provides the configuration for the Ollama's API interface. Below are the parameters:
 
@@ -69,7 +69,7 @@ class OllamaChatConfig:
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
@@ -134,6 +134,7 @@ class OllamaChatConfig:
             "tools",
             "tool_choice",
             "functions",
+            "response_format",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -150,6 +151,8 @@ class OllamaChatConfig:
                 optional_params["repeat_penalty"] = param
             if param == "stop":
                 optional_params["stop"] = value
+            if param == "response_format" and value["type"] == "json_object":
+                optional_params["format"] = "json"
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 # ollama actually supports json output
@@ -170,10 +173,11 @@ class OllamaChatConfig:
                 litellm.add_function_to_prompt = (
                     True  # so that main.py adds the function call to the prompt
                 )
-                optional_params["functions_unsupported_model"] = non_default_params.pop(
+                optional_params["functions_unsupported_model"] = non_default_params.get(
                     "functions"
                 )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
+        non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
 
 

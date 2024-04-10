@@ -117,7 +117,10 @@ import asyncio
 model_list = [{ ... }]
 
 # init router
-router = Router(model_list=model_list, routing_strategy="latency-based-routing") # 👈 set routing strategy
+router = Router(model_list=model_list,
+				routing_strategy="latency-based-routing",# 👈 set routing strategy
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
 
 ## CALL 1+2
 tasks = []
@@ -257,8 +260,9 @@ router = Router(model_list=model_list,
                 redis_host=os.environ["REDIS_HOST"], 
 				redis_password=os.environ["REDIS_PASSWORD"], 
 				redis_port=os.environ["REDIS_PORT"], 
-                routing_strategy="usage-based-routing")
-
+                routing_strategy="usage-based-routing"
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
 
 response = await router.acompletion(model="gpt-3.5-turbo", 
 				messages=[{"role": "user", "content": "Hey, how's it going?"}]
@@ -442,6 +446,8 @@ If a call fails after num_retries, fall back to another model group.
 
 If the error is a context window exceeded error, fall back to a larger model group (if given). 
 
+Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
+
 ```python
 from litellm import Router
 
@@ -550,6 +556,156 @@ router = Router(model_list: Optional[list] = None,
 				 cache_kwargs= {}, # additional kwargs to pass to RedisCache (see caching.py)
 				 cache_responses=True)
 ```
+
+## Pre-Call Checks (Context Window)
+
+Enable pre-call checks to filter out:
+1. deployments with context window limit < messages for a call.
+2. deployments that have exceeded rate limits when making concurrent calls. (eg. `asyncio.gather(*[
+        router.acompletion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
+    ])`)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**1. Enable pre-call checks**
+```python 
+from litellm import Router 
+# ...
+router = Router(model_list=model_list, enable_pre_call_checks=True) # 👈 Set to True
+```
+
+
+**2. Set Model List**
+
+For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with `azure/`. 
+
+<Tabs>
+<TabItem value="same-group" label="Same Group">
+
+```python
+model_list = [
+            {
+                "model_name": "gpt-3.5-turbo", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+				"model_info": {
+					"base_model": "azure/gpt-35-turbo", # 👈 (Azure-only) SET BASE MODEL
+				}
+            },
+            {
+                "model_name": "gpt-3.5-turbo", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo-1106",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True) 
+```
+
+</TabItem>
+
+<TabItem value="different-group" label="Context Window Fallbacks (Different Groups)">
+
+```python
+model_list = [
+            {
+                "model_name": "gpt-3.5-turbo-small", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+				"model_info": {
+					"base_model": "azure/gpt-35-turbo", # 👈 (Azure-only) SET BASE MODEL
+				}
+            },
+            {
+                "model_name": "gpt-3.5-turbo-large", # model group name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo-1106",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-opus", 
+                "litellm_params": {  call
+                    "model": "claude-3-opus-20240229",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            },
+        ]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True, context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}]) 
+```
+
+</TabItem>
+
+</Tabs>
+
+**3. Test it!**
+
+```python
+"""
+- Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
+- Send a 5k prompt
+- Assert it works
+"""
+from litellm import Router
+import os
+
+try:
+model_list = [
+	{
+		"model_name": "gpt-3.5-turbo",  # model group name
+		"litellm_params": {  # params for litellm completion/embedding call
+			"model": "azure/chatgpt-v-2",
+			"api_key": os.getenv("AZURE_API_KEY"),
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE"),
+		},
+		"model_info": {
+			"base_model": "azure/gpt-35-turbo", 
+		}
+	},
+	{
+		"model_name": "gpt-3.5-turbo",  # model group name
+		"litellm_params": {  # params for litellm completion/embedding call
+			"model": "gpt-3.5-turbo-1106",
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+	},
+]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True) 
+
+text = "What is the meaning of 42?" * 5000
+
+response = router.completion(
+	model="gpt-3.5-turbo",
+	messages=[
+		{"role": "system", "content": text},
+		{"role": "user", "content": "Who was Alexander?"},
+	],
+)
+
+print(f"response: {response}")
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+:::info
+Go [here](./proxy/reliability.md#advanced---context-window-fallbacks) for how to do this on the proxy
+:::
+</TabItem>
+</Tabs>
 
 ## Caching across model groups
 

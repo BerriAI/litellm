@@ -1,13 +1,17 @@
-import { BarChart, Card, Title } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
-import { Grid, Col, Text, LineChart } from "@tremor/react";
+
+import ViewUserSpend from "./view_user_spend";
+import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
+  teamSpendLogsCall,
+  tagsSpendLogsCall
 } from "./networking";
 import { start } from "repl";
 
@@ -23,6 +27,7 @@ type CustomTooltipTypeBar = {
   active: boolean | undefined;
   label: any;
 };
+
 
 const customTooltip = (props: CustomTooltipTypeBar) => {
   const { payload, active } = props;
@@ -134,6 +139,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topKeys, setTopKeys] = useState<any[]>([]);
   const [topModels, setTopModels] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
+  const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
+  const [topTagsData, setTopTagsData] = useState<any[]>([]);
+  const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
+  const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -183,7 +192,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             const filtered_keys = top_keys.map((k: any) => ({
               key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
                 0,
-                7
+                10
               ),
               spend: k["total_spend"],
             }));
@@ -194,6 +203,26 @@ const UsagePage: React.FC<UsagePageProps> = ({
               spend: k["total_spend"],
             }));
             setTopModels(filtered_models);
+
+            const teamSpend = await teamSpendLogsCall(accessToken);
+            console.log("teamSpend", teamSpend);
+            setTeamSpendData(teamSpend.daily_spend);
+            setUniqueTeamIds(teamSpend.teams)
+
+            let total_spend_per_team = teamSpend.total_spend_per_team;
+            // in total_spend_per_team, replace null team_id with "" and replace null total_spend with 0
+
+            total_spend_per_team = total_spend_per_team.map((tspt: any) => {
+              tspt["name"] = tspt["team_id"] || "";
+              tspt["value"] = tspt["total_spend"] || 0;
+              return tspt;
+            })
+
+            setTotalSpendPerTeam(total_spend_per_team);
+
+            //get top tags
+            const top_tags = await tagsSpendLogsCall(accessToken);
+            setTopTagsData(top_tags.top_10_tags);
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -220,9 +249,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 const filtered_keys = topKeysResponse["info"].map((k: any) => ({
                   key: (
                     k["key_name"] ||
-                    k["key_alias"] ||
-                    k["token"]
-                  ).substring(0, 7),
+                    k["key_alias"]
+                  ).substring(0, 10),
                   spend: k["spend"],
                 }));
                 setTopKeys(filtered_keys);
@@ -241,73 +269,159 @@ const UsagePage: React.FC<UsagePageProps> = ({
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid numItems={2} className="gap-2 p-10 h-[75vh] w-full">
-        <Col numColSpan={2}>
-          <Card>
-            <Title>Monthly Spend</Title>
-            <BarChart
-              data={keySpendData}
-              index="date"
-              categories={["spend"]}
-              colors={["blue"]}
-              valueFormatter={valueFormatter}
-              yAxisWidth={100}
-              tickGap={5}
-              // customTooltip={customTooltip}
-            />
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top API Keys</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={topKeys}
-              index="key"
-              categories={["spend"]}
-              colors={["blue"]}
-              yAxisWidth={80}
-              tickGap={5}
-              layout="vertical"
-              showXAxis={false}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top Users</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={topUsers}
-              index="user_id"
-              categories={["spend"]}
-              colors={["blue"]}
-              yAxisWidth={200}
-              layout="vertical"
-              showXAxis={false}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top Models</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={topModels}
-              index="key"
-              categories={["spend"]}
-              colors={["blue"]}
-              yAxisWidth={200}
-              layout="vertical"
-              showXAxis={false}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-      </Grid>
+    <div style={{ width: "100%" }} className="p-8">
+      <ViewUserSpend
+            userID={userID}
+            userRole={userRole}
+            accessToken={accessToken}
+            userSpend={null}
+          />
+      <TabGroup>
+        <TabList className="mt-2">
+          <Tab>All Up</Tab>
+          <Tab>Team Based Usage</Tab>
+           <Tab>Tag Based Usage</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Monthly Spend</Title>
+                  <BarChart
+                    data={keySpendData}
+                    index="date"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    valueFormatter={valueFormatter}
+                    yAxisWidth={100}
+                    tickGap={5}
+                    // customTooltip={customTooltip}
+                  />
+                </Card>
+              </Col>
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top API Keys</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={topKeys}
+                    index="key"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    yAxisWidth={80}
+                    tickGap={5}
+                    layout="vertical"
+                    showXAxis={false}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top Users</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={topUsers}
+                    index="user_id"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    yAxisWidth={200}
+                    layout="vertical"
+                    showXAxis={false}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top Models</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={topModels}
+                    index="key"
+                    categories={["spend"]}
+                    colors={["blue"]}
+                    yAxisWidth={200}
+                    layout="vertical"
+                    showXAxis={false}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+            </Grid>
+            </TabPanel>
+            <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
+              <Col numColSpan={2}>
+              <Card className="mb-2">
+              <Title>Total Spend Per Team</Title>
+                <BarList
+                  data={totalSpendPerTeam}
+                />
+              </Card>
+              <Card>
+
+              <Title>Daily Spend Per Team</Title>
+                <BarChart
+                  className="h-72"
+                  data={teamSpendData}
+                  showLegend={true}
+                  index="date"
+                  categories={uniqueTeamIds}
+                  yAxisWidth={80}
+                  
+                  stack={true}
+                />
+              </Card>
+              </Col>
+              <Col numColSpan={2}>
+              </Col>
+            </Grid>
+            </TabPanel>
+            <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
+              <Col numColSpan={2}>
+
+              <Card>
+              <Title>Spend Per Tag - Last 30 Days</Title>
+              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Tag</TableHeaderCell>
+                    <TableHeaderCell>Spend</TableHeaderCell>
+                    <TableHeaderCell>Requests</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {topTagsData.map((tag) => (
+                    <TableRow key={tag.name}>
+                      <TableCell>{tag.name}</TableCell>
+                      <TableCell>{tag.value}</TableCell>
+                      <TableCell>{tag.log_count}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+                {/* <BarChart
+                  className="h-72"
+                  data={teamSpendData}
+                  showLegend={true}
+                  index="date"
+                  categories={uniqueTeamIds}
+                  yAxisWidth={80}
+                  
+                  stack={true}
+                /> */}
+              </Card>
+              </Col>
+              <Col numColSpan={2}>
+              </Col>
+            </Grid>
+            </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };

@@ -112,7 +112,7 @@ def test_router_get_available_deployments():
 
     deployment = router.get_available_deployment(model=model_group, messages=None)
     print(f"deployment: {deployment}")
-    assert deployment["model_info"]["id"] == 1
+    assert deployment["model_info"]["id"] == "1"
 
     ## run router completion - assert completion event, no change in 'busy'ness once calls are complete
 
