@@ -1677,6 +1677,28 @@ def test_get_bearer_token():
     assert result == "sk-1234", f"Expected 'valid_token', got '{result}'"
 
 
+def test_update_logs_with_spend_logs_url(prisma_client):
+    """
+    Unit test for making sure spend logs list is still updated when url passed in
+    """
+    from litellm.proxy.proxy_server import _set_spend_logs_payload
+
+    payload = {"startTime": datetime.now(), "endTime": datetime.now()}
+    _set_spend_logs_payload(payload=payload, prisma_client=prisma_client)
+
+    assert len(prisma_client.spend_log_transactions) > 0
+
+    prisma_client.spend_log_transactions = []
+
+    spend_logs_url = ""
+    payload = {"startTime": datetime.now(), "endTime": datetime.now()}
+    _set_spend_logs_payload(
+        payload=payload, spend_logs_url=spend_logs_url, prisma_client=prisma_client
+    )
+
+    assert len(prisma_client.spend_log_transactions) > 0
+
+
 @pytest.mark.asyncio
 async def test_user_api_key_auth(prisma_client):
     from litellm.proxy.proxy_server import ProxyException
