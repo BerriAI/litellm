@@ -236,7 +236,7 @@ class HiddenParams(OpenAIObject):
 
     class Config:
         extra = "allow"
-        protected_namespaces = ()      
+        protected_namespaces = ()
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -606,7 +606,7 @@ class ModelResponse(OpenAIObject):
 
 
 class Embedding(OpenAIObject):
-    embedding: list = []
+    embedding: Union[list, str] = []
     index: int
     object: str
 
