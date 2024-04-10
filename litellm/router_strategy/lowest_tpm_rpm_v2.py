@@ -3,6 +3,7 @@
 
 import dotenv, os, requests, random
 from typing import Optional, Union, List, Dict
+import datetime as datetime_og
 from datetime import datetime
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
@@ -59,7 +60,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
-                current_minute = datetime.now().strftime("%H-%M")
+                current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
                 tpm_key = f"{model_group}:tpm:{current_minute}"
                 rpm_key = f"{model_group}:rpm:{current_minute}"
 
@@ -109,7 +110,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
-                current_minute = datetime.now().strftime("%H-%M")
+                current_minute = datetime.now(datetime_og.UTC).strftime(
+                    "%H-%M"
+                )  # use the same timezone regardless of system clock
 
                 tpm_key = f"{id}:tpm:{current_minute}"
                 rpm_key = f"{id}:rpm:{current_minute}"
@@ -162,7 +165,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
         )
 
-        current_minute = datetime.now().strftime("%H-%M")
+        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
         tpm_keys = []
         rpm_keys = []
         for m in healthy_deployments:

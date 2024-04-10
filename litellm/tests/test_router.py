@@ -932,6 +932,35 @@ def test_openai_completion_on_router():
 # test_openai_completion_on_router()
 
 
+def test_consistent_model_id():
+    """
+    - For a given model group + litellm params, assert the model id is always the same
+
+    Test on `_generate_model_id`
+
+    Test on `set_model_list`
+
+    Test on `_add_deployment`
+    """
+    model_group = "gpt-3.5-turbo"
+    litellm_params = {
+        "model": "openai/my-fake-model",
+        "api_key": "my-fake-key",
+        "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
+        "stream_timeout": 0.001,
+    }
+
+    id1 = Router()._generate_model_id(
+        model_group=model_group, litellm_params=litellm_params
+    )
+
+    id2 = Router()._generate_model_id(
+        model_group=model_group, litellm_params=litellm_params
+    )
+
+    assert id1 == id2
+
+
 def test_reading_keys_os_environ():
     import openai
 
