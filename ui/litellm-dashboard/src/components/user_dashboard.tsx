@@ -180,7 +180,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   useEffect(() => {
     // This code will run every time selectedTeam changes
-    if (keys !== null && selectedTeam !== null) {
+    if (keys !== null && selectedTeam !== null && selectedTeam !== undefined) {
       let sum = 0;
       for (const key of keys) {
         console.log(`key in team keys: ${key.team_id}`)
