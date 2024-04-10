@@ -388,6 +388,41 @@ async def test_embedding_caching_azure_individual_items_reordered():
 
 
 @pytest.mark.asyncio
+async def test_embedding_caching_base_64():
+    """ """
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+    )
+    import uuid
+
+    inputs = [
+        f"{uuid.uuid4()} hello this is ishaan",
+        f"{uuid.uuid4()} hello this is ishaan again",
+    ]
+
+    embedding_val_1 = await aembedding(
+        model="azure/azure-embedding-model",
+        input=inputs,
+        caching=True,
+        encoding_format="base64",
+    )
+    embedding_val_2 = await aembedding(
+        model="azure/azure-embedding-model",
+        input=inputs,
+        caching=True,
+        encoding_format="base64",
+    )
+
+    assert embedding_val_2._hidden_params["cache_hit"] == True
+    print(embedding_val_2)
+    print(embedding_val_1)
+    assert embedding_val_2.data[0]["embedding"] == embedding_val_1.data[0]["embedding"]
+    assert embedding_val_2.data[1]["embedding"] == embedding_val_1.data[1]["embedding"]
+
+
+@pytest.mark.asyncio
 async def test_redis_cache_basic():
     """
     Init redis client
