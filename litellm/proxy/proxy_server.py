@@ -2493,13 +2493,12 @@ class ProxyConfig:
                     if success_callback not in litellm.success_callback:
                         litellm.success_callback.append(success_callback)
                         _added_callback = True
-            if _added_callback:
-                # we need to set env variables too
-                environment_variables = config_data.get("environment_variables", None)
-                for k, v in environment_variables.items():
-                    decoded_b64 = base64.b64decode(v)
-                    value = decrypt_value(value=decoded_b64, master_key=master_key)
-                    os.environ[k] = value
+            # we need to set env variables too
+            environment_variables = config_data.get("environment_variables", None)
+            for k, v in environment_variables.items():
+                decoded_b64 = base64.b64decode(v)
+                value = decrypt_value(value=decoded_b64, master_key=master_key)
+                os.environ[k] = value
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
