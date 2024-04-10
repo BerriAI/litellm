@@ -11,7 +11,7 @@ import copy, httpx
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO
 import random, threading, time, traceback, uuid
-import litellm, openai
+import litellm, openai, hashlib, json
 from litellm.caching import RedisCache, InMemoryCache, DualCache
 
 import logging, asyncio
@@ -2072,6 +2072,34 @@ class Router:
                     local_only=True,
                 )  # cache for 1 hr
 
+    def _generate_model_id(self, model_group: str, litellm_params: dict):
+        """
+        Helper function to consistently generate the same id for a deployment
+
+        - create a string from all the litellm params
+        - hash
+        - use hash as id
+        """
+        concat_str = model_group
+        for k, v in litellm_params.items():
+            if isinstance(k, str):
+                concat_str += k
+            elif isinstance(k, dict):
+                concat_str += json.dumps(k)
+            else:
+                concat_str += str(k)
+
+            if isinstance(v, str):
+                concat_str += v
+            elif isinstance(v, dict):
+                concat_str += json.dumps(v)
+            else:
+                concat_str += str(v)
+
+        hash_object = hashlib.sha256(concat_str.encode())
+
+        return hash_object.hexdigest()
+
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
@@ -2087,7 +2115,13 @@ class Router:
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         _litellm_params[k] = litellm.get_secret(v)
 
-            _model_info = model.pop("model_info", {})
+            _model_info: dict = model.pop("model_info", {})
+
+            # check if model info has id
+            if "id" not in _model_info:
+                _id = self._generate_model_id(_model_name, _litellm_params)
+                _model_info["id"] = _id
+
             deployment = Deployment(
                 **model,
                 model_name=_model_name,
