@@ -95,8 +95,8 @@ print(content)
 ```
 
 ## Chat Models
-| Model Name       | Function Call                        | Required OS Variables    |
-|------------------|--------------------------------------|-------------------------|
-| gemini-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-1.5-pro       | `completion('gemini/gemini-1.5-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |
+| Model Name            | Function Call                                          | Required OS Variables          |
+|-----------------------|--------------------------------------------------------|--------------------------------|
+| gemini-pro            | `completion('gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
+| gemini-1.5-pro-latest | `completion('gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
+| gemini-pro-vision     | `completion('gemini/gemini-pro-vision', messages)`     | `os.environ['GEMINI_API_KEY']` |
