@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ✨ Enterprise Features - Content Mod
+# ✨ Enterprise Features - Content Mod, SSO
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
@@ -12,6 +12,7 @@ Features here are behind a commercial license in our `/enterprise` folder. [**Se
 :::
 
 Features: 
+- ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
 - ✅ Content Moderation with LLM Guard
 - ✅ Content Moderation with LlamaGuard 
 - ✅ Content Moderation with Google Text Moderations 
@@ -19,6 +20,7 @@ Features:
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 - ✅ Don't log/store specific requests (eg confidential LLM requests)
 - ✅ Tracking Spend for Custom Tags
+
 
 
 
