@@ -2374,7 +2374,6 @@ class Router:
         """
         Returns the deployment based on routing strategy
         """
-
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
         if specific_deployment == True:

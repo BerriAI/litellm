@@ -425,9 +425,10 @@ def run_server(
                 )
 
             proxy_config = ProxyConfig()
-            _, _, general_settings = asyncio.run(
-                proxy_config.load_config(router=None, config_file_path=config)
-            )
+            _config = asyncio.run(proxy_config.get_config(config_file_path=config))
+            general_settings = _config.get("general_settings", {})
+            if general_settings is None:
+                general_settings = {}
             database_url = general_settings.get("database_url", None)
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit", 100
