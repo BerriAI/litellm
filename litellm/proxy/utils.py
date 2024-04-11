@@ -989,15 +989,14 @@ class PrismaClient:
                         }
                     )
                 elif query_type == "find_all" and user_id_list is not None:
-                    user_id_values = ", ".join(f"'{item}'" for item in user_id_list)
-                    sql_query = f"""
+                    # Parameterized query
+                    sql_query = """
                     SELECT *
                     FROM "LiteLLM_UserTable"
-                    WHERE "user_id" IN ({user_id_values})
+                    WHERE "user_id" IN ({}) -- Placeholder for parameter
                     """
-                    # Execute the raw query
-                    # The asterisk before `user_id_list` unpacks the list into separate arguments
-                    response = await self.db.query_raw(sql_query)
+                    # Execute the raw query with parameters
+                    response = await self.db.query_raw(sql_query, user_id_list)
                 elif query_type == "find_all":
                     if expires is not None:
                         response = await self.db.litellm_usertable.find_many(  # type: ignore
