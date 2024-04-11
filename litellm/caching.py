@@ -270,7 +270,8 @@ class RedisCache(BaseCache):
         _redis_client = self.init_async_client()
         try:
             async with _redis_client as redis_client:
-                await redis_client.incr(name=key, amount=value)
+                response = await redis_client.incr(name=key, amount=value)
+                return response
         except Exception as e:
             verbose_logger.error(
                 "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, Writing value=%s",
@@ -300,6 +301,7 @@ class RedisCache(BaseCache):
             )  # Convert string to dictionary
         except:
             cached_response = ast.literal_eval(cached_response)
+
         return cached_response
 
     def get_cache(self, key, **kwargs):
@@ -378,10 +380,13 @@ class RedisCache(BaseCache):
             # 'results' is a list of values corresponding to the order of keys in 'key_list'.
             key_value_dict = dict(zip(key_list, results))
 
-            decoded_results = {
-                k.decode("utf-8"): self._get_cache_logic(v)
-                for k, v in key_value_dict.items()
-            }
+            decoded_results = {}
+            for k, v in key_value_dict.items():
+                if isinstance(k, bytes):
+                    k = k.decode("utf-8")
+                v = self._get_cache_logic(v)
+
+                decoded_results[k] = v
 
             return decoded_results
         except Exception as e:

@@ -2372,19 +2372,68 @@ class Router:
             except Exception as e:
                 verbose_router_logger.debug("An error occurs - {}".format(str(e)))
 
-            ## RPM CHECK ##
+        if len(invalid_model_indices) == len(_returned_deployments):
+            """
+            - no healthy deployments available b/c context window checks or rate limit error
+
+            - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
+            """
+            if _context_window_error == True:
+                raise litellm.ContextWindowExceededError(
+                    message="Context Window exceeded for given call",
+                    model=model,
+                    llm_provider="",
+                    response=httpx.Response(
+                        status_code=400,
+                        request=httpx.Request("GET", "https://example.com"),
+                    ),
+                )
+        if len(invalid_model_indices) > 0:
+            for idx in reversed(invalid_model_indices):
+                _returned_deployments.pop(idx)
+
+        return _returned_deployments
+
+    async def _async_pre_call_check_tpm_rpm(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: List[Dict[str, str]],
+    ):
+        """
+        Async implementation of rpm pre-call checks
+        """
+        ## RPM CHECK ##
+        """
+        - incr redis cache by 1 
+        - check if response > rpm 
+        """
+        verbose_router_logger.debug(
+            f"Starting Pre-call checks for deployments in model={model}"
+        )
+
+        _returned_deployments = copy.deepcopy(healthy_deployments)
+
+        invalid_model_indices = []
+
+        ## get model group RPM ##
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
+        cache_keys = [
+            "{}:rpm:{}".format(
+                deployment.get("model_info", {}).get("id", ""), current_minute
+            )
+            for deployment in _returned_deployments
+        ]
+
+        current_usage = await self.cache.async_batch_get_cache(keys=cache_keys)
+
+        for idx, deployment in enumerate(_returned_deployments):
             _litellm_params = deployment.get("litellm_params", {})
             model_id = deployment.get("model_info", {}).get("id", "")
-            ### get local router cache ###
-            current_request_cache_local = (
-                self.cache.get_cache(key=model_id, local_only=True) or 0
-            )
+            rpm_key = f"{model_id}:rpm:{current_minute}"
             ### get usage based cache ###
-            model_group_cache[model_id] = model_group_cache.get(model_id, 0)
-
-            current_request = max(
-                current_request_cache_local, model_group_cache[model_id]
-            )
+            current_request = current_usage.get(rpm_key, 0) or 0
 
             if (
                 isinstance(_litellm_params, dict)
@@ -2395,10 +2444,7 @@ class Router:
                     and _litellm_params["rpm"] <= current_request
                 ):
                     invalid_model_indices.append(idx)
-                    _rate_limit_error = True
                     continue
-
-            self._update_usage(model_id)  # update in-memory cache for tracking
 
         if len(invalid_model_indices) == len(_returned_deployments):
             """
@@ -2406,21 +2452,9 @@ class Router:
 
             - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
             """
-
-            if _rate_limit_error == True:  # allow generic fallback logic to take place
-                raise ValueError(
-                    f"{ErrorStrings.no_models_available_error.value}, passed model={model}"
-                )
-            elif _context_window_error == True:
-                raise litellm.ContextWindowExceededError(
-                    message="Context Window exceeded for given call",
-                    model=model,
-                    llm_provider="",
-                    response=httpx.Response(
-                        status_code=400,
-                        request=httpx.Request("GET", "https://example.com"),
-                    ),
-                )
+            raise ValueError(
+                f"{ErrorStrings.no_models_available_error.value}, passed model={model}"
+            )
         if len(invalid_model_indices) > 0:
             for idx in reversed(invalid_model_indices):
                 _returned_deployments.pop(idx)
@@ -2540,7 +2574,13 @@ class Router:
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
+            # context window / function calling checks
             healthy_deployments = self._pre_call_checks(
+                model=model, healthy_deployments=healthy_deployments, messages=messages
+            )
+
+            # tpm/rpm checks
+            healthy_deployments = await self._async_pre_call_check_tpm_rpm(
                 model=model, healthy_deployments=healthy_deployments, messages=messages
             )
 

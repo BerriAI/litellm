@@ -128,8 +128,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 await self.router_cache.async_increment_cache(
                     key=tpm_key, value=total_tokens
                 )
-                ## RPM
-                await self.router_cache.async_increment_cache(key=rpm_key, value=1)
+                # ## RPM
+                # await self.router_cache.async_increment_cache(key=rpm_key, value=1)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -144,8 +144,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         healthy_deployments: list,
         tpm_keys: list,
         tpm_values: list,
-        rpm_keys: list,
-        rpm_values: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
     ):
@@ -155,10 +153,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         tpm_dict = {}  # {model_id: 1, ..}
         for idx, key in enumerate(tpm_keys):
             tpm_dict[tpm_keys[idx]] = tpm_values[idx]
-
-        rpm_dict = {}  # {model_id: 1, ..}
-        for idx, key in enumerate(rpm_keys):
-            rpm_dict[rpm_keys[idx]] = rpm_values[idx]
 
         try:
             input_tokens = token_counter(messages=messages, text=input)
@@ -204,21 +198,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             if _deployment_tpm is None:
                 _deployment_tpm = float("inf")
 
-            _deployment_rpm = None
-            if _deployment_rpm is None:
-                _deployment_rpm = _deployment.get("rpm")
-            if _deployment_rpm is None:
-                _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm")
-            if _deployment_rpm is None:
-                _deployment_rpm = _deployment.get("model_info", {}).get("rpm")
-            if _deployment_rpm is None:
-                _deployment_rpm = float("inf")
-
             if item_tpm + input_tokens > _deployment_tpm:
-                continue
-            elif (rpm_dict is not None and item in rpm_dict) and (
-                rpm_dict[item] + 1 > _deployment_rpm
-            ):
                 continue
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
@@ -261,20 +241,24 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         tpm_values = await self.router_cache.async_batch_get_cache(
             keys=tpm_keys
         )  # [1, 2, None, ..]
-        rpm_values = await self.router_cache.async_batch_get_cache(
-            keys=rpm_keys
-        )  # [1, 2, None, ..]
 
-        return self._common_checks_available_deployment(
+        deployment = self._common_checks_available_deployment(
             model_group=model_group,
             healthy_deployments=healthy_deployments,
             tpm_keys=tpm_keys,
             tpm_values=tpm_values,
-            rpm_keys=rpm_keys,
-            rpm_values=rpm_values,
             messages=messages,
             input=input,
         )
+
+        ### UPDATE RPM ###
+        _id = deployment.get("model_info", {}).get("id", "")
+        rpm_key = "{}:rpm:{}".format(_id, current_minute)
+        await self.router_cache.async_increment_cache(
+            key=rpm_key, value=1
+        )  # [TODO]: make this asyncio.create_task()
+
+        return deployment
 
     def get_available_deployments(
         self,
@@ -294,23 +278,17 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
         tpm_keys = []
-        rpm_keys = []
         for m in healthy_deployments:
             if isinstance(m, dict):
                 id = m.get("model_info", {}).get(
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
                 tpm_key = "{}:tpm:{}".format(id, current_minute)
-                rpm_key = "{}:rpm:{}".format(id, current_minute)
 
                 tpm_keys.append(tpm_key)
-                rpm_keys.append(rpm_key)
 
         tpm_values = self.router_cache.batch_get_cache(
             keys=tpm_keys
-        )  # [1, 2, None, ..]
-        rpm_values = self.router_cache.batch_get_cache(
-            keys=rpm_keys
         )  # [1, 2, None, ..]
 
         return self._common_checks_available_deployment(
@@ -318,8 +296,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             healthy_deployments=healthy_deployments,
             tpm_keys=tpm_keys,
             tpm_values=tpm_values,
-            rpm_keys=rpm_keys,
-            rpm_values=rpm_values,
             messages=messages,
             input=input,
         )
