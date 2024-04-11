@@ -2496,9 +2496,14 @@ class ProxyConfig:
             # we need to set env variables too
             environment_variables = config_data.get("environment_variables", {})
             for k, v in environment_variables.items():
-                decoded_b64 = base64.b64decode(v)
-                value = decrypt_value(value=decoded_b64, master_key=master_key)
-                os.environ[k] = value
+                try:
+                    decoded_b64 = base64.b64decode(v)
+                    value = decrypt_value(value=decoded_b64, master_key=master_key)
+                    os.environ[k] = value
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        "Error setting env variable: %s - %s", k, str(e)
+                    )
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
