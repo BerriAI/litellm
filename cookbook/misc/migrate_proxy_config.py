@@ -29,6 +29,8 @@ def migrate_models(config_file, proxy_base_url):
         model_name = model.get("model_name")
         print("\nAdding model: ", model_name)
         litellm_params = model.get("litellm_params", {})
+        api_base = litellm_params.get("api_base", "")
+        print("api_base on config.yaml: ", api_base)
 
         litellm_model_name = litellm_params.get("model", "") or ""
         if "vertex_ai/" in litellm_model_name:
