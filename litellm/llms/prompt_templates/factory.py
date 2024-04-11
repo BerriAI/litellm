@@ -221,7 +221,7 @@ def phind_codellama_pt(messages):
 
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     # Define Jinja2 environment with autoescaping disabled
-    env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+    env = ImmutableSandboxedEnvironment()
 
     def raise_exception(message):
         raise Exception(f"Error message - {message}")
@@ -258,13 +258,6 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
         bos_token = tokenizer_config["bos_token"]
         eos_token = tokenizer_config["eos_token"]
         chat_template = tokenizer_config["chat_template"]
-
-        # Render the chat_template safely
-        rendered_template = env.from_string(chat_template).render(messages=messages)
-
-        # Now you can use the rendered_template in your application
-        # For example, return it or process further
-        return rendered_template
 
     try:
         template = env.from_string(chat_template)
