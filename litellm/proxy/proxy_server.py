@@ -7656,10 +7656,12 @@ async def login(request: Request):
                 **{"user_role": "proxy_admin", "duration": "1hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
             )
         else:
-            response = {
-                "token": "sk-gm",
-                "user_id": "litellm-dashboard",
-            }
+            raise ProxyException(
+                message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
+                type="auth_error",
+                param="DATABASE_URL",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         key = response["token"]  # type: ignore
         litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
         if litellm_dashboard_ui.endswith("/"):
