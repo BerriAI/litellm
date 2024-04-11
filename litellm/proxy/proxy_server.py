@@ -2401,7 +2401,8 @@ class ProxyConfig:
                 new_models = (
                     await prisma_client.db.litellm_proxymodeltable.find_many()
                 )  # get all models in db
-                # verbose_proxy_logger.debug(f"new_models: {new_models}")
+                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+
                 _model_list: list = []
                 for m in new_models:
                     _litellm_params = m.litellm_params
@@ -2444,7 +2445,7 @@ class ProxyConfig:
                 )
             else:
                 new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
-                # verbose_proxy_logger.debug(f"new_models: {new_models}")
+                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
 
                 for m in new_models:
                     _litellm_params = m.litellm_params
