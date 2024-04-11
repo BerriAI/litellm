@@ -93,6 +93,11 @@ def ollama_pt(
                             prompt += element["text"]
                         elif element["type"] == "image_url":
                             image_url = element["image_url"]["url"]
+
+                            # remove prefix info from base64 data if present (ex. "data:image/jpeg;base64,")
+                            if image_url.startswith("data:") and ";base64," in image_url:
+                                image_url = image_url.split(";base64,", 1)[1]
+
                             images.append(image_url)
         return {"prompt": prompt, "images": images}
     else:
