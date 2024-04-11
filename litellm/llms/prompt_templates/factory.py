@@ -1,7 +1,8 @@
 from enum import Enum
 import requests, traceback
 import json, re, xml.etree.ElementTree as ET
-from jinja2 import Template, exceptions, Environment, meta, BaseLoader
+from jinja2 import Template, exceptions, meta, BaseLoader
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing import Optional, Any
 import imghdr, base64
 from typing import List
@@ -220,7 +221,13 @@ def phind_codellama_pt(messages):
 
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     # Define Jinja2 environment with autoescaping disabled
-    env = Environment(loader=BaseLoader(), autoescape=False)
+    env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+
+    def raise_exception(message):
+        raise Exception(f"Error message - {message}")
+
+    # Create a template object from the template text
+    env.globals["raise_exception"] = raise_exception
 
     ## get the tokenizer config from huggingface
     bos_token = ""
@@ -259,12 +266,6 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
         # For example, return it or process further
         return rendered_template
 
-    def raise_exception(message):
-        raise Exception(f"Error message - {message}")
-
-    # Create a template object from the template text
-    env = Environment()
-    env.globals["raise_exception"] = raise_exception
     try:
         template = env.from_string(chat_template)
     except Exception as e:
