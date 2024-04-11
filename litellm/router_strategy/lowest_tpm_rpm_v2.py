@@ -12,7 +12,7 @@ from litellm import token_counter
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_router_logger
-from litellm.utils import print_verbose
+from litellm.utils import print_verbose, get_utc_datetime
 
 
 class LowestTPMLoggingHandler_v2(CustomLogger):
@@ -60,7 +60,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
-                current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
+                dt = get_utc_datetime()
+                current_minute = dt.strftime("%H-%M")
                 tpm_key = f"{model_group}:tpm:{current_minute}"
                 rpm_key = f"{model_group}:rpm:{current_minute}"
 
@@ -110,7 +111,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
-                current_minute = datetime.now(datetime_og.UTC).strftime(
+                dt = get_utc_datetime()
+                current_minute = dt.strftime(
                     "%H-%M"
                 )  # use the same timezone regardless of system clock
 
@@ -241,7 +243,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
         )
 
-        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
         tpm_keys = []
         rpm_keys = []
         for m in healthy_deployments:
@@ -288,7 +291,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
         )
 
-        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
         tpm_keys = []
         rpm_keys = []
         for m in healthy_deployments:

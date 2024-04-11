@@ -26,7 +26,7 @@ from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
 )
-from litellm.utils import ModelResponse, CustomStreamWrapper
+from litellm.utils import ModelResponse, CustomStreamWrapper, get_utc_datetime
 import copy
 from litellm._logging import verbose_router_logger
 import logging
@@ -588,7 +588,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
             )
-            deployment = self.get_available_deployment(
+            deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -688,7 +688,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _atranscription()- model: {model}; kwargs: {kwargs}"
             )
-            deployment = self.get_available_deployment(
+            deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -768,7 +768,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _moderation()- model: {model}; kwargs: {kwargs}"
             )
-            deployment = self.get_available_deployment(
+            deployment = await self.async_get_available_deployment(
                 model=model,
                 input=input,
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -911,7 +911,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
-            deployment = self.get_available_deployment(
+            deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -1077,7 +1077,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _aembedding()- model: {model}; kwargs: {kwargs}"
             )
-            deployment = self.get_available_deployment(
+            deployment = await self.async_get_available_deployment(
                 model=model,
                 input=input,
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -1605,7 +1605,8 @@ class Router:
         if deployment is None:
             return
 
-        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
         # get current fails for deployment
         # update the number of failed calls
         # if it's > allowed fails
@@ -1647,7 +1648,8 @@ class Router:
         """
         Async implementation of '_get_cooldown_deployments'
         """
-        current_minute = datetime.now(datetime_og.UTC).strftime("%H-%M")
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
         # get the current cooldown list for that minute
         cooldown_key = f"{current_minute}:cooldown_models"
 
@@ -1663,7 +1665,8 @@ class Router:
         """
         Get the list of models being cooled down for this minute
         """
-        current_minute = datetime.now().strftime("%H-%M")
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
         # get the current cooldown list for that minute
         cooldown_key = f"{current_minute}:cooldown_models"
 
@@ -2336,7 +2339,8 @@ class Router:
         _rate_limit_error = False
 
         ## get model group RPM ##
-        current_minute = datetime.now().strftime("%H-%M")
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
         rpm_key = f"{model}:rpm:{current_minute}"
         model_group_cache = (
             self.cache.get_cache(key=rpm_key, local_only=True) or {}

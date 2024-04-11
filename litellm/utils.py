@@ -5908,6 +5908,16 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     return api_key
 
 
+def get_utc_datetime():
+    import datetime as dt
+    from datetime import datetime
+
+    if hasattr(dt, "UTC"):
+        return datetime.now(dt.UTC)  # type: ignore
+    else:
+        return datetime.utcnow()  # type: ignore
+
+
 def get_max_tokens(model: str):
     """
     Get the maximum number of output tokens allowed for a given model.
