@@ -320,6 +320,24 @@ class LangFuseLogger:
                     clean_metadata["cache_hit"] = kwargs["cache_hit"]
                 trace_params.update({"tags": tags})
 
+            proxy_server_request = litellm_params.get("proxy_server_request", None)
+            if proxy_server_request:
+                method = proxy_server_request.get("method", None)
+                url = proxy_server_request.get("url", None)
+                headers = proxy_server_request.get("headers", None)
+                clean_headers = {}
+                if headers:
+                    for key, value in headers.items():
+                        # these headers can leak our API keys and/or JWT tokens
+                        if key.lower() not in ["authorization", "cookie", "referer"]:
+                            clean_headers[key] = value
+
+                clean_metadata["request"] = {
+                    "method": method,
+                    "url": url,
+                    "headers": clean_headers,
+                }
+
             print_verbose(f"trace_params: {trace_params}")
 
             trace = self.Langfuse.trace(**trace_params)
