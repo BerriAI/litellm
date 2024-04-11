@@ -30,6 +30,11 @@ def migrate_models(config_file, proxy_base_url):
         print("\nAdding model: ", model_name)
         litellm_params = model.get("litellm_params", {})
 
+        litellm_model_name = litellm_params.get("model", "") or ""
+        if "vertex_ai/" in litellm_model_name:
+            print(f"\033[91m\nSkipping Vertex AI model\033[0m", model)
+            continue
+
         for param, value in litellm_params.items():
             if isinstance(value, str) and value.startswith("os.environ/"):
                 new_value = input(f"Enter value for {value}: ")
@@ -44,7 +49,7 @@ def migrate_models(config_file, proxy_base_url):
             "Authorization": f"Bearer {master_key}",
         }
         data = {"model_name": model_name, "litellm_params": litellm_params}
-
+        print("POSTING data to proxy url", url)
         response = requests.post(url, headers=headers, json=data)
         if response.status_code != 200:
             print(f"Error: {response.status_code} - {response.text}")
