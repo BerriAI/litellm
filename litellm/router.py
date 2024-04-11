@@ -2434,8 +2434,22 @@ class Router:
     ):
         """
         Common checks for 'get_available_deployment' across sync + async call.
+
+        If 'healthy_deployments' returned is None, this means the user chose a specific deployment
         """
         # check if aliases set on litellm model alias map
+        if specific_deployment == True:
+            # users can also specify a specific deployment name. At this point we should check if they are just trying to call a specific deployment
+            for deployment in self.model_list:
+                deployment_model = deployment.get("litellm_params").get("model")
+                if deployment_model == model:
+                    # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
+                    # return the first deployment where the `model` matches the specificed deployment name
+                    return deployment, None
+            raise ValueError(
+                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
+            )
+
         if model in self.model_group_alias:
             verbose_router_logger.debug(
                 f"Using a model alias. Got Request for {model}, sending requests to {self.model_group_alias.get(model)}"
@@ -2447,7 +2461,7 @@ class Router:
                 self.default_deployment
             )  # self.default_deployment
             updated_deployment["litellm_params"]["model"] = model
-            return updated_deployment
+            return updated_deployment, None
 
         ## get healthy deployments
         ### get all deployments
@@ -2496,24 +2510,15 @@ class Router:
                 specific_deployment=specific_deployment,
             )
 
-        if specific_deployment == True:
-            # users can also specify a specific deployment name. At this point we should check if they are just trying to call a specific deployment
-            for deployment in self.model_list:
-                deployment_model = deployment.get("litellm_params").get("model")
-                if deployment_model == model:
-                    # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
-                    # return the first deployment where the `model` matches the specificed deployment name
-                    return deployment
-            raise ValueError(
-                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
-            )
-
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
         )
+
+        if healthy_deployments is None:
+            return model
 
         # filter out the deployments currently cooling down
         deployments_to_remove = []
@@ -2572,17 +2577,6 @@ class Router:
         """
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
-        if specific_deployment == True:
-            # users can also specify a specific deployment name. At this point we should check if they are just trying to call a specific deployment
-            for deployment in self.model_list:
-                deployment_model = deployment.get("litellm_params").get("model")
-                if deployment_model == model:
-                    # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
-                    # return the first deployment where the `model` matches the specificed deployment name
-                    return deployment
-            raise ValueError(
-                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
-            )
 
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
@@ -2590,6 +2584,9 @@ class Router:
             input=input,
             specific_deployment=specific_deployment,
         )
+
+        if healthy_deployments is None:
+            return model
 
         # filter out the deployments currently cooling down
         deployments_to_remove = []
