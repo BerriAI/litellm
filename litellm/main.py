@@ -3816,11 +3816,15 @@ async def ahealth_check(
         return response
     except Exception as e:
         traceback.print_exc()
+        stack_trace = traceback.format_exc()
+        if isinstance(stack_trace, str):
+            stack_trace = stack_trace[:1000]
         if model not in litellm.model_cost and mode is None:
             raise Exception(
                 "Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models"
             )
-        return {"error": f"{str(e)}"}
+        error_to_return = str(e) + " stack trace: " + stack_trace
+        return {"error": error_to_return}
 
 
 ####### HELPER FUNCTIONS ################
