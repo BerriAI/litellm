@@ -95,7 +95,7 @@ print(response)
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
 - `router.aimage_generation()` - async image generation calls
 
-### Advanced
+### Advanced - Routing Strategies
 #### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
@@ -261,6 +261,70 @@ router = Router(model_list=model_list,
 				redis_password=os.environ["REDIS_PASSWORD"], 
 				redis_port=os.environ["REDIS_PORT"], 
                 routing_strategy="usage-based-routing"
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
+
+response = await router.acompletion(model="gpt-3.5-turbo", 
+				messages=[{"role": "user", "content": "Hey, how's it going?"}]
+
+print(response)
+```
+
+
+</TabItem>
+<TabItem value="usage-based-v2" label="Rate-Limit Aware v2 (ASYNC)">
+
+**NEW**
+
+This is an async implementation of usage-based-routing.
+
+This will route to the deployment with the lowest TPM usage for that minute. 
+
+In production, we use Redis to track usage (TPM/RPM) across multiple deployments. This implementation uses async redis calls (redis.incr and redis.mget).
+
+If you pass in the deployment's tpm/rpm limits, this will also check against that, and filter out any who's limits would be exceeded. 
+
+For Azure, your RPM = TPM/6. 
+
+
+```python
+from litellm import Router 
+
+
+model_list = [{ # list of model deployments 
+	"model_name": "gpt-3.5-turbo", # model alias 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "azure/chatgpt-v-2", # actual model name
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE")
+	}, 
+    "tpm": 100000,
+	"rpm": 10000,
+}, {
+    "model_name": "gpt-3.5-turbo", 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "azure/chatgpt-functioncalling", 
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE")
+	},
+    "tpm": 100000,
+	"rpm": 1000,
+}, {
+    "model_name": "gpt-3.5-turbo", 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "gpt-3.5-turbo", 
+		"api_key": os.getenv("OPENAI_API_KEY"),
+	},
+    "tpm": 100000,
+	"rpm": 1000,
+}]
+router = Router(model_list=model_list, 
+                redis_host=os.environ["REDIS_HOST"], 
+				redis_password=os.environ["REDIS_PASSWORD"], 
+				redis_port=os.environ["REDIS_PORT"], 
+                routing_strategy="usage-based-routing-v2" # 👈 KEY CHANGE
 				enable_pre_call_check=True, # enables router rate limits for concurrent calls
 				)
 
