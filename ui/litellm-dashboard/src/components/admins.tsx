@@ -27,6 +27,7 @@ import {
   Col,
   Text,
   Grid,
+  Callout,
 } from "@tremor/react";
 import { PencilAltIcon } from "@heroicons/react/outline";
 interface AdminPanelProps {
@@ -59,6 +60,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isUpdateMemberModalVisible, setIsUpdateModalModalVisible] = useState(false);
   const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
+
+  let nonSssoUrl;
+  try {
+    nonSssoUrl = window.location.origin;
+  } catch (error) {
+    nonSssoUrl  = '<your-proxy-url>';
+  }
 
 const handleAddSSOOk = () => {
   
@@ -504,6 +512,9 @@ const handleInstructionsCancel = () => {
     </div>
     </Modal>
   </div>
+  <Callout title="Login without SSO" color="teal">
+      If you need to login without sso, you can access <a href= {nonSssoUrl} target="_blank"><b>{nonSssoUrl}/fallback/login</b>  </a>
+  </Callout>
 </Grid>
     </div>
   );
