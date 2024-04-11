@@ -25,6 +25,7 @@ class VertexAIError(Exception):
 class VertexAIConfig:
     """
     Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
+    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
 
     The class `VertexAIConfig` provides configuration for the VertexAI's API interface. Below are the parameters:
 
@@ -36,6 +37,12 @@ class VertexAIConfig:
 
     - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
 
+    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'.
+
+    - `candidate_count` (int): Number of generated responses to return.
+
+    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
+
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
@@ -43,6 +50,9 @@ class VertexAIConfig:
     max_output_tokens: Optional[int] = None
     top_p: Optional[float] = None
     top_k: Optional[int] = None
+    response_mime_type: Optional[str] = None
+    candidate_count: Optional[int] = None
+    stop_sequences: Optional[list] = None
 
     def __init__(
         self,
@@ -50,6 +60,9 @@ class VertexAIConfig:
         max_output_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
+        response_mime_type: Optional[str] = None,
+        candidate_count: Optional[int] = None,
+        stop_sequences: Optional[list] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
