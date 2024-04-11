@@ -1,5 +1,5 @@
 # Enterprise
-For companies that need better security, user management and professional support
+For companies that need SSO, user management and professional support
 
 :::info
 
