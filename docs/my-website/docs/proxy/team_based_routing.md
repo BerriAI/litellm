@@ -99,7 +99,7 @@ Now, when you [generate keys](./virtual_keys.md) for this team-id
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{"team_id": "ishaans-secret-project"}'
+-d '{"team_id": "ishaans-secret-project"}'
 ```
 
 All requests made with these keys will log data to their team-specific logging.
