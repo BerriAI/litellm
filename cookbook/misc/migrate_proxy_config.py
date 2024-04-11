@@ -15,6 +15,8 @@ Step 3: calls `<proxy-base-url>/model/new` for each model
 import yaml
 import requests
 
+_in_memory_os_variables = {}
+
 
 def migrate_models(config_file, proxy_base_url):
     # Step 1: Read the config.yaml file
@@ -39,10 +41,28 @@ def migrate_models(config_file, proxy_base_url):
 
         for param, value in litellm_params.items():
             if isinstance(value, str) and value.startswith("os.environ/"):
-                new_value = input(f"Enter value for {value}: ")
+                # check if value is in _in_memory_os_variables
+                if value in _in_memory_os_variables:
+                    new_value = _in_memory_os_variables[value]
+                    print(
+                        "\033[92mAlready entered value for \033[0m",
+                        value,
+                        "\033[92musing \033[0m",
+                        new_value,
+                    )
+                else:
+                    new_value = input(f"Enter value for {value}: ")
+                    _in_memory_os_variables[value] = new_value
                 litellm_params[param] = new_value
 
         print("\nlitellm_params: ", litellm_params)
+        # Confirm before sending POST request
+        confirm = input(
+            "\033[92mDo you want to send the POST request with the above parameters? (y/n): \033[0m"
+        )
+        if confirm.lower() != "y":
+            print("Aborting POST request.")
+            exit()
 
         # Step 3: Call <proxy-base-url>/model/new for each model
         url = f"{proxy_base_url}/model/new"
