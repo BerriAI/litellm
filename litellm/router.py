@@ -2357,20 +2357,20 @@ class Router:
                     "model", None
                 )
                 model_info = litellm.get_model_info(model=model)
-            except:
-                continue
 
-            if (
-                isinstance(model_info, dict)
-                and model_info.get("max_input_tokens", None) is not None
-            ):
                 if (
-                    isinstance(model_info["max_input_tokens"], int)
-                    and input_tokens > model_info["max_input_tokens"]
+                    isinstance(model_info, dict)
+                    and model_info.get("max_input_tokens", None) is not None
                 ):
-                    invalid_model_indices.append(idx)
-                    _context_window_error = True
-                    continue
+                    if (
+                        isinstance(model_info["max_input_tokens"], int)
+                        and input_tokens > model_info["max_input_tokens"]
+                    ):
+                        invalid_model_indices.append(idx)
+                        _context_window_error = True
+                        continue
+            except Exception as e:
+                verbose_router_logger.debug("An error occurs - {}".format(str(e)))
 
             ## RPM CHECK ##
             _litellm_params = deployment.get("litellm_params", {})
