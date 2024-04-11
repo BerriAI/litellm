@@ -67,6 +67,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   } catch (error) {
     nonSssoUrl  = '<your-proxy-url>';
   }
+  nonSssoUrl += '/fallback/login';
 
 const handleAddSSOOk = () => {
   
@@ -513,7 +514,7 @@ const handleInstructionsCancel = () => {
     </Modal>
   </div>
   <Callout title="Login without SSO" color="teal">
-      If you need to login without sso, you can access <a href= {nonSssoUrl} target="_blank"><b>{nonSssoUrl}/fallback/login</b>  </a>
+      If you need to login without sso, you can access <a href= {nonSssoUrl} target="_blank"><b>{nonSssoUrl}</b>  </a>
   </Callout>
 </Grid>
     </div>
