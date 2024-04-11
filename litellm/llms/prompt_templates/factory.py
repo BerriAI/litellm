@@ -4,7 +4,6 @@ import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, meta, BaseLoader
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing import Optional, Any
-import imghdr, base64
 from typing import List
 import litellm
 
