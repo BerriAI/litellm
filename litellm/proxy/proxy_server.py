@@ -2443,9 +2443,7 @@ class ProxyConfig:
                     f"llm_router model list: {llm_router.model_list}"
                 )
             else:
-                new_models = await prisma_client.db.litellm_proxymodeltable.find_many(
-                    take=10, order={"updated_at": "desc"}
-                )
+                new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
                 # verbose_proxy_logger.debug(f"new_models: {new_models}")
 
                 for m in new_models:
@@ -2493,7 +2491,6 @@ class ProxyConfig:
                 for success_callback in success_callbacks:
                     if success_callback not in litellm.success_callback:
                         litellm.success_callback.append(success_callback)
-                        _added_callback = True
             # we need to set env variables too
             environment_variables = config_data.get("environment_variables", {})
             for k, v in environment_variables.items():
