@@ -220,7 +220,7 @@ def phind_codellama_pt(messages):
 
 
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
-    # Define Jinja2 environment with autoescaping disabled
+    # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
 
     def raise_exception(message):
