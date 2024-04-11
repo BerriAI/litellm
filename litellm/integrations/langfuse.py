@@ -100,34 +100,35 @@ class LangFuseLogger:
                         pass
 
             # end of processing langfuse ########################
+            
+            # Set default input and outputs
+            input = prompt
+            output = response_obj
+
             if (
                 level == "ERROR"
                 and status_message is not None
                 and isinstance(status_message, str)
             ):
-                input = prompt
                 output = status_message
             elif response_obj is not None and (
                 kwargs.get("call_type", None) == "embedding"
                 or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
-                input = prompt
                 output = response_obj["data"]
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
-                input = prompt
                 output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
-                input = prompt
                 output = response_obj.choices[0].text
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
-                input = prompt
                 output = response_obj["data"]
+
             print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             if self._is_langfuse_v2():
                 self._log_langfuse_v2(
@@ -160,9 +161,7 @@ class LangFuseLogger:
             )
             verbose_logger.info(f"Langfuse Layer Logging - logging success")
         except:
-            traceback.print_exc()
-            print(f"Langfuse Layer Error - {traceback.format_exc()}")
-            pass
+            print_verbose(f"Langfuse Layer Error - {traceback.format_exc()}")
 
     async def _async_log_event(
         self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
@@ -247,7 +246,7 @@ class LangFuseLogger:
 
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
-            print(f"response_obj: {response_obj}")
+            print_verbose(f"response_obj: {response_obj}")
             if supports_tags:
                 metadata_tags = metadata.get("tags", [])
                 tags = metadata_tags
@@ -312,13 +311,13 @@ class LangFuseLogger:
             usage = None
             if response_obj is not None and response_obj.get("id", None) is not None:
                 generation_id = litellm.utils.get_logging_id(start_time, response_obj)
-                print(f"getting usage, cost={cost}")
+                print_verbose(f"getting usage, cost={cost}")
                 usage = {
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
                 }
-                print(f"constructed usage - {usage}")
+                print_verbose(f"constructed usage - {usage}")
             generation_name = metadata.get("generation_name", None)
             if generation_name is None:
                 # just log `litellm-{call_type}` as the generation name
@@ -351,4 +350,4 @@ class LangFuseLogger:
 
             trace.generation(**generation_params)
         except Exception as e:
-            print(f"Langfuse Layer Error - {traceback.format_exc()}")
+            print_verbose(f"Langfuse Layer Error - {traceback.format_exc()}")
