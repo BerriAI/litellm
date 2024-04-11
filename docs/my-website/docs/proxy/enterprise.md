@@ -18,7 +18,7 @@ Features:
 - ✅ Content Moderation with Google Text Moderations 
 - ✅ Reject calls from Blocked User list 
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
-- ✅ Don't log/store specific requests (eg confidential LLM requests)
+- ✅ Don't log/store specific requests to Langfuse, Sentry, etc. (eg confidential LLM requests)
 - ✅ Tracking Spend for Custom Tags
 
 
