@@ -1056,7 +1056,7 @@ class DualCache(BaseCache):
                 sublist_dict = dict(zip(sublist_keys, redis_result))
 
                 for key, value in sublist_dict.items():
-                    result[sublist_keys.index(key)] = value[key]
+                    result[sublist_keys.index(key)] = value
 
             print_verbose(f"async batch get cache: cache result: {result}")
             return result
