@@ -30,7 +30,7 @@ from litellm.utils import ModelResponse, CustomStreamWrapper, get_utc_datetime
 import copy
 from litellm._logging import verbose_router_logger
 import logging
-from litellm.types.router import Deployment, ModelInfo, LiteLLM_Params
+from litellm.types.router import Deployment, ModelInfo, LiteLLM_Params, ErrorStrings
 
 
 class Router:
@@ -1258,7 +1258,7 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if "No models available" in str(e):
+            if ErrorStrings.no_models_available_error.value in str(e):
                 timeout = litellm._calculate_retry_after(
                     remaining_retries=num_retries,
                     max_retries=num_retries,
@@ -1308,7 +1308,7 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    if "No models available" in str(e):
+                    if ErrorStrings.no_models_available_error.value in str(e):
                         timeout = litellm._calculate_retry_after(
                             remaining_retries=remaining_retries,
                             max_retries=num_retries,
@@ -1474,7 +1474,7 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    if "No models available" in str(e):
+                    if ErrorStrings.no_models_available_error.value in str(e):
                         timeout = litellm._calculate_retry_after(
                             remaining_retries=remaining_retries,
                             max_retries=num_retries,
@@ -2398,6 +2398,8 @@ class Router:
                     _rate_limit_error = True
                     continue
 
+            self._update_usage(model_id)  # update in-memory cache for tracking
+
         if len(invalid_model_indices) == len(_returned_deployments):
             """
             - no healthy deployments available b/c context window checks or rate limit error
@@ -2407,7 +2409,7 @@ class Router:
 
             if _rate_limit_error == True:  # allow generic fallback logic to take place
                 raise ValueError(
-                    f"No deployments available for selected model, passed model={model}"
+                    f"{ErrorStrings.no_models_available_error.value}, passed model={model}"
                 )
             elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(
@@ -2558,7 +2560,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{ErrorStrings.no_models_available_error.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -2684,7 +2686,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{ErrorStrings.no_models_available_error.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -2702,7 +2704,6 @@ class Router:
 
                 # update self.deployment_stats
                 if model_id is not None:
-                    self._update_usage(model_id)  # update in-memory cache for tracking
                     if model_id in self.deployment_stats:
                         # only update num_requests
                         self.deployment_stats[model_id]["num_requests"] += 1

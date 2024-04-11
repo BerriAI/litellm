@@ -3,7 +3,11 @@ from typing import List, Optional, Union, Dict, Tuple, Literal
 from pydantic import BaseModel, validator
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-import uuid
+import uuid, enum
+
+
+class ErrorStrings(enum.Enum):
+    no_models_available_error = "No deployments available for selected model"
 
 
 class ModelConfig(BaseModel):

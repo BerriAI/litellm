@@ -103,13 +103,14 @@ class ExpectNoException(Exception):
 @pytest.mark.parametrize(
     "routing_strategy",
     [
-        "usage-based-routing",
+        "usage-based-routing-v2",
         # "simple-shuffle", # dont expect to rate limit
         # "least-busy", # dont expect to rate limit
         # "latency-based-routing",
     ],
 )
-def test_rate_limit(
+@pytest.mark.asyncio
+async def test_rate_limit(
     router_factory, num_try_send, num_allowed_send, sync_mode, routing_strategy
 ):
     """
@@ -145,7 +146,7 @@ def test_rate_limit(
         if sync_mode:
             results = sync_call(router, list_of_messages)
         else:
-            results = asyncio.run(async_call(router, list_of_messages))
+            results = await async_call(router, list_of_messages)
         print(results)
         if len([i for i in results if i is not None]) != num_try_send:
             # since not all results got returned, raise rate limit error
@@ -157,3 +158,25 @@ def test_rate_limit(
         assert "No deployments available for selected model" in str(excinfo.value)
     else:
         assert len([i for i in results if i is not None]) == num_try_send
+
+
+@pytest.mark.asyncio
+async def test_parallel_rate_limit(router_factory):
+    """
+    Make 2 concurrent requests when rpm = 1
+
+    Expect it to fail 2nd request
+    """
+    try:
+
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
+
+        router: Router = router_factory(1, 100, "usage-based-routing-v2")
+
+        try:
+            await async_call(router=router, list_of_messages=[messages, messages])
+            pytest.fail("Expected this to fail")
+        except Exception as e:
+            pass
+    except Exception as e:
+        raise Exception(f"An error occurred - {str(e)}")
