@@ -87,3 +87,11 @@ version_files = [
     "pyproject.toml:^version"
 ]
 
+[tool.pytest.ini_options]
+testpaths = [
+    "litellm/tests",
+]
+
+[tool.mypy]
+warn_return_any = false
+ignore_missing_imports = true
