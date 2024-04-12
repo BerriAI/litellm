@@ -44,6 +44,26 @@ interface ModelDashboardProps {
   userID: string | null;
 }
 
+//["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
+
+enum Providers {
+  OpenAI = "OpenAI",
+  Azure = "Azure",
+  Anthropic = "Anthropic",
+  Google_AI_Studio = "Gemini (Google AI Studio)",
+  Bedrock = "Amazon Bedrock",
+  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"
+}
+
+const provider_map: Record<Providers, string> = {
+  [Providers.OpenAI]: "",
+  [Providers.Azure]: "azure/",
+  [Providers.Anthropic]: "",
+  [Providers.Google_AI_Studio]: "gemini/",
+  [Providers.Bedrock]: "bedrock/",
+  [Providers.OpenAI_Compatible]: "openai/"
+};
+
 const ModelDashboard: React.FC<ModelDashboardProps> = ({
   accessToken,
   token,
@@ -55,7 +75,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
 
-  const providers = ["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
+  const providers: Providers[] = [Providers.OpenAI, Providers.Azure, Providers.Anthropic, Providers.Google_AI_Studio, Providers.Bedrock, Providers.OpenAI_Compatible]
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
 
   useEffect(() => {
@@ -182,26 +202,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       const litellmParamsObj: Record<string, any>  = {};
       const modelInfoObj: Record<string, any>  = {};
       let modelName: string  = "";
+      // get the llm provider
+
       // Iterate through the key-value pairs in formValues
       for (const [key, value] of Object.entries(formValues)) {
         if (key == "model_name") {
-          modelName = value
+          modelName = modelName + value
         }
-
-        // Check if key is any of the specified API related keys
-        if (key === "api_key" || key === "model" || key === "api_base" || key === "api_version" || key.startsWith("aws_")) {
-          // Add key-value pair to litellm_params dictionary
-          litellmParamsObj[key] = value;
+        else if (key == "custom_llm_provider") {
+          const providerEnumValue = Providers[value as keyof typeof Providers];
+          const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
+          modelName = mappingResult + modelName
         }
 
         // Check if key is "base_model"
-        if (key === "base_model") {
+        else if (key === "base_model") {
           // Add key-value pair to model_info dictionary
           modelInfoObj[key] = value;
         }
 
-
-        if (key == "litellm_extra_params") {
+        else if (key == "litellm_extra_params") {
           console.log("litellm_extra_params:", value);
           let litellmExtraParams = {};
           if (value && value != undefined) {
@@ -216,6 +236,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               litellmParamsObj[key] = value;
             }
           }
+        }
+
+        // Check if key is any of the specified API related keys
+        else {
+          // Add key-value pair to litellm_params dictionary
+          litellmParamsObj[key] = value;
         }
       }
 
@@ -385,9 +411,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <Col span={10}></Col>
                 <Col span={10}><Text className="mb-3 mt-1">Actual model name used for making <Link href="https://docs.litellm.ai/docs/providers" target="_blank">litellm.completion() call</Link></Text></Col>
                 </Row>
-                
                 {
-                  selectedProvider != "Amazon Bedrock" && <Form.Item
+                  selectedProvider != Providers.Bedrock && <Form.Item
                   rules={[{ required: true, message: 'Required' }]}
                     label="API Key"
                     name="api_key"
@@ -396,7 +421,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Form.Item>
                 }
                 {
-                  (selectedProvider == "Azure OpenAI" || selectedProvider == "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)") && <Form.Item
+                  selectedProvider == Providers.OpenAI && <Form.Item
+                    label="Organization ID"
+                    name="organization_id"
+                    className="mb-0"
+                  >
+                    <TextInput placeholder="[OPTIONAL] my-unique-org"/>
+                  </Form.Item>
+                }
+                {
+                  (selectedProvider == Providers.Azure || selectedProvider == Providers.OpenAI_Compatible) && <Form.Item
                   rules={[{ required: true, message: 'Required' }]}
                   label="API Base"
                   name="api_base"
@@ -405,7 +439,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Form.Item>
                 }
                 {
-                  selectedProvider == "Azure OpenAI" && <Form.Item
+                  selectedProvider == Providers.Azure && <Form.Item
                   rules={[{ required: true, message: 'Required' }]}
                   label="API Version"
                   name="api_version"
@@ -414,7 +448,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Form.Item>
                 }
                 {
-                  selectedProvider == "Azure OpenAI" && <Form.Item
+                  selectedProvider == Providers.Azure && <Form.Item
                   label="Base Model"
                   name="base_model"
                 >
@@ -423,7 +457,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Form.Item>
                 }
                 {
-                  selectedProvider == "Amazon Bedrock" && <Form.Item
+                  selectedProvider == Providers.Bedrock && <Form.Item
                   rules={[{ required: true, message: 'Required' }]}
                   label="AWS Access Key ID"
                   name="aws_access_key_id"
@@ -433,7 +467,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Form.Item>
                 }
                 {
-                  selectedProvider == "Amazon Bedrock" && <Form.Item
+                  selectedProvider == Providers.Bedrock && <Form.Item
                   rules={[{ required: true, message: 'Required' }]}
                   label="AWS Secret Access Key"
                   name="aws_secret_access_key"
@@ -443,7 +477,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Form.Item>
                 }
                 {
-                  selectedProvider == "Amazon Bedrock" && <Form.Item
+                  selectedProvider == Providers.Bedrock && <Form.Item
                   rules={[{ required: true, message: 'Required' }]}
                   label="AWS Region Name"
                   name="aws_region_name"
