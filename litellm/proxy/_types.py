@@ -124,7 +124,8 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     - team_jwt_scope: The JWT scope required for proxy team roles.
     - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
     - team_allowed_routes: list of allowed routes for proxy team roles.
-    - end_user_id_jwt_field: Default - `sub`. The field in the JWT token that stores the end-user ID. Turn this off by setting to `None`. Enables end-user cost tracking.
+    - user_id_jwt_field: The field in the JWT token that stores the user id (maps to `LiteLLMUserTable`). Use this for internal employees.
+    - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
 
     See `auth_checks.py` for the specific routes
