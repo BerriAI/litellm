@@ -15,7 +15,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall } from "./networking";
 import { BarChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -354,6 +354,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         <TabList className="mt-2">
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
+          <Tab>Health Check Models</Tab>
         </TabList>
       
       <TabPanels>
@@ -593,6 +594,36 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Tooltip>
         </Form>
       </Card>
+      </TabPanel>
+      <TabPanel>
+        <Card>
+          <Title>Output</Title>
+          <Button>
+            Run Health Check
+          </Button>
+          <Grid numItems={2}>
+          <Card
+          className="max-w-xs"
+          decoration="top"
+          decorationColor="indigo"
+        >
+          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Healthy</p>
+          <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">5</p>
+        </Card>
+
+        <Card
+          className="max-w-xs"
+          decoration="top"
+          decorationColor="indigo"
+        >
+          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Un-Healthy</p>
+          <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">1</p>
+        </Card>
+
+          </Grid>
+          
+
+        </Card>
       </TabPanel>
       </TabPanels>
       </TabGroup>
