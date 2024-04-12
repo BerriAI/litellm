@@ -84,8 +84,9 @@ const Settings: React.FC<SettingsPageProps> = ({
         setCallbacks(callbacks ? [...callbacks, values.callback] : [values.callback]);
       } else if (values.callback === 'slack') {
         payload = {
-          litellm_settings: {
-            success_callback: [values.callback]
+          general_settings: {
+            alerting: ["slack"],
+            alerting_threshold: 300
           },
           environment_variables: {
             SLACK_WEBHOOK_URL: values.slackWebhookUrl
