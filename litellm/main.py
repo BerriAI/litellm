@@ -15,7 +15,7 @@ from copy import deepcopy
 
 import httpx
 import litellm
-from ._logging import verbose_logger
+from ._logging import verbose_logger, verbose_proxy_logger
 from litellm import (  # type: ignore
     client,
     exception_type,
@@ -3731,6 +3731,9 @@ async def ahealth_check(
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         mode = mode or "chat"  # default to chat completion calls
 
+        verbose_proxy_logger.debug(
+            "\nrunning /health check model %s, model_params %s", model, model_params
+        )
         if custom_llm_provider == "azure":
             api_key = (
                 model_params.get("api_key")
