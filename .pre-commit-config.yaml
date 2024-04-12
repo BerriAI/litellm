@@ -17,12 +17,11 @@ repos:
         name: Check if files match
         entry: python3 ci_cd/check_files_match.py
         language: system
--   repo: local
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.9.0
     hooks:
     -   id: mypy
-        name: mypy
-        entry: python3 -m mypy --ignore-missing-imports
-        language: system
+        args: [--ignore-missing-imports]
         types: [python]
         files: ^litellm/
 -   repo: local
