@@ -1900,8 +1900,12 @@ class Router:
                         local_only=True,
                     )  # cache for 1 hr
                 else:
+                    _api_key = api_key
+                    if _api_key is not None and isinstance(_api_key, str):
+                        # only show first 5 chars of api_key
+                        _api_key = _api_key[:8] + "*" * 15
                     verbose_router_logger.debug(
-                        f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{api_key}"
+                        f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}"
                     )
                     azure_client_params = {
                         "api_key": api_key,
@@ -1998,8 +2002,12 @@ class Router:
                     )  # cache for 1 hr
 
             else:
+                _api_key = api_key
+                if _api_key is not None and isinstance(_api_key, str):
+                    # only show first 5 chars of api_key
+                    _api_key = _api_key[:8] + "*" * 15
                 verbose_router_logger.debug(
-                    f"Initializing OpenAI Client for {model_name}, Api Base:{str(api_base)}, Api Key:{api_key}"
+                    f"Initializing OpenAI Client for {model_name}, Api Base:{str(api_base)}, Api Key:{_api_key}"
                 )
                 cache_key = f"{model_id}_async_client"
                 _client = openai.AsyncOpenAI(  # type: ignore
