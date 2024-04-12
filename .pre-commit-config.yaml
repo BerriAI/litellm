@@ -24,15 +24,15 @@ repos:
         args: [--ignore-missing-imports]
         types: [python]
         files: ^litellm/
--   repo: local
-    hooks:
-    -   id: pytest
-        name: pytest
-        entry: pytest litellm
-        language: system
-        types: [python]
-        pass_filenames: false
-        always_run: true
-        verbose: true
-        stages:
-            - pre-push
+#-   repo: local
+#    hooks:
+#    -   id: pytest
+#        name: pytest
+#        entry: pytest litellm
+#        language: system
+#        types: [python]
+#        pass_filenames: false
+#        always_run: true
+#        verbose: true
+#        stages:
+#            - pre-push

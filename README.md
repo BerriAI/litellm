@@ -245,11 +245,9 @@ Here's how to modify the repo locally:
    poetry install 
    pre-commit install
    ```
-3. Test and push your change:
+3. Test your changes:
    ```bash
-   git add <files...>
-   git commit -m <commit message>  # runs linters from git hook!
-   git push # runs linters & pytest from git hooks!
+   poetry run pytest
    ```
 4. Submit a PR with your changes! 🚀
    - push your fork to your GitHub repo
