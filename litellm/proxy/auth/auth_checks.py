@@ -14,6 +14,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_TeamTable,
     LiteLLMRoutes,
+    LiteLLM_OrganizationTable,
 )
 from typing import Optional, Literal, Union
 from litellm.proxy.utils import PrismaClient
@@ -286,4 +287,42 @@ async def get_team_object(
     except Exception as e:
         raise Exception(
             f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        )
+
+
+async def get_org_object(
+    org_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+):
+    """
+    - Check if org id in proxy Org Table
+    - if valid, return LiteLLM_OrganizationTable object
+    - if not, then raise an error
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # check if in cache
+    cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
+    if cached_org_obj is not None:
+        if isinstance(cached_org_obj, dict):
+            return cached_org_obj
+        elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
+            return cached_org_obj
+    # else, check db
+    try:
+        response = await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": org_id}
+        )
+
+        if response is None:
+            raise Exception
+
+        return response
+    except Exception as e:
+        raise Exception(
+            f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
