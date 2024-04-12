@@ -246,7 +246,9 @@ async def get_user_object(
 
         return LiteLLM_UserTable(**response.dict())
     except Exception as e:  # if end-user not in db
-        return None
+        raise Exception(
+            f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call."
+        )
 
 
 async def get_team_object(
