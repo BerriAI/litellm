@@ -4449,6 +4449,13 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
         )
+
+        # Delete - key from cache, since it's been updated!
+        # key updated - a new model could have been added to this key. it should not block requests after this is done
+        user_api_key_cache.delete_cache(key)
+        hashed_token = hash_token(key)
+        user_api_key_cache.delete_cache(hashed_token)
+
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
     except Exception as e:
