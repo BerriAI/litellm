@@ -140,6 +140,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
+    org_id_jwt_field: Optional[str] = None
     user_id_jwt_field: Optional[str] = None
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
@@ -514,6 +515,7 @@ class LiteLLM_BudgetTable(LiteLLMBase):
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_id: Optional[str] = None
     organization_alias: str
     models: List = []
     budget_id: Optional[str] = None
@@ -522,6 +524,7 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
 class LiteLLM_OrganizationTable(LiteLLMBase):
     """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
+    organization_id: Optional[str] = None
     organization_alias: Optional[str] = None
     budget_id: str
     metadata: Optional[dict] = None
@@ -705,6 +708,8 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
     litellm_budget_table: Optional[dict] = None
+
+    org_id: Optional[str] = None  # org id for a given key
 
     # hidden params used for parallel request limiting, not required to create a token
     user_id_rate_limits: Optional[dict] = None
