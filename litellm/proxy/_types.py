@@ -139,7 +139,8 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
-    end_user_id_jwt_field: Optional[str] = "sub"
+    user_id_jwt_field: Optional[str] = None
+    end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
 
     def __init__(self, **kwargs: Any) -> None:
