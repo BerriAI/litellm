@@ -58,6 +58,41 @@ export const modelCreateCall = async (
   }
 }
 
+export const modelDeleteCall = async (  
+  accessToken: string,
+  model_id: string,
+) => {
+  console.log(`model_id in model delete call: ${model_id}`)
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/delete` : `/model/delete`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "id": model_id, 
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to create key: " + errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    message.success("Model deleted successfully. Restart server to see this.");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
+
 export const keyCreateCall = async (
   accessToken: string,
   userID: string,
