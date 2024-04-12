@@ -4840,8 +4840,17 @@ def get_optional_params(
             optional_params["top_p"] = top_p
         if stream:
             optional_params["stream"] = stream
+        if n is not None:
+            optional_params["candidate_count"] = n
+        if stop is not None:
+            if isinstance(stop, str):
+                optional_params["stop_sequences"] = [stop]
+            elif isinstance(stop, list):
+                optional_params["stop_sequences"] = stop
         if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
+        if response_format is not None and response_format["type"] == "json_object":
+            optional_params["response_mime_type"] = "application/json"
         if tools is not None and isinstance(tools, list):
             from vertexai.preview import generative_models
 
@@ -5528,6 +5537,9 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "stream",
             "tools",
             "tool_choice",
+            "response_format",
+            "n",
+            "stop",
         ]
     elif custom_llm_provider == "sagemaker":
         return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
