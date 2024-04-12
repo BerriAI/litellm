@@ -245,11 +245,11 @@ Here's how to modify the repo locally:
    poetry install 
    pre-commit install
    ```
-3. Test your change:
+3. Test and push your change:
    ```bash
-   cd litellm/tests # pwd: Documents/litellm/litellm/tests
-   poetry run flake8
-   poetry run pytest .
+   git add <files...>
+   git commit -m <commit message>  # runs linters from git hook!
+   git push # runs linters & pytest from git hooks!
    ```
 4. Submit a PR with your changes! 🚀
    - push your fork to your GitHub repo
