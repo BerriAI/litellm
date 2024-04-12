@@ -514,6 +514,7 @@ async def user_api_key_auth(
                     team_rpm_limit=team_object.rpm_limit,
                     team_models=team_object.models,
                     user_role="app_owner",
+                    user_id=user_id,
                 )
         #### ELSE ####
         if master_key is None:
@@ -1341,8 +1342,6 @@ async def update_database(
             existing_token_obj = await user_api_key_cache.async_get_cache(
                 key=hashed_token
             )
-            if existing_token_obj is None:
-                return
             existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
             if existing_user_obj is not None and isinstance(existing_user_obj, dict):
                 existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
@@ -1364,7 +1363,9 @@ async def update_database(
                     if end_user_id is not None:
                         prisma_client.end_user_list_transactons[end_user_id] = (
                             response_cost
-                            + prisma_client.user_list_transactons.get(end_user_id, 0)
+                            + prisma_client.end_user_list_transactons.get(
+                                end_user_id, 0
+                            )
                         )
                 elif custom_db_client is not None:
                     for id in user_ids:
