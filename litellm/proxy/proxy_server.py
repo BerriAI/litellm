@@ -8073,6 +8073,15 @@ async def update_config(config_info: ConfigYAML):
             updated_general_settings = config_info.general_settings.dict(
                 exclude_none=True
             )
+            # ensure master key is not store in the DB here
+            if "master_key" in updated_general_settings:
+                raise ProxyException(
+                    message="master_key cannot be stored in the DB, please store it on your machines env",
+                    type="auth_error",
+                    param="master_key",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+
             config["general_settings"] = {
                 **updated_general_settings,
                 **config["general_settings"],
