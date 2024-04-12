@@ -7766,7 +7766,7 @@ def exception_type(
                     )
                 elif (
                     "429 Quota exceeded" in error_str
-                    or "IndexError: list index out of range"
+                    or "IndexError: list index out of range" in error_str
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
