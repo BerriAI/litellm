@@ -13,9 +13,9 @@ import {
   Text,
   Grid,
 } from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput } from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall, modelCreateCall, Model, modelCostMap } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall } from "./networking";
 import { BarChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -34,7 +34,7 @@ import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 const { Title: Title2, Link } = Typography;
 
 interface ModelDashboardProps {
@@ -129,7 +129,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (modelMap == null) {
       fetchModelMap()
     }
-  }, [accessToken, token, userRole, userID]);
+  }, [accessToken, token, userRole, userID, modelMap]);
 
   if (!modelData) {
     return <div>Loading...</div>;
@@ -143,7 +143,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   // loop through model data and edit each row
   for (let i = 0; i < modelData.data.length; i++) {
     let curr_model = modelData.data[i];
-    let litellm_model_name = curr_model?.litellm_params?.mode
+    let litellm_model_name = curr_model?.litellm_params?.model
     let model_info = curr_model?.model_info;
 
     let defaultProvider = "openai";
@@ -152,6 +152,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     let output_cost = "Undefined";
     let max_tokens = "Undefined";
     let cleanedLitellmParams = {};
+
+    const getProviderFromModel = (model: string) => {
+      /**
+       * Use model map
+       * - check if model in model map
+       * - return it's litellm_provider, if so 
+       */
+      console.log(`GET PROVIDER CALLED! - ${modelMap}`)
+      if (modelMap !== null && modelMap !== undefined) {
+        if (typeof modelMap == "object" && model in modelMap) {
+          return modelMap[model]["litellm_provider"]
+        }
+      }
+      return "openai"
+    }
 
     // Check if litellm_model_name is null or undefined
     if (litellm_model_name) {
@@ -162,10 +177,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       let firstElement = splitModel[0];
 
       // If there is only one element, default provider to openai
-      provider = splitModel.length === 1 ? defaultProvider : firstElement;
+      provider = splitModel.length === 1 ? getProviderFromModel(litellm_model_name) : firstElement;
     } else {
       // litellm_model_name is null or undefined, default provider to openai
-      provider = defaultProvider;
+      provider = "openai"
     }
 
     if (model_info) {
@@ -207,6 +222,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       </div>
     );
   }
+
+  const handleDelete = async (model_id: string) => {
+    await modelDeleteCall(accessToken, model_id)
+  };
+
 
   const setProviderModelsFn = (provider: string) => {
     console.log(`received provider string: ${provider}`)
@@ -365,8 +385,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </TableRow>
             </TableHead>
             <TableBody>
-              {modelData.data.map((model: any) => (
-                <TableRow key={model.model_name}>
+              {modelData.data.map((model: any, index: number) => (
+                <TableRow key={index}>
                   <TableCell>
                     <Text>{model.model_name}</Text>
                   </TableCell>
@@ -386,6 +406,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <TableCell>{model.input_cost}</TableCell>
                   <TableCell>{model.output_cost}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
+                  <TableCell><Icon icon={TrashIcon} size="sm" onClick={() => handleDelete(model.model_info.id)}/></TableCell>
                 </TableRow>
               ))}
             </TableBody>
