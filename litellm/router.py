@@ -2224,6 +2224,7 @@ class Router:
 
         # add to model list
         _deployment = deployment.to_json(exclude_none=True)
+        verbose_router_logger.debug("adding _deployment to router", _deployment)
         self.model_list.append(_deployment)
 
         # initialize client
