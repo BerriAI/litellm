@@ -74,6 +74,16 @@ class JWTHandler:
             team_id = default_value
         return team_id
 
+    def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+        try:
+            if self.litellm_jwtauth.user_id_jwt_field is not None:
+                user_id = token[self.litellm_jwtauth.user_id_jwt_field]
+            else:
+                user_id = None
+        except KeyError:
+            user_id = default_value
+        return user_id
+
     def get_scopes(self, token: dict) -> list:
         try:
             if isinstance(token["scope"], str):
