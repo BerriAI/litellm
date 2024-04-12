@@ -1,3 +1,4 @@
+default_install_hook_types: [pre-commit, pre-push]
 repos:
 -   repo: https://github.com/psf/black
     rev: 24.2.0
@@ -24,3 +25,15 @@ repos:
         language: system
         types: [python]
         files: ^litellm/
+-   repo: local
+    hooks:
+    -   id: pytest
+        name: pytest
+        entry: pytest litellm
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+        verbose: true
+        stages:
+            - pre-push
