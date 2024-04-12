@@ -8329,13 +8329,13 @@ async def health_endpoint(
     ```
     else, the health checks will be run on models when /health is called.
     """
-    global health_check_results, use_background_health_checks, user_model
+    global health_check_results, use_background_health_checks, user_model, llm_router
     try:
-        if llm_model_list is None:
+        if llm_router is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
                 healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=[], cli_model=user_model
+                    litellm_router_instance=None, cli_model=user_model
                 )
                 return {
                     "healthy_endpoints": healthy_endpoints,
@@ -8356,8 +8356,11 @@ async def health_endpoint(
         if use_background_health_checks:
             return health_check_results
         else:
+            verbose_proxy_logger.debug(
+                "about to make a health check - llm_model_list= %s", llm_model_list
+            )
             healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                llm_model_list, model
+                llm_router, model
             )
 
             return {

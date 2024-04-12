@@ -7,6 +7,7 @@ from typing import Optional
 import litellm
 import logging
 from litellm._logging import print_verbose
+from litellm import Router
 
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,9 @@ async def _perform_health_check(model_list: list):
 
 
 async def perform_health_check(
-    model_list: list, model: Optional[str] = None, cli_model: Optional[str] = None
+    litellm_router_instance: Optional[Router] = None,
+    model: Optional[str] = None,
+    cli_model: Optional[str] = None,
 ):
     """
     Perform a health check on the system.
@@ -77,6 +80,10 @@ async def perform_health_check(
     Returns:
         (bool): True if the health check passes, False otherwise.
     """
+    model_list = None
+    if litellm_router_instance is not None:
+        model_list = litellm_router_instance.get_model_list()
+
     if not model_list:
         if cli_model:
             model_list = [
