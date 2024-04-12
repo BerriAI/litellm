@@ -171,7 +171,12 @@ def completion(
     logging_obj.pre_call(
         input=prompt,
         api_key="",
-        additional_args={"complete_input_dict": {"inference_params": inference_params}},
+        additional_args={
+            "complete_input_dict": {
+                "inference_params": inference_params,
+                "system_prompt": system_prompt,
+            }
+        },
     )
     ## COMPLETION CALL
     try:
