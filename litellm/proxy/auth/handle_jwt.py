@@ -84,6 +84,16 @@ class JWTHandler:
             user_id = default_value
         return user_id
 
+    def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+        try:
+            if self.litellm_jwtauth.org_id_jwt_field is not None:
+                org_id = token[self.litellm_jwtauth.org_id_jwt_field]
+            else:
+                org_id = None
+        except KeyError:
+            org_id = default_value
+        return org_id
+
     def get_scopes(self, token: dict) -> list:
         try:
             if isinstance(token["scope"], str):
