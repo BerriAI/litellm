@@ -20,6 +20,7 @@ import datetime, time
 import tiktoken
 import uuid
 import aiohttp
+import textwrap
 import logging
 import asyncio, httpx, inspect
 from inspect import iscoroutine
@@ -6536,8 +6537,9 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     for detail in additional_details:
                         slack_msg += f"{detail}: {additional_details[detail]}\n"
                     slack_msg += f"Traceback: {traceback_exception}"
+                    truncated_slack_msg = textwrap.shorten(slack_msg, width=512, placeholder="...")
                     slack_app.client.chat_postMessage(
-                        channel=alerts_channel, text=slack_msg
+                        channel=alerts_channel, text=truncated_slack_msg
                     )
                 elif callback == "sentry":
                     capture_exception(exception)
