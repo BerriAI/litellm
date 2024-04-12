@@ -711,8 +711,13 @@ async def user_api_key_auth(
                             query_type="find_all",
                         )
                         for _id in user_id_information:
+                            if _id is None:
+                                continue
+                            _id = dict(_id)
+                            assert isinstance(_id, dict)
+                            _user_id = _id.get("user_id")
                             await user_api_key_cache.async_set_cache(
-                                key=_id["user_id"], value=_id, ttl=600
+                                key=_user_id, value=_id, ttl=600
                             )
                     if custom_db_client is not None:
                         user_id_information = await custom_db_client.get_data(
@@ -729,6 +734,7 @@ async def user_api_key_auth(
                         for _user in user_id_information:
                             if _user is None:
                                 continue
+                            _user = dict(_user)
                             assert isinstance(_user, dict)
                             # check if user is admin #
 
