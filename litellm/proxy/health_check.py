@@ -6,7 +6,7 @@ from typing import Optional
 
 import litellm
 import logging
-from litellm._logging import print_verbose
+from litellm._logging import print_verbose, verbose_logger
 from litellm import Router
 
 
@@ -82,6 +82,9 @@ async def perform_health_check(
     """
     model_list = None
     if litellm_router_instance is not None:
+        verbose_logger.debug(
+            "litellm_router_instance models: %s", litellm_router_instance.model_list
+        )
         model_list = litellm_router_instance.get_model_list()
 
     if not model_list:
