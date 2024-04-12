@@ -2410,7 +2410,10 @@ class ProxyConfig:
                 raise Exception(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-            verbose_proxy_logger.debug(f"llm_router: {llm_router}")
+            if llm_router is not None:
+                verbose_proxy_logger.debug(
+                    f"llm_router model list before adding new deployments: {llm_router.model_list}"
+                )
             if llm_router is None:
                 new_models = (
                     await prisma_client.db.litellm_proxymodeltable.find_many()
@@ -2486,7 +2489,9 @@ class ProxyConfig:
                         _model_info = RouterModelInfo(**m.model_info)
                     else:
                         _model_info = RouterModelInfo(id=m.model_id)
-
+                    verbose_proxy_logger.debug(
+                        f"about to add deployment, model {m.model_name}, litellm_params={_litellm_params}"
+                    )
                     llm_router.add_deployment(
                         deployment=Deployment(
                             model_name=m.model_name,
@@ -2496,6 +2501,9 @@ class ProxyConfig:
                     )
 
             llm_model_list = llm_router.get_model_list()
+            verbose_proxy_logger.debug(
+                "llm router model list after adding a model: ", llm_model_list
+            )
 
             # check if user set any callbacks in Config Table
             config_data = await proxy_config.get_config()
