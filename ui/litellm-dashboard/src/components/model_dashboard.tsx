@@ -15,7 +15,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput } from "@tremor/react";
 import { Select, SelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall, modelCreateCall, Model } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelMetricsCall, modelCreateCall, Model, modelCostMap } from "./networking";
 import { BarChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -55,13 +55,13 @@ enum Providers {
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"
 }
 
-const provider_map: Record<Providers, string> = {
-  [Providers.OpenAI]: "",
-  [Providers.Azure]: "azure/",
-  [Providers.Anthropic]: "",
-  [Providers.Google_AI_Studio]: "gemini/",
-  [Providers.Bedrock]: "bedrock/",
-  [Providers.OpenAI_Compatible]: "openai/"
+const provider_map: Record <string, string> = {
+  "OpenAI": "openai",
+  "Azure": "azure",
+  "Anthropic": "anthropic",
+  "Google_AI_Studio": "gemini",
+  "Bedrock": "bedrock",
+  "OpenAI_Compatible": "openai"
 };
 
 const ModelDashboard: React.FC<ModelDashboardProps> = ({
@@ -74,8 +74,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelMetrics, setModelMetrics] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
+  const [modelMap, setModelMap] = useState<any>(null);
+
+  const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers: Providers[] = [Providers.OpenAI, Providers.Azure, Providers.Anthropic, Providers.Google_AI_Studio, Providers.Bedrock, Providers.OpenAI_Compatible]
+  
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
 
   useEffect(() => {
@@ -115,6 +119,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
     if (accessToken && token && userRole && userID) {
       fetchData();
+    }
+
+    const fetchModelMap = async () => {
+      const data = await modelCostMap()
+      console.log(`received model cost map data: ${Object.keys(data)}`)
+      setModelMap(data)
+    }
+    if (modelMap == null) {
+      fetchModelMap()
     }
   }, [accessToken, token, userRole, userID]);
 
@@ -195,6 +208,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   }
 
+  const setProviderModelsFn = (provider: string) => {
+    console.log(`received provider string: ${provider}`)
+    const providerEnumValue = Providers[provider as keyof typeof Providers];
+    console.log(`received providerEnumValue: ${providerEnumValue}`)
+    const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
+    console.log(`mappingResult: ${mappingResult}`)
+    let _providerModels: Array<string> = []
+    if (typeof modelMap === 'object') {
+      Object.entries(modelMap).forEach(([key, value]) => {
+        if (value !== null && typeof value === 'object' && "litellm_provider" in value && value["litellm_provider"] === mappingResult) {
+          _providerModels.push(key);
+        }
+      });
+    }
+    setProviderModels(_providerModels)
+    console.log(`providerModels: ${providerModels}`);
+  }
+
   const handleSubmit = async (formValues: Record<string, any>) => {
     try {
 
@@ -210,9 +241,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           modelName = modelName + value
         }
         else if (key == "custom_llm_provider") {
-          const providerEnumValue = Providers[value as keyof typeof Providers];
-          const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
-          modelName = mappingResult + modelName
+          // const providerEnumValue = Providers[value as keyof typeof Providers];
+          // const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
+          // modelName = mappingResult + "/" + modelName
+          continue
         }
 
         // Check if key is "base_model"
@@ -278,7 +310,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   };
 
   console.log(`selectedProvider: ${selectedProvider}`)
-
+  console.log(`providerModels.length: ${providerModels.length}`)
   return (
     <div style={{ width: "100%", height: "100%"}}>
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -389,6 +421,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       key={index}
                       value={provider}
                       onClick={() => {
+                        setProviderModelsFn(provider);
                         setSelectedProvider(provider);
                       }}
                     >
@@ -405,7 +438,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <Col span={10}><Text className="mb-3 mt-1">Model name your users will pass in. Also used for <Link href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config" target="_blank">loadbalancing.</Link></Text></Col>
                 </Row>
                 <Form.Item rules={[{ required: true, message: 'Required' }]} label="LiteLLM Model Name" name="model" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
-                  <TextInput placeholder="gpt-3.5-turbo-0125"/>
+                  {
+                    providerModels.length > 0 ? 
+                    <Select value={providerModels[0].toString()}>
+                      {providerModels.map((model, index) => (
+                          <SelectItem
+                            key={index}
+                            value={model}
+                          >
+                            {model}
+                          </SelectItem>
+                        ))}
+                    </Select>
+                    : <TextInput placeholder="gpt-3.5-turbo-0125"/>
+                  }
                 </Form.Item>
                 <Row>
                 <Col span={10}></Col>
@@ -424,7 +470,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   selectedProvider == Providers.OpenAI && <Form.Item
                     label="Organization ID"
                     name="organization_id"
-                    className="mb-0"
                   >
                     <TextInput placeholder="[OPTIONAL] my-unique-org"/>
                   </Form.Item>

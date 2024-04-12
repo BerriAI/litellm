@@ -12,6 +12,18 @@ export interface Model {
   model_info: Object | null;
 }
 
+export const modelCostMap = async () => {
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json');
+    const jsonData = await response.json();
+    console.log(`received data: ${jsonData}`)
+    return jsonData
+  } catch (error) {
+    console.error("Failed to get model cost map:", error);
+    throw error;
+  }
+}
+
 export const modelCreateCall = async (
   accessToken: string,
   formValues: Model
