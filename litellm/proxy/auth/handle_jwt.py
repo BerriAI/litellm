@@ -101,7 +101,11 @@ class JWTHandler:
         if cached_keys is None:
             response = await self.http_handler.get(keys_url)
 
-            keys = response.json()["keys"]
+            response_json = response.json()
+            if "keys" in response_json:
+                keys = response.json()["keys"]
+            else:
+                keys = response_json
 
             await self.user_api_key_cache.async_set_cache(
                 key="litellm_jwt_auth_keys",
