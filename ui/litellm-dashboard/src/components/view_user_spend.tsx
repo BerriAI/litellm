@@ -31,16 +31,18 @@ interface ViewUserSpendProps {
     userID: string | null;
     userRole: string | null;
     accessToken: string | null;
+    userSpend: number | null;  
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken }) => {
-    const [spend, setSpend] = useState(0.0);
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend }) => {
+    console.log(`userSpend: ${userSpend}`)
+    let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
     const [maxBudget, setMaxBudget] = useState(0.0);
     useEffect(() => {
       const fetchData = async () => {
         if (!accessToken || !userID || !userRole) {
           return;
         }
-        if (userRole === "Admin") {
+        if (userRole === "Admin" && userSpend == null) {
           try {
             const globalSpend = await getTotalSpendCall(accessToken);
             if (globalSpend) {
@@ -64,13 +66,20 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
       fetchData();
     }, [userRole, accessToken]);
 
+    useEffect(() => {
+      if (userSpend !== null) {
+        setSpend(userSpend)
+      }
+    }, [userSpend])
+
     const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
 
-    const roundedSpend = spend !== undefined ? spend.toFixed(5) : null;
+    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
 
+    console.log(`spend in view user spend: ${spend}`)
     return (
         <>
-      <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend (across all teams)</p>
+      <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend </p>
       <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">${roundedSpend}</p>
         
     </>

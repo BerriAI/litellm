@@ -74,6 +74,26 @@ class JWTHandler:
             team_id = default_value
         return team_id
 
+    def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+        try:
+            if self.litellm_jwtauth.user_id_jwt_field is not None:
+                user_id = token[self.litellm_jwtauth.user_id_jwt_field]
+            else:
+                user_id = None
+        except KeyError:
+            user_id = default_value
+        return user_id
+
+    def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+        try:
+            if self.litellm_jwtauth.org_id_jwt_field is not None:
+                org_id = token[self.litellm_jwtauth.org_id_jwt_field]
+            else:
+                org_id = None
+        except KeyError:
+            org_id = default_value
+        return org_id
+
     def get_scopes(self, token: dict) -> list:
         try:
             if isinstance(token["scope"], str):
@@ -101,7 +121,11 @@ class JWTHandler:
         if cached_keys is None:
             response = await self.http_handler.get(keys_url)
 
-            keys = response.json()["keys"]
+            response_json = response.json()
+            if "keys" in response_json:
+                keys = response.json()["keys"]
+            else:
+                keys = response_json
 
             await self.user_api_key_cache.async_set_cache(
                 key="litellm_jwt_auth_keys",

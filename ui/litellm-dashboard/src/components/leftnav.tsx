@@ -46,8 +46,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
   }
   return (
-    <Layout style={{ minHeight: "100vh", maxWidth: "100px" }}>
-      <Sider width={100}>
+    <Layout style={{ minHeight: "100vh", maxWidth: "120px" }}>
+      <Sider width={120}>
         <Menu
           mode="inline"
           defaultSelectedKeys={defaultSelectedKey ? defaultSelectedKey : ["1"]}
@@ -61,6 +61,11 @@ const Sidebar: React.FC<SidebarProps> = ({
           <Menu.Item key="3" onClick={() => setPage("llm-playground")}>
           <Text>
             Test Key
+            </Text>
+          </Menu.Item>
+          <Menu.Item key="2" onClick={() => setPage("models")}>
+          <Text>
+            Models
             </Text>
           </Menu.Item>
           {userRole == "Admin" ? (
@@ -82,10 +87,10 @@ const Sidebar: React.FC<SidebarProps> = ({
               </Text>
             </Menu.Item>
           ) : null}
-          <Menu.Item key="2" onClick={() => setPage("models")}>
+          <Menu.Item key="8" onClick={() => setPage("settings")}>
           <Text>
-            Models
-            </Text>
+            Integrations
+          </Text>
           </Menu.Item>
           {userRole == "Admin" ? (
             <Menu.Item key="7" onClick={() => setPage("admin-panel")}>

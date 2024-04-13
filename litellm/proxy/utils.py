@@ -461,7 +461,12 @@ class ProxyLogging:
         """
         ### ALERTING ###
         if isinstance(original_exception, HTTPException):
-            error_message = original_exception.detail
+            if isinstance(original_exception.detail, str):
+                error_message = original_exception.detail
+            elif isinstance(original_exception.detail, dict):
+                error_message = json.dumps(original_exception.detail)
+            else:
+                error_message = str(original_exception)
         else:
             error_message = str(original_exception)
         if isinstance(traceback_str, str):
@@ -562,6 +567,7 @@ class PrismaClient:
     end_user_list_transactons: dict = {}
     key_list_transactons: dict = {}
     team_list_transactons: dict = {}
+    org_list_transactons: dict = {}
     spend_log_transactions: List = []
 
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
@@ -1159,13 +1165,26 @@ class PrismaClient:
                 return new_verification_token
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
-                new_user_row = await self.db.litellm_usertable.upsert(
-                    where={"user_id": data["user_id"]},
-                    data={
-                        "create": {**db_data},  # type: ignore
-                        "update": {},  # don't do anything if it already exists
-                    },
-                )
+                try:
+                    new_user_row = await self.db.litellm_usertable.upsert(
+                        where={"user_id": data["user_id"]},
+                        data={
+                            "create": {**db_data},  # type: ignore
+                            "update": {},  # don't do anything if it already exists
+                        },
+                    )
+                except Exception as e:
+                    if (
+                        "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
+                        in str(e)
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"Foreign Key Constraint failed. Organization ID={db_data['organization_id']} does not exist in LiteLLM_OrganizationTable. Create via `/organization/new`."
+                            },
+                        )
+                    raise e
                 verbose_proxy_logger.info("Data Inserted into User Table")
                 return new_user_row
             elif table_name == "team":
@@ -2122,6 +2141,46 @@ async def update_spend(
 
                 error_msg = (
                     f"LiteLLM Prisma Client Exception - update team spend: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e, traceback_str=error_traceback
+                    )
+                )
+                raise e
+
+    ### UPDATE ORG TABLE ###
+    if len(prisma_client.org_list_transactons.keys()) > 0:
+        for i in range(n_retry_times + 1):
+            try:
+                async with prisma_client.db.tx(
+                    timeout=timedelta(seconds=60)
+                ) as transaction:
+                    async with transaction.batch_() as batcher:
+                        for (
+                            org_id,
+                            response_cost,
+                        ) in prisma_client.org_list_transactons.items():
+                            batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                where={"organization_id": org_id},
+                                data={"spend": {"increment": response_cost}},
+                            )
+                prisma_client.org_list_transactons = (
+                    {}
+                )  # Clear the remaining transactions after processing all batches in the loop.
+                break
+            except httpx.ReadTimeout:
+                if i >= n_retry_times:  # If we've reached the maximum number of retries
+                    raise  # Re-raise the last exception
+                # Optionally, sleep for a bit before retrying
+                await asyncio.sleep(2**i)  # Exponential backoff
+            except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update org spend: {str(e)}"
                 )
                 print_verbose(error_msg)
                 error_traceback = error_msg + "\n" + traceback.format_exc()
