@@ -8308,7 +8308,7 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal["slack_budget_alerts"] = fastapi.Query(
+    service: Literal["slack_budget_alerts", "langfuse"] = fastapi.Query(
         description="Specify the service being hit."
     ),
 ):
@@ -8324,8 +8324,16 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
+        if service == "langfuse":
+            # run mock completion request
+            return litellm.completion(
+                model="openai/litellm-mock-response-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                user="litellm:/health/services",
+                mock_response="This is a mock response",
+            )
 
-        if service not in ["slack_budget_alerts"]:
+        if service not in ["slack_budget_alerts", "langfuse"]:
             raise HTTPException(
                 status_code=400,
                 detail={
