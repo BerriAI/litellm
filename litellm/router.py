@@ -487,7 +487,9 @@ class Router:
                 }
             )
 
-            rpm_semaphore = self.semaphore
+            rpm_semaphore = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="rpm_client"
+            )
 
             if rpm_semaphore is not None and isinstance(
                 rpm_semaphore, asyncio.Semaphore
@@ -1723,16 +1725,15 @@ class Router:
         model_name = litellm_params.get("model")
         model_id = model["model_info"]["id"]
         # ### IF RPM SET - initialize a semaphore ###
-        # rpm = litellm_params.get("rpm", None)
-        # print(f"rpm: {rpm}")
-        # if rpm:
-        #     semaphore = asyncio.Semaphore(rpm)
-        #     cache_key = f"{model_id}_rpm_client"
-        #     self.cache.set_cache(
-        #         key=cache_key,
-        #         value=semaphore,
-        #         local_only=True,
-        #     )
+        rpm = litellm_params.get("rpm", None)
+        if rpm:
+            semaphore = asyncio.Semaphore(rpm)
+            cache_key = f"{model_id}_rpm_client"
+            self.cache.set_cache(
+                key=cache_key,
+                value=semaphore,
+                local_only=True,
+            )
 
         #     print("STORES SEMAPHORE IN CACHE")
 
