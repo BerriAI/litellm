@@ -72,7 +72,12 @@ const Settings: React.FC<SettingsPageProps> = ({
       environment_variables: updatedVariables,
     };
 
-    setCallbacksCall(accessToken, payload);
+    try {
+      setCallbacksCall(accessToken, payload);
+    } catch (error) {
+      message.error("Failed to update callback: " + error);
+    }
+
     message.success("Callback updated successfully");
   };
 
