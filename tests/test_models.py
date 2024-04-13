@@ -41,7 +41,7 @@ async def get_models(session, key):
     async with session.get(url, headers=headers) as response:
         status = response.status
         response_text = await response.text()
-
+        print("response from /models")
         print(response_text)
         print()
 
@@ -207,24 +207,6 @@ async def add_model_for_health_checking(session, model_id="123"):
         response_text = await response.text()
 
         print(f"Add models {response_text}")
-        print()
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-
-
-async def get_model_info(session, key):
-    url = "http://0.0.0.0:4000/model/info"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    async with session.get(url, headers=headers) as response:
-        status = response.status
-        response_text = await response.text()
-        print("response from /model/info")
-        print(response_text)
         print()
 
         if status != 200:
