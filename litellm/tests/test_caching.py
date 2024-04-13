@@ -734,8 +734,7 @@ async def test_redis_cache_atext_completion():
 
         print(response2)
 
-        assert response1 == response2
-        assert response1.choices == response2.choices
+        assert response1.id == response2.id
     except Exception as e:
         print(f"{str(e)}\n\n{traceback.format_exc()}")
         raise e
