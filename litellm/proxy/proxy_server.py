@@ -8369,7 +8369,7 @@ async def health_endpoint(
     ```
     else, the health checks will be run on models when /health is called.
     """
-    global health_check_results, use_background_health_checks, user_model
+    global health_check_results, use_background_health_checks, user_model, llm_model_list
     try:
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
@@ -8387,7 +8387,7 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-
+        _llm_model_list = copy.deepcopy(llm_model_list)
         ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
         if len(user_api_key_dict.models) > 0:
             allowed_model_names = user_api_key_dict.models
@@ -8397,7 +8397,7 @@ async def health_endpoint(
             return health_check_results
         else:
             healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                llm_model_list, model
+                _llm_model_list, model
             )
 
             return {
