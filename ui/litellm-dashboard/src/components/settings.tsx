@@ -75,7 +75,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     try {
       setCallbacksCall(accessToken, payload);
     } catch (error) {
-      message.error("Failed to update callback: " + error);
+      message.error("Failed to update callback: " + error, 20);
     }
 
     message.success("Callback updated successfully");
