@@ -280,7 +280,7 @@ async def test_add_model_run_health():
 
         print("calling /health?model=", model_name)
         _health_info = await get_model_health(
-            session=session, key=key, model_name="azure/chatgpt-v-2"
+            session=session, key=key, model_name=model_name
         )
         _healthy_endpooint = _health_info["healthy_endpoints"][0]
 
