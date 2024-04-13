@@ -79,7 +79,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                     self.print_verbose(f"redis keys: {keys}")
                     if len(keys) > 0:
                         key_value_dict = (
-                            await litellm.cache.cache.async_get_cache_pipeline(
+                            await litellm.cache.cache.async_batch_get_cache(
                                 key_list=keys
                             )
                         )

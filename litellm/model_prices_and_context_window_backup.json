@@ -66,6 +66,28 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "gpt-4-turbo": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "gpt-4-turbo-2024-04-09": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
     "gpt-4-1106-preview": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
@@ -948,6 +970,28 @@
         "supports_function_calling": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "gemini-1.0-pro-001": { 
+        "max_tokens": 8192,
+        "max_input_tokens": 32760,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000025, 
+        "output_cost_per_token": 0.0000005,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "gemini-1.0-pro-002": { 
+        "max_tokens": 8192,
+        "max_input_tokens": 32760,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000025, 
+        "output_cost_per_token": 0.0000005,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "gemini-1.5-pro": { 
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
@@ -964,6 +1008,17 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0, 
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "gemini-1.5-pro-preview-0409": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0,
         "output_cost_per_token": 0,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
@@ -2804,6 +2859,46 @@
     "voyage/voyage-lite-01": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-large-2": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-law-2": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-code-2": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-2": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-lite-02-instruct": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "voyage",

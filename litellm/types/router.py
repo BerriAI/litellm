@@ -3,7 +3,7 @@ from typing import List, Optional, Union, Dict, Tuple, Literal
 from pydantic import BaseModel, validator
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-import uuid
+import uuid, enum
 
 
 class ModelConfig(BaseModel):
@@ -11,6 +11,9 @@ class ModelConfig(BaseModel):
     litellm_params: Union[CompletionRequest, EmbeddingRequest]
     tpm: int
     rpm: int
+
+    class Config:
+        protected_namespaces = ()
 
 
 class RouterConfig(BaseModel):
@@ -40,6 +43,9 @@ class RouterConfig(BaseModel):
         "usage-based-routing",
         "latency-based-routing",
     ] = "simple-shuffle"
+
+    class Config:
+        protected_namespaces = ()
 
 
 class ModelInfo(BaseModel):
@@ -127,9 +133,11 @@ class Deployment(BaseModel):
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
 
-    def __init__(self, model_info: Optional[ModelInfo] = None, **params):
+    def __init__(self, model_info: Optional[Union[ModelInfo, dict]] = None, **params):
         if model_info is None:
             model_info = ModelInfo()
+        elif isinstance(model_info, dict):
+            model_info = ModelInfo(**model_info)
         super().__init__(model_info=model_info, **params)
 
     def to_json(self, **kwargs):
@@ -141,6 +149,7 @@ class Deployment(BaseModel):
 
     class Config:
         extra = "allow"
+        protected_namespaces = ()
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -157,3 +166,11 @@ class Deployment(BaseModel):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class RouterErrors(enum.Enum):
+    """
+    Enum for router specific errors with common codes
+    """
+
+    user_defined_ratelimit_error = "Deployment over user-defined ratelimit."

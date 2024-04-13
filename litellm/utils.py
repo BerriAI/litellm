@@ -20,6 +20,7 @@ import datetime, time
 import tiktoken
 import uuid
 import aiohttp
+import textwrap
 import logging
 import asyncio, httpx, inspect
 from inspect import iscoroutine
@@ -236,6 +237,7 @@ class HiddenParams(OpenAIObject):
 
     class Config:
         extra = "allow"
+        protected_namespaces = ()
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -605,7 +607,7 @@ class ModelResponse(OpenAIObject):
 
 
 class Embedding(OpenAIObject):
-    embedding: list = []
+    embedding: Union[list, str] = []
     index: int
     object: str
 
@@ -1104,7 +1106,6 @@ class Logging:
                 curl_command = self.model_call_details
 
             # only print verbose if verbose logger is not set
-
             if verbose_logger.level == 0:
                 # this means verbose logger was not switched on - user is in litellm.set_verbose=True
                 print_verbose(f"\033[92m{curl_command}\033[0m\n")
@@ -1989,9 +1990,6 @@ class Logging:
                             else:
                                 litellm.cache.add_cache(result, **kwargs)
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    print_verbose(
-                        f"Running Async success callback: {callback}; self.stream: {self.stream}; async_complete_streaming_response: {self.model_call_details.get('async_complete_streaming_response', None)} result={result}"
-                    )
                     if self.stream == True:
                         if (
                             "async_complete_streaming_response"
@@ -2375,7 +2373,6 @@ def client(original_function):
             if litellm.use_client or (
                 "use_client" in kwargs and kwargs["use_client"] == True
             ):
-                print_verbose(f"litedebugger initialized")
                 if "lite_debugger" not in litellm.input_callback:
                     litellm.input_callback.append("lite_debugger")
                 if "lite_debugger" not in litellm.success_callback:
@@ -2999,7 +2996,7 @@ def client(original_function):
                 )
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
-                print_verbose(f"INSIDE CHECKING CACHE")
+                print_verbose("INSIDE CHECKING CACHE")
                 if (
                     litellm.cache is not None
                     and str(original_function.__name__)
@@ -3106,6 +3103,22 @@ def client(original_function):
                                     response_object=cached_result,
                                     model_response_object=ModelResponse(),
                                 )
+                        if (
+                            call_type == CallTypes.atext_completion.value
+                            and isinstance(cached_result, dict)
+                        ):
+                            if kwargs.get("stream", False) == True:
+                                cached_result = convert_to_streaming_response_async(
+                                    response_object=cached_result,
+                                )
+                                cached_result = CustomStreamWrapper(
+                                    completion_stream=cached_result,
+                                    model=model,
+                                    custom_llm_provider="cached_response",
+                                    logging_obj=logging_obj,
+                                )
+                            else:
+                                cached_result = TextCompletionResponse(**cached_result)
                         elif call_type == CallTypes.aembedding.value and isinstance(
                             cached_result, dict
                         ):
@@ -3174,7 +3187,13 @@ def client(original_function):
                             for val in non_null_list:
                                 idx, cr = val  # (idx, cr) tuple
                                 if cr is not None:
-                                    final_embedding_cached_response.data[idx] = cr
+                                    final_embedding_cached_response.data[idx] = (
+                                        Embedding(
+                                            embedding=cr["embedding"],
+                                            index=idx,
+                                            object="embedding",
+                                        )
+                                    )
                         if len(remaining_list) == 0:
                             # LOG SUCCESS
                             cache_hit = True
@@ -4837,8 +4856,17 @@ def get_optional_params(
             optional_params["top_p"] = top_p
         if stream:
             optional_params["stream"] = stream
+        if n is not None:
+            optional_params["candidate_count"] = n
+        if stop is not None:
+            if isinstance(stop, str):
+                optional_params["stop_sequences"] = [stop]
+            elif isinstance(stop, list):
+                optional_params["stop_sequences"] = stop
         if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
+        if response_format is not None and response_format["type"] == "json_object":
+            optional_params["response_mime_type"] = "application/json"
         if tools is not None and isinstance(tools, list):
             from vertexai.preview import generative_models
 
@@ -5525,6 +5553,9 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "stream",
             "tools",
             "tool_choice",
+            "response_format",
+            "n",
+            "stop",
         ]
     elif custom_llm_provider == "sagemaker":
         return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
@@ -5903,6 +5934,16 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
             or get_secret("TOGETHER_AI_TOKEN")
         )
     return api_key
+
+
+def get_utc_datetime():
+    import datetime as dt
+    from datetime import datetime
+
+    if hasattr(dt, "UTC"):
+        return datetime.now(dt.UTC)  # type: ignore
+    else:
+        return datetime.utcnow()  # type: ignore
 
 
 def get_max_tokens(model: str):
@@ -6523,8 +6564,9 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     for detail in additional_details:
                         slack_msg += f"{detail}: {additional_details[detail]}\n"
                     slack_msg += f"Traceback: {traceback_exception}"
+                    truncated_slack_msg = textwrap.shorten(slack_msg, width=512, placeholder="...")
                     slack_app.client.chat_postMessage(
-                        channel=alerts_channel, text=slack_msg
+                        channel=alerts_channel, text=truncated_slack_msg
                     )
                 elif callback == "sentry":
                     capture_exception(exception)
@@ -7741,7 +7783,7 @@ def exception_type(
                     )
                 elif (
                     "429 Quota exceeded" in error_str
-                    or "IndexError: list index out of range"
+                    or "IndexError: list index out of range" in error_str
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
@@ -8764,7 +8806,9 @@ class CustomStreamWrapper:
         return hold, curr_chunk
 
     def handle_anthropic_chunk(self, chunk):
-        str_line = chunk.decode("utf-8")  # Convert bytes to string
+        str_line = chunk
+        if isinstance(chunk, bytes):  # Handle binary data
+            str_line = chunk.decode("utf-8")  # Convert bytes to string
         text = ""
         is_finished = False
         finish_reason = None
@@ -10024,6 +10068,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "custom_openai"
                 or self.custom_llm_provider == "text-completion-openai"
                 or self.custom_llm_provider == "azure_text"
+                or self.custom_llm_provider == "anthropic"
                 or self.custom_llm_provider == "huggingface"
                 or self.custom_llm_provider == "ollama"
                 or self.custom_llm_provider == "ollama_chat"

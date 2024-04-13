@@ -18,7 +18,12 @@ async def generate_key(session):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
-        "models": ["gpt-4", "text-embedding-ada-002", "dall-e-2"],
+        "models": [
+            "gpt-4",
+            "text-embedding-ada-002",
+            "dall-e-2",
+            "fake-openai-endpoint-2",
+        ],
         "duration": None,
     }
 
@@ -63,14 +68,14 @@ async def new_user(session):
         return await response.json()
 
 
-async def chat_completion(session, key):
+async def chat_completion(session, key, model="gpt-4"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     data = {
-        "model": "gpt-4",
+        "model": model,
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello!"},
@@ -187,6 +192,31 @@ async def test_chat_completion():
         key_gen = await new_user(session=session)
         key_2 = key_gen["key"]
         await chat_completion(session=session, key=key_2)
+
+
+# @pytest.mark.skip(reason="Local test. Proxy not concurrency safe yet. WIP.")
+@pytest.mark.asyncio
+async def test_chat_completion_ratelimit():
+    """
+    - call model with rpm 1
+    - make 2 parallel calls
+    - make sure 1 fails
+    """
+    async with aiohttp.ClientSession() as session:
+        # key_gen = await generate_key(session=session)
+        key = "sk-1234"
+        tasks = []
+        tasks.append(
+            chat_completion(session=session, key=key, model="fake-openai-endpoint-2")
+        )
+        tasks.append(
+            chat_completion(session=session, key=key, model="fake-openai-endpoint-2")
+        )
+        try:
+            await asyncio.gather(*tasks)
+            pytest.fail("Expected at least 1 call to fail")
+        except Exception as e:
+            pass
 
 
 @pytest.mark.asyncio
