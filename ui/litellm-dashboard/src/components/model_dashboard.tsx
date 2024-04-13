@@ -294,7 +294,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 litellmExtraParams = JSON.parse(value);
               }
               catch (error) {
-                message.error("Failed to parse LiteLLM Extra Params: " + error);
+                message.error("Failed to parse LiteLLM Extra Params: " + error, 20);
                 throw new Error("Failed to parse litellm_extra_params: " + error);
               }
               for (const [key, value] of Object.entries(litellmExtraParams)) {
@@ -330,7 +330,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
       
       } catch (error) {
-        message.error("Failed to create model: " + error);
+        message.error("Failed to create model: " + error, 20);
       }
   }
 

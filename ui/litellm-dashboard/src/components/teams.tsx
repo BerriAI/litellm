@@ -290,7 +290,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       }
     } catch (error) {
       console.error("Error creating the team:", error);
-      message.error("Error creating the team: " + error);
+      message.error("Error creating the team: " + error, 20);
     }
   };
 
