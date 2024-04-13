@@ -708,6 +708,40 @@ async def test_redis_cache_acompletion_stream():
 
 
 @pytest.mark.asyncio
+async def test_redis_cache_atext_completion():
+    try:
+        litellm.set_verbose = True
+        prompt = f"write a one sentence poem about: {uuid.uuid4()}"
+        litellm.cache = Cache(
+            type="redis",
+            host=os.environ["REDIS_HOST"],
+            port=os.environ["REDIS_PORT"],
+            password=os.environ["REDIS_PASSWORD"],
+            supported_call_types=["atext_completion"],
+        )
+        print("test for caching, atext_completion")
+
+        response1 = await litellm.atext_completion(
+            model="gpt-3.5-turbo-instruct", prompt=prompt, max_tokens=40, temperature=1
+        )
+
+        await asyncio.sleep(0.5)
+        print("\n\n Response 1 content: ", response1, "\n\n")
+
+        response2 = await litellm.atext_completion(
+            model="gpt-3.5-turbo-instruct", prompt=prompt, max_tokens=40, temperature=1
+        )
+
+        print(response2)
+
+        assert response1 == response2
+        assert response1.choices == response2.choices
+    except Exception as e:
+        print(f"{str(e)}\n\n{traceback.format_exc()}")
+        raise e
+
+
+@pytest.mark.asyncio
 async def test_redis_cache_acompletion_stream_bedrock():
     import asyncio
 
