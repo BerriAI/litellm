@@ -35,6 +35,7 @@ import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
 
 interface ModelDashboardProps {
@@ -223,11 +224,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   }
 
-  const handleDelete = async (model_id: string) => {
-    await modelDeleteCall(accessToken, model_id)
-  };
-
-
   const setProviderModelsFn = (provider: string) => {
     console.log(`received provider string: ${provider}`)
     const providerEnumValue = Providers[provider as keyof typeof Providers];
@@ -406,7 +402,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <TableCell>{model.input_cost}</TableCell>
                   <TableCell>{model.output_cost}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
-                  <TableCell><Icon icon={TrashIcon} size="sm" onClick={() => handleDelete(model.model_info.id)}/></TableCell>
+                  <TableCell>
+                          <DeleteModelButton modelID={model.model_info.id} accessToken={accessToken} />
+                        </TableCell>
                 </TableRow>
               ))}
             </TableBody>
