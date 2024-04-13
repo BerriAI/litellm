@@ -1836,6 +1836,9 @@ async def _run_background_health_check():
         await asyncio.sleep(health_check_interval)
 
 
+semaphore = asyncio.Semaphore(1)
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -2425,8 +2428,7 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
-
-        router = litellm.Router(**router_params)  # type:ignore
+        router = litellm.Router(**router_params, semaphore=semaphore)  # type:ignore
         return router, model_list, general_settings
 
     async def add_deployment(
@@ -3421,6 +3423,7 @@ async def chat_completion(
 ):
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     try:
+        # async with llm_router.sem
         data = {}
         body = await request.body()
         body_str = body.decode()
@@ -3525,7 +3528,9 @@ async def chat_completion(
         tasks = []
         tasks.append(
             proxy_logging_obj.during_call_hook(
-                data=data, user_api_key_dict=user_api_key_dict, call_type="completion"
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
             )
         )
 
