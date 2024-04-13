@@ -194,7 +194,7 @@ async def test_chat_completion():
         await chat_completion(session=session, key=key_2)
 
 
-@pytest.mark.skip(reason="Local test. Proxy not concurrency safe yet. WIP.")
+# @pytest.mark.skip(reason="Local test. Proxy not concurrency safe yet. WIP.")
 @pytest.mark.asyncio
 async def test_chat_completion_ratelimit():
     """
