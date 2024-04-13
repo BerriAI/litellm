@@ -8326,12 +8326,16 @@ async def health_services_endpoint(
             )
         if service == "langfuse":
             # run mock completion request
-            return litellm.completion(
+            _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 user="litellm:/health/services",
                 mock_response="This is a mock response",
             )
+            return {
+                "status": "success",
+                "message": "Mock LLM request made - check langfuse.",
+            }
 
         if service not in ["slack_budget_alerts", "langfuse"]:
             raise HTTPException(
