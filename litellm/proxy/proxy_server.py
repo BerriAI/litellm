@@ -7103,7 +7103,7 @@ async def model_info_v2(
     # Load existing config
     config = await proxy_config.get_config()
 
-    all_models = llm_model_list
+    all_models = copy.deepcopy(llm_model_list)
     if user_model is not None:
         # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
         all_models += [user_model]
@@ -7230,9 +7230,10 @@ async def model_info_v1(
 
     if len(user_api_key_dict.models) > 0:
         model_names = user_api_key_dict.models
-        all_models = [m for m in llm_model_list if m["model_name"] in model_names]
+        _relevant_models = [m for m in llm_model_list if m["model_name"] in model_names]
+        all_models = copy.deepcopy(_relevant_models)
     else:
-        all_models = llm_model_list
+        all_models = copy.deepcopy(llm_model_list)
     for model in all_models:
         # provided model_info in config.yaml
         model_info = model.get("model_info", {})
@@ -8368,7 +8369,7 @@ async def health_endpoint(
     ```
     else, the health checks will be run on models when /health is called.
     """
-    global health_check_results, use_background_health_checks, user_model
+    global health_check_results, use_background_health_checks, user_model, llm_model_list
     try:
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
@@ -8386,7 +8387,7 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-
+        _llm_model_list = copy.deepcopy(llm_model_list)
         ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
         if len(user_api_key_dict.models) > 0:
             allowed_model_names = user_api_key_dict.models
@@ -8396,7 +8397,7 @@ async def health_endpoint(
             return health_check_results
         else:
             healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                llm_model_list, model
+                _llm_model_list, model
             )
 
             return {
