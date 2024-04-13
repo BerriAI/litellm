@@ -476,20 +476,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <Col span={10}><Text className="mb-3 mt-1">Model name your users will pass in.</Text></Col>
                 </Row>
                 <Form.Item rules={[{ required: true, message: 'Required' }]} label="LiteLLM Model Name(s)" name="model" tooltip="Actual model name used for making litellm.completion() call." className="mb-0">
-                  {
-                    providerModels.length > 0 ? 
-                    <MultiSelect value={providerModels}>
-                      {providerModels.map((model, index) => (
-                          <MultiSelectItem
-                            key={index}
-                            value={model}
-                          >
+                  {selectedProvider === Providers.Azure ? (
+                      <TextInput placeholder="Enter model name" />
+                    ) : providerModels.length > 0 ? (
+                      <MultiSelect value={providerModels}>
+                        {providerModels.map((model, index) => (
+                          <MultiSelectItem key={index} value={model}>
                             {model}
                           </MultiSelectItem>
                         ))}
-                    </MultiSelect>
-                    : <TextInput placeholder="gpt-3.5-turbo-0125"/>
-                  }
+                      </MultiSelect>
+                    ) : (
+                      <TextInput placeholder="gpt-3.5-turbo-0125" />
+                    )}
                 </Form.Item>
                 <Row>
                 <Col span={10}></Col>
