@@ -51,52 +51,33 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
         Raises - RateLimitError if deployment over defined RPM limit
         """
+        try:
 
-        # ------------
-        # Setup values
-        # ------------
-        dt = get_utc_datetime()
-        current_minute = dt.strftime("%H-%M")
-        model_group = deployment.get("model_name", "")
-        rpm_key = f"{model_group}:rpm:{current_minute}"
-        local_result = await self.router_cache.async_get_cache(
-            key=rpm_key, local_only=True
-        )  # check local result first
+            # ------------
+            # Setup values
+            # ------------
+            dt = get_utc_datetime()
+            current_minute = dt.strftime("%H-%M")
+            model_group = deployment.get("model_name", "")
+            rpm_key = f"{model_group}:rpm:{current_minute}"
+            local_result = await self.router_cache.async_get_cache(
+                key=rpm_key, local_only=True
+            )  # check local result first
 
-        deployment_rpm = None
-        if deployment_rpm is None:
-            deployment_rpm = deployment.get("rpm")
-        if deployment_rpm is None:
-            deployment_rpm = deployment.get("litellm_params", {}).get("rpm")
-        if deployment_rpm is None:
-            deployment_rpm = deployment.get("model_info", {}).get("rpm")
-        if deployment_rpm is None:
-            deployment_rpm = float("inf")
+            deployment_rpm = None
+            if deployment_rpm is None:
+                deployment_rpm = deployment.get("rpm")
+            if deployment_rpm is None:
+                deployment_rpm = deployment.get("litellm_params", {}).get("rpm")
+            if deployment_rpm is None:
+                deployment_rpm = deployment.get("model_info", {}).get("rpm")
+            if deployment_rpm is None:
+                deployment_rpm = float("inf")
 
-        if local_result is not None and local_result >= deployment_rpm:
-            raise litellm.RateLimitError(
-                message="Deployment over defined rpm limit={}. current usage={}".format(
-                    deployment_rpm, local_result
-                ),
-                llm_provider="",
-                model=deployment.get("litellm_params", {}).get("model"),
-                response=httpx.Response(
-                    status_code=429,
-                    content="{} rpm limit={}. current usage={}".format(
-                        RouterErrors.user_defined_ratelimit_error.value,
-                        deployment_rpm,
-                        local_result,
-                    ),
-                    request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
-            )
-        else:
-            # if local result below limit, check redis ## prevent unnecessary redis checks
-            result = await self.router_cache.async_increment_cache(key=rpm_key, value=1)
-            if result is not None and result > deployment_rpm:
+            if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
                     message="Deployment over defined rpm limit={}. current usage={}".format(
-                        deployment_rpm, result
+                        deployment_rpm, local_result
                     ),
                     llm_provider="",
                     model=deployment.get("litellm_params", {}).get("model"),
@@ -105,12 +86,38 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         content="{} rpm limit={}. current usage={}".format(
                             RouterErrors.user_defined_ratelimit_error.value,
                             deployment_rpm,
-                            result,
+                            local_result,
                         ),
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
                 )
-        return deployment
+            else:
+                # if local result below limit, check redis ## prevent unnecessary redis checks
+                result = await self.router_cache.async_increment_cache(
+                    key=rpm_key, value=1
+                )
+                if result is not None and result > deployment_rpm:
+                    raise litellm.RateLimitError(
+                        message="Deployment over defined rpm limit={}. current usage={}".format(
+                            deployment_rpm, result
+                        ),
+                        llm_provider="",
+                        model=deployment.get("litellm_params", {}).get("model"),
+                        response=httpx.Response(
+                            status_code=429,
+                            content="{} rpm limit={}. current usage={}".format(
+                                RouterErrors.user_defined_ratelimit_error.value,
+                                deployment_rpm,
+                                result,
+                            ),
+                            request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        ),
+                    )
+            return deployment
+        except Exception as e:
+            if isinstance(e, litellm.RateLimitError):
+                raise e
+            return deployment  # don't fail calls if eg. redis fails to connect
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
