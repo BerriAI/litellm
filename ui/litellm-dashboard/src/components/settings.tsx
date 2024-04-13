@@ -160,7 +160,7 @@ const Settings: React.FC<SettingsPageProps> = ({
               <Text>{key}</Text>
               <TextInput
                 name={key}
-                defaultValue={value}
+                defaultValue={value as string}
                 type="password"
               />
             </li>
