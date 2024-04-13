@@ -258,7 +258,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       // get the list of deployments
       let deployments: Array<string> = [];
       // This is required because the formValues["model"] can be of type string or array depending on the input type (input field or dropdown selection)
-      if (formValues["model"] instanceof String) {
+      if (formValues["model"] instanceof String || typeof formValues["model"] === "string") {
         // user has entered one or multiple model names separated by comma in to the input field
         deployments = formValues["model"].split(",");
       } else if (formValues["model"] instanceof Array) {
