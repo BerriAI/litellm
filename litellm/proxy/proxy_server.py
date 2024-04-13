@@ -3186,6 +3186,11 @@ async def startup_event():
                 seconds=30,
                 args=[prisma_client, proxy_logging_obj],
             )
+
+            # this will load all existing models on proxy startup
+            await proxy_config.add_deployment(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+            )
         scheduler.start()
 
 
