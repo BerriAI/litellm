@@ -7103,7 +7103,7 @@ async def model_info_v2(
     # Load existing config
     config = await proxy_config.get_config()
 
-    all_models = llm_model_list
+    all_models = copy.deepcopy(llm_model_list)
     if user_model is not None:
         # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
         all_models += [user_model]
@@ -7230,9 +7230,10 @@ async def model_info_v1(
 
     if len(user_api_key_dict.models) > 0:
         model_names = user_api_key_dict.models
-        all_models = [m for m in llm_model_list if m["model_name"] in model_names]
+        _relevant_models = [m for m in llm_model_list if m["model_name"] in model_names]
+        all_models = copy.deepcopy(_relevant_models)
     else:
-        all_models = llm_model_list
+        all_models = copy.deepcopy(llm_model_list)
     for model in all_models:
         # provided model_info in config.yaml
         model_info = model.get("model_info", {})
