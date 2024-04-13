@@ -48,7 +48,16 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
+  - model_name: fake-openai-endpoint-2
+    litellm_params:
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+      stream_timeout: 0.001
+      rpm: 1
+  - model_name: gpt-instruct # [PROD TEST] - tests if `/health` automatically infers this to be a text completion model
+    litellm_params:
+      model: text-completion-openai/gpt-3.5-turbo-instruct
 litellm_settings:
   drop_params: True
   # max_budget: 100 
@@ -57,6 +66,13 @@ litellm_settings:
   request_timeout: 600
   telemetry: False
   context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
+
+router_settings:
+  routing_strategy: usage-based-routing-v2 
+  redis_host: os.environ/REDIS_HOST
+  redis_password: os.environ/REDIS_PASSWORD
+  redis_port: os.environ/REDIS_PORT
+  enable_pre_call_checks: true
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys

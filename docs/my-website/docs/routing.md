@@ -95,12 +95,129 @@ print(response)
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
 - `router.aimage_generation()` - async image generation calls
 
-### Advanced
+### Advanced - Routing Strategies
 #### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
 
 <Tabs>
+<TabItem value="usage-based-v2" label="Rate-Limit Aware v2 (ASYNC)">
+
+**🎉 NEW** This is an async implementation of usage-based-routing.
+
+**Filters out deployment if tpm/rpm limit exceeded** - If you pass in the deployment's tpm/rpm limits.
+
+Routes to **deployment with lowest TPM usage** for that minute. 
+
+In production, we use Redis to track usage (TPM/RPM) across multiple deployments. This implementation uses **async redis calls** (redis.incr and redis.mget).
+
+For Azure, your RPM = TPM/6. 
+
+<Tabs>
+<TabItem value="sdk" label="sdk">
+
+```python
+from litellm import Router 
+
+
+model_list = [{ # list of model deployments 
+	"model_name": "gpt-3.5-turbo", # model alias 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "azure/chatgpt-v-2", # actual model name
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE")
+	}, 
+    "tpm": 100000,
+	"rpm": 10000,
+}, {
+    "model_name": "gpt-3.5-turbo", 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "azure/chatgpt-functioncalling", 
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE")
+	},
+    "tpm": 100000,
+	"rpm": 1000,
+}, {
+    "model_name": "gpt-3.5-turbo", 
+	"litellm_params": { # params for litellm completion/embedding call 
+		"model": "gpt-3.5-turbo", 
+		"api_key": os.getenv("OPENAI_API_KEY"),
+	},
+    "tpm": 100000,
+	"rpm": 1000,
+}]
+router = Router(model_list=model_list, 
+                redis_host=os.environ["REDIS_HOST"], 
+				redis_password=os.environ["REDIS_PASSWORD"], 
+				redis_port=os.environ["REDIS_PORT"], 
+                routing_strategy="usage-based-routing-v2" # 👈 KEY CHANGE
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
+
+response = await router.acompletion(model="gpt-3.5-turbo", 
+				messages=[{"role": "user", "content": "Hey, how's it going?"}]
+
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="proxy">
+
+**1. Set strategy in config**
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo # model alias 
+	  litellm_params: # params for litellm completion/embedding call 
+		model: azure/chatgpt-v-2 # actual model name
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+      tpm: 100000
+	  rpm: 10000
+	- model_name: gpt-3.5-turbo 
+	  litellm_params: # params for litellm completion/embedding call 
+		model: gpt-3.5-turbo 
+		api_key: os.getenv(OPENAI_API_KEY)
+      tpm: 100000
+	  rpm: 1000
+
+router_settings:
+  routing_strategy: usage-based-routing-v2 # 👈 KEY CHANGE
+  redis_host: <your-redis-host>
+  redis_password: <your-redis-password>
+  redis_port: <your-redis-port>
+  enable_pre_call_check: true
+
+general_settings:
+  master_key: sk-1234
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://localhost:4000/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-1234' \
+--data '{
+    "model": "gpt-3.5-turbo", 
+    "messages": [{"role": "user", "content": "Hey, how's it going?"}]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
+</TabItem>
 <TabItem value="latency-based" label="Latency-Based">
 
 
@@ -117,7 +234,10 @@ import asyncio
 model_list = [{ ... }]
 
 # init router
-router = Router(model_list=model_list, routing_strategy="latency-based-routing") # 👈 set routing strategy
+router = Router(model_list=model_list,
+				routing_strategy="latency-based-routing",# 👈 set routing strategy
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
 
 ## CALL 1+2
 tasks = []
@@ -257,8 +377,9 @@ router = Router(model_list=model_list,
                 redis_host=os.environ["REDIS_HOST"], 
 				redis_password=os.environ["REDIS_PASSWORD"], 
 				redis_port=os.environ["REDIS_PORT"], 
-                routing_strategy="usage-based-routing")
-
+                routing_strategy="usage-based-routing"
+				enable_pre_call_check=True, # enables router rate limits for concurrent calls
+				)
 
 response = await router.acompletion(model="gpt-3.5-turbo", 
 				messages=[{"role": "user", "content": "Hey, how's it going?"}]
@@ -555,7 +676,11 @@ router = Router(model_list: Optional[list] = None,
 
 ## Pre-Call Checks (Context Window)
 
-Enable pre-call checks to filter out deployments with context window limit < messages for a call.
+Enable pre-call checks to filter out:
+1. deployments with context window limit < messages for a call.
+2. deployments that have exceeded rate limits when making concurrent calls. (eg. `asyncio.gather(*[
+        router.acompletion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
+    ])`)
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

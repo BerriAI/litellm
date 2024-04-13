@@ -38,6 +38,18 @@ class LiteLLMBase(BaseModel):
         protected_namespaces = ()
 
 
+class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
+    """
+    Set default upperbound to max budget a key called via `/key/generate` can be.
+    """
+
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+
 class LiteLLMRoutes(enum.Enum):
     openai_routes: List = [  # chat completions
         "/openai/deployments/{model}/chat/completions",
@@ -112,7 +124,8 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     - team_jwt_scope: The JWT scope required for proxy team roles.
     - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
     - team_allowed_routes: list of allowed routes for proxy team roles.
-    - end_user_id_jwt_field: Default - `sub`. The field in the JWT token that stores the end-user ID. Turn this off by setting to `None`. Enables end-user cost tracking.
+    - user_id_jwt_field: The field in the JWT token that stores the user id (maps to `LiteLLMUserTable`). Use this for internal employees.
+    - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
 
     See `auth_checks.py` for the specific routes
@@ -127,7 +140,9 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
-    end_user_id_jwt_field: Optional[str] = "sub"
+    org_id_jwt_field: Optional[str] = None
+    user_id_jwt_field: Optional[str] = None
+    end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
 
     def __init__(self, **kwargs: Any) -> None:
@@ -363,6 +378,8 @@ class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
     user_role: Optional[str] = None
+    teams: Optional[list] = None
+    organization_id: Optional[str] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -498,6 +515,7 @@ class LiteLLM_BudgetTable(LiteLLMBase):
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_id: Optional[str] = None
     organization_alias: str
     models: List = []
     budget_id: Optional[str] = None
@@ -506,6 +524,7 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
 class LiteLLM_OrganizationTable(LiteLLMBase):
     """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
+    organization_id: Optional[str] = None
     organization_alias: Optional[str] = None
     budget_id: str
     metadata: Optional[dict] = None
@@ -689,6 +708,8 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
     litellm_budget_table: Optional[dict] = None
+
+    org_id: Optional[str] = None  # org id for a given key
 
     # hidden params used for parallel request limiting, not required to create a token
     user_id_rate_limits: Optional[dict] = None

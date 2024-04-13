@@ -1,9 +1,9 @@
 from enum import Enum
 import requests, traceback
 import json, re, xml.etree.ElementTree as ET
-from jinja2 import Template, exceptions, Environment, meta
+from jinja2 import Template, exceptions, meta, BaseLoader
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing import Optional, Any
-import imghdr, base64
 from typing import List
 import litellm
 
@@ -219,6 +219,15 @@ def phind_codellama_pt(messages):
 
 
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
+    # Define Jinja2 environment
+    env = ImmutableSandboxedEnvironment()
+
+    def raise_exception(message):
+        raise Exception(f"Error message - {message}")
+
+    # Create a template object from the template text
+    env.globals["raise_exception"] = raise_exception
+
     ## get the tokenizer config from huggingface
     bos_token = ""
     eos_token = ""
@@ -249,12 +258,6 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
         eos_token = tokenizer_config["eos_token"]
         chat_template = tokenizer_config["chat_template"]
 
-    def raise_exception(message):
-        raise Exception(f"Error message - {message}")
-
-    # Create a template object from the template text
-    env = Environment()
-    env.globals["raise_exception"] = raise_exception
     try:
         template = env.from_string(chat_template)
     except Exception as e:
@@ -959,7 +962,20 @@ def parse_xml_params(xml_content, json_schema: Optional[dict] = None):
     return params
 
 
-###
+### GEMINI HELPER FUNCTIONS ###
+
+
+def get_system_prompt(messages):
+    system_prompt_indices = []
+    system_prompt = ""
+    for idx, message in enumerate(messages):
+        if message["role"] == "system":
+            system_prompt += message["content"]
+            system_prompt_indices.append(idx)
+    if len(system_prompt_indices) > 0:
+        for idx in reversed(system_prompt_indices):
+            messages.pop(idx)
+    return system_prompt, messages
 
 
 def convert_openai_message_to_cohere_tool_result(message):

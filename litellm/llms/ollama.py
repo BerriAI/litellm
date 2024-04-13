@@ -254,7 +254,7 @@ def get_ollama_response(
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
     prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-    completion_tokens = response_json["eval_count"]
+    completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -356,7 +356,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data["model"]
             prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(data["prompt"])))  # type: ignore
-            completion_tokens = response_json["eval_count"]
+            completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

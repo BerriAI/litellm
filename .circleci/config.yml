@@ -129,6 +129,7 @@ jobs:
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
@@ -188,6 +189,9 @@ jobs:
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DOCKER_DB_URL \
               -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
