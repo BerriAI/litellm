@@ -256,7 +256,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
        */
 
       // get the list of deployments
-      let deployments: Array<string> = Object.values(formValues["model"])
+      let deployments: Array<string> = formValues["model"].split(",");
       console.log(`received deployments: ${deployments}`)
       console.log(`received type of deployments: ${typeof deployments}`)
       deployments.forEach(async (litellm_model) => { 
