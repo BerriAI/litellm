@@ -491,23 +491,16 @@ class Router:
                 deployment=deployment, kwargs=kwargs, client_type="rpm_client"
             )
 
-            if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+            if (
+                rpm_semaphore is not None
+                and isinstance(rpm_semaphore, asyncio.Semaphore)
+                and self.routing_strategy == "usage-based-routing-v2"
             ):
                 async with rpm_semaphore:
                     """
-                    - Check against in-memory tpm/rpm limits before making the call
+                    - Check rpm limits before making the call
                     """
-                    dt = get_utc_datetime()
-                    current_minute = dt.strftime("%H-%M")
-                    id = kwargs["model_info"]["id"]
-                    rpm_key = "{}:rpm:{}".format(id, current_minute)
-                    curr_rpm = await self.cache.async_get_cache(key=rpm_key)
-                    if (
-                        curr_rpm is not None and curr_rpm >= data["rpm"]
-                    ):  # >= b/c the initial count is 0
-                        raise Exception("Rate Limit error")
-                    await self.cache.async_increment_cache(key=rpm_key, value=1)
+                    await self.lowesttpm_logger_v2.pre_call_rpm_check(deployment)
                     response = await _response
             else:
                 response = await _response
