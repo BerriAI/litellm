@@ -30,7 +30,7 @@ from litellm.utils import ModelResponse, CustomStreamWrapper, get_utc_datetime
 import copy
 from litellm._logging import verbose_router_logger
 import logging
-from litellm.types.router import Deployment, ModelInfo, LiteLLM_Params
+from litellm.types.router import Deployment, ModelInfo, LiteLLM_Params, RouterErrors
 
 
 class Router:
@@ -78,6 +78,7 @@ class Router:
             "latency-based-routing",
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based routing
+        semaphore: Optional[asyncio.Semaphore] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -143,6 +144,8 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+        if semaphore:
+            self.semaphore = semaphore
         self.set_verbose = set_verbose
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
@@ -409,11 +412,18 @@ class Router:
             raise e
 
     async def _acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+        """
+        - Get an available deployment
+        - call it with a semaphore over the call
+        - semaphore specific to it's rpm
+        - in the semaphore,  make a check against it's local rpm before running
+        """
         model_name = None
         try:
             verbose_router_logger.debug(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
             )
+
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
@@ -443,6 +453,7 @@ class Router:
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs, client_type="async"
             )
+
             # check if provided keys == client keys #
             dynamic_api_key = kwargs.get("api_key", None)
             if (
@@ -465,7 +476,7 @@ class Router:
                 )  # this uses default_litellm_params when nothing is set
             )
 
-            response = await litellm.acompletion(
+            _response = litellm.acompletion(
                 **{
                     **data,
                     "messages": messages,
@@ -475,6 +486,25 @@ class Router:
                     **kwargs,
                 }
             )
+
+            rpm_semaphore = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="rpm_client"
+            )
+
+            if (
+                rpm_semaphore is not None
+                and isinstance(rpm_semaphore, asyncio.Semaphore)
+                and self.routing_strategy == "usage-based-routing-v2"
+            ):
+                async with rpm_semaphore:
+                    """
+                    - Check rpm limits before making the call
+                    """
+                    await self.lowesttpm_logger_v2.pre_call_rpm_check(deployment)
+                    response = await _response
+            else:
+                response = await _response
+
             self.success_calls[model_name] += 1
             verbose_router_logger.info(
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
@@ -1265,6 +1295,8 @@ class Router:
                     min_timeout=self.retry_after,
                 )
                 await asyncio.sleep(timeout)
+            elif RouterErrors.user_defined_ratelimit_error.value in str(e):
+                raise e  # don't wait to retry if deployment hits user-defined rate-limit
             elif hasattr(original_exception, "status_code") and litellm._should_retry(
                 status_code=original_exception.status_code
             ):
@@ -1680,12 +1712,26 @@ class Router:
 
     def set_client(self, model: dict):
         """
-        Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
+        - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
+        - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
         """
         client_ttl = self.client_ttl
         litellm_params = model.get("litellm_params", {})
         model_name = litellm_params.get("model")
         model_id = model["model_info"]["id"]
+        # ### IF RPM SET - initialize a semaphore ###
+        rpm = litellm_params.get("rpm", None)
+        if rpm:
+            semaphore = asyncio.Semaphore(rpm)
+            cache_key = f"{model_id}_rpm_client"
+            self.cache.set_cache(
+                key=cache_key,
+                value=semaphore,
+                local_only=True,
+            )
+
+        #     print("STORES SEMAPHORE IN CACHE")
+
         ####  for OpenAI / Azure we need to initalize the Client for High Traffic ########
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         custom_llm_provider = custom_llm_provider or model_name.split("/", 1)[0] or ""
@@ -2275,7 +2321,11 @@ class Router:
             The appropriate client based on the given client_type and kwargs.
         """
         model_id = deployment["model_info"]["id"]
-        if client_type == "async":
+        if client_type == "rpm_client":
+            cache_key = "{}_rpm_client".format(model_id)
+            client = self.cache.get_cache(key=cache_key, local_only=True)
+            return client
+        elif client_type == "async":
             if kwargs.get("stream") == True:
                 cache_key = f"{model_id}_stream_async_client"
                 client = self.cache.get_cache(key=cache_key, local_only=True)
@@ -2328,6 +2378,7 @@ class Router:
         Filter out model in model group, if:
 
         - model context window < message length
+        - filter models above rpm limits
         - [TODO] function call and model doesn't support function calling
         """
         verbose_router_logger.debug(
@@ -2352,7 +2403,7 @@ class Router:
         rpm_key = f"{model}:rpm:{current_minute}"
         model_group_cache = (
             self.cache.get_cache(key=rpm_key, local_only=True) or {}
-        )  # check the redis + in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
+        )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
         for idx, deployment in enumerate(_returned_deployments):
             # see if we have the info for this model
             try:
@@ -2388,23 +2439,24 @@ class Router:
                 self.cache.get_cache(key=model_id, local_only=True) or 0
             )
             ### get usage based cache ###
-            model_group_cache[model_id] = model_group_cache.get(model_id, 0)
+            if isinstance(model_group_cache, dict):
+                model_group_cache[model_id] = model_group_cache.get(model_id, 0)
 
-            current_request = max(
-                current_request_cache_local, model_group_cache[model_id]
-            )
+                current_request = max(
+                    current_request_cache_local, model_group_cache[model_id]
+                )
 
-            if (
-                isinstance(_litellm_params, dict)
-                and _litellm_params.get("rpm", None) is not None
-            ):
                 if (
-                    isinstance(_litellm_params["rpm"], int)
-                    and _litellm_params["rpm"] <= current_request
+                    isinstance(_litellm_params, dict)
+                    and _litellm_params.get("rpm", None) is not None
                 ):
-                    invalid_model_indices.append(idx)
-                    _rate_limit_error = True
-                    continue
+                    if (
+                        isinstance(_litellm_params["rpm"], int)
+                        and _litellm_params["rpm"] <= current_request
+                    ):
+                        invalid_model_indices.append(idx)
+                        _rate_limit_error = True
+                        continue
 
         if len(invalid_model_indices) == len(_returned_deployments):
             """
