@@ -269,7 +269,7 @@ async def test_add_model_run_health():
         model_name = f"azure-model-health-check-{model_id}"
         print("adding model", model_name)
         await add_model_for_health_checking(session=session, model_id=model_id)
-        await asyncio.sleep(10)
+        await asyncio.sleep(30)
         print("calling /model/info")
         await get_model_info(session=session, key=key)
         print("calling v2/model/info")
