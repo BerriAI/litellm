@@ -3,7 +3,7 @@ from typing import List, Optional, Union, Dict, Tuple, Literal
 from pydantic import BaseModel, validator
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-import uuid
+import uuid, enum
 
 
 class ModelConfig(BaseModel):
@@ -166,3 +166,11 @@ class Deployment(BaseModel):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class RouterErrors(enum.Enum):
+    """
+    Enum for router specific errors with common codes
+    """
+
+    user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
