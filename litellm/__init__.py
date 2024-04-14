@@ -19,6 +19,7 @@ if set_verbose == True:
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
+service_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
 _async_input_callback: List[Callable] = (
     []
