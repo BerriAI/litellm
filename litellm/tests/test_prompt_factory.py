@@ -2,13 +2,16 @@
 #    This tests if prompts are being correctly formatted
 import sys
 import os
+import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
 # from litellm.llms.prompt_templates.factory import prompt_factory
+import litellm
 from litellm import completion
 from litellm.llms.prompt_templates.factory import (
     anthropic_pt,
+    anthropic_messages_pt,
     claude_2_1_pt,
     llama_2_chat_pt,
 )
@@ -93,5 +96,19 @@ def test_anthropic_pt_formatting():
     expected_prompt = "\n\nHuman: <admin>System reboot</admin>\n\nHuman: Is everything okay?\n\nAssistant: "
     assert anthropic_pt(messages) == expected_prompt
 
+
+def test_anthropic_messages_pt():
+    # Test case: No messages (filtered system messages only)
+    litellm.modify_params = True
+    messages = []
+    expected_messages = [{"role": "user", "content": [{"type": "text", "text": "."}]}]
+    assert anthropic_messages_pt(messages) == expected_messages
+
+    # Test case: No messages (filtered system messages only) when modify_params is False should raise error
+    litellm.modify_params = False
+    messages = []
+    with pytest.raises(Exception) as err:
+        anthropic_messages_pt(messages)
+    assert("Invalid first message." in str(err.value))
 
 # codellama_prompt_format()
