@@ -8123,7 +8123,7 @@ async def update_config(config_info: ConfigYAML):
 
     Currently supports modifying General Settings + LiteLLM settings
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
         import base64
 
@@ -8190,6 +8190,12 @@ async def update_config(config_info: ConfigYAML):
 
         # Save the updated config
         await proxy_config.save_config(new_config=config)
+
+        # make sure the change is instantly rolled out for langfuse
+        if prisma_client is not None:
+            await proxy_config.add_deployment(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+            )
 
         # Test new connections
         ## Slack
