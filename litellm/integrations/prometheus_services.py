@@ -24,7 +24,12 @@ class PrometheusServicesLogger:
         **kwargs,
     ):
         try:
-            from prometheus_client import Counter, Histogram, REGISTRY
+            try:
+                from prometheus_client import Counter, Histogram, REGISTRY
+            except ImportError:
+                raise Exception(
+                    "Missing prometheus_client. Run `pip install prometheus-client`"
+                )
 
             self.Histogram = Histogram
             self.Counter = Counter
