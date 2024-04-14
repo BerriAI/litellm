@@ -3186,6 +3186,11 @@ async def startup_event():
                 seconds=30,
                 args=[prisma_client, proxy_logging_obj],
             )
+
+            # this will load all existing models on proxy startup
+            await proxy_config.add_deployment(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+            )
         scheduler.start()
 
 
@@ -8221,15 +8226,58 @@ async def update_config(config_info: ConfigYAML):
 async def get_config():
     """
     For Admin UI - allows admin to view config via UI
+    # return the callbacks and the env variables for the callback
 
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
+        import base64
 
         config_data = await proxy_config.get_config()
-        config_data = config_data.get("litellm_settings", {})
+        _litellm_settings = config_data.get("litellm_settings", {})
+        environment_variables = config_data.get("environment_variables", {})
 
-        return {"data": config_data, "status": "success"}
+        # check if "langfuse" in litellm_settings
+        _success_callbacks = _litellm_settings.get("success_callback", [])
+        _data_to_return = []
+        """
+        [
+            {
+                "name": "langfuse",
+                "variables": {
+                    "LANGFUSE_PUB_KEY": "value",
+                    "LANGFUSE_SECRET_KEY": "value",
+                    "LANGFUSE_HOST": "value"
+                },
+            }
+        ]
+        
+        """
+        for _callback in _success_callbacks:
+            if _callback == "langfuse":
+                _langfuse_vars = [
+                    "LANGFUSE_PUBLIC_KEY",
+                    "LANGFUSE_SECRET_KEY",
+                    "LANGFUSE_HOST",
+                ]
+                _langfuse_env_vars = {}
+                for _var in _langfuse_vars:
+                    env_variable = environment_variables.get(_var, None)
+                    if env_variable is None:
+                        _langfuse_env_vars[_var] = None
+                    else:
+                        # decode + decrypt the value
+                        decoded_b64 = base64.b64decode(env_variable)
+                        _decrypted_value = decrypt_value(
+                            value=decoded_b64, master_key=master_key
+                        )
+                        _langfuse_env_vars[_var] = _decrypted_value
+
+                _data_to_return.append(
+                    {"name": _callback, "variables": _langfuse_env_vars}
+                )
+
+        return {"status": "success", "data": _data_to_return}
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):
@@ -8303,7 +8351,7 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal["slack_budget_alerts"] = fastapi.Query(
+    service: Literal["slack_budget_alerts", "langfuse"] = fastapi.Query(
         description="Specify the service being hit."
     ),
 ):
@@ -8319,14 +8367,29 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
-
-        if service not in ["slack_budget_alerts"]:
+        if service not in ["slack_budget_alerts", "langfuse"]:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
                 },
             )
+
+        if service == "langfuse":
+            from litellm.integrations.langfuse import LangFuseLogger
+
+            langfuse_logger = LangFuseLogger()
+            langfuse_logger.Langfuse.auth_check()
+            _ = litellm.completion(
+                model="openai/litellm-mock-response-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                user="litellm:/health/services",
+                mock_response="This is a mock response",
+            )
+            return {
+                "status": "success",
+                "message": "Mock LLM request made - check langfuse.",
+            }
 
         if "slack" in general_settings.get("alerting", []):
             test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
