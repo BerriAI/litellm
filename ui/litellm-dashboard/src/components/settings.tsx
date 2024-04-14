@@ -17,7 +17,7 @@ import {
   TextInput,
   Col,
 } from "@tremor/react";
-import { getCallbacksCall, setCallbacksCall } from "./networking";
+import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 
@@ -177,7 +177,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       </TableCell>
       <TableCell>
         
-        <Button onClick={() => console.log(`Test Callback ${callback.name} clicked`)}>
+        <Button onClick={() => serviceHealthCheck(accessToken, callback.name)}>
           Test Callback
         </Button>
       </TableCell>
