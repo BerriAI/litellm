@@ -133,6 +133,10 @@ const Settings: React.FC<SettingsPageProps> = ({
     setSelectedCallback(value);
   };
 
+  if (!accessToken) {
+    return null;
+  }
+
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
