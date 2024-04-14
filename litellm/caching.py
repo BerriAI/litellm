@@ -505,10 +505,12 @@ class RedisCache(BaseCache):
             # 'results' is a list of values corresponding to the order of keys in 'key_list'.
             key_value_dict = dict(zip(key_list, results))
 
-            decoded_results = {
-                k.decode("utf-8"): self._get_cache_logic(v)
-                for k, v in key_value_dict.items()
-            }
+            decoded_results = {}
+            for k, v in key_value_dict.items():
+                if isinstance(k, bytes):
+                    k = k.decode("utf-8")
+                v = self._get_cache_logic(v)
+                decoded_results[k] = v
 
             return decoded_results
         except Exception as e:

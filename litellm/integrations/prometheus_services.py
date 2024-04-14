@@ -58,7 +58,6 @@ class PrometheusServicesLogger:
 
     def is_metric_registered(self, metric_name) -> bool:
         for metric in self.REGISTRY.collect():
-            print(f"metric name: {metric.name}")
             if metric_name == metric.name:
                 return True
         return False
@@ -82,7 +81,7 @@ class PrometheusServicesLogger:
         )
 
     def create_counter(self, label: str):
-        metric_name = "litellm_{}_requests".format(label)
+        metric_name = "litellm_{}_failed_requests".format(label)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
             return self.get_metric(metric_name)
@@ -158,6 +157,7 @@ class PrometheusServicesLogger:
                     )
 
     async def async_service_failure_hook(self, payload: ServiceLoggerPayload):
+        print(f"received error payload: {payload.error}")
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
 

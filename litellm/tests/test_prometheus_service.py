@@ -54,6 +54,8 @@ async def test_completion_with_caching():
 
     assert sl.mock_testing_async_success_hook > 0
     assert sl.prometheusServicesLogger.mock_testing_success_calls > 0
+    assert sl.mock_testing_sync_failure_hook == 0
+    assert sl.mock_testing_async_failure_hook == 0
 
 
 @pytest.mark.asyncio
@@ -81,6 +83,8 @@ async def test_completion_with_caching_bad_call():
         pass
 
     assert sl.mock_testing_async_failure_hook > 0
+    assert sl.mock_testing_async_success_hook == 0
+    assert sl.mock_testing_sync_success_hook == 0
 
 
 @pytest.mark.asyncio
@@ -134,6 +138,8 @@ async def test_router_with_caching():
         response1 = await router.acompletion(model="azure/gpt-4", messages=messages)
 
         assert sl.mock_testing_async_success_hook > 0
+        assert sl.mock_testing_sync_failure_hook == 0
+        assert sl.mock_testing_async_failure_hook == 0
         assert sl.prometheusServicesLogger.mock_testing_success_calls > 0
 
     except Exception as e:
@@ -194,6 +200,8 @@ async def test_router_with_caching_bad_call():
             pass
 
         assert sl.mock_testing_async_failure_hook > 0
+        assert sl.mock_testing_async_success_hook == 0
+        assert sl.mock_testing_sync_success_hook == 0
 
     except Exception as e:
         pytest.fail(f"An exception occured - {str(e)}")
