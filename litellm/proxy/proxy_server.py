@@ -8367,8 +8367,19 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
+        if service not in ["slack_budget_alerts", "langfuse"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
+                },
+            )
+
         if service == "langfuse":
-            # run mock completion request
+            from litellm.integrations.langfuse import LangFuseLogger
+
+            langfuse_logger = LangFuseLogger()
+            langfuse_logger.Langfuse.auth_check()
             _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -8379,14 +8390,6 @@ async def health_services_endpoint(
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
             }
-
-        if service not in ["slack_budget_alerts", "langfuse"]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
-                },
-            )
 
         if "slack" in general_settings.get("alerting", []):
             test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
