@@ -38,8 +38,8 @@ response = client.chat.completions.create(
             "content": "this is a test request, write a short poem"
         }
     ],
-    extra_body={
-        "metadata": {
+    extra_body={ # pass in any provider-specific param, if not supported by openai, https://docs.litellm.ai/docs/completion/input#provider-specific-params
+        "metadata": { # 👈 use for logging additional params (e.g. to langfuse)
             "generation_name": "ishaan-generation-openai-client",
             "generation_id": "openai-client-gen-id22",
             "trace_id": "openai-client-trace-id22",
@@ -363,7 +363,9 @@ curl --location 'http://0.0.0.0:4000/moderations' \
 ## Advanced
 
 ### Pass User LLM API Keys, Fallbacks
-Allows users to pass their model list, api base, OpenAI API key (any LiteLLM supported provider) to make requests 
+Allow your end-users to pass their model list, api base, OpenAI API key (any LiteLLM supported provider) to make requests 
+
+**Note** This is not related to [virtual keys](./virtual_keys.md). This is for when you want to pass in your users actual LLM API keys. 
 
 :::info
 

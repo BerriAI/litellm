@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { userInfoCall, modelAvailableCall } from "./networking";
-import { Grid, Col, Card, Text } from "@tremor/react";
+import { userInfoCall, modelAvailableCall, getTotalSpendCall } from "./networking";
+import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import ViewUserSpend from "./view_user_spend";
@@ -17,6 +17,7 @@ type UserSpendData = {
   spend: number;
   max_budget?: number | null;
 };
+
 
 interface UserDashboardProps {
   userID: string | null;
@@ -52,6 +53,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const token = searchParams.get("token");
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<any | null>(
     teams ? teams[0] : null
@@ -123,13 +125,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       } else {
         const fetchData = async () => {
           try {
-            const response = await userInfoCall(accessToken, userID, userRole);
+            const response = await userInfoCall(accessToken, userID, userRole, false, null, null);
             console.log(
               `received teams in user dashboard: ${Object.keys(
                 response
               )}; team values: ${Object.entries(response.teams)}`
             );
-            setUserSpendData(response["user_info"]);
+            if (userRole == "Admin") {
+              const globalSpend = await getTotalSpendCall(accessToken);
+              setUserSpendData(globalSpend);
+              console.log("globalSpend:", globalSpend);
+            } else {
+              setUserSpendData(response["user_info"]);
+            }
             setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
             setSelectedTeam(response["teams"] ? response["teams"][0] : null);
@@ -168,7 +176,28 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchData();
       }
     }
+    
   }, [userID, token, accessToken, keys, userRole]);
+
+  useEffect(() => {
+    // This code will run every time selectedTeam changes
+    if (keys !== null && selectedTeam !== null && selectedTeam !== undefined) {
+      let sum = 0;
+      for (const key of keys) {
+        if (selectedTeam.hasOwnProperty('team_id') && key.team_id !== null && key.team_id === selectedTeam.team_id) {
+          sum += key.spend;
+        }
+      }
+      setTeamSpend(sum);
+    } else if (keys !== null) {
+      // sum the keys which don't have team-id set (default team)
+      let sum = 0 
+      for (const key of keys) {
+        sum += key.spend;
+      }
+      setTeamSpend(sum);
+    }
+  }, [selectedTeam]);
 
   if (userID == null || token == null) {
     // Now you can construct the full URL
@@ -197,27 +226,32 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     );
   }
 
+  console.log("inside user dashboard, selected team", selectedTeam);
+  console.log(`teamSpend: ${teamSpend}`)
   return (
-    <div>
-      <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
+      <div className="w-full mx-4">
+      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
           <ViewUserSpend
             userID={userID}
-            userSpendData={userSpendData}
             userRole={userRole}
             accessToken={accessToken}
+            userSpend={teamSpend}
           />
+
           <ViewKeyTable
             userID={userID}
+            userRole={userRole}
             accessToken={accessToken}
+            selectedTeam={selectedTeam ? selectedTeam : null}
             data={keys}
             setData={setKeys}
           />
           <CreateKey
+            key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
-            teamID={selectedTeam ? selectedTeam["team_id"] : null}
+            team={selectedTeam ? selectedTeam : null}
             userRole={userRole}
-            userModels={userModels}
             accessToken={accessToken}
             data={keys}
             setData={setKeys}

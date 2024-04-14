@@ -4,7 +4,6 @@ import TabItem from '@theme/TabItem';
 # AWS Bedrock
 Anthropic, Amazon Titan, A121 LLMs are Supported on Bedrock
 
-## Pre-Requisites
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
 pip install boto3>=1.28.57
@@ -51,11 +50,25 @@ export AWS_REGION_NAME=""
 
 ### 2. Start the proxy 
 
+<Tabs>
+<TabItem value="cli" label="CLI">
+
 ```bash
 $ litellm --model anthropic.claude-3-sonnet-20240229-v1:0
 
 # Server running on http://0.0.0.0:4000
 ```
+</TabItem>
+<TabItem value="config" label="config.yaml">
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-instant-v1
+```
+</TabItem>
+</Tabs>
 
 ### 3. Test it
 
@@ -67,7 +80,7 @@ $ litellm --model anthropic.claude-3-sonnet-20240229-v1:0
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "bedrock-claude-v1",
       "messages": [
         {
           "role": "user",
@@ -88,7 +101,7 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -112,7 +125,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo",
+    model = "bedrock-claude-v1",
     temperature=0.1
 )
 
@@ -132,6 +145,15 @@ print(response)
 </Tabs>
 
 ## Usage - Function Calling 
+
+:::info 
+
+Claude returns it's output as an XML Tree. [Here is how we translate it](https://github.com/BerriAI/litellm/blob/49642a5b00a53b1babc1a753426a8afcac85dbbe/litellm/llms/prompt_templates/factory.py#L734).
+
+You can see the raw response via `response._hidden_params["original_response"]`.
+
+Claude hallucinates, e.g. returning the list param `value` as `<value>\n<item>apple</item>\n<item>banana</item>\n</value>` or `<value>\n<list>\n<item>apple</item>\n<item>banana</item>\n</list>\n</value>`.
+:::
 
 ```python
 from litellm import completion
@@ -473,7 +495,8 @@ Here's an example of using a bedrock model with LiteLLM
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
-| Anthropic Claude-V3      | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude-V3  sonnet    | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude-V3 Haiku     | `completion(model='bedrock/anthropic.claude-3-haiku-20240307-v1:0', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V2.1      | `completion(model='bedrock/anthropic.claude-v2:1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V2        | `completion(model='bedrock/anthropic.claude-v2', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-Instant V1 | `completion(model='bedrock/anthropic.claude-instant-v1', messages=messages)` | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |

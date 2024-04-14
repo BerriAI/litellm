@@ -93,7 +93,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 else:
                     # Make the first request to /analyze
                     analyze_url = f"{self.presidio_analyzer_api_base}analyze"
-                    verbose_proxy_logger.debug(f"Making request to: {analyze_url}")
+                    verbose_proxy_logger.debug("Making request to: %s", analyze_url)
                     analyze_payload = {"text": text, "language": "en"}
                     if self.ad_hoc_recognizers is not None:
                         analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
@@ -105,7 +105,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
 
                     # Make the second request to /anonymize
                     anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-                    verbose_proxy_logger.debug(f"Making request to: {anonymize_url}")
+                    verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
                     anonymize_payload = {
                         "text": text,
                         "analyzer_results": analyze_results,
@@ -118,7 +118,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
 
                 new_text = text
                 if redacted_text is not None:
-                    verbose_proxy_logger.debug(f"redacted_text: {redacted_text}")
+                    verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
                     for item in redacted_text["items"]:
                         start = item["start"]
                         end = item["end"]
@@ -172,7 +172,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 no_pii = not permissions.get("pii", True)
 
             content_safety = data.get("content_safety", None)
-            verbose_proxy_logger.debug(f"content_safety: {content_safety}")
+            verbose_proxy_logger.debug("content_safety: %s", content_safety)
             ## Request-level turn on/off PII controls ##
             if content_safety is not None and isinstance(content_safety, dict):
                 # pii masking ##
@@ -240,7 +240,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 )
             return data
         except Exception as e:
-            verbose_proxy_logger.info(f"An error occurred - {str(e)}")
+            verbose_proxy_logger.info(
+                f"An error occurred -",
+            )
             raise e
 
     async def async_post_call_success_hook(

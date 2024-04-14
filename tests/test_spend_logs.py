@@ -109,8 +109,48 @@ async def test_spend_logs():
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
         response = await chat_completion(session=session, key=key)
-        await asyncio.sleep(5)
+        await asyncio.sleep(20)
         await get_spend_logs(session=session, request_id=response["id"])
+
+
+async def get_predict_spend_logs(session):
+    url = f"http://0.0.0.0:4000/global/predict/spend/logs"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "data": [
+            {
+                "date": "2024-03-09",
+                "spend": 200000,
+                "api_key": "f19bdeb945164278fc11c1020d8dfd70465bffd931ed3cb2e1efa6326225b8b7",
+            }
+        ]
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
+
+
+@pytest.mark.asyncio
+async def test_get_predicted_spend_logs():
+    """
+    - Create key
+    - Make call (makes sure it's in spend logs)
+    - Get request id from logs
+    """
+    async with aiohttp.ClientSession() as session:
+        result = await get_predict_spend_logs(session=session)
+        print(result)
+
+        assert "response" in result
+        assert len(result["response"]) > 0
 
 
 @pytest.mark.skip(reason="High traffic load test, meant to be run locally")

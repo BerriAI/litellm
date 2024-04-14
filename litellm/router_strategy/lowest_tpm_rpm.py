@@ -11,6 +11,7 @@ from litellm import token_counter
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_router_logger
+from litellm.utils import print_verbose
 
 
 class LowestTPMLoggingHandler(CustomLogger):
@@ -38,6 +39,8 @@ class LowestTPMLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                elif isinstance(id, int):
+                    id = str(id)
 
                 total_tokens = response_obj["usage"]["total_tokens"]
 
@@ -86,6 +89,8 @@ class LowestTPMLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                elif isinstance(id, int):
+                    id = str(id)
 
                 total_tokens = response_obj["usage"]["total_tokens"]
 
@@ -148,31 +153,26 @@ class LowestTPMLoggingHandler(CustomLogger):
             input_tokens = token_counter(messages=messages, text=input)
         except:
             input_tokens = 0
+        verbose_router_logger.debug(f"input_tokens={input_tokens}")
         # -----------------------
         # Find lowest used model
         # ----------------------
         lowest_tpm = float("inf")
-        deployment = None
-        if tpm_dict is None:  # base case - none of the deployments have been used
-            # Return the 1st deployment where deployment["tpm"] >= input_tokens
-            for deployment in healthy_deployments:
-                _deployment_tpm = (
-                    deployment.get("tpm", None)
-                    or deployment.get("litellm_params", {}).get("tpm", None)
-                    or deployment.get("model_info", {}).get("tpm", None)
-                    or float("inf")
-                )
 
-                if _deployment_tpm >= input_tokens:
-                    return deployment
-            return None
+        if tpm_dict is None:  # base case - none of the deployments have been used
+            # initialize a tpm dict with {model_id: 0}
+            tpm_dict = {}
+            for deployment in healthy_deployments:
+                tpm_dict[deployment["model_info"]["id"]] = 0
+        else:
+            for d in healthy_deployments:
+                ## if healthy deployment not yet used
+                if d["model_info"]["id"] not in tpm_dict:
+                    tpm_dict[d["model_info"]["id"]] = 0
 
         all_deployments = tpm_dict
-        for d in healthy_deployments:
-            ## if healthy deployment not yet used
-            if d["model_info"]["id"] not in all_deployments:
-                all_deployments[d["model_info"]["id"]] = 0
 
+        deployment = None
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
             _deployment = None
@@ -183,28 +183,34 @@ class LowestTPMLoggingHandler(CustomLogger):
             if _deployment is None:
                 continue  # skip to next one
 
-            _deployment_tpm = (
-                _deployment.get("tpm", None)
-                or _deployment.get("litellm_params", {}).get("tpm", None)
-                or _deployment.get("model_info", {}).get("tpm", None)
-                or float("inf")
-            )
+            _deployment_tpm = None
+            if _deployment_tpm is None:
+                _deployment_tpm = _deployment.get("tpm")
+            if _deployment_tpm is None:
+                _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm")
+            if _deployment_tpm is None:
+                _deployment_tpm = _deployment.get("model_info", {}).get("tpm")
+            if _deployment_tpm is None:
+                _deployment_tpm = float("inf")
 
-            _deployment_rpm = (
-                _deployment.get("rpm", None)
-                or _deployment.get("litellm_params", {}).get("rpm", None)
-                or _deployment.get("model_info", {}).get("rpm", None)
-                or float("inf")
-            )
+            _deployment_rpm = None
+            if _deployment_rpm is None:
+                _deployment_rpm = _deployment.get("rpm")
+            if _deployment_rpm is None:
+                _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm")
+            if _deployment_rpm is None:
+                _deployment_rpm = _deployment.get("model_info", {}).get("rpm")
+            if _deployment_rpm is None:
+                _deployment_rpm = float("inf")
 
-            if item_tpm == 0:
-                deployment = _deployment
-                break
-            elif item_tpm + input_tokens > _deployment_tpm or (
-                item in rpm_dict and rpm_dict[item] + 1 > _deployment_rpm
-            ):  # if user passed in tpm / rpm in the model_list
+            if item_tpm + input_tokens > _deployment_tpm:
+                continue
+            elif (rpm_dict is not None and item in rpm_dict) and (
+                rpm_dict[item] + 1 > _deployment_rpm
+            ):
                 continue
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 deployment = _deployment
+        print_verbose("returning picked lowest tpm/rpm deployment.")
         return deployment

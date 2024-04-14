@@ -1,11 +1,11 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.2.0 # openai + http req.
 openai>=1.0.0 # openai req. 
-fastapi # server dep
+fastapi>=0.109.1 # server dep
 pydantic>=2.5 # openai req. 
 backoff==2.2.1 # server dep
 pyyaml>=6.0.1 # server dep
-uvicorn==0.22.0 # server dep
+uvicorn==0.29.0 # server dep
 gunicorn==21.2.0 # server dep
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
@@ -13,16 +13,19 @@ numpy==1.24.3 # semantic caching
 pandas==2.1.1 # for viewing clickhouse spend analytics
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
-google-generativeai==0.3.2 # for vertex ai calls
+pynacl==1.5.0 # for encrypting keys
+google-cloud-aiplatform==1.47.0 # for vertex ai calls
+anthropic[vertex]==0.21.3
+google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
-traceloop-sdk==0.5.3 # for open telemetry logging
 langfuse>=2.6.3 # for langfuse self-hosted logging
-clickhouse_connect==0.7.0
-orjson==3.9.7 # fast /embedding responses
+datadog-api-client==2.23.0 # for datadog logging
+prometheus_client==0.20.0 # for /metrics endpoint on proxy
+orjson==3.9.15 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
 fastapi-sso==0.10.0 # admin UI, SSO
-PyJWT==2.8.0 # admin UI, jwts 
-python-multipart==0.0.6 # admin UI
+pyjwt[crypto]==2.8.0
+python-multipart==0.0.9 # admin UI
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage
@@ -33,5 +36,5 @@ jinja2==3.1.3 # for prompt templates
 certifi>=2023.7.22 # [TODO] clean up 
 aiohttp==3.9.0 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
-argon2-cffi==23.1.0 # for checking secrets
+tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 ####

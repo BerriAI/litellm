@@ -715,6 +715,16 @@ class AzureChatCompletion(BaseLLM):
                 model = model
             else:
                 model = None
+
+            ## BASE MODEL CHECK
+            if (
+                model_response is not None
+                and optional_params.get("base_model", None) is not None
+            ):
+                model_response._hidden_params["model"] = optional_params.pop(
+                    "base_model"
+                )
+
             data = {"model": model, "prompt": prompt, **optional_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
@@ -789,6 +799,7 @@ class AzureChatCompletion(BaseLLM):
         optional_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
+        max_retries: int,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         api_version: Optional[str] = None,
@@ -806,8 +817,6 @@ class AzureChatCompletion(BaseLLM):
             "azure_deployment": model,
             "timeout": timeout,
         }
-
-        max_retries = optional_params.pop("max_retries", None)
 
         azure_client_params = select_azure_base_url_or_endpoint(
             azure_client_params=azure_client_params

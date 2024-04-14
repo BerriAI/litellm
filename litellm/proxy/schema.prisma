@@ -24,6 +24,19 @@ model LiteLLM_BudgetTable {
   updated_by String
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
+  end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
+}
+
+// Models on proxy
+model LiteLLM_ProxyModelTable {
+  model_id String @id @default(uuid())
+  model_name String 
+  litellm_params Json
+  model_info Json? 
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
 }
 
 model LiteLLM_OrganizationTable {
@@ -40,6 +53,7 @@ model LiteLLM_OrganizationTable {
     updated_by String
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     teams LiteLLM_TeamTable[] 
+    users LiteLLM_UserTable[]
 }
 
 // Model info for teams, just has model aliases for now.
@@ -52,6 +66,7 @@ model LiteLLM_ModelTable {
   updated_by String
   team LiteLLM_TeamTable?
 }
+
 
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
@@ -70,6 +85,7 @@ model LiteLLM_TeamTable {
     rpm_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
+    blocked Boolean @default(false)
     created_at    DateTime               @default(now()) @map("created_at")
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
@@ -82,7 +98,9 @@ model LiteLLM_TeamTable {
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
 		user_id    String @id
+    user_alias String? 
     team_id    String?
+    organization_id String?
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
@@ -97,6 +115,7 @@ model LiteLLM_UserTable {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
 }
 
 // Generate Tokens for Proxy
@@ -125,6 +144,15 @@ model LiteLLM_VerificationToken {
     model_max_budget Json @default("{}")
     budget_id String?
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+}
+
+model LiteLLM_EndUserTable {
+  user_id String @id
+  alias    String? // admin-facing alias
+  spend      Float    @default(0.0)
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  blocked Boolean @default(false)
 }
 
 // store proxy config.yaml

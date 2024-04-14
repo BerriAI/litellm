@@ -97,27 +97,23 @@ class TmpFunction:
         )
 
 
-def test_async_chat_openai_stream():
+@pytest.mark.asyncio
+async def test_async_chat_openai_stream():
     try:
         tmp_function = TmpFunction()
         litellm.set_verbose = True
         litellm.success_callback = [tmp_function.async_test_logging_fn]
         complete_streaming_response = ""
 
-        async def call_gpt():
-            nonlocal complete_streaming_response
-            response = await litellm.acompletion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
-                stream=True,
-            )
-            async for chunk in response:
-                complete_streaming_response += (
-                    chunk["choices"][0]["delta"]["content"] or ""
-                )
-                print(complete_streaming_response)
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+            stream=True,
+        )
+        async for chunk in response:
+            complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
+            print(complete_streaming_response)
 
-        asyncio.run(call_gpt())
         complete_streaming_response = complete_streaming_response.strip("'")
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"
@@ -130,7 +126,7 @@ def test_async_chat_openai_stream():
         assert tmp_function.async_success == True
     except Exception as e:
         print(e)
-        pytest.fail(f"An error occurred - {str(e)}")
+        pytest.fail(f"An error occurred - {str(e)}\n\n{traceback.format_exc()}")
 
 
 # test_async_chat_openai_stream()
@@ -494,7 +490,7 @@ def test_redis_cache_completion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(0.1)  # sleep for 0.1 seconds allow set cache to occur
+        time.sleep(1)  # sleep for 0.1 seconds allow set cache to occur
         response2 = completion(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -509,8 +505,10 @@ def test_redis_cache_completion_stream():
             response_2_id = chunk.id
             print(chunk)
             response_2_content += chunk.choices[0].delta.content or ""
-        print("\nresponse 1", response_1_content)
-        print("\nresponse 2", response_2_content)
+        print(
+            f"\nresponse 1: {response_1_content}",
+        )
+        print(f"\nresponse 2: {response_2_content}")
         assert (
             response_1_id == response_2_id
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"

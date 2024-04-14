@@ -95,5 +95,4 @@ completion_with_split_tests(
 )
 ```
 
-### A/B Testing Dashboard after running code - https://admin.litellm.ai/
-<Image img={require('../../img/ab_test_logs.png')} />
+

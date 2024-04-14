@@ -62,7 +62,6 @@ model_list:
 
 litellm_settings: # module level litellm settings - https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py
   drop_params: True
-  set_verbose: True
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
@@ -246,6 +245,10 @@ $ litellm --config /path/to/config.yaml
 
 ## Load Balancing 
 
+:::info
+For more on this, go to [this page](./load_balancing.md)
+:::
+
 Use this to call multiple instances of the same model and configure things like [routing strategy](../routing.md#advanced). 
 
 For optimal performance:
@@ -304,25 +307,6 @@ router_settings: # router_settings are optional
   redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
   redis_password: <your redis password>
   redis_port: 1992
-```
-
-## Set Azure `base_model` for cost tracking
-
-**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
-
-**Solution** ✅ :  Set `base_model` on your config so litellm uses the correct model for calculating azure cost
-
-Example config with `base_model`
-```yaml
-model_list:
-  - model_name: azure-gpt-3.5
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-    model_info:
-      base_model: azure/gpt-4-1106-preview
 ```
 
 You can view your cost once you set up [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys) or [custom_callbacks](https://docs.litellm.ai/docs/proxy/logging)
@@ -573,6 +557,16 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+## Disable Swagger UI 
+
+To disable the Swagger docs from the base url, set 
+
+```env
+NO_DOCS="True"
+```
+
+in your environment, and restart the proxy. 
+
 
 ## Configure DB Pool Limits + Connection Timeouts 
 
@@ -605,6 +599,11 @@ general_settings:
   "litellm_settings": {}, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
   "general_settings": {
     "completion_model": "string",
+    "disable_spend_logs": "boolean", # turn off writing each transaction to the db
+    "disable_reset_budget": "boolean", # turn off reset budget scheduled task
+    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
+    "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
+    "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
     "key_management_system": "google_kms", # either google_kms or azure_kms
     "master_key": "string",
     "database_url": "string",

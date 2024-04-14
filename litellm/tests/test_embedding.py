@@ -117,6 +117,8 @@ def test_openai_azure_embedding_simple():
 
         print("Calculated request cost=", request_cost)
 
+        assert isinstance(response.usage, litellm.Usage)
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -191,6 +193,33 @@ def test_openai_azure_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_openai_azure_embedding_optional_arg(mocker):
+    mocked_create_embeddings = mocker.patch.object(
+        openai.resources.embeddings.Embeddings,
+        "create",
+        return_value=openai.types.create_embedding_response.CreateEmbeddingResponse(
+            data=[],
+            model="azure/test",
+            object="list",
+            usage=openai.types.create_embedding_response.Usage(
+                prompt_tokens=1, total_tokens=2
+            ),
+        ),
+    )
+    _ = litellm.embedding(
+        model="azure/test",
+        input=["test"],
+        api_version="test",
+        api_base="test",
+        azure_ad_token="test",
+    )
+
+    assert mocked_create_embeddings.called_once_with(
+        model="test", input=["test"], timeout=600
+    )
+    assert "azure_ad_token" not in mocked_create_embeddings.call_args.kwargs
+
+
 # test_openai_azure_embedding()
 
 # test_openai_embedding()
@@ -204,6 +233,8 @@ def test_cohere_embedding():
             input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
+
+        assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -269,6 +300,8 @@ def test_bedrock_embedding_titan():
 
         assert end_time - start_time < 0.1
         litellm.disable_cache()
+
+        assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -295,6 +328,8 @@ def test_bedrock_embedding_cohere():
             isinstance(x, float) for x in response["data"][0]["embedding"]
         ), "Expected response to be a list of floats"
         # print(f"response:", response)
+
+        assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -331,6 +366,8 @@ def test_hf_embedding():
             input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
+
+        assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
         # Note: Huggingface inference API is unstable and fails with "model loading errors all the time"
         pass
@@ -386,6 +423,8 @@ def test_aembedding_azure():
                     response._hidden_params["custom_llm_provider"],
                 )
                 assert response._hidden_params["custom_llm_provider"] == "azure"
+
+                assert isinstance(response.usage, litellm.Usage)
             except Exception as e:
                 pytest.fail(f"Error occurred: {e}")
 
@@ -440,6 +479,7 @@ def test_mistral_embeddings():
             input=["good morning from litellm"],
         )
         print(f"response: {response}")
+        assert isinstance(response.usage, litellm.Usage)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -447,6 +487,9 @@ def test_mistral_embeddings():
 # test_mistral_embeddings()
 
 
+@pytest.mark.skip(
+    reason="Community maintained embedding provider - they are quite unstable"
+)
 def test_voyage_embeddings():
     try:
         litellm.set_verbose = True

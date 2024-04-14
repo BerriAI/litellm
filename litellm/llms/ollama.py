@@ -20,7 +20,7 @@ class OllamaError(Exception):
 
 class OllamaConfig:
     """
-    Reference: https://github.com/jmorganca/ollama/blob/main/docs/api.md#parameters
+    Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 
     The class `OllamaConfig` provides the configuration for the Ollama's API interface. Below are the parameters:
 
@@ -68,9 +68,9 @@ class OllamaConfig:
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
-    stop: Optional[
-        list
-    ] = None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    stop: Optional[list] = (
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
+    )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -229,7 +229,7 @@ def get_ollama_response(
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
     prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-    completion_tokens = response_json["eval_count"]
+    completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -331,7 +331,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data["model"]
             prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(data["prompt"])))  # type: ignore
-            completion_tokens = response_json["eval_count"]
+            completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -344,9 +344,9 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
 
 
 async def ollama_aembeddings(
-    api_base="http://localhost:11434",
-    model="llama2",
-    prompt="Why is the sky blue?",
+    api_base: str,
+    model: str,
+    prompts: list,
     optional_params=None,
     logging_obj=None,
     model_response=None,
@@ -365,51 +365,56 @@ async def ollama_aembeddings(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    data = {
-        "model": model,
-        "prompt": prompt,
-    }
-    ## LOGGING
-    logging_obj.pre_call(
-        input=None,
-        api_key=None,
-        additional_args={"api_base": url, "complete_input_dict": data, "headers": {}},
-    )
+    total_input_tokens = 0
+    output_data = []
     timeout = aiohttp.ClientTimeout(total=litellm.request_timeout)  # 10 minutes
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        response = await session.post(url, json=data)
-
-        if response.status != 200:
-            text = await response.text()
-            raise OllamaError(status_code=response.status, message=text)
-
-        ## LOGGING
-        logging_obj.post_call(
-            input=prompt,
-            api_key="",
-            original_response=response.text,
-            additional_args={
-                "headers": None,
-                "api_base": api_base,
-            },
-        )
-
-        response_json = await response.json()
-        embeddings = response_json["embedding"]
-        ## RESPONSE OBJECT
-        output_data = []
-        for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
+        for idx, prompt in enumerate(prompts):
+            data = {
+                "model": model,
+                "prompt": prompt,
+            }
+            ## LOGGING
+            logging_obj.pre_call(
+                input=None,
+                api_key=None,
+                additional_args={
+                    "api_base": url,
+                    "complete_input_dict": data,
+                    "headers": {},
+                },
             )
-        model_response["object"] = "list"
-        model_response["data"] = output_data
-        model_response["model"] = model
 
-        input_tokens = len(encoding.encode(prompt))
+            response = await session.post(url, json=data)
+            if response.status != 200:
+                text = await response.text()
+                raise OllamaError(status_code=response.status, message=text)
 
-        model_response["usage"] = {
-            "prompt_tokens": input_tokens,
-            "total_tokens": input_tokens,
-        }
-        return model_response
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key="",
+                original_response=response.text,
+                additional_args={
+                    "headers": None,
+                    "api_base": api_base,
+                },
+            )
+
+            response_json = await response.json()
+            embeddings: list[float] = response_json["embedding"]
+            output_data.append(
+                {"object": "embedding", "index": idx, "embedding": embeddings}
+            )
+
+            input_tokens = len(encoding.encode(prompt))
+            total_input_tokens += input_tokens
+
+    model_response["object"] = "list"
+    model_response["data"] = output_data
+    model_response["model"] = model
+    model_response["usage"] = {
+        "prompt_tokens": total_input_tokens,
+        "total_tokens": total_input_tokens,
+    }
+    return model_response

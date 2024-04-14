@@ -1,13 +1,9 @@
 model_list:
-  - model_name: azure-gpt-3.5
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-litellm_settings:
-  set_verbose: True
-  success_callback: ["langfuse"]
-router_settings:
-  set_verbose: True
-  debug_level: "DEBUG"
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+general_settings:
+  store_model_in_db: true
+  master_key: sk-1234
