@@ -147,8 +147,6 @@ const Settings: React.FC<SettingsPageProps> = ({
               <TableRow>
                 <TableHeaderCell>Callback</TableHeaderCell>
                 <TableHeaderCell>Callback Env Vars</TableHeaderCell>
-                <TableHeaderCell></TableHeaderCell>
-                {/* <TableHeaderCell>Test Callback</TableHeaderCell> */}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -159,29 +157,22 @@ const Settings: React.FC<SettingsPageProps> = ({
       </TableCell>
       <TableCell>
         <ul>
-          {Object.entries(callback.variables).map(([key, value]) => (
-            <li key={key}>
-              <Text>{key}</Text>
-              <TextInput
-                name={key}
-                defaultValue={value as string}
-                type="password"
-              />
-            </li>
-          ))}
+        {Object.entries(callback.variables).map(([key, value]) => (
+  <li key={key}>
+    <Text className="mt-2">{key}</Text>
+    {key === "LANGFUSE_HOST" ? (
+      <p>default value="https://cloud.langfuse.com"</p>
+    ) : (
+      <div></div>
+    )}
+    <TextInput name={key} defaultValue={value as string} type="password" />
+  </li>
+))}
         </ul>
         <Button className="mt-2" onClick={() => handleSaveChanges(callback)}>
           Save Changes
         </Button>
-      </TableCell>
-
-      <TableCell>
-        
-        
-      </TableCell>
-      <TableCell>
-        
-        <Button onClick={() => serviceHealthCheck(accessToken, callback.name)}>
+        <Button onClick={() => serviceHealthCheck(accessToken, callback.name)} className="mx-2">
           Test Callback
         </Button>
       </TableCell>
@@ -192,6 +183,7 @@ const Settings: React.FC<SettingsPageProps> = ({
             <Button size="xs" className="mt-2" onClick={handleAddCallback}>
               Add Callback
             </Button>
+            
         </Card>
         
       </Grid>
