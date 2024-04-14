@@ -51,3 +51,5 @@ http://localhost:4000/metrics
 | `litellm_requests_metric`             | Number of requests made, per `"user", "key", "model"`          |
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model"`                 |
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model"`     |
+| `litellm_redis_latency`         | histogram latency for redis calls     |
+| `litellm_redis_fails`         | Number of failed redis calls    |
