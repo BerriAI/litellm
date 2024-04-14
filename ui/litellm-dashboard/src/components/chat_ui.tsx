@@ -74,7 +74,7 @@ async function generateModelResponse(
       }
     }
   } catch (error) {
-    message.error(`Error occurred while generating model response. Please try again. Error: ${error}`);
+    message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
   }
 }
 
