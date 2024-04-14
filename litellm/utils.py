@@ -29,7 +29,9 @@ from tokenizers import Tokenizer
 from dataclasses import (
     dataclass,
     field,
-)  # for storing API inputs, outputs, and metadata
+)
+
+import litellm._service_logger  # for storing API inputs, outputs, and metadata
 
 try:
     # this works in python 3.8
@@ -69,6 +71,7 @@ from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.datadog import DataDogLogger
 from .integrations.prometheus import PrometheusLogger
+from .integrations.prometheus_services import PrometheusServicesLogger
 from .integrations.dynamodb import DyanmoDBLogger
 from .integrations.s3 import S3Logger
 from .integrations.clickhouse import ClickhouseLogger
@@ -6564,7 +6567,9 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     for detail in additional_details:
                         slack_msg += f"{detail}: {additional_details[detail]}\n"
                     slack_msg += f"Traceback: {traceback_exception}"
-                    truncated_slack_msg = textwrap.shorten(slack_msg, width=512, placeholder="...")
+                    truncated_slack_msg = textwrap.shorten(
+                        slack_msg, width=512, placeholder="..."
+                    )
                     slack_app.client.chat_postMessage(
                         channel=alerts_channel, text=truncated_slack_msg
                     )
