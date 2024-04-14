@@ -51,5 +51,21 @@ http://localhost:4000/metrics
 | `litellm_requests_metric`             | Number of requests made, per `"user", "key", "model"`          |
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model"`                 |
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model"`     |
+
+## Monitor System Health
+
+To monitor the health of litellm adjacent services (redis / postgres), do:
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  service_callback: ["prometheus_system"]
+```
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
 | `litellm_redis_latency`         | histogram latency for redis calls     |
 | `litellm_redis_fails`         | Number of failed redis calls    |
