@@ -1172,6 +1172,42 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
 
 
 
+export const serviceHealthCheck= async (accessToken: String, service: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/health/services?service=${service}`
+      : `/health/services?service=${service}`;
+
+    console.log("Checking Slack Budget Alerts service health");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(`Failed ${service} service health check ` + errorData);
+      // throw error with message
+      throw new Error(errorData);
+    }
+    
+    const data = await response.json();
+    message.success(`Test request to ${service} made - check logs on ${service} dashboard!`);
+    // You can add additional logic here based on the response if needed
+    return data;
+  } catch (error) {
+    console.error("Failed to perform health check:", error);
+    throw error;
+  }
+};
+
+
+
+
 export const getCallbacksCall = async (
   accessToken: String,
   userID: String,
