@@ -161,7 +161,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   <li key={key}>
     <Text className="mt-2">{key}</Text>
     {key === "LANGFUSE_HOST" ? (
-      <p>default value="https://cloud.langfuse.com"</p>
+      <p>default value=https://cloud.langfuse.com</p>
     ) : (
       <div></div>
     )}
