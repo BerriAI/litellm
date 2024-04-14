@@ -2441,7 +2441,7 @@ class ProxyConfig:
         - Check if model id's in router already
         - If not, add to router
         """
-        global llm_router, llm_model_list, master_key
+        global llm_router, llm_model_list, master_key, general_settings
 
         import base64
 
@@ -2541,7 +2541,7 @@ class ProxyConfig:
             config_data = await proxy_config.get_config()
             litellm_settings = config_data.get("litellm_settings", {}) or {}
             success_callbacks = litellm_settings.get("success_callback", None)
-            _added_callback = False
+
             if success_callbacks is not None and isinstance(success_callbacks, list):
                 for success_callback in success_callbacks:
                     if success_callback not in litellm.success_callback:
@@ -2557,6 +2557,13 @@ class ProxyConfig:
                     verbose_proxy_logger.error(
                         "Error setting env variable: %s - %s", k, str(e)
                     )
+
+            # general_settings
+            _general_settings = config_data.get("general_settings", {})
+            if "alerting" in _general_settings:
+                general_settings["alerting"] = _general_settings["alerting"]
+                proxy_logging_obj.alerting = general_settings["alerting"]
+
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
@@ -8379,7 +8386,7 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal["slack_budget_alerts", "langfuse"] = fastapi.Query(
+    service: Literal["slack_budget_alerts", "langfuse", "slack"] = fastapi.Query(
         description="Specify the service being hit."
     ),
 ):
@@ -8395,7 +8402,7 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
-        if service not in ["slack_budget_alerts", "langfuse"]:
+        if service not in ["slack_budget_alerts", "langfuse", "slack"]:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -8422,6 +8429,10 @@ async def health_services_endpoint(
         if "slack" in general_settings.get("alerting", []):
             test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
             await proxy_logging_obj.alerting_handler(message=test_message, level="Low")
+            return {
+                "status": "success",
+                "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
+            }
         else:
             raise HTTPException(
                 status_code=422,
