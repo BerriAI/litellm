@@ -8241,6 +8241,7 @@ async def get_config():
 
         config_data = await proxy_config.get_config()
         _litellm_settings = config_data.get("litellm_settings", {})
+        _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
 
         # check if "langfuse" in litellm_settings
@@ -8282,6 +8283,27 @@ async def get_config():
                 _data_to_return.append(
                     {"name": _callback, "variables": _langfuse_env_vars}
                 )
+
+        # Check if slack alerting is on
+        _alerting = _general_settings.get("alerting", [])
+        if "slack" in _alerting:
+            _slack_vars = [
+                "SLACK_WEBHOOK_URL",
+            ]
+            _slack_env_vars = {}
+            for _var in _slack_vars:
+                env_variable = environment_variables.get(_var, None)
+                if env_variable is None:
+                    _slack_env_vars[_var] = None
+                else:
+                    # decode + decrypt the value
+                    decoded_b64 = base64.b64decode(env_variable)
+                    _decrypted_value = decrypt_value(
+                        value=decoded_b64, master_key=master_key
+                    )
+                    _slack_env_vars[_var] = _decrypted_value
+
+            _data_to_return.append({"name": "slack", "variables": _slack_env_vars})
 
         return {"status": "success", "data": _data_to_return}
     except Exception as e:
