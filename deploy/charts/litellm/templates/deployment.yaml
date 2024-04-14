@@ -137,11 +137,13 @@ spec:
             {{- end }}
             - name: DATABASE_URL
               value: "postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)"
+            {{- if .Values.masterKey }}
             - name: LITELLM_MASTER_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "litellm.fullname" . }}-masterkey
                   key: masterkey
+            {{- end }}
             {{- if .Values.redis.enabled }}
             - name: REDIS_HOST
               value: {{ include "litellm.redis.serviceName" . }}
