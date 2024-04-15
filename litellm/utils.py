@@ -7534,7 +7534,6 @@ def exception_type(
                             message=f"AnthropicException - {original_exception.message}",
                             model=model,
                             llm_provider="anthropic",
-                            request=original_exception.request,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -7631,7 +7630,6 @@ def exception_type(
                             message=f"ReplicateException - {original_exception.message}",
                             model=model,
                             llm_provider="replicate",
-                            request=original_exception.request,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -8040,7 +8038,6 @@ def exception_type(
                             message=f"HuggingfaceException - {original_exception.message}",
                             model=model,
                             llm_provider="huggingface",
-                            request=original_exception.request,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -8100,7 +8097,6 @@ def exception_type(
                             message=f"AI21Exception - {original_exception.message}",
                             model=model,
                             llm_provider="ai21",
-                            request=original_exception.request,
                         )
                     if original_exception.status_code == 422:
                         exception_mapping_worked = True
@@ -8190,7 +8186,6 @@ def exception_type(
                             message=f"NLPCloudException - {original_exception.message}",
                             model=model,
                             llm_provider="nlp_cloud",
-                            request=original_exception.request,
                         )
                     elif (
                         original_exception.status_code == 429
@@ -8307,7 +8302,6 @@ def exception_type(
                             message=f"TogetherAIException - {original_exception.message}",
                             model=model,
                             llm_provider="together_ai",
-                            request=original_exception.request,
                         )
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
@@ -8507,7 +8501,6 @@ def exception_type(
                             message=f"AzureException - {original_exception.message}",
                             model=model,
                             llm_provider="azure",
-                            request=original_exception.request,
                         )
                     if original_exception.status_code == 422:
                         exception_mapping_worked = True
