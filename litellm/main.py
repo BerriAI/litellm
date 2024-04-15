@@ -1676,13 +1676,12 @@ def completion(
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
-
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
             if "claude-3" in model:
-                vertex_credentials = (
-                    optional_params.pop("vertex_credentials", None)
-                    or optional_params.pop("vertex_ai_credentials", None)
-                    or get_secret("VERTEXAI_CREDENTIALS")
-                )
                 model_response = vertex_ai_anthropic.completion(
                     model=model,
                     messages=messages,
