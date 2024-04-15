@@ -8845,6 +8845,35 @@ class CustomStreamWrapper:
             self.holding_chunk = ""
         return hold, curr_chunk
 
+    def handle_anthropic_text_chunk(self, chunk):
+        str_line = chunk
+        if isinstance(chunk, bytes):  # Handle binary data
+            str_line = chunk.decode("utf-8")  # Convert bytes to string
+        text = ""
+        is_finished = False
+        finish_reason = None
+        if str_line.startswith("data:"):
+            data_json = json.loads(str_line[5:])
+            type_chunk = data_json.get("type", None)
+            if type_chunk == "completion":
+                text = data_json.get("completion")
+                finish_reason = data_json.get("stop_reason")
+                if finish_reason is not None:
+                    is_finished = True
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+        elif "error" in str_line:
+            raise ValueError(f"Unable to parse response. Original response: {str_line}")
+        else:
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+
     def handle_anthropic_chunk(self, chunk):
         str_line = chunk
         if isinstance(chunk, bytes):  # Handle binary data
@@ -9532,6 +9561,14 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+            elif (
+                self.custom_llm_provider
+                and self.custom_llm_provider == "anthropic_text"
+            ):
+                response_obj = self.handle_anthropic_text_chunk(chunk)
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -10109,6 +10146,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "text-completion-openai"
                 or self.custom_llm_provider == "azure_text"
                 or self.custom_llm_provider == "anthropic"
+                or self.custom_llm_provider == "anthropic_text"
                 or self.custom_llm_provider == "huggingface"
                 or self.custom_llm_provider == "ollama"
                 or self.custom_llm_provider == "ollama_chat"
