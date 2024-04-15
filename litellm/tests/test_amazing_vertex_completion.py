@@ -123,8 +123,6 @@ async def get_response():
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
 def test_vertex_ai_anthropic():
-    load_vertex_ai_credentials()
-
     model = "claude-3-sonnet@20240229"
 
     vertex_ai_project = "adroit-crow-413218"
@@ -179,12 +177,14 @@ def test_vertex_ai_anthropic_streaming():
 # )
 @pytest.mark.asyncio
 async def test_vertex_ai_anthropic_async():
-    load_vertex_ai_credentials()
+    # load_vertex_ai_credentials()
 
     model = "claude-3-sonnet@20240229"
 
     vertex_ai_project = "adroit-crow-413218"
     vertex_ai_location = "asia-southeast1"
+    json_obj = get_vertex_ai_creds_json()
+    vertex_credentials = json.dumps(json_obj)
 
     response = await acompletion(
         model="vertex_ai/" + model,
@@ -192,6 +192,7 @@ async def test_vertex_ai_anthropic_async():
         temperature=0.7,
         vertex_ai_project=vertex_ai_project,
         vertex_ai_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
     )
     print(f"Model Response: {response}")
 
