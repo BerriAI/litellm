@@ -20,7 +20,7 @@ import {
   Icon,
   BarChart,
 } from "@tremor/react";
-
+import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -52,6 +52,7 @@ interface ViewKeyTableProps {
   selectedTeam: any | null;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: any[] | null;
 }
 
 interface ItemData {
@@ -78,6 +79,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   selectedTeam,
   data,
   setData,
+  teams
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -221,7 +223,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   name="token"
                   hidden={true}
                 ></Form.Item>
-
+              <Form.Item 
+                label="Team" 
+                name="team_id"
+                help="the team this key belongs to"
+              >
+                <Select value={token.team_alias}>
+                {teams?.map((team_obj, index) => (
+                    <SelectItem
+                      key={index}
+                      value={team_obj.team_id}
+                    >
+                      {team_obj.team_alias}
+                    </SelectItem>
+                  ))}
+              </Select>
+              </Form.Item>
             </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Edit Key</Button2>
