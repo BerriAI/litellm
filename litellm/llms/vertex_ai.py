@@ -270,6 +270,7 @@ def completion(
     logging_obj,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
@@ -348,6 +349,7 @@ def completion(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
+
         creds, _ = google.auth.default(quota_project_id=vertex_project)
         print_verbose(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
