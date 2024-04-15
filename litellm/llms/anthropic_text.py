@@ -139,6 +139,8 @@ class AnthropicTextCompletion(BaseLLM):
         )
         model_response.usage = usage
 
+        return model_response
+
     async def async_completion(
         self,
         model: str,
