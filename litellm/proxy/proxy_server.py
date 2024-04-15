@@ -703,7 +703,11 @@ async def user_api_key_auth(
                 verbose_proxy_logger.debug(
                     f"model: {model}; allowed_models: {filtered_models}"
                 )
-                if model is not None and model not in filtered_models:
+                if (
+                    model is not None
+                    and model not in filtered_models
+                    and "*" not in filtered_models
+                ):
                     raise ValueError(
                         f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
                     )
