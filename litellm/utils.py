@@ -4523,6 +4523,7 @@ def get_optional_params(
             and custom_llm_provider != "vertex_ai"
             and custom_llm_provider != "anyscale"
             and custom_llm_provider != "together_ai"
+            and custom_llm_provider != "groq"
             and custom_llm_provider != "mistral"
             and custom_llm_provider != "anthropic"
             and custom_llm_provider != "cohere_chat"
@@ -5222,6 +5223,29 @@ def get_optional_params(
         optional_params["extra_body"] = (
             extra_body  # openai client supports `extra_body` param
         )
+    elif custom_llm_provider == "groq":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if max_tokens is not None:
+            optional_params["max_tokens"] = max_tokens
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if stream is not None:
+            optional_params["stream"] = stream
+        if stop is not None:
+            optional_params["stop"] = stop
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
+        if response_format is not None:
+            optional_params["response_format"] = tool_choice
+
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -5425,6 +5449,17 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "max_tokens",
             "tools",
             "tool_choice",
+        ]
+    elif custom_llm_provider == "groq":
+        return [
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stream",
+            "stop",
+            "tools",
+            "tool_choice",
+            "response_format",
         ]
     elif custom_llm_provider == "cohere":
         return [
