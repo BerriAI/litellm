@@ -2306,7 +2306,9 @@ class Router:
         return self.model_names
 
     def get_model_list(self):
-        return self.model_list
+        if hasattr(self, "model_list"):
+            return self.model_list
+        return None
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """

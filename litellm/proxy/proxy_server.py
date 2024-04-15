@@ -2494,9 +2494,6 @@ class ProxyConfig:
                 verbose_proxy_logger.debug(f"_model_list: {_model_list}")
                 llm_router = litellm.Router(model_list=_model_list)
                 verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
-                verbose_proxy_logger.debug(
-                    f"llm_router model list: {llm_router.model_list}"
-                )
             else:
                 new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
                 verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
