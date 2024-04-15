@@ -714,7 +714,8 @@
         "input_cost_per_token": 0.00000070,
         "output_cost_per_token": 0.00000080,
         "litellm_provider": "groq",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "groq/mixtral-8x7b-32768": {
         "max_tokens": 32768,
@@ -723,7 +724,8 @@
         "input_cost_per_token": 0.00000027,
         "output_cost_per_token": 0.00000027,
         "litellm_provider": "groq",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "groq/gemma-7b-it": {
         "max_tokens": 8192,
@@ -732,7 +734,8 @@
         "input_cost_per_token": 0.00000010,
         "output_cost_per_token": 0.00000010,
         "litellm_provider": "groq",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "claude-instant-1.2": {
         "max_tokens": 8191,
