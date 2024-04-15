@@ -55,6 +55,10 @@ model_list:
       api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
       stream_timeout: 0.001
       rpm: 1
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: gpt-instruct # [PROD TEST] - tests if `/health` automatically infers this to be a text completion model
     litellm_params:
       model: text-completion-openai/gpt-3.5-turbo-instruct
