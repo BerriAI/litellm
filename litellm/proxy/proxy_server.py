@@ -2809,12 +2809,17 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
                 deleted_tokens = await prisma_client.delete_data(
                     tokens=tokens, user_id=user_id
                 )
-
+                _num_deleted_tokens = deleted_tokens.get("deleted_keys", 0)
+                if _num_deleted_tokens != len(tokens):
+                    raise Exception(
+                        "Failed to delete all tokens. Tried to delete tokens that don't belong to user: "
+                        + str(user_id)
+                    )
         else:
-            raise Exception
+            raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise e
     return deleted_tokens
 
 
