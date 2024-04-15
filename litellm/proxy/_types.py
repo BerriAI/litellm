@@ -458,8 +458,16 @@ class TeamMemberDeleteRequest(LiteLLMBase):
         return values
 
 
-class UpdateTeamRequest(TeamBase):
+class UpdateTeamRequest(LiteLLMBase):
     team_id: str  # required
+    team_alias: Optional[str] = None
+    organization_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: Optional[list] = None
+    blocked: Optional[bool] = None
 
 
 class DeleteTeamRequest(LiteLLMBase):
