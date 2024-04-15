@@ -120,8 +120,8 @@ class OllamaConfig:
             and v is not None
         }
 
-# ollama wants plain base64 jpeg files as images.  strip any leading dataURI
-# and convert to jpeg.
+# ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
+# and convert to jpeg if necessary.
 def _convert_image(image):
     import base64, io
     try:
