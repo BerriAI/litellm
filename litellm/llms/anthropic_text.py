@@ -8,6 +8,8 @@ from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 import httpx
+from .base import BaseLLM
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 class AnthropicConstants(Enum):
@@ -94,98 +96,13 @@ def validate_environment(api_key, user_headers):
     return headers
 
 
-def completion(
-    model: str,
-    messages: list,
-    api_base: str,
-    custom_prompt_dict: dict,
-    model_response: ModelResponse,
-    print_verbose: Callable,
-    encoding,
-    api_key,
-    logging_obj,
-    optional_params=None,
-    litellm_params=None,
-    logger_fn=None,
-    headers={},
-):
-    headers = validate_environment(api_key, headers)
-    if model in custom_prompt_dict:
-        # check if the model has a registered custom prompt
-        model_prompt_details = custom_prompt_dict[model]
-        prompt = custom_prompt(
-            role_dict=model_prompt_details["roles"],
-            initial_prompt_value=model_prompt_details["initial_prompt_value"],
-            final_prompt_value=model_prompt_details["final_prompt_value"],
-            messages=messages,
-        )
-    else:
-        prompt = prompt_factory(
-            model=model, messages=messages, custom_llm_provider="anthropic"
-        )
+class AnthropicTextCompletion(BaseLLM):
+    def __init__(self) -> None:
+        super().__init__()
 
-    ## Load Config
-    config = litellm.AnthropicTextConfig.get_config()
-    for k, v in config.items():
-        if (
-            k not in optional_params
-        ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-            optional_params[k] = v
-
-    data = {
-        "model": model,
-        "prompt": prompt,
-        **optional_params,
-    }
-
-    ## LOGGING
-    logging_obj.pre_call(
-        input=prompt,
-        api_key=api_key,
-        additional_args={
-            "complete_input_dict": data,
-            "api_base": api_base,
-            "headers": headers,
-        },
-    )
-
-    ## COMPLETION CALL
-    if "stream" in optional_params and optional_params["stream"] == True:
-        response = requests.post(
-            api_base,
-            headers=headers,
-            data=json.dumps(data),
-            stream=optional_params["stream"],
-        )
-
-        if response.status_code != 200:
-            raise AnthropicError(
-                status_code=response.status_code, message=response.text
-            )
-        completion_stream = response.iter_lines()
-        stream_response = CustomStreamWrapper(
-            completion_stream=completion_stream,
-            model=model,
-            custom_llm_provider="anthropic",
-            logging_obj=logging_obj,
-        )
-        return stream_response
-
-    else:
-        response = requests.post(api_base, headers=headers, data=json.dumps(data))
-        if response.status_code != 200:
-            raise AnthropicError(
-                status_code=response.status_code, message=response.text
-            )
-
-        ## LOGGING
-        logging_obj.post_call(
-            input=prompt,
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-        print_verbose(f"raw model_response: {response.text}")
+    def process_response(
+        self, model_response: ModelResponse, response, encoding, prompt: str, model: str
+    ):
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
@@ -221,9 +138,206 @@ def completion(
             total_tokens=prompt_tokens + completion_tokens,
         )
         model_response.usage = usage
+
         return model_response
 
+    async def async_completion(
+        self,
+        model: str,
+        model_response: ModelResponse,
+        api_base: str,
+        logging_obj,
+        encoding,
+        headers: dict,
+        data: dict,
+        client=None,
+    ):
+        if client is None:
+            client = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
-def embedding():
-    # logic for parsing in - calling - parsing out model embedding calls
-    pass
+        response = await client.post(api_base, headers=headers, data=json.dumps(data))
+
+        if response.status_code != 200:
+            raise AnthropicError(
+                status_code=response.status_code, message=response.text
+            )
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=data["prompt"],
+            api_key=headers.get("x-api-key"),
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+
+        response = self.process_response(
+            model_response=model_response,
+            response=response,
+            encoding=encoding,
+            prompt=data["prompt"],
+            model=model,
+        )
+        return response
+
+    async def async_streaming(
+        self,
+        model: str,
+        api_base: str,
+        logging_obj,
+        headers: dict,
+        data: Optional[dict],
+        client=None,
+    ):
+        if client is None:
+            client = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+
+        response = await client.post(api_base, headers=headers, data=json.dumps(data))
+
+        if response.status_code != 200:
+            raise AnthropicError(
+                status_code=response.status_code, message=response.text
+            )
+
+        completion_stream = response.aiter_lines()
+
+        streamwrapper = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="anthropic_text",
+            logging_obj=logging_obj,
+        )
+        return streamwrapper
+
+    def completion(
+        self,
+        model: str,
+        messages: list,
+        api_base: str,
+        acompletion: str,
+        custom_prompt_dict: dict,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        api_key,
+        logging_obj,
+        optional_params=None,
+        litellm_params=None,
+        logger_fn=None,
+        headers={},
+        client=None,
+    ):
+        headers = validate_environment(api_key, headers)
+        if model in custom_prompt_dict:
+            # check if the model has a registered custom prompt
+            model_prompt_details = custom_prompt_dict[model]
+            prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],
+                final_prompt_value=model_prompt_details["final_prompt_value"],
+                messages=messages,
+            )
+        else:
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="anthropic"
+            )
+
+        ## Load Config
+        config = litellm.AnthropicTextConfig.get_config()
+        for k, v in config.items():
+            if (
+                k not in optional_params
+            ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                optional_params[k] = v
+
+        data = {
+            "model": model,
+            "prompt": prompt,
+            **optional_params,
+        }
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        ## COMPLETION CALL
+        if "stream" in optional_params and optional_params["stream"] == True:
+            if acompletion == True:
+                return self.async_streaming(
+                    model=model,
+                    api_base=api_base,
+                    logging_obj=logging_obj,
+                    headers=headers,
+                    data=data,
+                    client=None,
+                )
+
+            if client is None:
+                client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+
+            response = client.post(
+                api_base,
+                headers=headers,
+                data=json.dumps(data),
+                # stream=optional_params["stream"],
+            )
+
+            if response.status_code != 200:
+                raise AnthropicError(
+                    status_code=response.status_code, message=response.text
+                )
+            completion_stream = response.iter_lines()
+            stream_response = CustomStreamWrapper(
+                completion_stream=completion_stream,
+                model=model,
+                custom_llm_provider="anthropic_text",
+                logging_obj=logging_obj,
+            )
+            return stream_response
+        elif acompletion == True:
+            return self.async_completion(
+                model=model,
+                model_response=model_response,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                encoding=encoding,
+                headers=headers,
+                data=data,
+                client=client,
+            )
+        else:
+            if client is None:
+                client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            response = client.post(api_base, headers=headers, data=json.dumps(data))
+            if response.status_code != 200:
+                raise AnthropicError(
+                    status_code=response.status_code, message=response.text
+                )
+
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                original_response=response.text,
+                additional_args={"complete_input_dict": data},
+            )
+            print_verbose(f"raw model_response: {response.text}")
+
+            response = self.process_response(
+                model_response=model_response,
+                response=response,
+                encoding=encoding,
+                prompt=data["prompt"],
+                model=model,
+            )
+            return response
+
+    def embedding(self):
+        # logic for parsing in - calling - parsing out model embedding calls
+        pass
