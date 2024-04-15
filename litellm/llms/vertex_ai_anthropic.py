@@ -129,6 +129,18 @@ class VertexAIAnthropicConfig:
 
 
 # makes headers for API call
+def refresh_auth(
+    credentials,
+) -> str:  # used when user passes in credentials as json string
+    from google.auth.transport.requests import Request  # type: ignore[import-untyped]
+
+    if credentials.token is None:
+        credentials.refresh(Request())
+
+    if not credentials.token:
+        raise RuntimeError("Could not resolve API token from the credentials")
+
+    return credentials.token
 
 
 def completion(
@@ -140,6 +152,7 @@ def completion(
     logging_obj,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
@@ -217,11 +230,28 @@ def completion(
         ## Completion Call
 
         print_verbose(
-            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
+            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}; vertex_credentials={vertex_credentials}"
         )
+        access_token = None
         if client is None:
+            if vertex_credentials is not None and isinstance(vertex_credentials, str):
+                import google.oauth2.service_account
+
+                json_obj = json.loads(vertex_credentials)
+
+                creds = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                )
+                ### CHECK IF ACCESS
+                access_token = refresh_auth(credentials=creds)
+
             vertex_ai_client = AnthropicVertex(
-                project_id=vertex_project, region=vertex_location
+                project_id=vertex_project,
+                region=vertex_location,
+                access_token=access_token,
             )
         else:
             vertex_ai_client = client
@@ -243,6 +273,7 @@ def completion(
                     vertex_location=vertex_location,
                     optional_params=optional_params,
                     client=client,
+                    access_token=access_token,
                 )
             else:
                 return async_completion(
@@ -256,6 +287,7 @@ def completion(
                     vertex_location=vertex_location,
                     optional_params=optional_params,
                     client=client,
+                    access_token=access_token,
                 )
         if stream is not None and stream == True:
             ## LOGGING
@@ -334,12 +366,13 @@ async def async_completion(
     vertex_location=None,
     optional_params=None,
     client=None,
+    access_token=None,
 ):
     from anthropic import AsyncAnthropicVertex
 
     if client is None:
         vertex_ai_client = AsyncAnthropicVertex(
-            project_id=vertex_project, region=vertex_location
+            project_id=vertex_project, region=vertex_location, access_token=access_token
         )
     else:
         vertex_ai_client = client
@@ -404,12 +437,13 @@ async def async_streaming(
     vertex_location=None,
     optional_params=None,
     client=None,
+    access_token=None,
 ):
     from anthropic import AsyncAnthropicVertex
 
     if client is None:
         vertex_ai_client = AsyncAnthropicVertex(
-            project_id=vertex_project, region=vertex_location
+            project_id=vertex_project, region=vertex_location, access_token=access_token
         )
     else:
         vertex_ai_client = client

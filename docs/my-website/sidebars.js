@@ -115,6 +115,7 @@ const sidebars = {
       },
       items: [
         "providers/openai", 
+        "providers/text_completion_openai",
         "providers/openai_compatible",
         "providers/azure", 
         "providers/azure_ai", 
