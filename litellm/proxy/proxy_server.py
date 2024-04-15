@@ -1896,7 +1896,12 @@ class ProxyConfig:
                     param_name = getattr(response, "param_name", None)
                     param_value = getattr(response, "param_value", None)
                     if param_name is not None and param_value is not None:
-                        config[param_name] = param_value
+                        # check if param_name is already in the config
+                        if param_name in config:
+                            if isinstance(config[param_name], dict):
+                                config[param_name].update(param_value)
+                            else:
+                                config[param_name] = param_value
 
         return config
 
