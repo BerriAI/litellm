@@ -274,7 +274,6 @@ def test_groq_parallel_function_call():
         )
 
         print("length of tool calls", len(tool_calls))
-        print("Expecting there to be 3 tool calls")
 
         # Step 2: check if the model wanted to call a function
         if tool_calls:
