@@ -199,6 +199,10 @@ jobs:
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
+              -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
+              -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
+              -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
               my-app:latest \
