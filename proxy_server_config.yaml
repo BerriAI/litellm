@@ -70,6 +70,15 @@ litellm_settings:
   request_timeout: 600
   telemetry: False
   context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
+  default_team_settings: 
+    - team_id: team-1
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PROJECT1_PUBLIC # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PROJECT1_SECRET # Project 1
+    - team_id: team-2
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
+      langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
 
 router_settings:
   routing_strategy: usage-based-routing-v2 
