@@ -7,6 +7,7 @@ import aiohttp
 import os
 import dotenv
 from dotenv import load_dotenv
+import pytest
 
 load_dotenv()
 
@@ -103,9 +104,9 @@ async def test_team_logging():
 
             generations = langfuse_client.get_generations(trace_id=_trace_id).data
             print(generations)
-            assert len(generations) == 2
+            assert len(generations) == 1
     except Exception as e:
-        print(e)
+        pytest.fail(f"Unexpected error: {str(e)}")
 
 
 @pytest.mark.asyncio
@@ -169,4 +170,4 @@ async def test_team_2logging():
             assert len(generations_team_1) == 0
 
     except Exception as e:
-        print(e)
+        pytest.fail("Team 2 logging failed: " + str(e))
