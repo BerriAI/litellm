@@ -6310,7 +6310,7 @@ async def update_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [RECOMMENDED] - use `/team/member_add` to add new team members instead
+    Use `/team/member_add` AND `/team/member/delete` to add/remove new team members  
 
     You can now update team budget / rate limits via /team/update
 
@@ -6360,60 +6360,6 @@ async def update_team(
         team_id=data.team_id,
     )
 
-    ## ADD NEW USERS ##
-    existing_user_id_list = []
-    ## Get new users
-    for user in existing_team_row.members_with_roles:
-        if user["user_id"] is not None:
-            existing_user_id_list.append(user["user_id"])
-
-    ## Update new user rows with team id (info used by /user/info to show all teams, user is a part of)
-    if data.members_with_roles is not None:
-        for user in data.members_with_roles:
-            if user.user_id not in existing_user_id_list:
-                await prisma_client.update_data(
-                    user_id=user.user_id,
-                    data={
-                        "user_id": user.user_id,
-                        "teams": [team_row["team_id"]],
-                        "models": team_row["data"].models,
-                    },
-                    update_key_values_custom_query={
-                        "teams": {
-                            "push": [team_row["team_id"]],
-                        }
-                    },
-                    table_name="user",
-                )
-
-    ## REMOVE DELETED USERS ##
-    ### Get list of deleted users (old list - new list)
-    deleted_user_id_list = []
-    new_user_id_list = []
-    ## Get old user list
-    if data.members_with_roles is not None:
-        for user in data.members_with_roles:
-            new_user_id_list.append(user.user_id)
-    ## Get diff
-    if existing_team_row.members_with_roles is not None:
-        for user in existing_team_row.members_with_roles:
-            if user["user_id"] not in new_user_id_list and len(new_user_id_list) > 0:
-                deleted_user_id_list.append(user["user_id"])
-
-    ## SET UPDATED LIST
-    if len(deleted_user_id_list) > 0:
-        # get the deleted users
-        existing_user_rows = await prisma_client.get_data(
-            user_id_list=deleted_user_id_list, table_name="user", query_type="find_all"
-        )
-        for user in existing_user_rows:
-            if data.team_id in user["teams"]:
-                user["teams"].remove(data.team_id)
-            await prisma_client.update_data(
-                user_id=user["user_id"],
-                data=user,
-                update_key_values={"user_id": user["user_id"], "teams": user["teams"]},
-            )
     return team_row
 
 
