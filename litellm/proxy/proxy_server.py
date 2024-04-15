@@ -1098,7 +1098,6 @@ async def user_api_key_auth(
             allowed_routes = [
                 "/sso",
                 "/login",
-                "/key",
                 "/key/generate",
                 "/key/update",
                 "/key/info",
