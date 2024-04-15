@@ -246,6 +246,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             selectedTeam={selectedTeam ? selectedTeam : null}
             data={keys}
             setData={setKeys}
+            teams={teams}
           />
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
