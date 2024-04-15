@@ -2777,7 +2777,10 @@ class Router:
                         }
             else:
                 # check response_ms and update num_successes
-                response_ms = response.get("_response_ms", 0)
+                if isinstance(response, dict):
+                    response_ms = response.get("_response_ms", 0)
+                else:
+                    response_ms = 0
                 if model_id is not None:
                     if model_id in self.deployment_stats:
                         # check if avg_latency exists
