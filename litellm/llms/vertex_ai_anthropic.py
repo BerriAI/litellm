@@ -140,6 +140,7 @@ def completion(
     logging_obj,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
@@ -217,11 +218,24 @@ def completion(
         ## Completion Call
 
         print_verbose(
-            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
+            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}; vertex_credentials={vertex_credentials}"
         )
         if client is None:
+            if vertex_credentials is not None and isinstance(vertex_credentials, str):
+                import google.oauth2.service_account
+
+                json_obj = json.loads(vertex_credentials)
+
+                creds = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        json_obj
+                    )
+                )
+
+                vertexai.init(credentials=creds)
             vertex_ai_client = AnthropicVertex(
-                project_id=vertex_project, region=vertex_location
+                project_id=vertex_project,
+                region=vertex_location,
             )
         else:
             vertex_ai_client = client
