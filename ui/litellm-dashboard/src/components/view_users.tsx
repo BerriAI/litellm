@@ -45,7 +45,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 }) => {
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(0);
   const defaultPageSize = 25;
 
   useEffect(() => {
@@ -113,19 +113,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   function renderPagination() {
     if (!userData) return null;
 
-    // const totalPages = Math.ceil(userData.length / defaultPageSize);
-    const startItem = (currentPage - 1) * defaultPageSize + 1;
-    const endItem = Math.min(currentPage * defaultPageSize, userData.length);
+    const totalPages = Math.ceil(userData.length / defaultPageSize);
 
     return (
       <div className="flex justify-between items-center">
         <div>
-          Showing {startItem} – {endItem} of {userData.length}
+          Showing Page {currentPage+1} of {totalPages}
         </div>
         <div className="flex">
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 1}
+            disabled={currentPage === 0}
             onClick={() => setCurrentPage(currentPage - 1)}
           >
             &larr; Prev
