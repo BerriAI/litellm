@@ -67,6 +67,7 @@ from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.anthropic import AnthropicChatCompletion
+from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -99,6 +100,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
+anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
@@ -1165,10 +1167,11 @@ def completion(
                     or get_secret("ANTHROPIC_API_BASE")
                     or "https://api.anthropic.com/v1/complete"
                 )
-                response = anthropic_text.completion(
+                response = anthropic_text_completions.completion(
                     model=model,
                     messages=messages,
                     api_base=api_base,
+                    acompletion=acompletion,
                     custom_prompt_dict=litellm.custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,

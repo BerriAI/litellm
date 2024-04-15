@@ -58,13 +58,16 @@ class AsyncHTTPHandler:
 
 
 class HTTPHandler:
-    def __init__(self, concurrent_limit=1000):
+    def __init__(
+        self, timeout: httpx.Timeout = _DEFAULT_TIMEOUT, concurrent_limit=1000
+    ):
         # Create a client with a connection pool
         self.client = httpx.Client(
+            timeout=timeout,
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
                 max_keepalive_connections=concurrent_limit,
-            )
+            ),
         )
 
     def close(self):
