@@ -4,6 +4,11 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+
 
 litellm_settings:
   default_team_settings: 
@@ -15,6 +20,7 @@ litellm_settings:
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
+
 general_settings:
   store_model_in_db: true
   master_key: sk-1234
