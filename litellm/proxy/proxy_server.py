@@ -1102,7 +1102,9 @@ async def user_api_key_auth(
             allowed_routes = [
                 "/sso",
                 "/login",
-                "/key",
+                "/key/generate",
+                "/key/update",
+                "/key/info",
                 "/config",
                 "/spend",
                 "/user",
@@ -5598,7 +5600,7 @@ async def new_user(data: NewUserRequest):
     if "user_role" in data_json:
         user_role = data_json["user_role"]
         if user_role is not None:
-            if user_role not in ["admin", "app_owner", "app_user"]:
+            if user_role not in ["proxy_admin", "app_owner", "app_user"]:
                 raise ProxyException(
                     message=f"Invalid user role, passed in {user_role}. Must be one of 'admin', 'app_owner', 'app_user'",
                     type="invalid_user_role",
