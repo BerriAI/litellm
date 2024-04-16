@@ -117,7 +117,8 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "gpt-4-1106-vision-preview": {
         "max_tokens": 4096,
@@ -126,7 +127,8 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "gpt-3.5-turbo": {
         "max_tokens": 4097,
@@ -409,7 +411,8 @@
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "azure", 
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "azure/gpt-35-turbo-16k-0613": {
         "max_tokens": 4096,
@@ -1051,6 +1054,7 @@
         "litellm_provider": "vertex_ai-vision-models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_vision": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.0-pro-vision": {
@@ -1065,6 +1069,7 @@
         "litellm_provider": "vertex_ai-vision-models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_vision": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.0-pro-vision-001": {
@@ -1079,6 +1084,7 @@
         "litellm_provider": "vertex_ai-vision-models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_vision": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "vertex_ai/claude-3-sonnet@20240229": {
@@ -1249,6 +1255,7 @@
         "litellm_provider": "gemini",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_vision": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "command-r": {
