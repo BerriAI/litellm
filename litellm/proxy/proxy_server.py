@@ -1040,6 +1040,15 @@ async def user_api_key_auth(
                 elif route == "/model/info":
                     # /model/info just shows models user has access to
                     pass
+                elif route == "/team/info":
+                    # check if key can access this team's info
+                    query_params = request.query_params
+                    team_id = query_params.get("team_id")
+                    if team_id != valid_token.team_id:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="key not allowed to access this team's info",
+                        )
                 else:
                     raise Exception(
                         f"Only master key can be used to generate, delete, update info for new keys/users."
