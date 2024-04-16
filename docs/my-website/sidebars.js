@@ -86,6 +86,7 @@ const sidebars = {
         "completion/stream",
         "completion/message_trimming",
         "completion/function_call",
+        "completion/vision",
         "completion/model_alias",
         "completion/batching",
         "completion/mock_requests",
