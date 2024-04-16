@@ -103,6 +103,26 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
     ]
 
+    spend_tracking_routes: List = [
+        # spend
+        "/spend/keys",
+        "/spend/users",
+        "/spend/tags",
+        "/spend/calculate",
+        "/spend/logs",
+    ]
+
+    global_spend_tracking_routes: List = [
+        # global spend
+        "/global/spend/logs",
+        "/global/spend",
+        "/global/spend/keys",
+        "/global/spend/teams",
+        "/global/spend/end_users",
+        "/global/spend/models",
+        "/global/predict/spend/logs",
+    ]
+
     public_routes: List = [
         "/routes",
         "/",
@@ -112,6 +132,18 @@ class LiteLLMRoutes(enum.Enum):
         "/config/yaml",
         "/metrics",
     ]
+
+
+# class LiteLLMAllowedRoutes(LiteLLMBase):
+#     """
+#     Defines allowed routes based on key type.
+
+#     Types = ["admin", "team", "user", "unmapped"]
+#     """
+
+#     admin_allowed_routes: List[
+#         Literal["openai_routes", "info_routes", "management_routes", "spend_tracking_routes", "global_spend_tracking_routes"]
+#     ] = ["management_routes"]
 
 
 class LiteLLM_JWTAuth(LiteLLMBase):
