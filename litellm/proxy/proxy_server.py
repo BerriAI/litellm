@@ -2587,6 +2587,9 @@ class ProxyConfig:
                 general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
 
+            # router settings
+            _router_settings = config_data.get("router_settings", {})
+            llm_router.set_settings(**_router_settings)
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
@@ -8196,8 +8199,8 @@ async def update_config(config_info: ConfigYAML):
             _updated_router_settings = config_info.router_settings
 
             config["router_settings"] = {
-                **_updated_router_settings,
                 **config["router_settings"],
+                **_updated_router_settings,
             }
 
         # Save the updated config

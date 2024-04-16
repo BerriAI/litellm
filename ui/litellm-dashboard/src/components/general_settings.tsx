@@ -79,10 +79,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     try {
       setCallbacksCall(accessToken, payload);
     } catch (error) {
-      message.error("Failed to update callback: " + error, 20);
+      message.error("Failed to update router settings: " + error, 20);
     }
 
-    message.success("Callback updated successfully");
+    message.success("router settings updated successfully");
   };
 
   
