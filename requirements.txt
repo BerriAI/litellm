@@ -26,6 +26,8 @@ apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.10.0 # admin UI, SSO
 pyjwt[crypto]==2.8.0
 python-multipart==0.0.9 # admin UI
+Pillow==10.0.1
+
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage
