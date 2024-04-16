@@ -8495,6 +8495,11 @@ async def health_endpoint(
     ),
 ):
     """
+    🚨 USE `/health/liveliness` to health check the proxy 🚨
+
+    See more 👉 https://docs.litellm.ai/docs/proxy/health
+
+
     Check the health of all the endpoints in config.yaml
 
     To run health checks in the background, add this to config.yaml:
