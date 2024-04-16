@@ -6988,6 +6988,7 @@ async def add_new_model(
                 },
             )
 
+        model_response = None
         # update DB
         if store_model_in_db == True:
             """
@@ -7002,17 +7003,20 @@ async def add_new_model(
                     model_params.litellm_params[k] = base64.b64encode(
                         encrypted_value
                     ).decode("utf-8")
-            await prisma_client.db.litellm_proxymodeltable.create(
-                data={
-                    "model_id": model_params.model_info.id,
-                    "model_name": model_params.model_name,
-                    "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
-                    "model_info": model_params.model_info.model_dump_json(  # type: ignore
-                        exclude_none=True
-                    ),
-                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                }
+            _data: dict = {
+                "model_id": model_params.model_info.id,
+                "model_name": model_params.model_name,
+                "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
+                "model_info": model_params.model_info.model_dump_json(  # type: ignore
+                    exclude_none=True
+                ),
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }
+            if model_params.model_info.id is not None:
+                _data["model_id"] = model_params.model_info.id
+            model_response = await prisma_client.db.litellm_proxymodeltable.create(
+                data=_data  # type: ignore
             )
 
             await proxy_config.add_deployment(
@@ -7026,7 +7030,8 @@ async def add_new_model(
                     "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
-        return {"message": "Model added successfully"}
+
+        return model_response
 
     except Exception as e:
         traceback.print_exc()
@@ -7282,15 +7287,13 @@ async def delete_model(model_info: ModelInfoDelete):
             result = await prisma_client.db.litellm_proxymodeltable.delete(
                 where={"model_id": model_info.id}
             )
-            
+
             if result is None:
                 raise HTTPException(
                     status_code=400,
-                    detail={
-                        "error": f"Model with id={model_info.id} not found in db"
-                    },
+                    detail={"error": f"Model with id={model_info.id} not found in db"},
                 )
-            
+
             return {"message": f"Model: {result.model_id} deleted successfully"}
         else:
             raise HTTPException(
@@ -7299,7 +7302,6 @@ async def delete_model(model_info: ModelInfoDelete):
                     "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
-        
 
     except Exception as e:
         if isinstance(e, HTTPException):

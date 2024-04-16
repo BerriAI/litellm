@@ -78,12 +78,14 @@ async def add_models(session, model_id="123"):
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
         response_text = await response.text()
-
         print(f"Add models {response_text}")
         print()
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_json = await response.json()
+        return response_json
 
 
 async def get_model_info(session, key):
@@ -177,11 +179,13 @@ async def test_add_and_delete_models():
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
-        model_id = "1234"
-        await add_models(session=session, model_id=model_id)
-        await asyncio.sleep(60)
+        model_id = "12345"
+        response = await add_models(session=session, model_id=model_id)
+        assert response["model_id"] == "12345"
+        await asyncio.sleep(10)
         await chat_completion(session=session, key=key)
         await delete_model(session=session, model_id=model_id)
+        # raise Exception("it worked!")
 
 
 async def add_model_for_health_checking(session, model_id="123"):
