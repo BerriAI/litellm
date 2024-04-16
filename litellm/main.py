@@ -63,6 +63,8 @@ from .llms import (
     vertex_ai,
     vertex_ai_anthropic,
     maritalk,
+    #sparkai
+    spark_ai,
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
@@ -539,6 +541,13 @@ def completion(
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+    ###__________________
+    spark_app_id=kwargs.get("spark_app_id",None)
+    spark_api_key=kwargs.get("spark_api_key",None)
+    spark_api_secret=kwargs.get("spark_api_secret",None)
+    sparkai_domain=kwargs.get("sparkai_domain",None)
+    sparkai_url=kwargs.get("sparkai_url",None)
+    ###__________________
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -1600,6 +1609,31 @@ def completion(
                 )
                 return response
             response = model_response
+        #改动部分
+        elif custom_llm_provider == "spark_ai":
+            SPARKAI_APP_ID = get_secret('SPARKAI_APP_ID')
+            SPARKAI_API_KEY = get_secret('SPARKAI_API_KEY')
+            SPARKAI_API_SECRET = get_secret('SPARKAI_API_SECRET')
+            SPARKAI_DOMAIN = get_secret('SPARKAI_DOMAIN')
+            SPARKAI_URL = get_secret('SPARKAI_URL')
+            api_key = SPARKAI_APP_ID + '&' + SPARKAI_API_KEY + '&' + SPARKAI_API_SECRET + '&' + SPARKAI_DOMAIN + '&' + SPARKAI_URL
+            if stream == False:
+                model_response = spark_ai.get_sparkai_response(
+                    model=model,
+                    messages=messages,
+                    api_key=api_key,
+                    streaming=stream,
+                )
+                return model_response
+            else:
+                model_response = spark_ai.get_sparkai_stream(
+                    model=model,
+                    messages=messages,
+                    api_key=api_key,
+                    streaming=stream,
+                )
+                return model_response
+
         elif custom_llm_provider == "palm":
             palm_api_key = api_key or get_secret("PALM_API_KEY") or litellm.api_key
 

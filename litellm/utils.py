@@ -5668,7 +5668,10 @@ def get_llm_provider(
     try:
         dynamic_api_key = None
         # check if llm provider provided
-
+        if model == 'spark_ai':
+            custom_llm_provider = "spark_ai"
+            # print(model,custom_llm_provider,dynamic_api_key,api_base)
+            return model, custom_llm_provider, dynamic_api_key, api_base
         # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
         # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
         if model.split("/", 1)[0] == "azure":
