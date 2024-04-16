@@ -1012,7 +1012,9 @@ async def user_api_key_auth(
                 )
 
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
-                if (
+                if route in LiteLLMRoutes.openai_routes.value:
+                    pass
+                elif (
                     route in LiteLLMRoutes.info_routes.value
                 ):  # check if user allowed to call an info route
                     if route == "/key/info":
@@ -1053,7 +1055,7 @@ async def user_api_key_auth(
                             )
                 else:
                     raise Exception(
-                        f"Only master key can be used to generate, delete, update info for new keys/users/teams."
+                        f"Only master key can be used to generate, delete, update info for new keys/users/teams. Route={route}"
                     )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
