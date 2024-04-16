@@ -705,7 +705,7 @@ def anthropic_messages_pt_xml(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -884,7 +884,7 @@ def anthropic_messages_pt(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
