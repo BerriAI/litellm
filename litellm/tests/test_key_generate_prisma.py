@@ -1,4 +1,5 @@
 # Test the following scenarios:
+# 0. Check if master key is hashed in UserAPIKeyAuth object
 # 1. Generate a Key, and use it to make a call
 # 2. Make a call with invalid key, expect it to fail
 # 3. Make a call to a key with invalid model - expect to fail
@@ -51,6 +52,7 @@ from litellm.proxy.proxy_server import (
     user_info,
     info_key_fn,
     new_team,
+    hash_token,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
@@ -106,6 +108,49 @@ def prisma_client():
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
+
+
+@pytest.mark.asyncio()
+async def test_master_key_hashing(prisma_client):
+    try:
+
+        print("prisma client=", prisma_client)
+
+        master_key = "sk-1234"
+
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+        await litellm.proxy.proxy_server.prisma_client.connect()
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        _response = await new_user(
+            data=NewUserRequest(
+                models=["azure-gpt-3.5"],
+                team_id="ishaans-special-team",
+                tpm_limit=20,
+            )
+        )
+        print(_response)
+        assert _response.models == ["azure-gpt-3.5"]
+        assert _response.team_id == "ishaans-special-team"
+        assert _response.tpm_limit == 20
+
+        bearer_token = "Bearer " + master_key
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        # use generated key to auth in
+        result: UserAPIKeyAuth = await user_api_key_auth(
+            request=request, api_key=bearer_token
+        )
+
+        assert result.api_key == hash_token(master_key)
+
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
 
 
 @pytest.mark.asyncio()
