@@ -346,6 +346,83 @@ async def test_embedding_caching_azure_individual_items():
 
 
 @pytest.mark.asyncio
+async def test_embedding_caching_azure_individual_items_reordered():
+    """
+    Tests caching for individual items in an embedding list
+
+    - Cache an item
+    - call aembedding(..) with the item + 1 unique item
+    - compare to a 2nd aembedding (...) with 2 unique items
+    ```
+    embedding_1 = ["hey how's it going", "I'm doing well"]
+    embedding_val_1 = embedding(...)
+
+    embedding_2 = ["hey how's it going", "I'm fine"]
+    embedding_val_2 = embedding(...)
+
+    assert embedding_val_1[0]["id"] == embedding_val_2[0]["id"]
+    ```
+    """
+    litellm.cache = Cache()
+    common_msg = f"{uuid.uuid4()}"
+    common_msg_2 = f"hey how's it going {uuid.uuid4()}"
+    embedding_1 = [common_msg_2, common_msg]
+    embedding_2 = [
+        common_msg,
+        f"I'm fine {uuid.uuid4()}",
+    ]
+
+    embedding_val_1 = await aembedding(
+        model="azure/azure-embedding-model", input=embedding_1, caching=True
+    )
+    embedding_val_2 = await aembedding(
+        model="azure/azure-embedding-model", input=embedding_2, caching=True
+    )
+    print(f"embedding_val_2._hidden_params: {embedding_val_2._hidden_params}")
+    assert embedding_val_2._hidden_params["cache_hit"] == True
+
+    assert embedding_val_2.data[0]["embedding"] == embedding_val_1.data[1]["embedding"]
+    assert embedding_val_2.data[0]["index"] != embedding_val_1.data[1]["index"]
+    assert embedding_val_2.data[0]["index"] == 0
+    assert embedding_val_1.data[1]["index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_caching_base_64():
+    """ """
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+    )
+    import uuid
+
+    inputs = [
+        f"{uuid.uuid4()} hello this is ishaan",
+        f"{uuid.uuid4()} hello this is ishaan again",
+    ]
+
+    embedding_val_1 = await aembedding(
+        model="azure/azure-embedding-model",
+        input=inputs,
+        caching=True,
+        encoding_format="base64",
+    )
+    embedding_val_2 = await aembedding(
+        model="azure/azure-embedding-model",
+        input=inputs,
+        caching=True,
+        encoding_format="base64",
+    )
+
+    assert embedding_val_2._hidden_params["cache_hit"] == True
+    print(embedding_val_2)
+    print(embedding_val_1)
+    assert embedding_val_2.data[0]["embedding"] == embedding_val_1.data[0]["embedding"]
+    assert embedding_val_2.data[1]["embedding"] == embedding_val_1.data[1]["embedding"]
+
+
+@pytest.mark.asyncio
 async def test_redis_cache_basic():
     """
     Init redis client
@@ -628,6 +705,39 @@ async def test_redis_cache_acompletion_stream():
 
 
 # test_redis_cache_acompletion_stream()
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_atext_completion():
+    try:
+        litellm.set_verbose = True
+        prompt = f"write a one sentence poem about: {uuid.uuid4()}"
+        litellm.cache = Cache(
+            type="redis",
+            host=os.environ["REDIS_HOST"],
+            port=os.environ["REDIS_PORT"],
+            password=os.environ["REDIS_PASSWORD"],
+            supported_call_types=["atext_completion"],
+        )
+        print("test for caching, atext_completion")
+
+        response1 = await litellm.atext_completion(
+            model="gpt-3.5-turbo-instruct", prompt=prompt, max_tokens=40, temperature=1
+        )
+
+        await asyncio.sleep(0.5)
+        print("\n\n Response 1 content: ", response1, "\n\n")
+
+        response2 = await litellm.atext_completion(
+            model="gpt-3.5-turbo-instruct", prompt=prompt, max_tokens=40, temperature=1
+        )
+
+        print(response2)
+
+        assert response1.id == response2.id
+    except Exception as e:
+        print(f"{str(e)}\n\n{traceback.format_exc()}")
+        raise e
 
 
 @pytest.mark.asyncio

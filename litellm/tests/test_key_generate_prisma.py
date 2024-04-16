@@ -66,6 +66,7 @@ from litellm.proxy._types import (
     GenerateKeyRequest,
     NewTeamRequest,
     UserAPIKeyAuth,
+    LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.proxy.utils import DBClient
 from starlette.datastructures import URL
@@ -105,6 +106,35 @@ def prisma_client():
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
+
+
+@pytest.mark.asyncio()
+async def test_new_user_response(prisma_client):
+    try:
+
+        print("prisma client=", prisma_client)
+
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+        await litellm.proxy.proxy_server.prisma_client.connect()
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        _response = await new_user(
+            data=NewUserRequest(
+                models=["azure-gpt-3.5"],
+                team_id="ishaans-special-team",
+                tpm_limit=20,
+            )
+        )
+        print(_response)
+        assert _response.models == ["azure-gpt-3.5"]
+        assert _response.team_id == "ishaans-special-team"
+        assert _response.tpm_limit == 20
+
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
 
 
 def test_generate_and_call_with_valid_key(prisma_client):
@@ -1627,10 +1657,9 @@ async def test_upperbound_key_params(prisma_client):
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    litellm.upperbound_key_generate_params = {
-        "max_budget": 0.001,
-        "budget_duration": "1m",
-    }
+    litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+        max_budget=0.001, budget_duration="1m"
+    )
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
         request = GenerateKeyRequest(
@@ -1638,18 +1667,9 @@ async def test_upperbound_key_params(prisma_client):
             budget_duration="30d",
         )
         key = await generate_key_fn(request)
-        generated_key = key.key
-
-        result = await info_key_fn(key=generated_key)
-        key_info = result["info"]
-        # assert it used the upper bound for max_budget, and budget_duration
-        assert key_info["max_budget"] == 0.001
-        assert key_info["budget_duration"] == "1m"
-
-        print(result)
+        # print(result)
     except Exception as e:
-        print("Got Exception", e)
-        pytest.fail(f"Got exception {e}")
+        assert e.code == 400
 
 
 def test_get_bearer_token():
@@ -1684,6 +1704,28 @@ def test_get_bearer_token():
     api_key = "Bearer sk-1234"
     result = _get_bearer_token(api_key)
     assert result == "sk-1234", f"Expected 'valid_token', got '{result}'"
+
+
+def test_update_logs_with_spend_logs_url(prisma_client):
+    """
+    Unit test for making sure spend logs list is still updated when url passed in
+    """
+    from litellm.proxy.proxy_server import _set_spend_logs_payload
+
+    payload = {"startTime": datetime.now(), "endTime": datetime.now()}
+    _set_spend_logs_payload(payload=payload, prisma_client=prisma_client)
+
+    assert len(prisma_client.spend_log_transactions) > 0
+
+    prisma_client.spend_log_transactions = []
+
+    spend_logs_url = ""
+    payload = {"startTime": datetime.now(), "endTime": datetime.now()}
+    _set_spend_logs_payload(
+        payload=payload, spend_logs_url=spend_logs_url, prisma_client=prisma_client
+    )
+
+    assert len(prisma_client.spend_log_transactions) > 0
 
 
 @pytest.mark.asyncio

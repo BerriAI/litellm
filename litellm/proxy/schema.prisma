@@ -39,7 +39,6 @@ model LiteLLM_ProxyModelTable {
   updated_by String
 }
 
-
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String
@@ -54,6 +53,7 @@ model LiteLLM_OrganizationTable {
     updated_by String
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     teams LiteLLM_TeamTable[] 
+    users LiteLLM_UserTable[]
 }
 
 // Model info for teams, just has model aliases for now.
@@ -98,7 +98,9 @@ model LiteLLM_TeamTable {
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
 		user_id    String @id
+    user_alias String? 
     team_id    String?
+    organization_id String?
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
@@ -113,6 +115,7 @@ model LiteLLM_UserTable {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
 }
 
 // Generate Tokens for Proxy

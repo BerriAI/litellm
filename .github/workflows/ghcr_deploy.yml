@@ -5,10 +5,13 @@ on:
     inputs:
       tag:
         description: "The tag version you want to build"
-      stable:
-        description: "Build Stable version"
-        type: boolean
-        default: false
+      release_type:
+        description: "The release type you want to build. Can be 'latest', 'stable', 'dev'"
+        type: string
+        default: "latest"
+      commit_hash:
+        description: "Commit hash"
+        required: true
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -89,9 +92,9 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
         with:
-          context: .
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.stable && 'stable' || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
           
@@ -125,10 +128,10 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: .
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           file: Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.stable && 'stable' || 'latest' }}
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
           labels: ${{ steps.meta-database.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
@@ -162,11 +165,10 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: .
+          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
           file: ./litellm-js/spend-logs/Dockerfile
           push: true
-          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.stable && 'stable' || 'latest' }}
-          labels: ${{ steps.meta-spend-logs.outputs.labels }} 
+          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:
@@ -240,17 +242,20 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
           script: |
+            const commitHash = "${{ github.event.inputs.commit_hash}}";
+            console.log("Commit Hash:", commitHash); // Add this line for debugging
             try {
               const response = await github.rest.repos.createRelease({
                 draft: false,
                 generate_release_notes: true,
+                target_commitish: commitHash,
                 name: process.env.RELEASE_TAG,
                 owner: context.repo.owner,
                 prerelease: false,
                 repo: context.repo.repo,
                 tag_name: process.env.RELEASE_TAG,
               });
-
+      
               core.exportVariable('RELEASE_ID', response.data.id);
               core.exportVariable('RELEASE_UPLOAD_URL', response.data.upload_url);
             } catch (error) {

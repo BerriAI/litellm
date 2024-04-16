@@ -666,8 +666,8 @@ services:
   litellm:
     build:
       context: .
-        args:
-          target: runtime
+      args:
+        target: runtime
     image: ghcr.io/berriai/litellm:main-latest
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary

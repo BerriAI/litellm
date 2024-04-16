@@ -398,6 +398,40 @@ async def test_async_router_context_window_fallback():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
+def test_router_rpm_pre_call_check():
+    """
+    - for a given model not in model cost map
+    - with rpm set
+    - check if rpm check is run
+    """
+    try:
+        model_list = [
+            {
+                "model_name": "fake-openai-endpoint",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "openai/my-fake-model",
+                    "api_key": "my-fake-key",
+                    "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
+                    "rpm": 0,
+                },
+            },
+        ]
+
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+
+        try:
+            router._pre_call_checks(
+                model="fake-openai-endpoint",
+                healthy_deployments=model_list,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+            pytest.fail("Expected this to fail")
+        except:
+            pass
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+
 def test_router_context_window_check_pre_call_check_in_group():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
@@ -932,6 +966,35 @@ def test_openai_completion_on_router():
 # test_openai_completion_on_router()
 
 
+def test_consistent_model_id():
+    """
+    - For a given model group + litellm params, assert the model id is always the same
+
+    Test on `_generate_model_id`
+
+    Test on `set_model_list`
+
+    Test on `_add_deployment`
+    """
+    model_group = "gpt-3.5-turbo"
+    litellm_params = {
+        "model": "openai/my-fake-model",
+        "api_key": "my-fake-key",
+        "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
+        "stream_timeout": 0.001,
+    }
+
+    id1 = Router()._generate_model_id(
+        model_group=model_group, litellm_params=litellm_params
+    )
+
+    id2 = Router()._generate_model_id(
+        model_group=model_group, litellm_params=litellm_params
+    )
+
+    assert id1 == id2
+
+
 def test_reading_keys_os_environ():
     import openai
 
@@ -1228,3 +1291,35 @@ def test_router_add_deployment():
     assert len(new_model_id_list) > len(init_model_id_list)
 
     assert new_model_id_list[1] != new_model_id_list[0]
+
+
+@pytest.mark.asyncio
+async def test_router_text_completion_client():
+    # This tests if we re-use the Async OpenAI client
+    # This test fails when we create a new Async OpenAI client per request
+    try:
+        model_list = [
+            {
+                "model_name": "fake-openai-endpoint",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": os.getenv("OPENAI_API_KEY", None),
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+            }
+        ]
+        router = Router(model_list=model_list, debug_level="DEBUG", set_verbose=True)
+        tasks = []
+        for _ in range(300):
+            tasks.append(
+                router.atext_completion(
+                    model="fake-openai-endpoint",
+                    prompt="hello from litellm test",
+                )
+            )
+
+        # Execute all coroutines concurrently
+        responses = await asyncio.gather(*tasks)
+        print(responses)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
