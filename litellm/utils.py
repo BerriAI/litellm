@@ -70,6 +70,7 @@ from .integrations.prometheus import PrometheusLogger
 from .integrations.dynamodb import DyanmoDBLogger
 from .integrations.s3 import S3Logger
 from .integrations.clickhouse import ClickhouseLogger
+from .integrations.greenscale import GreenscaleLogger
 from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
@@ -129,6 +130,7 @@ dynamoLogger = None
 s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
+greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
 berrispendLogger = None
@@ -1715,6 +1717,33 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "greenscale":
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            verbose_logger.debug(
+                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
+                            if complete_streaming_response is None:
+                                break
+                            else:
+                                print_verbose(
+                                    "reaches greenscale for streaming logging!"
+                                )
+                                result = kwargs["complete_streaming_response"]
+          
+                        greenscaleLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
                             print_verbose=print_verbose,
                         )
                     if callback == "cache" and litellm.cache is not None:
@@ -6304,7 +6333,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
 
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger
 
     try:
         for callback in callback_list:
@@ -6391,6 +6420,9 @@ def set_callbacks(callback_list, function_id=None):
             elif callback == "supabase":
                 print_verbose(f"instantiating supabase")
                 supabaseClient = Supabase()
+            elif callback == "greenscale":
+                greenscaleLogger = GreenscaleLogger()
+                print_verbose("Initialized Greenscale Logger")
             elif callback == "lite_debugger":
                 print_verbose(f"instantiating lite_debugger")
                 if function_id:
