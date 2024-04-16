@@ -211,6 +211,7 @@
     "text-embedding-3-large": {
         "max_tokens": 8191,
         "max_input_tokens": 8191,
+        "output_vector_size": 3072,
         "input_cost_per_token": 0.00000013,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "openai",
@@ -219,6 +220,7 @@
     "text-embedding-3-small": {
         "max_tokens": 8191,
         "max_input_tokens": 8191,
+        "output_vector_size": 1536, 
         "input_cost_per_token": 0.00000002,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "openai",
@@ -227,6 +229,7 @@
     "text-embedding-ada-002": {
         "max_tokens": 8191,
         "max_input_tokens": 8191,
+        "output_vector_size": 1536, 
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "openai",
@@ -1169,10 +1172,11 @@
         "max_input_tokens": 3072,
         "output_vector_size": 768,
         "input_cost_per_token": 0.00000000625,
+        "input_cost_per_token_batch_requests": 0.000000005,
         "output_cost_per_token": 0,
         "litellm_provider": "vertex_ai-embedding-models",
         "mode": "embedding",
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "text-multilingual-embedding-preview-0409":{
         "max_tokens": 3072,
