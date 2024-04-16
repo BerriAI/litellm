@@ -182,6 +182,25 @@ class ProxyLogging:
                 raise e
         return data
 
+    def _response_taking_too_long_callback(
+        self,
+        kwargs,  # kwargs to completion
+        start_time,
+        end_time,  # start/end time
+    ):
+        try:
+            time_difference = end_time - start_time
+            # Convert the timedelta to float (in seconds)
+            time_difference_float = time_difference.total_seconds()
+            litellm_params = kwargs.get("litellm_params", {})
+            api_base = litellm_params.get("api_base", "")
+            model = kwargs.get("model", "")
+            messages = kwargs.get("messages", "")
+
+            return time_difference_float, model, api_base, messages
+        except Exception as e:
+            raise e
+
     async def response_taking_too_long_callback(
         self,
         kwargs,  # kwargs to completion
@@ -191,13 +210,13 @@ class ProxyLogging:
     ):
         if self.alerting is None:
             return
-        time_difference = end_time - start_time
-        # Convert the timedelta to float (in seconds)
-        time_difference_float = time_difference.total_seconds()
-        litellm_params = kwargs.get("litellm_params", {})
-        api_base = litellm_params.get("api_base", "")
-        model = kwargs.get("model", "")
-        messages = kwargs.get("messages", "")
+        time_difference_float, model, api_base, messages = (
+            self._response_taking_too_long_callback(
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
         if time_difference_float > self.alerting_threshold:
@@ -244,6 +263,20 @@ class ProxyLogging:
                 request_data is not None
                 and request_data.get("litellm_status", "") != "success"
             ):
+                if request_data.get("deployment", None) is not None and isinstance(
+                    request_data["deployment"], dict
+                ):
+                    _api_base = litellm.get_api_base(
+                        model=model,
+                        optional_params=request_data["deployment"].get(
+                            "litellm_params", {}
+                        ),
+                    )
+
+                    if _api_base is None:
+                        _api_base = ""
+
+                    request_info += f"\nAPI Base: {_api_base}"
                 # only alert hanging responses if they have not been marked as success
                 alerting_message = (
                     f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
@@ -428,7 +461,12 @@ class ProxyLogging:
         """
         ### ALERTING ###
         if isinstance(original_exception, HTTPException):
-            error_message = original_exception.detail
+            if isinstance(original_exception.detail, str):
+                error_message = original_exception.detail
+            elif isinstance(original_exception.detail, dict):
+                error_message = json.dumps(original_exception.detail)
+            else:
+                error_message = str(original_exception)
         else:
             error_message = str(original_exception)
         if isinstance(traceback_str, str):
@@ -529,6 +567,7 @@ class PrismaClient:
     end_user_list_transactons: dict = {}
     key_list_transactons: dict = {}
     team_list_transactons: dict = {}
+    org_list_transactons: dict = {}
     spend_log_transactions: List = []
 
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
@@ -1126,13 +1165,26 @@ class PrismaClient:
                 return new_verification_token
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
-                new_user_row = await self.db.litellm_usertable.upsert(
-                    where={"user_id": data["user_id"]},
-                    data={
-                        "create": {**db_data},  # type: ignore
-                        "update": {},  # don't do anything if it already exists
-                    },
-                )
+                try:
+                    new_user_row = await self.db.litellm_usertable.upsert(
+                        where={"user_id": data["user_id"]},
+                        data={
+                            "create": {**db_data},  # type: ignore
+                            "update": {},  # don't do anything if it already exists
+                        },
+                    )
+                except Exception as e:
+                    if (
+                        "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
+                        in str(e)
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"Foreign Key Constraint failed. Organization ID={db_data['organization_id']} does not exist in LiteLLM_OrganizationTable. Create via `/organization/new`."
+                            },
+                        )
+                    raise e
                 verbose_proxy_logger.info("Data Inserted into User Table")
                 return new_user_row
             elif table_name == "team":
@@ -2099,6 +2151,46 @@ async def update_spend(
                 )
                 raise e
 
+    ### UPDATE ORG TABLE ###
+    if len(prisma_client.org_list_transactons.keys()) > 0:
+        for i in range(n_retry_times + 1):
+            try:
+                async with prisma_client.db.tx(
+                    timeout=timedelta(seconds=60)
+                ) as transaction:
+                    async with transaction.batch_() as batcher:
+                        for (
+                            org_id,
+                            response_cost,
+                        ) in prisma_client.org_list_transactons.items():
+                            batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                where={"organization_id": org_id},
+                                data={"spend": {"increment": response_cost}},
+                            )
+                prisma_client.org_list_transactons = (
+                    {}
+                )  # Clear the remaining transactions after processing all batches in the loop.
+                break
+            except httpx.ReadTimeout:
+                if i >= n_retry_times:  # If we've reached the maximum number of retries
+                    raise  # Re-raise the last exception
+                # Optionally, sleep for a bit before retrying
+                await asyncio.sleep(2**i)  # Exponential backoff
+            except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update org spend: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e, traceback_str=error_traceback
+                    )
+                )
+                raise e
+
     ### UPDATE SPEND LOGS ###
     verbose_proxy_logger.debug(
         "Spend Logs transactions: {}".format(len(prisma_client.spend_log_transactions))
@@ -2180,32 +2272,6 @@ async def update_spend(
                     )
                 )
                 raise e
-
-
-# class Models:
-#     """
-#     Need a class to maintain state of models / router across calls to check if new deployments need to be added
-#     """
-
-#     def __init__(
-#         self,
-#         router: litellm.Router,
-#         llm_model_list: list,
-#         prisma_client: PrismaClient,
-#         proxy_logging_obj: ProxyLogging,
-#         master_key: str,
-#     ) -> None:
-#         self.router = router
-#         self.llm_model_list = llm_model_list
-#         self.prisma_client = prisma_client
-#         self.proxy_logging_obj = proxy_logging_obj
-#         self.master_key = master_key
-
-#     def get_router(self) -> litellm.Router:
-#         return self.router
-
-#     def get_model_list(self) -> list:
-#         return self.llm_model_list
 
 
 async def _read_request_body(request):

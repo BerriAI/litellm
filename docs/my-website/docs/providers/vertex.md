@@ -1,7 +1,8 @@
+import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# VertexAI - Google [Gemini, Model Garden]
+# VertexAI [Anthropic, Gemini, Model Garden]
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -129,6 +130,100 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
 
   </Tabs>
 
+## Specifying Safety Settings 
+In certain use-cases you may need to make calls to the models and pass [safety settigns](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
+
+
+<Tabs>
+
+<TabItem value="sdk" label="SDK">
+
+```python
+response = completion(
+    model="gemini/gemini-pro", 
+    messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
+    safety_settings=[
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ]
+)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**Option 1: Set in config**
+```yaml
+model_list:
+  - model_name: gemini-experimental
+    litellm_params:
+      model: vertex_ai/gemini-experimental
+      vertex_project: litellm-epic
+      vertex_location: us-central1
+      safety_settings:
+      - category: HARM_CATEGORY_HARASSMENT
+        threshold: BLOCK_NONE
+      - category: HARM_CATEGORY_HATE_SPEECH
+        threshold: BLOCK_NONE
+      - category: HARM_CATEGORY_SEXUALLY_EXPLICIT
+        threshold: BLOCK_NONE
+      - category: HARM_CATEGORY_DANGEROUS_CONTENT
+        threshold: BLOCK_NONE
+```
+
+**Option 2: Set on call**
+
+```python
+response = client.chat.completions.create(
+    model="gemini-experimental",
+    messages=[
+        {
+            "role": "user",
+            "content": "Can you write exploits?",
+        }
+    ],
+    max_tokens=8192,
+    stream=False,
+    temperature=0.0,
+
+    extra_body={
+        "safety_settings": [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE",
+            },
+        ],
+    }
+)
+```
+</TabItem>
+</Tabs>
+
 ## Set Vertex Project & Vertex Location
 All calls using Vertex AI require the following parameters:
 * Your Project ID
@@ -155,6 +250,84 @@ os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
 # set directly on module 
 litellm.vertex_location = "us-central1 # Your Location
 ```
+## Anthropic 
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
+| claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+model = "claude-3-sonnet@20240229"
+
+vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
+vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
+
+response = completion(
+    model="vertex_ai/" + model,
+    messages=[{"role": "user", "content": "hi"}],
+    temperature=0.7,
+    vertex_ai_project=vertex_ai_project,
+    vertex_ai_location=vertex_ai_location,
+)
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: anthropic-vertex
+      litellm_params:
+        model: vertex_ai/claude-3-sonnet@20240229
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-east-1"
+    - model_name: anthropic-vertex
+      litellm_params:
+        model: vertex_ai/claude-3-sonnet@20240229
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-west-1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "anthropic-vertex", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Model Garden
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
@@ -181,18 +354,15 @@ response = completion(
 |------------------|--------------------------------------|
 | gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
 
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
-
 ## Gemini Pro Vision
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | gemini-pro-vision   | `completion('gemini-pro-vision', messages)`, `completion('vertex_ai/gemini-pro-vision', messages)`|
 
+## Gemini 1.5 Pro (and Vision)
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-1.5-pro-vision   | `completion('gemini-pro-vision', messages)`, `completion('vertex_ai/gemini-pro-vision', messages)`|
+| gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
 
 
 
@@ -308,6 +478,7 @@ print(response)
 
 ## Extra
 
+### Using `GOOGLE_APPLICATION_CREDENTIALS`
 Here's the code for storing your service account credentials as `GOOGLE_APPLICATION_CREDENTIALS` environment variable:
 
 
@@ -344,3 +515,34 @@ def load_vertex_ai_credentials():
   # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
   os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 ```
+
+
+### Using GCP Service Account 
+
+1. Figure out the Service Account bound to the Google Cloud Run service
+
+<Image img={require('../../img/gcp_acc_1.png')} />
+
+2. Get the FULL EMAIL address of the corresponding Service Account
+
+3. Next, go to IAM & Admin > Manage Resources , select your top-level project that houses your Google Cloud Run Service
+
+Click `Add Principal`
+
+<Image img={require('../../img/gcp_acc_2.png')}/>
+
+4. Specify the Service Account as the principal and Vertex AI User as the role
+
+<Image img={require('../../img/gcp_acc_3.png')}/>
+
+Once that's done, when you deploy the new container in the Google Cloud Run service, LiteLLM will have automatic access to all Vertex AI endpoints.
+
+
+s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
+
+
+
+
+
+
+

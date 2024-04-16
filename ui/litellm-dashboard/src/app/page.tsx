@@ -7,6 +7,7 @@ import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
 import AdminPanel from "@/components/admins";
+import Settings from "@/components/settings";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
@@ -159,6 +160,13 @@ const CreateKeyPage = () => {
             <AdminPanel
               setTeams={setTeams}
               searchParams={searchParams}
+              accessToken={accessToken}
+              showSSOBanner={showSSOBanner}
+            />
+          ) : page == "settings" ? (
+            <Settings
+              userID={userID}
+              userRole={userRole}
               accessToken={accessToken}
             />
           ) : (

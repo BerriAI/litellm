@@ -1,6 +1,6 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
-#    On success + failure, log events to Supabase
+#    On success, log events to Prometheus
 
 import dotenv, os
 import requests
