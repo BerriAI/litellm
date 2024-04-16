@@ -1230,6 +1230,18 @@ def cost_tracking():
                 litellm.success_callback.append(_PROXY_track_cost_callback)  # type: ignore
 
 
+def _initialize_metrics():
+    if isinstance(litellm.success_callback, list):
+        if "PROXY_METRICS" not in litellm.success_callback:
+            litellm.success_callback.append("PROXY_METRICS")
+
+    from prometheus_client import make_asgi_app
+
+    # Add prometheus asgi middleware to route /metrics requests
+    metrics_app = make_asgi_app()
+    app.mount("/metrics/", metrics_app)
+
+
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion
@@ -3127,6 +3139,9 @@ async def startup_event():
 
     ## COST TRACKING ##
     cost_tracking()
+
+    # INITIALIZE METRICS - Prometheus /metrics endpoint
+    _initialize_metrics()
 
     db_writer_client = HTTPHandler()
 

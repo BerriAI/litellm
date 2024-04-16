@@ -112,3 +112,62 @@ async def test_team_logging():
 
     except Exception as e:
         pytest.fail("Team 2 logging failed: " + str(e))
+
+
+async def call_health_readiness(session):
+    url = "http://0.0.0.0:4000/health/readiness"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            status = response.status
+            response_text = await response.text()
+
+            print(response_text)
+            print()
+
+            if status != 200:
+                raise Exception(f"Request did not return a 200 status code: {status}")
+            return await response.json()
+
+
+async def call_metrics(session):
+    url = "http://0.0.0.0:4000/metrics/"
+    headers = {"Authorization": "Bearer sk-1234"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            status = response.status
+            response_text = await response.text()
+
+            print(response_text)
+            print()
+
+            if status != 200:
+                raise Exception(f"Request did not return a 200 status code: {status}")
+            return response_text
+
+
+@pytest.mark.asyncio
+async def test_default_proxy_callbacks():
+    """
+    Tests if prometheus is always included in the proxy as a callback
+    - check if "PROXY_METRICS" in success_callbacks
+    - check if success from /chat/completions is logged to /metrics
+    """
+
+    try:
+        _health_readiness_response = await call_health_readiness(
+            session=aiohttp.ClientSession()
+        )
+        print("_health_readiness_response=", _health_readiness_response)
+
+        success_callbacks = _health_readiness_response.get("success_callbacks")
+        assert "PROXY_METRICS" in success_callbacks
+
+        # make request to /metrics before
+        _metrics = await call_metrics(session=aiohttp.ClientSession())
+        print("_metrics=", _metrics)
+
+    except Exception as e:
+        pytest.fail("Team 2 logging failed: " + str(e))

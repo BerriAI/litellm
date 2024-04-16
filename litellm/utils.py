@@ -1637,7 +1637,7 @@ class Logging:
                             user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
-                    if callback == "prometheus":
+                    if callback == "prometheus" or callback == "PROXY_METRICS":
                         global prometheusLogger
                         verbose_logger.debug("reaches prometheus for success logging!")
                         kwargs = {}
@@ -6565,7 +6565,7 @@ def set_callbacks(callback_list, function_id=None):
                 langFuseLogger = LangFuseLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
-            elif callback == "prometheus":
+            elif callback == "prometheus" or callback == "PROXY_METRICS":
                 if prometheusLogger is None:
                     prometheusLogger = PrometheusLogger()
             elif callback == "dynamodb":
