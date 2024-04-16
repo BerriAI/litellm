@@ -14,6 +14,28 @@ sys.path.insert(
 import litellm
 
 
+async def generate_user(
+    session,
+    user_role="app_owner",
+):
+    url = "http://0.0.0.0:4000/user/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "user_role": user_role,
+        "team_id": "litellm-dashboard",
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response (Status code: {status}):")
+        print(response_text)
+        print()
+        _json_response = await response.json()
+        return _json_response
+
+
 async def generate_key(
     session,
     i,
@@ -21,6 +43,7 @@ async def generate_key(
     budget_duration=None,
     models=["azure-models", "gpt-4", "dall-e-3"],
     max_parallel_requests: Optional[int] = None,
+    user_id: Optional[str] = None,
 ):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -31,6 +54,7 @@ async def generate_key(
         "max_budget": budget,
         "budget_duration": budget_duration,
         "max_parallel_requests": max_parallel_requests,
+        "user_id": user_id,
     }
 
     print(f"data: {data}")
@@ -214,13 +238,13 @@ async def test_key_update():
         await chat_completion(session=session, key=key)
 
 
-async def delete_key(session, get_key):
+async def delete_key(session, get_key, auth_key="sk-1234"):
     """
     Delete key
     """
     url = "http://0.0.0.0:4000/key/delete"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {auth_key}",
         "Content-Type": "application/json",
     }
     data = {"keys": [get_key]}
@@ -608,3 +632,32 @@ async def test_key_rate_limit():
             await chat_completion(session=session, key=new_key)
         except Exception as e:
             pytest.fail(f"Expected this call to work - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_key_delete():
+    """
+    Admin UI flow - DO NOT DELETE
+    -> Create a key with user_id = "ishaan"
+    -> Log on Admin UI, delete the key for user "ishaan"
+    -> This should work, since we're on the admin UI and role == "proxy_admin
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0, user_id="ishaan-smart")
+        key = key_gen["key"]
+
+        # generate a admin UI key
+        admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
+        print(
+            "trying to delete key=",
+            key,
+            "using key=",
+            admin_ui_key["key"],
+            " to auth in",
+        )
+
+        await delete_key(
+            session=session,
+            get_key=key,
+            auth_key=admin_ui_key["key"],
+        )
