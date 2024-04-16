@@ -78,7 +78,14 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
     ]
 
-    info_routes: List = ["/key/info", "/team/info", "/user/info", "/model/info"]
+    info_routes: List = [
+        "/key/info",
+        "/team/info",
+        "/user/info",
+        "/model/info",
+        "/v2/model/info",
+        "/v2/key/info",
+    ]
 
     management_routes: List = [  # key
         "/key/generate",
