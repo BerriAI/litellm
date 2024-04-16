@@ -59,17 +59,21 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     setSelectedCallback(null);
   };
 
-  const handleSaveChanges = (callback: any) => {
+  const handleSaveChanges = (router_settings: any) => {
     if (!accessToken) {
       return;
     }
 
+    console.log("router_settings", router_settings);
+
     const updatedVariables = Object.fromEntries(
-      Object.entries(callback.variables).map(([key, value]) => [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value])
+      Object.entries(router_settings).map(([key, value]) => [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value])
     );
 
+    console.log("updatedVariables", updatedVariables);
+
     const payload = {
-      environment_variables: updatedVariables,
+      router_settings: updatedVariables
     };
 
     try {
@@ -116,11 +120,13 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   </TableRow>
 ))}
 </TableBody>
-          </Table>
-            
-            
+        </Table>
         </Card>
-        
+        <Col>
+            <Button className="mt-2" onClick={() => handleSaveChanges(routerSettings)}>
+            Save Changes
+            </Button>
+        </Col>
       </Grid>
 
     </div>
