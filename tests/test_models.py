@@ -57,7 +57,7 @@ async def test_get_models():
         await get_models(session=session, key=key)
 
 
-async def add_models(session, model_id="123"):
+async def add_models(session, model_id="123", model_name="azure-gpt-3.5"):
     url = "http://0.0.0.0:4000/model/new"
     headers = {
         "Authorization": f"Bearer sk-1234",
@@ -65,7 +65,7 @@ async def add_models(session, model_id="123"):
     }
 
     data = {
-        "model_name": "azure-gpt-3.5",
+        "model_name": model_name,
         "litellm_params": {
             "model": "azure/chatgpt-v-2",
             "api_key": "os.environ/AZURE_API_KEY",
@@ -173,19 +173,30 @@ async def delete_model(session, model_id="123"):
 @pytest.mark.asyncio
 async def test_add_and_delete_models():
     """
-    Add model
-    Call new model
+    - Add model
+    - Call new model -> expect to pass
+    - Delete model
+    - Call model -> expect to fail
     """
+    import uuid
+
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
-        model_id = "12345"
-        response = await add_models(session=session, model_id=model_id)
-        assert response["model_id"] == "12345"
+        model_id = f"12345_{uuid.uuid4()}"
+        model_name = f"{uuid.uuid4()}"
+        response = await add_models(
+            session=session, model_id=model_id, model_name=model_name
+        )
+        assert response["model_id"] == model_id
         await asyncio.sleep(10)
-        await chat_completion(session=session, key=key)
+        await chat_completion(session=session, key=key, model=model_name)
         await delete_model(session=session, model_id=model_id)
-        # raise Exception("it worked!")
+        try:
+            await chat_completion(session=session, key=key, model=model_name)
+            pytest.fail(f"Expected call to fail.")
+        except:
+            pass
 
 
 async def add_model_for_health_checking(session, model_id="123"):
