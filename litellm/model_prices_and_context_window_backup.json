@@ -1164,6 +1164,26 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "text-embedding-preview-0409": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "text-multilingual-embedding-preview-0409":{
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "palm/chat-bison": {
         "max_tokens": 4096,
         "max_input_tokens": 8192,
