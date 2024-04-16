@@ -6,6 +6,93 @@ import { message } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
+export interface Model {
+  model_name: string;
+  litellm_params: Object;
+  model_info: Object | null;
+}
+
+export const modelCostMap = async () => {
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json');
+    const jsonData = await response.json();
+    console.log(`received data: ${jsonData}`)
+    return jsonData
+  } catch (error) {
+    console.error("Failed to get model cost map:", error);
+    throw error;
+  }
+}
+
+export const modelCreateCall = async (
+  accessToken: string,
+  formValues: Model
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/new` : `/model/new`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to create key: " + errorData, 20);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    message.success("Model created successfully. Wait 60s and refresh on 'All Models' page");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
+
+export const modelDeleteCall = async (  
+  accessToken: string,
+  model_id: string,
+) => {
+  console.log(`model_id in model delete call: ${model_id}`)
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/delete` : `/model/delete`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "id": model_id, 
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to create key: " + errorData, 20);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    message.success("Model deleted successfully. Restart server to see this.");
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
+
 export const keyCreateCall = async (
   accessToken: string,
   userID: string,
@@ -33,7 +120,7 @@ export const keyCreateCall = async (
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
       } catch (error) {
-        message.error("Failed to parse metadata: " + error);
+        message.error("Failed to parse metadata: " + error, 20);
         throw new Error("Failed to parse metadata: " + error);
       }
     }
@@ -54,7 +141,7 @@ export const keyCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData);
+      message.error("Failed to create key: " + errorData, 20);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -96,7 +183,7 @@ export const userCreateCall = async (
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
       } catch (error) {
-        message.error("Failed to parse metadata: " + error);
+        message.error("Failed to parse metadata: " + error, 20);
         throw new Error("Failed to parse metadata: " + error);
       }
     }
@@ -117,7 +204,7 @@ export const userCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData);
+      message.error("Failed to create key: " + errorData, 20);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -150,7 +237,7 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData);
+      message.error("Failed to delete key: " + errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -182,7 +269,7 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete team: " + errorData);
+      message.error("Failed to delete team: " + errorData, 20);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -200,7 +287,9 @@ export const userInfoCall = async (
   accessToken: String,
   userID: String | null,
   userRole: String,
-  viewAll: Boolean = false
+  viewAll: Boolean = false,
+  page: number | null, 
+  page_size: number | null
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
@@ -208,8 +297,8 @@ export const userInfoCall = async (
       url = `${url}?user_id=${userID}`;
     }
     console.log("in userInfoCall viewAll=", viewAll);
-    if (viewAll) {
-      url = `${url}?view_all=true`;
+    if (viewAll && page_size && (page != null) && (page != undefined)) {
+      url = `${url}?view_all=true&page=${page}&page_size=${page_size}`;
     }
     //message.info("Requesting user data");
     const response = await fetch(url, {
@@ -222,7 +311,7 @@ export const userInfoCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -257,7 +346,7 @@ export const getTotalSpendCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -292,11 +381,12 @@ export const modelInfoCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
     const data = await response.json();
+    console.log("modelInfoCall:", data);
     //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -328,7 +418,7 @@ export const modelMetricsCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -363,7 +453,7 @@ export const modelAvailableCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -392,7 +482,7 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -421,7 +511,7 @@ export const teamSpendLogsCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -433,6 +523,36 @@ export const teamSpendLogsCall = async (accessToken: String) => {
     throw error;
   }
 };
+
+
+export const tagsSpendLogsCall = async (accessToken: String) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/spend/tags`
+      : `/global/spend/tags`;
+    console.log("in tagsSpendLogsCall:", url);
+    const response = await fetch(`${url}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 20);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 
 export const userSpendLogsCall = async (
   accessToken: String,
@@ -460,7 +580,7 @@ export const userSpendLogsCall = async (
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -490,7 +610,7 @@ export const adminSpendLogsCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -520,7 +640,7 @@ export const adminTopKeysCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -572,7 +692,7 @@ export const adminTopEndUsersCall = async (
     const response = await fetch(url, requestOptions);
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -602,7 +722,7 @@ export const adminTopModelsCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -633,7 +753,7 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -659,7 +779,7 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -697,7 +817,7 @@ export const userRequestModelCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData);
+      message.error("Failed to delete key: " + errorData, 20);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -727,7 +847,7 @@ export const userGetRequesedtModelsCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData);
+      message.error("Failed to delete key: " + errorData, 20);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -767,7 +887,7 @@ export const userGetAllUsersCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData);
+      message.error("Failed to delete key: " + errorData, 20);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -802,7 +922,7 @@ export const teamCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData);
+      message.error("Failed to create key: " + errorData, 20);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -839,7 +959,7 @@ export const keyUpdateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to update key: " + errorData);
+      message.error("Failed to update key: " + errorData, 20);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -874,7 +994,7 @@ export const teamUpdateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to update team: " + errorData);
+      message.error("Failed to update team: " + errorData, 20);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -919,7 +1039,7 @@ export const teamMemberAddCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData);
+      message.error("Failed to create key: " + errorData, 20);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -936,27 +1056,30 @@ export const teamMemberAddCall = async (
 
 export const userUpdateUserCall = async (
   accessToken: string,
-  formValues: any // Assuming formValues is an object
+  formValues: any, // Assuming formValues is an object
+  userRole: string | null
 ) => {
   try {
     console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
 
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/update` : `/user/update`;
+    let response_body = {...formValues};
+    if (userRole !== null) {
+      response_body["user_role"] = userRole;
+    }
+    response_body = JSON.stringify(response_body);
     const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        user_role: "proxy_admin_viewer",
-        ...formValues, // Include formValues in the request body
-      }),
+      body: response_body,
     });
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData);
+      message.error("Failed to create key: " + errorData, 20);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -996,7 +1119,7 @@ export const PredictedSpendLogsCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      message.error(errorData, 20);
       throw new Error("Network response was not ok");
     }
 
@@ -1046,4 +1169,157 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
     throw error;
   }
 };
+
+
+
+export const serviceHealthCheck= async (accessToken: String, service: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/health/services?service=${service}`
+      : `/health/services?service=${service}`;
+
+    console.log("Checking Slack Budget Alerts service health");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(`Failed ${service} service health check ` + errorData);
+      // throw error with message
+      throw new Error(errorData);
+    }
+    
+    const data = await response.json();
+    message.success(`Test request to ${service} made - check logs on ${service} dashboard!`);
+    // You can add additional logic here based on the response if needed
+    return data;
+  } catch (error) {
+    console.error("Failed to perform health check:", error);
+    throw error;
+  }
+};
+
+
+
+
+export const getCallbacksCall = async (
+  accessToken: String,
+  userID: String,
+  userRole: String
+) => {
+  /**
+   * Get all the models user has access to
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/config/callbacks` : `/get/config/callbacks`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 20);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+
+
+
+
+
+
+export const setCallbacksCall = async (
+  accessToken: String,
+  formValues: Record<string, any>
+) => {
+  /**
+   * Set callbacks on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/update` : `/config/update`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 20);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to set callbacks:", error);
+    throw error;
+  }
+};
+
+export const healthCheckCall = async (
+  accessToken: String,
+) => {
+  /**
+   * Get all the models user has access to
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health` : `/health`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to call /health:", error);
+    throw error;
+  }
+};
+
+
 

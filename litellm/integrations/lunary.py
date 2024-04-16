@@ -6,6 +6,8 @@ import dotenv
 import importlib
 import sys
 
+import packaging
+
 dotenv.load_dotenv()
 
 
@@ -56,13 +58,12 @@ class LunaryLogger:
     def __init__(self):
         try:
             import lunary
-            from pkg_resources import parse_version
 
             version = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
-            if parse_version(version) < parse_version("0.1.43"):
+            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
                 print(
-                    "Lunary version outdated. Required: > 0.1.43. Upgrade via 'pip install lunary --upgrade'"
+                    "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
                 raise ImportError
 

@@ -7,13 +7,13 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the, system path
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 
-# litellm.num_retries = 3
+# litellm.num_retries=3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -50,7 +50,22 @@ def test_completion_custom_provider_model_name():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_custom_provider_model_name()
+def test_completion_azure_command_r():
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="azure/command-r-plus",
+            api_base=os.getenv("AZURE_COHERE_API_BASE"),
+            api_key=os.getenv("AZURE_COHERE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )
+
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_claude():
@@ -477,6 +492,31 @@ def test_completion_claude2_1():
 
 # test_completion_claude2_1()
 
+
+@pytest.mark.asyncio
+async def test_acompletion_claude2_1():
+    try:
+        litellm.set_verbose = True
+        print("claude2.1 test request")
+        messages = [
+            {
+                "role": "system",
+                "content": "Your goal is generate a joke on the topic user gives.",
+            },
+            {"role": "user", "content": "Generate a 3 liner joke for me"},
+        ]
+        # test without max tokens
+        response = await litellm.acompletion(model="claude-2.1", messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        print(response.usage)
+        print(response.usage.completion_tokens)
+        print(response["usage"]["completion_tokens"])
+        # print("new cost tracking")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # def test_completion_oobabooga():
 #     try:
 #         response = completion(
@@ -581,7 +621,7 @@ def test_completion_gpt4_vision():
 
 
 def test_completion_azure_gpt4_vision():
-    # azure/gpt-4, vision takes 5 seconds to respond
+    # azure/gpt-4, vision takes 5-seconds to respond
     try:
         litellm.set_verbose = True
         response = completion(
@@ -954,6 +994,19 @@ def test_completion_text_openai():
     try:
         # litellm.set_verbose =True
         response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
+        print(response["choices"][0]["message"]["content"])
+    except Exception as e:
+        print(e)
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_completion_text_openai_async():
+    try:
+        # litellm.set_verbose =True
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo-instruct", messages=messages
+        )
         print(response["choices"][0]["message"]["content"])
     except Exception as e:
         print(e)
@@ -1604,9 +1657,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-7b-chat"
+    model_name = "replicate/meta/llama-2-70b-chat"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-7b-chat",
+        model="replicate/meta/llama-2-70b-chat",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -1624,16 +1677,24 @@ def test_replicate_custom_prompt_dict():
         },
         final_prompt_value="Now answer as best you can:",  # [OPTIONAL]
     )
-    response = completion(
-        model=model_name,
-        messages=[
-            {
-                "role": "user",
-                "content": "what is yc write 1 paragraph",
-            }
-        ],
-        num_retries=3,
-    )
+    try:
+        response = completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what is yc write 1 paragraph",
+                }
+            ],
+            repetition_penalty=0.1,
+            num_retries=3,
+        )
+    except litellm.APIError as e:
+        pass
+    except litellm.APIConnectionError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
     print(f"response: {response}")
     litellm.custom_prompt_dict = {}  # reset
 

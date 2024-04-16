@@ -86,7 +86,12 @@ async def perform_health_check(
             return [], []
 
     if model is not None:
-        model_list = [x for x in model_list if x["litellm_params"]["model"] == model]
+        _new_model_list = [
+            x for x in model_list if x["litellm_params"]["model"] == model
+        ]
+        if _new_model_list == []:
+            _new_model_list = [x for x in model_list if x["model_name"] == model]
+        model_list = _new_model_list
 
     healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
 

@@ -12,8 +12,8 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
-import httpx
 
+import httpx
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -39,7 +39,6 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 from .llms import (
-    anthropic,
     anthropic_text,
     together_ai,
     ai21,
@@ -62,11 +61,14 @@ from .llms import (
     palm,
     gemini,
     vertex_ai,
+    vertex_ai_anthropic,
     maritalk,
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
+from .llms.anthropic import AnthropicChatCompletion
+from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -98,6 +100,8 @@ from litellm.utils import (
 dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
+anthropic_chat_completions = AnthropicChatCompletion()
+anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
@@ -303,6 +307,7 @@ async def acompletion(
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
+            or custom_llm_provider == "anthropic"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -314,6 +319,14 @@ async def acompletion(
                 response = await init_response
             else:
                 response = init_response  # type: ignore
+
+            if custom_llm_provider == "text-completion-openai" and isinstance(
+                response, TextCompletionResponse
+            ):
+                response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
+                    response_object=response,
+                    model_response_object=litellm.ModelResponse(),
+                )
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)  # type: ignore
@@ -608,6 +621,7 @@ def completion(
         "cache",
         "no-log",
         "base_model",
+        "stream_timeout",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -1058,6 +1072,7 @@ def completion(
                 api_key=api_key,
                 api_base=api_base,
                 acompletion=acompletion,
+                client=client,  # pass AsyncOpenAI, OpenAI client
                 logging_obj=logging,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
@@ -1153,10 +1168,11 @@ def completion(
                     or get_secret("ANTHROPIC_API_BASE")
                     or "https://api.anthropic.com/v1/complete"
                 )
-                response = anthropic_text.completion(
+                response = anthropic_text_completions.completion(
                     model=model,
                     messages=messages,
                     api_base=api_base,
+                    acompletion=acompletion,
                     custom_prompt_dict=litellm.custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,
@@ -1177,10 +1193,11 @@ def completion(
                     or get_secret("ANTHROPIC_API_BASE")
                     or "https://api.anthropic.com/v1/messages"
                 )
-                response = anthropic.completion(
+                response = anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,
                     api_base=api_base,
+                    acompletion=acompletion,
                     custom_prompt_dict=litellm.custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,
@@ -1192,19 +1209,6 @@ def completion(
                     logging_obj=logging,
                     headers=headers,
                 )
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] == True
-                and not isinstance(response, CustomStreamWrapper)
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    response,
-                    model,
-                    custom_llm_provider="anthropic",
-                    logging_obj=logging,
-                )
-
             if optional_params.get("stream", False) or acompletion == True:
                 ## LOGGING
                 logging.post_call(
@@ -1673,21 +1677,42 @@ def completion(
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
-
-            model_response = vertex_ai.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                vertex_location=vertex_ai_location,
-                vertex_project=vertex_ai_project,
-                logging_obj=logging,
-                acompletion=acompletion,
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
             )
+            if "claude-3" in model:
+                model_response = vertex_ai_anthropic.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    vertex_location=vertex_ai_location,
+                    vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                )
+            else:
+                model_response = vertex_ai.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    vertex_location=vertex_ai_location,
+                    vertex_project=vertex_ai_project,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                )
 
             if (
                 "stream" in optional_params
@@ -3767,6 +3792,9 @@ async def ahealth_check(
 
             api_base = model_params.get("api_base") or get_secret("OPENAI_API_BASE")
 
+            if custom_llm_provider == "text-completion-openai":
+                mode = "completion"
+
             response = await openai_chat_completions.ahealth_check(
                 model=model,
                 messages=model_params.get(
@@ -3800,11 +3828,15 @@ async def ahealth_check(
         return response
     except Exception as e:
         traceback.print_exc()
+        stack_trace = traceback.format_exc()
+        if isinstance(stack_trace, str):
+            stack_trace = stack_trace[:1000]
         if model not in litellm.model_cost and mode is None:
             raise Exception(
                 "Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models"
             )
-        return {"error": f"{str(e)}"}
+        error_to_return = str(e) + " stack trace: " + stack_trace
+        return {"error": error_to_return}
 
 
 ####### HELPER FUNCTIONS ################

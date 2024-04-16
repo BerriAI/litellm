@@ -3,7 +3,11 @@ import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
 from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
-from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
+from litellm.proxy._types import (
+    KeyManagementSystem,
+    KeyManagementSettings,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 import httpx
 import dotenv
 
@@ -15,6 +19,7 @@ if set_verbose == True:
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
+service_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
 _async_input_callback: List[Callable] = (
     []
@@ -64,7 +69,7 @@ google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
-llm_guard_mode: Literal["all", "key-specific"] = "all"
+llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 ##################
 logging: bool = True
 caching: bool = (
@@ -172,7 +177,7 @@ dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
-upperbound_key_generate_params: Optional[Dict] = None
+upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
@@ -260,6 +265,7 @@ open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
 cohere_chat_models: List = []
+mistral_chat_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
@@ -269,6 +275,7 @@ vertex_code_chat_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
 vertex_embedding_models: List = []
+vertex_anthropic_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
@@ -284,6 +291,8 @@ for key, value in model_cost.items():
         cohere_models.append(key)
     elif value.get("litellm_provider") == "cohere_chat":
         cohere_chat_models.append(key)
+    elif value.get("litellm_provider") == "mistral":
+        mistral_chat_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
@@ -302,6 +311,9 @@ for key, value in model_cost.items():
         vertex_code_chat_models.append(key)
     elif value.get("litellm_provider") == "vertex_ai-embedding-models":
         vertex_embedding_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_anthropic_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -571,6 +583,7 @@ from .utils import (
     completion_cost,
     supports_function_calling,
     supports_parallel_function_calling,
+    supports_vision,
     get_litellm_params,
     Logging,
     acreate,
@@ -588,6 +601,7 @@ from .utils import (
     _should_retry,
     get_secret,
     get_supported_openai_params,
+    get_api_base,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -603,6 +617,7 @@ from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
+from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig

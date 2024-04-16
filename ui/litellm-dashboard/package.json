@@ -30,6 +30,7 @@
     "@tailwindcss/forms": "^0.5.7",
     "@types/node": "^20",
     "@types/react": "18.2.48",
+    "@types/react-copy-to-clipboard": "^5.0.7",
     "@types/react-dom": "^18",
     "@types/react-syntax-highlighter": "^15.5.11",
     "autoprefixer": "^10.4.17",

@@ -67,8 +67,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 {
                     {model_group}_map: {
                         id: {
-                            "latency": [..]  
-                            f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}      
+                            "latency": [..]
+                            f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
                     }
                 }
@@ -151,8 +151,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 {
                     {model_group}_map: {
                         id: {
-                            "latency": [..]  
-                            f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}      
+                            "latency": [..]
+                            f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
                     }
                 }
@@ -298,6 +298,4 @@ class LowestLatencyLoggingHandler(CustomLogger):
             elif item_latency < lowest_latency:
                 lowest_latency = item_latency
                 deployment = _deployment
-        if deployment is None:
-            deployment = random.choice(healthy_deployments)
         return deployment

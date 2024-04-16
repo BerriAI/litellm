@@ -45,7 +45,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 }) => {
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(0);
   const defaultPageSize = 25;
 
   useEffect(() => {
@@ -59,7 +59,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           accessToken,
           null,
           userRole,
-          true
+          true,
+          currentPage,
+          defaultPageSize
         );
         console.log("user data response:", userDataResponse);
         setUserData(userDataResponse);
@@ -68,7 +70,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       }
     };
 
-    if (accessToken && token && userRole && userID && !userData) {
+    if (accessToken && token && userRole && userID) {
       fetchData();
     }
 
@@ -88,7 +90,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     ) {
       fetchEndUserSpend();
     }
-  }, [accessToken, token, userRole, userID]);
+  }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
     return <div>Loading...</div>;
@@ -112,26 +114,26 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     if (!userData) return null;
 
     const totalPages = Math.ceil(userData.length / defaultPageSize);
-    const startItem = (currentPage - 1) * defaultPageSize + 1;
-    const endItem = Math.min(currentPage * defaultPageSize, userData.length);
 
     return (
       <div className="flex justify-between items-center">
         <div>
-          Showing {startItem} – {endItem} of {userData.length}
+          Showing Page {currentPage+1} of {totalPages}
         </div>
         <div className="flex">
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 1}
+            disabled={currentPage === 0}
             onClick={() => setCurrentPage(currentPage - 1)}
           >
             &larr; Prev
           </button>
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage(currentPage + 1)}
+            // disabled={currentPage === totalPages}
+            onClick={() => {
+              setCurrentPage(currentPage + 1);
+            }}
           >
             Next &rarr;
           </button>
