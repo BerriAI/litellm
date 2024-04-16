@@ -2410,27 +2410,44 @@ class ProxyConfig:
         router = litellm.Router(**router_params, semaphore=semaphore)  # type:ignore
         return router, model_list, general_settings
 
-    async def _delete_deployment(self, db_models: list):
+    def get_model_info_with_id(self, model) -> RouterModelInfo:
+        """
+        Common logic across add + delete router models
+        Parameters:
+        - deployment
+
+        Return model info w/ id
+        """
+        if model.model_info is not None and isinstance(model.model_info, dict):
+            if "id" not in model.model_info:
+                model.model_info["id"] = model.model_id
+            _model_info = RouterModelInfo(**model.model_info)
+        else:
+            _model_info = RouterModelInfo(id=model.model_id)
+        return _model_info
+
+    async def _delete_deployment(self, db_models: list) -> int:
         """
         (Helper function of add deployment) -> combined to reduce prisma db calls
 
         - Create all up list of model id's (db + config)
         - Compare all up list to router model id's
         - Remove any that are missing
+
+        Return:
+        - int - returns number of deleted deployments
         """
         global user_config_file_path, llm_router
         combined_id_list = []
         if llm_router is None:
-            return
+            return 0
 
         ## DB MODELS ##
         for m in db_models:
-            if m.model_info is not None and isinstance(m.model_info, dict):
-                if "id" not in m.model_info:
-                    m.model_info["id"] = m.model_id
-                combined_id_list.append(m.model_id)
-            else:
-                combined_id_list.append(m.model_id)
+            model_info = self.get_model_info_with_id(model=m)
+            if model_info.id is not None:
+                combined_id_list.append(model_info.id)
+
         ## CONFIG MODELS ##
         config = await self.get_config(config_file_path=user_config_file_path)
         model_list = config.get("model_list", None)
@@ -2440,21 +2457,73 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = litellm.get_secret(v)
-                litellm_model_name = model["litellm_params"]["model"]
-                litellm_model_api_base = model["litellm_params"].get("api_base", None)
-
-                model_id = litellm.Router()._generate_model_id(
+                model_id = llm_router._generate_model_id(
                     model_group=model["model_name"],
                     litellm_params=model["litellm_params"],
                 )
                 combined_id_list.append(model_id)  # ADD CONFIG MODEL TO COMBINED LIST
 
         router_model_ids = llm_router.get_model_ids()
-
         # Check for model IDs in llm_router not present in combined_id_list and delete them
+        deleted_deployments = 0
         for model_id in router_model_ids:
             if model_id not in combined_id_list:
-                llm_router.delete_deployment(id=model_id)
+                is_deleted = llm_router.delete_deployment(id=model_id)
+                if is_deleted is not None:
+                    deleted_deployments += 1
+        return deleted_deployments
+
+    def _add_deployment(self, db_models: list) -> int:
+        """
+        Iterate through db models
+
+        for any not in router - add them.
+
+        Return - number of deployments added
+        """
+        import base64
+
+        if master_key is None or not isinstance(master_key, str):
+            raise Exception(
+                f"Master key is not initialized or formatted. master_key={master_key}"
+            )
+
+        if llm_router is None:
+            return 0
+
+        added_models = 0
+        ## ADD MODEL LOGIC
+        for m in db_models:
+            _litellm_params = m.litellm_params
+            if isinstance(_litellm_params, dict):
+                # decrypt values
+                for k, v in _litellm_params.items():
+                    if isinstance(v, str):
+                        # decode base64
+                        decoded_b64 = base64.b64decode(v)
+                        # decrypt value
+                        _litellm_params[k] = decrypt_value(
+                            value=decoded_b64, master_key=master_key
+                        )
+                _litellm_params = LiteLLM_Params(**_litellm_params)
+            else:
+                verbose_proxy_logger.error(
+                    f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                )
+                continue  # skip to next model
+            _model_info = self.get_model_info_with_id(model=m)
+
+            added = llm_router.add_deployment(
+                deployment=Deployment(
+                    model_name=m.model_name,
+                    litellm_params=_litellm_params,
+                    model_info=_model_info,
+                )
+            )
+
+            if added is not None:
+                added_models += 1
+        return added_models
 
     async def add_deployment(
         self,
@@ -2502,13 +2571,7 @@ class ProxyConfig:
                         )
                         continue  # skip to next model
 
-                    if m.model_info is not None and isinstance(m.model_info, dict):
-                        if "id" not in m.model_info:
-                            m.model_info["id"] = m.model_id
-                        _model_info = RouterModelInfo(**m.model_info)
-                    else:
-                        _model_info = RouterModelInfo(id=m.model_id)
-
+                    _model_info = self.get_model_info_with_id(model=m)
                     _model_list.append(
                         Deployment(
                             model_name=m.model_name,
@@ -2526,39 +2589,7 @@ class ProxyConfig:
                 await self._delete_deployment(db_models=new_models)
 
                 ## ADD MODEL LOGIC
-                for m in new_models:
-                    _litellm_params = m.litellm_params
-                    if isinstance(_litellm_params, dict):
-                        # decrypt values
-                        for k, v in _litellm_params.items():
-                            if isinstance(v, str):
-                                # decode base64
-                                decoded_b64 = base64.b64decode(v)
-                                # decrypt value
-                                _litellm_params[k] = decrypt_value(
-                                    value=decoded_b64, master_key=master_key
-                                )
-                        _litellm_params = LiteLLM_Params(**_litellm_params)
-                    else:
-                        verbose_proxy_logger.error(
-                            f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
-                        )
-                        continue  # skip to next model
-
-                    if m.model_info is not None and isinstance(m.model_info, dict):
-                        if "id" not in m.model_info:
-                            m.model_info["id"] = m.model_id
-                        _model_info = RouterModelInfo(**m.model_info)
-                    else:
-                        _model_info = RouterModelInfo(id=m.model_id)
-
-                    llm_router.add_deployment(
-                        deployment=Deployment(
-                            model_name=m.model_name,
-                            litellm_params=_litellm_params,
-                            model_info=_model_info,
-                        )
-                    )
+                self._add_deployment(db_models=new_models)
 
             llm_model_list = llm_router.get_model_list()
 
@@ -3220,7 +3251,7 @@ async def startup_event():
             scheduler.add_job(
                 proxy_config.add_deployment,
                 "interval",
-                seconds=30,
+                seconds=10,
                 args=[prisma_client, proxy_logging_obj],
             )
 
