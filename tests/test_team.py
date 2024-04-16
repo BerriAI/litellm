@@ -260,7 +260,18 @@ async def get_team_info(session, get_team, call_key):
 
 @pytest.mark.asyncio
 async def test_team_info():
+    """
+    Scenario 1:
+    - test with admin key -> expect to work
+    Scenario 2:
+    - test with team key -> expect to work
+    Scenario 3:
+    - test with non-team key -> expect to fail
+    """
     async with aiohttp.ClientSession() as session:
+        """
+        Scenario 1 - as admin
+        """
         new_team_data = await new_team(
             session,
             0,
@@ -268,6 +279,25 @@ async def test_team_info():
         team_id = new_team_data["team_id"]
         ## as admin ##
         await get_team_info(session=session, get_team=team_id, call_key="sk-1234")
+        """
+        Scenario 2 - as team key
+        """
+        key_gen = await generate_key(session=session, i=0, team_id=team_id)
+        key = key_gen["key"]
+
+        await get_team_info(session=session, get_team=team_id, call_key=key)
+
+        """
+        Scenario 3 - as non-team key
+        """
+        key_gen = await generate_key(session=session, i=0)
+        key = key_gen["key"]
+
+        try:
+            await get_team_info(session=session, get_team=team_id, call_key=key)
+            pytest.fail(f"Expected call to fail")
+        except Exception as e:
+            pass
 
 
 """
