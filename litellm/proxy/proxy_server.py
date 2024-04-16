@@ -2442,6 +2442,52 @@ class ProxyConfig:
         router = litellm.Router(**router_params, semaphore=semaphore)  # type:ignore
         return router, model_list, general_settings
 
+    async def _delete_deployment(self, db_models: list):
+        """
+        (Helper function of add deployment) -> combined to reduce prisma db calls
+
+        - Create all up list of model id's (db + config)
+        - Compare all up list to router model id's
+        - Remove any that are missing
+        """
+        global user_config_file_path, llm_router
+        combined_id_list = []
+        if llm_router is None:
+            return
+
+        ## DB MODELS ##
+        for m in db_models:
+            if m.model_info is not None and isinstance(m.model_info, dict):
+                if "id" not in m.model_info:
+                    m.model_info["id"] = m.model_id
+                combined_id_list.append(m.model_info)
+            else:
+                combined_id_list.append(m.model_id)
+        ## CONFIG MODELS ##
+        config = await self.get_config(config_file_path=user_config_file_path)
+        model_list = config.get("model_list", None)
+        if model_list:
+            for model in model_list:
+                ### LOAD FROM os.environ/ ###
+                for k, v in model["litellm_params"].items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        model["litellm_params"][k] = litellm.get_secret(v)
+                litellm_model_name = model["litellm_params"]["model"]
+                litellm_model_api_base = model["litellm_params"].get("api_base", None)
+
+                model_id = litellm.Router()._generate_model_id(
+                    model_group=model["model_name"],
+                    litellm_params=model["litellm_params"],
+                )
+                combined_id_list.append(model_id)  # ADD CONFIG MODEL TO COMBINED LIST
+
+        router_model_ids = llm_router.get_model_ids()
+
+        # Check for model IDs in llm_router not present in combined_id_list and delete them
+        for model_id in router_model_ids:
+            if model_id not in combined_id_list:
+                llm_router.delete_deployment(id=model_id)
+
     async def add_deployment(
         self,
         prisma_client: PrismaClient,
@@ -2508,7 +2554,10 @@ class ProxyConfig:
             else:
                 new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
                 verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                ## DELETE MODEL LOGIC
+                await self._delete_deployment(db_models=new_models)
 
+                ## ADD MODEL LOGIC
                 for m in new_models:
                     _litellm_params = m.litellm_params
                     if isinstance(_litellm_params, dict):
@@ -7300,6 +7349,10 @@ async def delete_model(model_info: ModelInfoDelete):
                     status_code=400,
                     detail={"error": f"Model with id={model_info.id} not found in db"},
                 )
+
+            ## DELETE FROM ROUTER ##
+            if llm_router is not None:
+                llm_router.delete_deployment(id=model_info.id)
 
             return {"message": f"Model: {result.model_id} deleted successfully"}
         else:
