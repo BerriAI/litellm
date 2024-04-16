@@ -8190,6 +8190,16 @@ async def update_config(config_info: ConfigYAML):
                         "success_callback"
                     ] = combined_success_callback
 
+        # router settings
+        if config_info.router_settings is not None:
+            config.setdefault("router_settings", {})
+            _updated_router_settings = config_info.router_settings
+
+            config["router_settings"] = {
+                **_updated_router_settings,
+                **config["router_settings"],
+            }
+
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
