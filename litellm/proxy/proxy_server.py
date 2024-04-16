@@ -2620,6 +2620,9 @@ class ProxyConfig:
                 general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
 
+            # router settings
+            _router_settings = config_data.get("router_settings", {})
+            llm_router.set_settings(**_router_settings)
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
@@ -8223,6 +8226,16 @@ async def update_config(config_info: ConfigYAML):
                         "success_callback"
                     ] = combined_success_callback
 
+        # router settings
+        if config_info.router_settings is not None:
+            config.setdefault("router_settings", {})
+            _updated_router_settings = config_info.router_settings
+
+            config["router_settings"] = {
+                **config["router_settings"],
+                **_updated_router_settings,
+            }
+
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
@@ -8340,7 +8353,12 @@ async def get_config():
 
             _data_to_return.append({"name": "slack", "variables": _slack_env_vars})
 
-        return {"status": "success", "data": _data_to_return}
+        _router_settings = llm_router.get_settings()
+        return {
+            "status": "success",
+            "data": _data_to_return,
+            "router_settings": _router_settings,
+        }
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):
