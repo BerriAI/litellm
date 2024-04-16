@@ -10579,14 +10579,11 @@ def trim_messages(
         print_verbose(f"trimming messages")
         if max_tokens is None:
             # Check if model is valid
-            if (
-                model in litellm.model_cost
-                and "max_input_tokens" in litellm.model_cost[model]
-            ):
-                max_tokens_for_model = litellm.model_cost[model]["max_input_tokens"]
+            if model in litellm.model_cost:
+                max_tokens_for_model = litellm.model_cost[model].get("max_input_tokens", litellm.model_cost[model]["max_tokens"])
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
-                # if user did not specify max input tokens
+                # if user did not specify max (input) tokens
                 # or passed an llm litellm does not know
                 # do nothing, just return messages
                 return messages
