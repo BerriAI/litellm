@@ -568,8 +568,9 @@ async def user_api_key_auth(
             is_master_key_valid = False
 
         if is_master_key_valid:
+            hashed_key = hash_token(token=master_key)
             _user_api_key_obj = UserAPIKeyAuth(
-                api_key=master_key,
+                api_key=hashed_key,
                 user_role="proxy_admin",
                 user_id=litellm_proxy_admin_name,
             )
