@@ -299,6 +299,7 @@ class Router:
         verbose_router_logger.info(
             f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}"
         )
+        self.routing_strategy_args = routing_strategy_args
 
     def print_deployment(self, deployment: dict):
         """
@@ -2341,6 +2342,48 @@ class Router:
         if hasattr(self, "model_list"):
             return self.model_list
         return None
+
+    def get_settings(self):
+        """
+        Get router settings method, returns a dictionary of the settings and their values.
+        For example get the set values for routing_strategy_args, routing_strategy, allowed_fails, cooldown_time, num_retries, timeout, max_retries, retry_after
+        """
+        _all_vars = vars(self)
+        _settings_to_return = {}
+        vars_to_include = [
+            "routing_strategy_args",
+            "routing_strategy",
+            "allowed_fails",
+            "cooldown_time",
+            "num_retries",
+            "timeout",
+            "max_retries",
+            "retry_after",
+        ]
+
+        for var in vars_to_include:
+            if var in _all_vars:
+                _settings_to_return[var] = _all_vars[var]
+        return _settings_to_return
+
+    def set_settings(self, **kwargs):
+        # only the following settings are allowed to be configured
+        _allowed_settings = [
+            "routing_strategy_args",
+            "routing_strategy",
+            "allowed_fails",
+            "cooldown_time",
+            "num_retries",
+            "timeout",
+            "max_retries",
+            "retry_after",
+        ]
+
+        for var in kwargs:
+            if var in _allowed_settings:
+                setattr(self, var, kwargs[var])
+            else:
+                raise Exception(f"In router.set_settings, {var} is not a valid setting")
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
