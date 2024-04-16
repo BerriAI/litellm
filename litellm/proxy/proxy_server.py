@@ -1010,48 +1010,50 @@ async def user_api_key_auth(
                         db=custom_db_client,
                     )
                 )
-            if route in LiteLLMRoutes.info_routes.value and (
-                not _is_user_proxy_admin(user_id_information)
-            ):  # check if user allowed to call an info route
-                if route == "/key/info":
-                    # check if user can access this route
-                    query_params = request.query_params
-                    key = query_params.get("key")
-                    if (
-                        key is not None
-                        and prisma_client.hash_token(token=key) != api_key
-                    ):
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="user not allowed to access this key's info",
+
+            if not _is_user_proxy_admin(user_id_information):  # if non-admin
+                if (
+                    route in LiteLLMRoutes.info_routes.value
+                ):  # check if user allowed to call an info route
+                    if route == "/key/info":
+                        # check if user can access this route
+                        query_params = request.query_params
+                        key = query_params.get("key")
+                        if (
+                            key is not None
+                            and prisma_client.hash_token(token=key) != api_key
+                        ):
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="user not allowed to access this key's info",
+                            )
+                    elif route == "/user/info":
+                        # check if user can access this route
+                        query_params = request.query_params
+                        user_id = query_params.get("user_id")
+                        verbose_proxy_logger.debug(
+                            f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
                         )
-                elif route == "/user/info":
-                    # check if user can access this route
-                    query_params = request.query_params
-                    user_id = query_params.get("user_id")
-                    verbose_proxy_logger.debug(
-                        f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
-                    )
-                    if user_id != valid_token.user_id:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="key not allowed to access this user's info",
-                        )
-                elif route == "/model/info":
-                    # /model/info just shows models user has access to
-                    pass
-                elif route == "/team/info":
-                    # check if key can access this team's info
-                    query_params = request.query_params
-                    team_id = query_params.get("team_id")
-                    if team_id != valid_token.team_id:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="key not allowed to access this team's info",
-                        )
+                        if user_id != valid_token.user_id:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="key not allowed to access this user's info",
+                            )
+                    elif route == "/model/info":
+                        # /model/info just shows models user has access to
+                        pass
+                    elif route == "/team/info":
+                        # check if key can access this team's info
+                        query_params = request.query_params
+                        team_id = query_params.get("team_id")
+                        if team_id != valid_token.team_id:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="key not allowed to access this team's info",
+                            )
                 else:
                     raise Exception(
-                        f"Only master key can be used to generate, delete, update info for new keys/users."
+                        f"Only master key can be used to generate, delete, update info for new keys/users/teams."
                     )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
