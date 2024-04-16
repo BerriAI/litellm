@@ -2288,6 +2288,29 @@ class Router:
         self.model_names.append(deployment.model_name)
         return
 
+    def delete_deployment(self, id: str) -> Optional[Deployment]:
+        """
+        Parameters:
+        - id: str - the id of the deployment to be deleted
+
+        Returns:
+        - The deleted deployment
+        - OR None (if deleted deployment not found)
+        """
+        deployment_idx = None
+        for idx, m in enumerate(self.model_list):
+            if m["model_info"]["id"] == id:
+                deployment_idx = idx
+
+        try:
+            if deployment_idx is not None:
+                item = self.model_list.pop(deployment_idx)
+                return item
+            else:
+                return None
+        except:
+            return None
+
     def get_deployment(self, model_id: str):
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
