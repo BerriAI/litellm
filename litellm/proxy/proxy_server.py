@@ -1908,6 +1908,9 @@ class ProxyConfig:
                                 config[param_name].update(param_value)
                             else:
                                 config[param_name] = param_value
+                        else:
+                            # if it's not in the config - then add it
+                            config[param_name] = param_value
 
         return config
 
