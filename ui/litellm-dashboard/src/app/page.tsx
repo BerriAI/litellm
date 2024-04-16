@@ -8,6 +8,7 @@ import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
+import GeneralSettings from "@/components/general_settings";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
@@ -169,6 +170,12 @@ const CreateKeyPage = () => {
               userRole={userRole}
               accessToken={accessToken}
             />
+          )  : page == "general-settings" ? (
+              <GeneralSettings
+                userID={userID}
+                userRole={userRole}
+                accessToken={accessToken}
+              />
           ) : (
             <Usage
               userID={userID}
