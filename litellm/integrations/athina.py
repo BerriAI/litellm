@@ -1,6 +1,5 @@
 import datetime
 
-
 class AthinaLogger:
     def __init__(self):
         import os
@@ -17,7 +16,18 @@ class AthinaLogger:
         import json
         import traceback
         try:
-            response_json = response_obj.model_dump() if response_obj else {}
+            is_stream = kwargs.get("stream", False)
+            if is_stream:
+                if "complete_streaming_response" in kwargs:
+                    # Log the completion response in streaming mode
+                    completion_response = kwargs["complete_streaming_response"]
+                    response_json = completion_response.model_dump() if completion_response else {}
+                else:
+                    # Skip logging if the completion response is not available
+                    return
+            else:
+                # Log the completion response in non streaming mode
+                response_json = response_obj.model_dump() if response_obj else {}
             data = {
                 "language_model_id": kwargs.get("model"),
                 "request": kwargs,
