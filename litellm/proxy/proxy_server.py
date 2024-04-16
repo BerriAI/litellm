@@ -5675,8 +5675,13 @@ async def new_user(data: NewUserRequest):
     return NewUserResponse(
         key=response.get("token", ""),
         expires=response.get("expires", None),
-        user_id=response["user_id"],
         max_budget=response["max_budget"],
+        user_id=response["user_id"],
+        team_id=response.get("team_id", None),
+        metadata=response.get("metadata", None),
+        models=response.get("models", None),
+        tpm_limit=response.get("tpm_limit", None),
+        rpm_limit=response.get("rpm_limit", None),
     )
 
 
