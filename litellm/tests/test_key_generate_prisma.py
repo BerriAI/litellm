@@ -108,6 +108,35 @@ def prisma_client():
     return prisma_client
 
 
+@pytest.mark.asyncio()
+async def test_new_user_response(prisma_client):
+    try:
+
+        print("prisma client=", prisma_client)
+
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+        await litellm.proxy.proxy_server.prisma_client.connect()
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        _response = await new_user(
+            data=NewUserRequest(
+                models=["azure-gpt-3.5"],
+                team_id="ishaans-special-team",
+                tpm_limit=20,
+            )
+        )
+        print(_response)
+        assert _response.models == ["azure-gpt-3.5"]
+        assert _response.team_id == "ishaans-special-team"
+        assert _response.tpm_limit == 20
+
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+
 def test_generate_and_call_with_valid_key(prisma_client):
     # 1. Generate a Key, and use it to make a call
 
