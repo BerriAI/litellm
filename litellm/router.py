@@ -2271,11 +2271,19 @@ class Router:
 
         return deployment
 
-    def add_deployment(self, deployment: Deployment):
+    def add_deployment(self, deployment: Deployment) -> Optional[Deployment]:
+        """
+        Parameters:
+        - deployment: Deployment - the deployment to be added to the Router
+
+        Returns:
+        - The added deployment
+        - OR None (if deployment already exists)
+        """
         # check if deployment already exists
 
         if deployment.model_info.id in self.get_model_ids():
-            return
+            return None
 
         # add to model list
         _deployment = deployment.to_json(exclude_none=True)
@@ -2286,7 +2294,7 @@ class Router:
 
         # add to model names
         self.model_names.append(deployment.model_name)
-        return
+        return deployment
 
     def delete_deployment(self, id: str) -> Optional[Deployment]:
         """
