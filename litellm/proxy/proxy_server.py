@@ -8307,7 +8307,12 @@ async def get_config():
 
             _data_to_return.append({"name": "slack", "variables": _slack_env_vars})
 
-        return {"status": "success", "data": _data_to_return}
+        _router_settings = llm_router.get_settings()
+        return {
+            "status": "success",
+            "data": _data_to_return,
+            "router_settings": _router_settings,
+        }
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):

@@ -299,6 +299,7 @@ class Router:
         verbose_router_logger.info(
             f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}"
         )
+        self.routing_strategy_args = routing_strategy_args
 
     def print_deployment(self, deployment: dict):
         """
@@ -2333,6 +2334,25 @@ class Router:
         if hasattr(self, "model_list"):
             return self.model_list
         return None
+
+    def get_settings(self):
+        _all_vars = vars(self)
+        _settings_to_return = {}
+        vars_to_include = [
+            "routing_strategy_args",
+            "routing_strategy",
+            "allowed_fails",
+            "cooldown_time",
+            "num_retries",
+            "timeout",
+            "max_retries",
+            "retry_after",
+        ]
+
+        for var in vars_to_include:
+            if var in _all_vars:
+                _settings_to_return[var] = _all_vars[var]
+        return _settings_to_return
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
