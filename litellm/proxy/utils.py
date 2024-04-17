@@ -193,8 +193,8 @@ class ProxyLogging:
             # Convert the timedelta to float (in seconds)
             time_difference_float = time_difference.total_seconds()
             litellm_params = kwargs.get("litellm_params", {})
-            api_base = litellm_params.get("api_base", "")
             model = kwargs.get("model", "")
+            api_base = litellm.get_api_base(model=model, optional_params=litellm_params)
             messages = kwargs.get("messages", "")
 
             return time_difference_float, model, api_base, messages

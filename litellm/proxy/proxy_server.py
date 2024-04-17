@@ -1010,48 +1010,52 @@ async def user_api_key_auth(
                         db=custom_db_client,
                     )
                 )
-            if route in LiteLLMRoutes.info_routes.value and (
-                not _is_user_proxy_admin(user_id_information)
-            ):  # check if user allowed to call an info route
-                if route == "/key/info":
-                    # check if user can access this route
-                    query_params = request.query_params
-                    key = query_params.get("key")
-                    if (
-                        key is not None
-                        and prisma_client.hash_token(token=key) != api_key
-                    ):
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="user not allowed to access this key's info",
-                        )
-                elif route == "/user/info":
-                    # check if user can access this route
-                    query_params = request.query_params
-                    user_id = query_params.get("user_id")
-                    verbose_proxy_logger.debug(
-                        f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
-                    )
-                    if user_id != valid_token.user_id:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="key not allowed to access this user's info",
-                        )
-                elif route == "/model/info":
-                    # /model/info just shows models user has access to
+
+            if not _is_user_proxy_admin(user_id_information):  # if non-admin
+                if route in LiteLLMRoutes.openai_routes.value:
                     pass
-                elif route == "/team/info":
-                    # check if key can access this team's info
-                    query_params = request.query_params
-                    team_id = query_params.get("team_id")
-                    if team_id != valid_token.team_id:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="key not allowed to access this team's info",
+                elif (
+                    route in LiteLLMRoutes.info_routes.value
+                ):  # check if user allowed to call an info route
+                    if route == "/key/info":
+                        # check if user can access this route
+                        query_params = request.query_params
+                        key = query_params.get("key")
+                        if (
+                            key is not None
+                            and prisma_client.hash_token(token=key) != api_key
+                        ):
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="user not allowed to access this key's info",
+                            )
+                    elif route == "/user/info":
+                        # check if user can access this route
+                        query_params = request.query_params
+                        user_id = query_params.get("user_id")
+                        verbose_proxy_logger.debug(
+                            f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
                         )
+                        if user_id != valid_token.user_id:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="key not allowed to access this user's info",
+                            )
+                    elif route == "/model/info":
+                        # /model/info just shows models user has access to
+                        pass
+                    elif route == "/team/info":
+                        # check if key can access this team's info
+                        query_params = request.query_params
+                        team_id = query_params.get("team_id")
+                        if team_id != valid_token.team_id:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="key not allowed to access this team's info",
+                            )
                 else:
                     raise Exception(
-                        f"Only master key can be used to generate, delete, update info for new keys/users."
+                        f"Only master key can be used to generate, delete, update info for new keys/users/teams. Route={route}"
                     )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
@@ -2406,27 +2410,44 @@ class ProxyConfig:
         router = litellm.Router(**router_params, semaphore=semaphore)  # type:ignore
         return router, model_list, general_settings
 
-    async def _delete_deployment(self, db_models: list):
+    def get_model_info_with_id(self, model) -> RouterModelInfo:
+        """
+        Common logic across add + delete router models
+        Parameters:
+        - deployment
+
+        Return model info w/ id
+        """
+        if model.model_info is not None and isinstance(model.model_info, dict):
+            if "id" not in model.model_info:
+                model.model_info["id"] = model.model_id
+            _model_info = RouterModelInfo(**model.model_info)
+        else:
+            _model_info = RouterModelInfo(id=model.model_id)
+        return _model_info
+
+    async def _delete_deployment(self, db_models: list) -> int:
         """
         (Helper function of add deployment) -> combined to reduce prisma db calls
 
         - Create all up list of model id's (db + config)
         - Compare all up list to router model id's
         - Remove any that are missing
+
+        Return:
+        - int - returns number of deleted deployments
         """
         global user_config_file_path, llm_router
         combined_id_list = []
         if llm_router is None:
-            return
+            return 0
 
         ## DB MODELS ##
         for m in db_models:
-            if m.model_info is not None and isinstance(m.model_info, dict):
-                if "id" not in m.model_info:
-                    m.model_info["id"] = m.model_id
-                combined_id_list.append(m.model_id)
-            else:
-                combined_id_list.append(m.model_id)
+            model_info = self.get_model_info_with_id(model=m)
+            if model_info.id is not None:
+                combined_id_list.append(model_info.id)
+
         ## CONFIG MODELS ##
         config = await self.get_config(config_file_path=user_config_file_path)
         model_list = config.get("model_list", None)
@@ -2436,21 +2457,73 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = litellm.get_secret(v)
-                litellm_model_name = model["litellm_params"]["model"]
-                litellm_model_api_base = model["litellm_params"].get("api_base", None)
-
-                model_id = litellm.Router()._generate_model_id(
+                model_id = llm_router._generate_model_id(
                     model_group=model["model_name"],
                     litellm_params=model["litellm_params"],
                 )
                 combined_id_list.append(model_id)  # ADD CONFIG MODEL TO COMBINED LIST
 
         router_model_ids = llm_router.get_model_ids()
-
         # Check for model IDs in llm_router not present in combined_id_list and delete them
+        deleted_deployments = 0
         for model_id in router_model_ids:
             if model_id not in combined_id_list:
-                llm_router.delete_deployment(id=model_id)
+                is_deleted = llm_router.delete_deployment(id=model_id)
+                if is_deleted is not None:
+                    deleted_deployments += 1
+        return deleted_deployments
+
+    def _add_deployment(self, db_models: list) -> int:
+        """
+        Iterate through db models
+
+        for any not in router - add them.
+
+        Return - number of deployments added
+        """
+        import base64
+
+        if master_key is None or not isinstance(master_key, str):
+            raise Exception(
+                f"Master key is not initialized or formatted. master_key={master_key}"
+            )
+
+        if llm_router is None:
+            return 0
+
+        added_models = 0
+        ## ADD MODEL LOGIC
+        for m in db_models:
+            _litellm_params = m.litellm_params
+            if isinstance(_litellm_params, dict):
+                # decrypt values
+                for k, v in _litellm_params.items():
+                    if isinstance(v, str):
+                        # decode base64
+                        decoded_b64 = base64.b64decode(v)
+                        # decrypt value
+                        _litellm_params[k] = decrypt_value(
+                            value=decoded_b64, master_key=master_key
+                        )
+                _litellm_params = LiteLLM_Params(**_litellm_params)
+            else:
+                verbose_proxy_logger.error(
+                    f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                )
+                continue  # skip to next model
+            _model_info = self.get_model_info_with_id(model=m)
+
+            added = llm_router.add_deployment(
+                deployment=Deployment(
+                    model_name=m.model_name,
+                    litellm_params=_litellm_params,
+                    model_info=_model_info,
+                )
+            )
+
+            if added is not None:
+                added_models += 1
+        return added_models
 
     async def add_deployment(
         self,
@@ -2498,13 +2571,7 @@ class ProxyConfig:
                         )
                         continue  # skip to next model
 
-                    if m.model_info is not None and isinstance(m.model_info, dict):
-                        if "id" not in m.model_info:
-                            m.model_info["id"] = m.model_id
-                        _model_info = RouterModelInfo(**m.model_info)
-                    else:
-                        _model_info = RouterModelInfo(id=m.model_id)
-
+                    _model_info = self.get_model_info_with_id(model=m)
                     _model_list.append(
                         Deployment(
                             model_name=m.model_name,
@@ -2522,39 +2589,7 @@ class ProxyConfig:
                 await self._delete_deployment(db_models=new_models)
 
                 ## ADD MODEL LOGIC
-                for m in new_models:
-                    _litellm_params = m.litellm_params
-                    if isinstance(_litellm_params, dict):
-                        # decrypt values
-                        for k, v in _litellm_params.items():
-                            if isinstance(v, str):
-                                # decode base64
-                                decoded_b64 = base64.b64decode(v)
-                                # decrypt value
-                                _litellm_params[k] = decrypt_value(
-                                    value=decoded_b64, master_key=master_key
-                                )
-                        _litellm_params = LiteLLM_Params(**_litellm_params)
-                    else:
-                        verbose_proxy_logger.error(
-                            f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
-                        )
-                        continue  # skip to next model
-
-                    if m.model_info is not None and isinstance(m.model_info, dict):
-                        if "id" not in m.model_info:
-                            m.model_info["id"] = m.model_id
-                        _model_info = RouterModelInfo(**m.model_info)
-                    else:
-                        _model_info = RouterModelInfo(id=m.model_id)
-
-                    llm_router.add_deployment(
-                        deployment=Deployment(
-                            model_name=m.model_name,
-                            litellm_params=_litellm_params,
-                            model_info=_model_info,
-                        )
-                    )
+                self._add_deployment(db_models=new_models)
 
             llm_model_list = llm_router.get_model_list()
 
@@ -2585,6 +2620,9 @@ class ProxyConfig:
                 general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
 
+            # router settings
+            _router_settings = config_data.get("router_settings", {})
+            llm_router.update_settings(**_router_settings)
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
@@ -2727,10 +2765,12 @@ async def generate_key_helper_fn(
             "model_max_budget": model_max_budget_json,
             "budget_id": budget_id,
         }
+
         if (
-            general_settings.get("allow_user_auth", False) == True
-            or _has_user_setup_sso() == True
-        ):
+            litellm.get_secret("DISABLE_KEY_NAME", False) == True
+        ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
+            pass
+        else:
             key_data["key_name"] = f"sk-...{token[-4:]}"
         saved_token = copy.deepcopy(key_data)
         if isinstance(saved_token["aliases"], str):
@@ -3216,7 +3256,7 @@ async def startup_event():
             scheduler.add_job(
                 proxy_config.add_deployment,
                 "interval",
-                seconds=30,
+                seconds=10,
                 args=[prisma_client, proxy_logging_obj],
             )
 
@@ -8188,6 +8228,16 @@ async def update_config(config_info: ConfigYAML):
                         "success_callback"
                     ] = combined_success_callback
 
+        # router settings
+        if config_info.router_settings is not None:
+            config.setdefault("router_settings", {})
+            _updated_router_settings = config_info.router_settings
+
+            config["router_settings"] = {
+                **config["router_settings"],
+                **_updated_router_settings,
+            }
+
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
@@ -8305,7 +8355,12 @@ async def get_config():
 
             _data_to_return.append({"name": "slack", "variables": _slack_env_vars})
 
-        return {"status": "success", "data": _data_to_return}
+        _router_settings = llm_router.get_settings()
+        return {
+            "status": "success",
+            "data": _data_to_return,
+            "router_settings": _router_settings,
+        }
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):

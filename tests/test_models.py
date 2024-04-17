@@ -280,6 +280,7 @@ async def test_add_model_run_health():
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
+        master_key = "sk-1234"
         model_id = str(uuid.uuid4())
         model_name = f"azure-model-health-check-{model_id}"
         print("adding model", model_name)
@@ -295,7 +296,7 @@ async def test_add_model_run_health():
 
         print("calling /health?model=", model_name)
         _health_info = await get_model_health(
-            session=session, key=key, model_name=model_name
+            session=session, key=master_key, model_name=model_name
         )
         _healthy_endpooint = _health_info["healthy_endpoints"][0]
 
