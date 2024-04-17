@@ -2252,7 +2252,12 @@ def test_completion_claude_3_function_call_with_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -2306,7 +2311,12 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = await acompletion(

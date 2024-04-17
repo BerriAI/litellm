@@ -1710,6 +1710,7 @@ def completion(
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
                     logging_obj=logging,
                     acompletion=acompletion,
                 )
@@ -2807,6 +2808,11 @@ def embedding(
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
 
             response = vertex_ai.embedding(
                 model=model,
@@ -2817,6 +2823,7 @@ def embedding(
                 model_response=EmbeddingResponse(),
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
                 aembedding=aembedding,
                 print_verbose=print_verbose,
             )
