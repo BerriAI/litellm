@@ -2383,7 +2383,7 @@ class Router:
             if var in _allowed_settings:
                 setattr(self, var, kwargs[var])
             else:
-                raise Exception(f"In router.set_settings, {var} is not a valid setting")
+                verbose_router_logger.debug("Setting {} is not allowed".format(var))
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
