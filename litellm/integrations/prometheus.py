@@ -25,21 +25,21 @@ class PrometheusLogger:
             self.litellm_requests_metric = Counter(
                 name="litellm_requests_metric",
                 documentation="Total number of LLM calls to litellm",
-                labelnames=["end_user", "key", "model", "team"],
+                labelnames=["end_user", "hashed_api_key", "model", "team"],
             )
 
             # Counter for spend
             self.litellm_spend_metric = Counter(
                 "litellm_spend_metric",
                 "Total spend on LLM requests",
-                labelnames=["end_user", "key", "model", "team"],
+                labelnames=["end_user", "hashed_api_key", "model", "team"],
             )
 
             # Counter for total_output_tokens
             self.litellm_tokens_metric = Counter(
                 "litellm_total_tokens",
                 "Total number of input + output tokens from LLM requests",
-                labelnames=["end_user", "key", "model", "team"],
+                labelnames=["end_user", "hashed_api_key", "model", "team"],
             )
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
@@ -74,6 +74,15 @@ class PrometheusLogger:
             print_verbose(
                 f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
             )
+
+            if (
+                user_api_key is not None
+                and isinstance(user_api_key, str)
+                and user_api_key.startswith("sk-")
+            ):
+                from litellm.proxy.utils import hash_token
+
+                user_api_key = hash_token(user_api_key)
 
             self.litellm_requests_metric.labels(
                 end_user_id, user_api_key, model, user_api_team
