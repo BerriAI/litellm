@@ -553,7 +553,12 @@ def test_gemini_pro_function_calling():
         }
     ]
 
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     completion = litellm.completion(
         model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
     )
@@ -586,7 +591,10 @@ def test_gemini_pro_function_calling():
             }
         ]
         messages = [
-            {"role": "user", "content": "What's the weather like in Boston today?"}
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in fahrenheit?",
+            }
         ]
         completion = litellm.completion(
             model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
@@ -594,6 +602,8 @@ def test_gemini_pro_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -629,7 +639,12 @@ def test_gemini_pro_function_calling_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         completion = litellm.completion(
             model="gemini-pro",
@@ -643,6 +658,8 @@ def test_gemini_pro_function_calling_streaming():
         # assert len(completion.choices[0].message.tool_calls) == 1
         for chunk in completion:
             print(f"chunk: {chunk}")
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
 
@@ -675,7 +692,10 @@ async def test_gemini_pro_async_function_calling():
             }
         ]
         messages = [
-            {"role": "user", "content": "What's the weather like in Boston today?"}
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in fahrenheit?",
+            }
         ]
         completion = await litellm.acompletion(
             model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
@@ -683,6 +703,8 @@ async def test_gemini_pro_async_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:

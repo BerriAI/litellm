@@ -1587,11 +1587,12 @@ async def test_key_name_null(prisma_client):
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": False})
+    os.environ["DISABLE_KEY_NAME"] = "True"
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
         request = GenerateKeyRequest()
         key = await generate_key_fn(request)
+        print("generated key=", key)
         generated_key = key.key
         result = await info_key_fn(key=generated_key)
         print("result from info_key_fn", result)
@@ -1599,6 +1600,8 @@ async def test_key_name_null(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
+    finally:
+        os.environ["DISABLE_KEY_NAME"] = "False"
 
 
 @pytest.mark.asyncio()
