@@ -167,7 +167,12 @@ def test_completion_claude_3_function_call():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -376,7 +381,12 @@ def test_completion_claude_3_function_plus_image():
     ]
 
     tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
 
     response = completion(
         model="claude-3-sonnet-20240229",
