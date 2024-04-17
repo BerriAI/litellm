@@ -2765,10 +2765,12 @@ async def generate_key_helper_fn(
             "model_max_budget": model_max_budget_json,
             "budget_id": budget_id,
         }
+
         if (
-            general_settings.get("allow_user_auth", False) == True
-            or _has_user_setup_sso() == True
-        ):
+            litellm.get_secret("DISABLE_KEY_NAME", False) == True
+        ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
+            pass
+        else:
             key_data["key_name"] = f"sk-...{token[-4:]}"
         saved_token = copy.deepcopy(key_data)
         if isinstance(saved_token["aliases"], str):
