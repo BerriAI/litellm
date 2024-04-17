@@ -536,6 +536,55 @@ def test_completion_openai_api_key_exception():
 
 # tesy_async_acompletion()
 
+
+def test_router_completion_vertex_exception():
+    try:
+        import litellm
+
+        litellm.set_verbose = True
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "vertex-gemini-pro",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-pro",
+                        "api_key": "good-morning",
+                    },
+                },
+            ]
+        )
+        response = router.completion(
+            model="vertex-gemini-pro",
+            messages=[{"role": "user", "content": "hello"}],
+            vertex_project="bad-project",
+        )
+        pytest.fail("Request should have failed - bad api key")
+    except Exception as e:
+        print("exception: ", e)
+        assert "model: vertex_ai/gemini-pro" in str(e)
+        assert "model_group: vertex-gemini-pro" in str(e)
+        assert "deployment: vertex_ai/gemini-pro" in str(e)
+
+
+def test_litellm_completion_vertex_exception():
+    try:
+        import litellm
+
+        litellm.set_verbose = True
+        response = completion(
+            model="vertex_ai/gemini-pro",
+            api_key="good-morning",
+            messages=[{"role": "user", "content": "hello"}],
+            vertex_project="bad-project",
+        )
+        pytest.fail("Request should have failed - bad api key")
+    except Exception as e:
+        print("exception: ", e)
+        assert "model: vertex_ai/gemini-pro" in str(e)
+        assert "model_group" not in str(e)
+        assert "deployment" not in str(e)
+
+
 # # test_invalid_request_error(model="command-nightly")
 # # Test 3: Rate Limit Errors
 # def test_model_call(model):
