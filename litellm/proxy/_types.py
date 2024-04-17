@@ -800,6 +800,10 @@ class UserAPIKeyAuth(
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
             values.update({"token": hash_token(values.get("api_key"))})
+            if isinstance(values.get("api_key"), str) and values.get(
+                "api_key"
+            ).startswith("sk-"):
+                values.update({"api_key": hash_token(values.get("api_key"))})
         return values
 
 
