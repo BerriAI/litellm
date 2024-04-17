@@ -2366,7 +2366,7 @@ class Router:
                 _settings_to_return[var] = _all_vars[var]
         return _settings_to_return
 
-    def set_settings(self, **kwargs):
+    def update_settings(self, **kwargs):
         # only the following settings are allowed to be configured
         _allowed_settings = [
             "routing_strategy_args",
