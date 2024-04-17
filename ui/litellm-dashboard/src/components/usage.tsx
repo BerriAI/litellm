@@ -435,7 +435,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <Card>
-          <Title>Model Statistics (Number Requests)</Title>
+          <Title>Number Requests per Model</Title>
               <BarChart
                 data={modelMetrics}
                 index="model"
@@ -447,7 +447,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               />
         </Card>
         <Card>
-          <Title>Model Statistics (Latency)</Title>
+          <Title>Latency Per Model</Title>
               <BarChart
                 data={modelMetrics}
                 index="model"
