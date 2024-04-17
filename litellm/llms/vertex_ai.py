@@ -876,8 +876,8 @@ async def async_completion(
                 tools=tools,
             )
 
-            if tools is not None and hasattr(
-                response.candidates[0].content.parts[0], "function_call"
+            if tools is not None and bool(
+                getattr(response.candidates[0].content.parts[0], "function_call", None)
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
