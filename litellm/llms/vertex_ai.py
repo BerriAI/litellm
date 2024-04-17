@@ -349,8 +349,17 @@ def completion(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
+        if vertex_credentials is not None and isinstance(vertex_credentials, str):
+            import google.oauth2.service_account
 
-        creds, _ = google.auth.default(quota_project_id=vertex_project)
+            json_obj = json.loads(vertex_credentials)
+
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            creds, _ = google.auth.default(quota_project_id=vertex_project)
         print_verbose(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
         )
@@ -1171,6 +1180,7 @@ def embedding(
     encoding=None,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     aembedding=False,
     print_verbose=None,
 ):
@@ -1191,7 +1201,17 @@ def embedding(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
-        creds, _ = google.auth.default(quota_project_id=vertex_project)
+        if vertex_credentials is not None and isinstance(vertex_credentials, str):
+            import google.oauth2.service_account
+
+            json_obj = json.loads(vertex_credentials)
+
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            creds, _ = google.auth.default(quota_project_id=vertex_project)
         print_verbose(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
         )
