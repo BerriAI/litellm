@@ -75,7 +75,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
     },
     "gpt-4-turbo-2024-04-09": {
         "max_tokens": 4096,
@@ -86,7 +87,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
     },
     "gpt-4-1106-preview": {
         "max_tokens": 4096,
