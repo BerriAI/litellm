@@ -11,7 +11,8 @@ import {
   adminTopKeysCall,
   adminTopModelsCall,
   teamSpendLogsCall,
-  tagsSpendLogsCall
+  tagsSpendLogsCall,
+  modelMetricsCall,
 } from "./networking";
 import { start } from "repl";
 
@@ -143,6 +144,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -223,6 +225,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
             //get top tags
             const top_tags = await tagsSpendLogsCall(accessToken);
             setTopTagsData(top_tags.top_10_tags);
+
+            
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -259,6 +263,15 @@ const UsagePage: React.FC<UsagePageProps> = ({
               }
             });
           }
+
+          const modelMetricsResponse = await modelMetricsCall(
+            accessToken,
+            userID,
+            userRole
+          );
+  
+          console.log("Model metrics response:", modelMetricsResponse);
+          setModelMetrics(modelMetricsResponse);
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
@@ -281,6 +294,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
            <Tab>Tag Based Usage</Tab>
+           <Tab>Model Based Usage</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -419,6 +433,33 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Col numColSpan={2}>
               </Col>
             </Grid>
+            </TabPanel>
+            <Card>
+          <Title>Model Statistics (Number Requests)</Title>
+              <BarChart
+                data={modelMetrics}
+                index="model"
+                categories={["num_requests"]}
+                colors={["blue"]}
+                yAxisWidth={400}
+                layout="vertical"
+                tickGap={5}
+              />
+        </Card>
+        <Card>
+          <Title>Model Statistics (Latency)</Title>
+              <BarChart
+                data={modelMetrics}
+                index="model"
+                categories={["avg_latency_seconds"]}
+                colors={["red"]}
+                yAxisWidth={400}
+                layout="vertical"
+                tickGap={5}
+              />
+        </Card>
+            <TabPanel>
+
             </TabPanel>
         </TabPanels>
       </TabGroup>
