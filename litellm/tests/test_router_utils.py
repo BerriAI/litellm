@@ -26,8 +26,6 @@ def test_returned_settings():
 
     try:
         print("testing if router raises an exception")
-        old_api_key = os.environ["AZURE_API_KEY"]
-        os.environ["AZURE_API_KEY"] = ""
         model_list = [
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
