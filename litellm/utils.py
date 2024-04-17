@@ -5407,7 +5407,9 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     get_api_base(model="gemini/gemini-pro")
     ```
     """
-    _optional_params = LiteLLM_Params(**optional_params)  # convert to pydantic object
+    _optional_params = LiteLLM_Params(
+        model=model, **optional_params
+    )  # convert to pydantic object
     # get llm provider
     try:
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
