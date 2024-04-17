@@ -6134,7 +6134,13 @@ def get_model_info(model: str):
                 "mode": "chat",
             }
         else:
-            raise Exception()
+            """
+            Check if model in model cost map
+            """
+            if model in litellm.model_cost:
+                return litellm.model_cost[model]
+            else:
+                raise Exception()
     except:
         raise Exception(
             "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -10595,7 +10601,9 @@ def trim_messages(
         if max_tokens is None:
             # Check if model is valid
             if model in litellm.model_cost:
-                max_tokens_for_model = litellm.model_cost[model].get("max_input_tokens", litellm.model_cost[model]["max_tokens"])
+                max_tokens_for_model = litellm.model_cost[model].get(
+                    "max_input_tokens", litellm.model_cost[model]["max_tokens"]
+                )
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
                 # if user did not specify max (input) tokens
