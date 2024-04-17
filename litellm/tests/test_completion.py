@@ -441,7 +441,7 @@ def test_completion_mistral_azure():
                 }
             ],
         )
-        # Add any assertions here to check, the response
+        # Add any assertions here to check,the response
         print(response)
 
     except Exception as e:
