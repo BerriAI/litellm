@@ -2622,7 +2622,7 @@ class ProxyConfig:
 
             # router settings
             _router_settings = config_data.get("router_settings", {})
-            llm_router.set_settings(**_router_settings)
+            llm_router.update_settings(**_router_settings)
         except Exception as e:
             verbose_proxy_logger.error(
                 "{}\nTraceback:{}".format(str(e), traceback.format_exc())
