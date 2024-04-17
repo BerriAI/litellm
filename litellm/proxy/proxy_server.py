@@ -7199,6 +7199,7 @@ async def model_info_v2(
     "/model/metrics",
     description="View number of requests & avg latency per model on config.yaml",
     tags=["model management"],
+    include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def model_metrics(
