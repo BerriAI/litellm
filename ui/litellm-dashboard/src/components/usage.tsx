@@ -447,6 +447,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
           <Title>Number Requests per Model</Title>
               <BarChart
                 data={modelMetrics}
+                className="h-[50vh]"
                 index="model"
                 categories={["num_requests"]}
                 colors={["blue"]}
@@ -459,6 +460,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
           <Title>Latency Per Model</Title>
               <BarChart
                 data={modelLatencyMetrics}
+                className="h-[50vh]"
                 index="model"
                 categories={["avg_latency_seconds"]}
                 colors={["red"]}
