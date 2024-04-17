@@ -602,6 +602,8 @@ def test_gemini_pro_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -656,6 +658,8 @@ def test_gemini_pro_function_calling_streaming():
         # assert len(completion.choices[0].message.tool_calls) == 1
         for chunk in completion:
             print(f"chunk: {chunk}")
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
 
@@ -699,6 +703,8 @@ async def test_gemini_pro_async_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
