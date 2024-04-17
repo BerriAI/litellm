@@ -145,6 +145,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
   const [modelMetrics, setModelMetrics] = useState<any[]>([]);
+  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -271,7 +272,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
           );
   
           console.log("Model metrics response:", modelMetricsResponse);
+          // Sort by latency (avg_latency_seconds)
+          const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
+          console.log("Sorted by latency:", sortedByLatency);
+
           setModelMetrics(modelMetricsResponse);
+          setModelLatencyMetrics(sortedByLatency);
+
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
@@ -434,6 +441,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
               </Col>
             </Grid>
             </TabPanel>
+            
+            <TabPanel>
             <Card>
           <Title>Number Requests per Model</Title>
               <BarChart
@@ -446,10 +455,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 tickGap={5}
               />
         </Card>
-        <Card>
+        <Card className="mt-4">
           <Title>Latency Per Model</Title>
               <BarChart
-                data={modelMetrics}
+                data={modelLatencyMetrics}
                 index="model"
                 categories={["avg_latency_seconds"]}
                 colors={["red"]}
@@ -458,7 +467,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 tickGap={5}
               />
         </Card>
-            <TabPanel>
 
             </TabPanel>
         </TabPanels>
