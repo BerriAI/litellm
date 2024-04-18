@@ -169,6 +169,24 @@ const Settings: React.FC<SettingsPageProps> = ({
   </li>
 ))}
         </ul>
+        {callback.alerting_types && (
+          <div>
+            <Text className="mt-2">Alerting Types</Text>
+            <Select
+              mode="multiple"
+              style={{ width: '100%' }}
+              placeholder="Select Alerting Types"
+              optionLabelProp="label"
+              defaultValue={callback.alerting_types}
+            >
+              {callback.alerting_types.map((type: string) => (
+                <Select.Option key={type} value={type} label={type}>
+                  {type}
+                </Select.Option>
+              ))}
+            </Select>
+          </div>
+        )}
         <Button className="mt-2" onClick={() => handleSaveChanges(callback)}>
           Save Changes
         </Button>
