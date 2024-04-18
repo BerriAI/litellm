@@ -221,6 +221,7 @@ tools_schema = [
 
 
 def test_completion_azure_stream_special_char():
+    litellm.set_verbose = True
     messages = [
         {"role": "user", "content": "Respond with the '<' sign and nothing else."}
     ]
@@ -229,9 +230,7 @@ def test_completion_azure_stream_special_char():
     for part in response:
         response_str += part.choices[0].delta.content or ""
 
-    print(f"response_str: {response_str}")
     assert len(response_str) > 0
-    raise Exception("it worked")
 
 
 def test_completion_cohere_stream_bad_key():
