@@ -594,7 +594,8 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
     </function_results>
     """
     name = message.get("name")
-    content = message.get("content")
+    content = message.get("content", "")
+    content = content.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
