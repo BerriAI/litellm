@@ -360,21 +360,24 @@ class ProxyLogging:
             f"Budget Alerts: Percent left: {percent_left} for {user_info}"
         )
 
-        # check if crossed budget
-        if user_current_spend >= user_max_budget:
-            verbose_proxy_logger.debug("Budget Crossed for %s", user_info)
-            message = "Budget Crossed for" + user_info
-            await self.alerting_handler(
-                message=message,
-                level="High",
-            )
-            return
-
         ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
         # - Alert once within 28d period
         # - Cache this information
         # - Don't re-alert, if alert already sent
         _cache: DualCache = self.internal_usage_cache
+
+        # check if crossed budget
+        if user_current_spend >= user_max_budget:
+            verbose_proxy_logger.debug("Budget Crossed for %s", user_info)
+            message = "Budget Crossed for" + user_info
+            result = await _cache.async_get_cache(key=message)
+            if result is None:
+                await self.alerting_handler(
+                    message=message,
+                    level="High",
+                )
+                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
+            return
 
         # check if 5% of max budget is left
         if percent_left <= 0.05:
