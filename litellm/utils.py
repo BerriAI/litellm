@@ -41,11 +41,10 @@ try:
 #     )  # for python 3.8 and 3.12
 except:
     # this works in python 3.9+
-    from importlib import resources
-
+    from importlib.resources import path as get_resource_path
     filename = str(
-        resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
-    )  # for python 3.10+
+      get_resource_path(litellm,"llms/tokenizers"))
+    # for python 3.10+
 os.environ["TIKTOKEN_CACHE_DIR"] = (
     filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 )

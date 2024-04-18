@@ -22,6 +22,8 @@ click = "*"
 jinja2 = "^3.1.2"
 aiohttp = "*"
 requests = "^2.31.0"
+setuptools = "^59.0.0"
+pydantic="^1.8"
 
 uvicorn = {version = "^0.22.0", optional = true}
 gunicorn = {version = "^21.2.0", optional = true}
@@ -40,6 +42,7 @@ azure-identity = {version = "^1.15.0", optional = true}
 azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 resend = {version = "^0.8.0", optional = true}
+spark_ai_python = {version = "*",optional = true}
 
 [tool.poetry.extras]
 proxy = [
@@ -62,9 +65,14 @@ extra_proxy = [
     "azure-identity",
     "azure-keyvault-secrets",
     "google-cloud-kms",
-    "resend"
+    "resend",
+    "spark_ai_python",
 ]
 
+[[tool.poetry.source]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'

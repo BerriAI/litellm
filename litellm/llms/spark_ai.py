@@ -10,7 +10,6 @@ from sparkai.core.messages import (
 )
 from sparkai.core.callbacks import BaseCallbackHandler
 from sparkai.models.chat import ChatResponse
-
 import litellm
 from litellm.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
