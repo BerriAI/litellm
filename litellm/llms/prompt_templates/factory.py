@@ -695,6 +695,8 @@ def anthropic_messages_pt_xml(messages: list):
             assistant_text = (
                 messages[msg_i].get("content") or ""
             )  # either string or none
+            if assistant_text:
+                assistant_content.append({"type": "text", "text": assistant_text})
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
@@ -703,8 +705,6 @@ def anthropic_messages_pt_xml(messages: list):
                         messages[msg_i]["tool_calls"]
                     )
                 )
-
-            assistant_content.append({"type": "text", "text": assistant_text})
             msg_i += 1
 
         if assistant_content:
