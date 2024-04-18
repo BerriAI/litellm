@@ -16,7 +16,7 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import Router
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache, RedisCache
 from litellm.proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
@@ -29,7 +29,7 @@ async def test_pre_call_hook_rpm_limits():
     Test if error raised on hitting rpm limits
     """
     litellm.set_verbose = True
-    _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=9, rpm_limit=1)
     local_cache = DualCache()
     # redis_usage_cache = RedisCache()
