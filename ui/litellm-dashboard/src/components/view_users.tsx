@@ -158,6 +158,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>User ID</TableHeaderCell>
+                      <TableHeaderCell>User Email</TableHeaderCell>
                       <TableHeaderCell>User Role</TableHeaderCell>
                       <TableHeaderCell>User Models</TableHeaderCell>
                       <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
@@ -168,8 +169,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     {userData.map((user: any) => (
                       <TableRow key={user.user_id}>
                         <TableCell>{user.user_id}</TableCell>
+                        <TableCell>{user.user_email}</TableCell>
                         <TableCell>
-                          {user.user_role ? user.user_role : "app_owner"}
+                          {user.user_role ? user.user_role : ""}
                         </TableCell>
                         <TableCell>
                           {user.models && user.models.length > 0
