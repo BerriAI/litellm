@@ -426,9 +426,8 @@ class ProxyLogging:
 
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
-        formatted_message = (
-            f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-        )
+        _proxy_base_url = os.getenv("PROXY_BASE_URL", "None")
+        formatted_message = f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message} \n\nProxy URL: `{_proxy_base_url}`"
         if self.alerting is None:
             return
 
