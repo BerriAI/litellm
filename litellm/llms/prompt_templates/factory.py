@@ -617,7 +617,7 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
     for tool in tool_calls:
         if get_attribute_or_key(tool, "type") != "function":
             continue
-        
+
         tool_function =  get_attribute_or_key(tool,"function")
         tool_name = get_attribute_or_key(tool_function, "name")
         tool_arguments = get_attribute_or_key(tool_function, "arguments")
@@ -695,16 +695,14 @@ def anthropic_messages_pt_xml(messages: list):
             assistant_text = (
                 messages[msg_i].get("content") or ""
             )  # either string or none
-            if assistant_text:
-                assistant_content.append({"type": "text", "text": assistant_text})
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
-                assistant_content.extend(
-                    convert_to_anthropic_tool_invoke(  # type: ignore
-                        messages[msg_i]["tool_calls"]
-                    )
+                assistant_text += convert_to_anthropic_tool_invoke_xml(  # type: ignore
+                    messages[msg_i]["tool_calls"]
                 )
+
+            assistant_content.append({"type": "text", "text": assistant_text})
             msg_i += 1
 
         if assistant_content:
