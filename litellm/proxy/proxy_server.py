@@ -4867,6 +4867,111 @@ async def spend_key_fn():
 
 
 @router.get(
+    "/spend/user",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {"model": List[LiteLLM_UserSpend]},
+    },
+
+)
+async def spend_per_user_fn(
+    user_id: str = fastapi.Query(
+        description="User ID to view spend for",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
+    """
+    View spend for a specific user grouped by model
+
+    Example Request: 
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    With Date Range:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234&start_date=2022-01-01&end_date=2022-01-31" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    With Start Date:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234&start_date=2022-01-01" \
+-H "Authorization" Bearer sk-1234"
+    ```
+    """
+    global prisma_client
+    try:
+        verbose_proxy_logger.debug("inside view_spend_logs")
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        filter_query = {"user": user_id, "startTime": {}}
+        print('filter_query', filter_query)
+
+        if start_date is not None:
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            filter_query["startTime"]["gte"] = start_date_obj 
+
+        if end_date is not None:
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+            filter_query["startTime"]["lte"] = end_date_obj
+
+        # SQL query
+        response = await prisma_client.db.litellm_spendlogs.group_by(
+            by=["model"],
+            where=filter_query,  # type: ignore
+            sum={
+                "spend": True,
+                "prompt_tokens": True,
+                "completion_tokens": True,
+            },
+        )
+
+        result = list(
+            map(
+                lambda x: {
+                    "model": x["model"],
+                    "spend": x["_sum"]["spend"],
+                    "prompt_tokens": x["_sum"]["prompt_tokens"],
+                    "completion_tokens": x["_sum"]["completion_tokens"],
+                },
+                response,
+            )
+        )
+
+        return result
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/spend/user Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/spend/user Error" + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
     "/spend/users",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
