@@ -488,6 +488,9 @@ class ProxyLogging:
         if hasattr(self, "service_logging_obj"):
             self.service_logging_obj.async_service_failure_hook(
                 service=ServiceTypes.DB,
+                duration=duration,
+                error=error_message,
+                call_type=call_type,
             )
 
         if litellm.utils.capture_exception:
