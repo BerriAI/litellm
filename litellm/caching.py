@@ -272,7 +272,9 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_success_hook(
-                        service=ServiceTypes.REDIS, duration=_duration
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="async_set_cache",
                     )
                 )
             except Exception as e:
@@ -280,7 +282,10 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_failure_hook(
-                        service=ServiceTypes.REDIS, duration=_duration, error=e
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        error=e,
+                        call_type="async_set_cache",
                     )
                 )
                 # NON blocking - notify users Redis is throwing an exception
@@ -321,7 +326,9 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.REDIS, duration=_duration
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type="async_set_cache_pipeline",
                 )
             )
             return results
@@ -331,7 +338,10 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS, duration=_duration, error=e
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_set_cache_pipeline",
                 )
             )
 
