@@ -22,9 +22,9 @@ class PrometheusLogger:
             verbose_logger.debug(f"in init prometheus metrics")
             from prometheus_client import Counter
 
-            self.litellm_failed_requests_metric = Counter(
-                name="litellm_failed_requests_metric",
-                documentation="Total number of failed LLM calls to litellm",
+            self.litellm_llm_api_failed_requests_metric = Counter(
+                name="litellm_llm_api_failed_requests_metric",
+                documentation="Total number of failed LLM API calls via litellm",
                 labelnames=["end_user", "hashed_api_key", "model", "team"],
             )
 
@@ -105,7 +105,7 @@ class PrometheusLogger:
 
             ### FAILURE INCREMENT ###
             if "exception" in kwargs:
-                self.litellm_failed_requests_metric.labels(
+                self.litellm_llm_api_failed_requests_metric.labels(
                     end_user_id, user_api_key, model, user_api_team
                 ).inc()
         except Exception as e:
