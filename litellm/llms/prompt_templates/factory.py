@@ -619,10 +619,11 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
             continue
         
         tool_function =  get_attribute_or_key(tool,"function")
-        tool_name = tool_function["name"]
+        tool_name = get_attribute_or_key(tool_function, "name")
+        tool_arguments = get_attribute_or_key(tool_function, "arguments")
         parameters = "".join(
             f"<{param}>{val}</{param}>\n"
-            for param, val in json.loads(tool_function["arguments"]).items()
+            for param, val in json.loads(tool_arguments).items()
         )
         invokes += (
             "<invoke>\n"
@@ -707,7 +708,7 @@ def anthropic_messages_pt_xml(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
