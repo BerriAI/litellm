@@ -4,6 +4,7 @@ from .types.services import ServiceTypes, ServiceLoggerPayload
 from .integrations.prometheus_services import PrometheusServicesLogger
 from .integrations.custom_logger import CustomLogger
 from datetime import timedelta
+from typing import Union
 
 
 class ServiceLogging(CustomLogger):
@@ -59,7 +60,11 @@ class ServiceLogging(CustomLogger):
                 )
 
     async def async_service_failure_hook(
-        self, service: ServiceTypes, duration: float, error: Exception, call_type: str
+        self,
+        service: ServiceTypes,
+        duration: float,
+        error: Union[str, Exception],
+        call_type: str,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful
@@ -67,9 +72,15 @@ class ServiceLogging(CustomLogger):
         if self.mock_testing:
             self.mock_testing_async_failure_hook += 1
 
+        error_message = ""
+        if isinstance(error, Exception):
+            error_message = str(error)
+        elif isinstance(error, str):
+            error_message = error
+
         payload = ServiceLoggerPayload(
             is_error=True,
-            error=str(error),
+            error=error_message,
             service=service,
             duration=duration,
             call_type=call_type,
