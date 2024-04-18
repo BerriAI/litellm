@@ -87,6 +87,7 @@ async def test_pre_call_hook_team_rpm_limits(
         "team_id": _team_id,
     }
     user_api_key_dict = UserAPIKeyAuth(**_user_api_key_dict)  # type: ignore
+    _api_key = hash_token(_api_key)
     local_cache = DualCache()
     local_cache.set_cache(key=_api_key, value=_user_api_key_dict)
     internal_cache = DualCache(redis_cache=_redis_usage_cache)
