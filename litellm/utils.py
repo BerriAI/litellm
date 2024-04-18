@@ -226,6 +226,24 @@ class Function(OpenAIObject):
     arguments: str
     name: Optional[str] = None
 
+    def __init__(
+        self,
+        arguments: Union[Dict, str],
+        name: Optional[str] = None,
+        **params,
+    ):
+        if isinstance(arguments, Dict):
+            arguments = json.dumps(arguments)
+        else:
+            arguments = arguments
+
+        name = name
+
+        # Build a dictionary with the structure your BaseModel expects
+        data = {"arguments": arguments, "name": name, **params}
+
+        super(Function, self).__init__(**data)
+
 
 class ChatCompletionDeltaToolCall(OpenAIObject):
     id: Optional[str] = None
