@@ -7800,14 +7800,22 @@ def exception_type(
                     # add model, deployment and model_group to the exception message
                     _model = completion_kwargs.get("model")
                     _kwargs = completion_kwargs.get("kwargs", {}) or {}
+                    _vertex_project = completion_kwargs.get("vertex_project")
+                    _vertex_location = completion_kwargs.get("vertex_location")
+
                     _metadata = _kwargs.get("metadata", {}) or {}
                     _model_group = _metadata.get("model_group")
                     _deployment = _metadata.get("deployment")
+
                     error_str += f"\nmodel: {_model}\n"
                     if _model_group is not None:
                         error_str += f"model_group: {_model_group}\n"
                     if _deployment is not None:
                         error_str += f"deployment: {_deployment}\n"
+                    if _vertex_project is not None:
+                        error_str += f"vertex_project: {_vertex_project}\n"
+                    if _vertex_location is not None:
+                        error_str += f"vertex_location: {_vertex_location}\n"
 
                 if (
                     "Vertex AI API has not been used in project" in error_str
