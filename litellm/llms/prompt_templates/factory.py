@@ -145,6 +145,12 @@ def mistral_api_pt(messages):
         elif isinstance(m["content"], str):
             texts = m["content"]
         new_m = {"role": m["role"], "content": texts}
+
+        if new_m["role"] == "tool" and m.get("name"):
+            new_m["name"] = m["name"]
+        if m.get("tool_calls"):
+            new_m["tool_calls"] = m["tool_calls"]
+
         new_messages.append(new_m)
     return new_messages
 
