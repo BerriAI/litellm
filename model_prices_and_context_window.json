@@ -1078,14 +1078,6 @@
         "supports_function_calling": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "vertex_ai/claude-3-opus@20240229":{
-        "max_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000075,
-        "litellm_provider": "vertex_ai-anthropic_models",
-        "mode": "chat"
-    },
     "vertex_ai/claude-3-sonnet@20240229": {
         "max_tokens": 200000,
         "max_output_tokens": 4096,
