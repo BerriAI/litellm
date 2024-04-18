@@ -2283,6 +2283,7 @@ class ProxyConfig:
             proxy_logging_obj.update_values(
                 alerting=general_settings.get("alerting", None),
                 alerting_threshold=general_settings.get("alerting_threshold", 600),
+                alert_types=general_settings.get("alert_types", None),
                 redis_cache=redis_usage_cache,
             )
             ### CONNECT TO DATABASE ###
@@ -8354,7 +8355,15 @@ async def get_config():
                     )
                     _slack_env_vars[_var] = _decrypted_value
 
-            _data_to_return.append({"name": "slack", "variables": _slack_env_vars})
+            _alerting_types = proxy_logging_obj.alert_types
+
+            _data_to_return.append(
+                {
+                    "name": "slack",
+                    "variables": _slack_env_vars,
+                    "alerting_types": _alerting_types,
+                }
+            )
 
         _router_settings = llm_router.get_settings()
         return {
