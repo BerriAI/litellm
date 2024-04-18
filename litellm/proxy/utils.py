@@ -197,7 +197,10 @@ class ProxyLogging:
             api_base = litellm.get_api_base(model=model, optional_params=litellm_params)
             messages = kwargs.get("messages", "")
 
-            return time_difference_float, model, api_base, messages
+            # only use first 100 chars for alerting
+            _messages = str(messages)[:100]
+
+            return time_difference_float, model, api_base, _messages
         except Exception as e:
             raise e
 
