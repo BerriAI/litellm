@@ -36,6 +36,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
+  const [selectedAlertValues, setSelectedAlertValues] = useState([]);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -59,6 +60,12 @@ const Settings: React.FC<SettingsPageProps> = ({
     setSelectedCallback(null);
   };
 
+  const handleChange = (values) => {
+    setSelectedAlertValues(values);
+    // Here, you can perform any additional logic with the selected values
+    console.log('Selected values:', values);
+  };
+
   const handleSaveChanges = (callback: any) => {
     if (!accessToken) {
       return;
@@ -68,8 +75,14 @@ const Settings: React.FC<SettingsPageProps> = ({
       Object.entries(callback.variables).map(([key, value]) => [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value])
     );
 
+    console.log("updatedVariables", updatedVariables);
+    console.log("updateAlertTypes", selectedAlertValues);
+
     const payload = {
       environment_variables: updatedVariables,
+      general_settings: {
+        alert_types: selectedAlertValues
+      }
     };
 
     try {
@@ -177,6 +190,7 @@ const Settings: React.FC<SettingsPageProps> = ({
               style={{ width: '100%' }}
               placeholder="Select Alerting Types"
               optionLabelProp="label"
+              onChange={handleChange}
               defaultValue={callback.alerting_types}
             >
               {callback.alerting_types.map((type: string) => (
