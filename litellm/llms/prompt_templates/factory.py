@@ -466,10 +466,11 @@ def construct_tool_use_system_prompt(
 ):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
     tool_str_list = []
     for tool in tools:
+        tool_function = get_attribute_or_key(tool, "function")
         tool_str = construct_format_tool_for_claude_prompt(
-            tool["function"]["name"],
-            tool["function"].get("description", ""),
-            tool["function"].get("parameters", {}),
+            get_attribute_or_key(tool_function, "name"),
+            get_attribute_or_key(tool_function, "description", ""),
+            get_attribute_or_key(tool_function, "parameters", {}),
         )
         tool_str_list.append(tool_str)
     tool_use_system_prompt = (
@@ -614,13 +615,14 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
 def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
     invokes = ""
     for tool in tool_calls:
-        if tool["type"] != "function":
+        if get_attribute_or_key(tool, "type") != "function":
             continue
-
-        tool_name = tool["function"]["name"]
+        
+        tool_function =  get_attribute_or_key(tool,"function")
+        tool_name = tool_function["name"]
         parameters = "".join(
             f"<{param}>{val}</{param}>\n"
-            for param, val in json.loads(tool["function"]["arguments"]).items()
+            for param, val in json.loads(tool_function["arguments"]).items()
         )
         invokes += (
             "<invoke>\n"
@@ -705,7 +707,7 @@ def anthropic_messages_pt_xml(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if not new_messages or new_messages[0]["role"] != "user":
+    if new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -807,12 +809,12 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
     anthropic_tool_invoke = [
         {
             "type": "tool_use",
-            "id": tool["id"],
-            "name": tool["function"]["name"],
-            "input": json.loads(tool["function"]["arguments"]),
+            "id": get_attribute_or_key(tool, "id"),
+            "name": get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            "input": json.loads(get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments")),
         }
         for tool in tool_calls
-        if tool["type"] == "function"
+        if get_attribute_or_key(tool, "type") == "function"
     ]
 
     return anthropic_tool_invoke
@@ -1355,3 +1357,8 @@ def prompt_factory(
         return default_pt(
             messages=messages
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
+
+def get_attribute_or_key(tool_or_function, attribute, default=None):
+    if hasattr(tool_or_function, attribute):
+        return getattr(tool_or_function, attribute)
+    return tool_or_function.get(attribute, default)
