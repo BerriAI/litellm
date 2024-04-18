@@ -85,6 +85,17 @@ class ProxyLogging:
         alerting: Optional[List],
         alerting_threshold: Optional[float],
         redis_cache: Optional[RedisCache],
+        alert_types: Optional[
+            List[
+                Literal[
+                    "llm_exceptions",
+                    "llm_too_slow",
+                    "llm_requests_hanging",
+                    "budget_alerts",
+                    "db_exceptions",
+                ]
+            ]
+        ],
     ):
         self.alerting = alerting
         if alerting_threshold is not None:
@@ -92,6 +103,9 @@ class ProxyLogging:
 
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache
+
+        if alert_types is not None:
+            self.alert_types = alert_types
 
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
