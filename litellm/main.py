@@ -243,7 +243,9 @@ async def acompletion(
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
     loop = asyncio.get_event_loop()
-    custom_llm_provider = None
+    custom_llm_provider = kwargs.get(
+        "custom_llm_provider", None
+    )  # Get custom_llm_provider from the kwargs like in the 'completion' method
     # Adjusted to use explicit arguments instead of *args and **kwargs
     completion_kwargs = {
         "model": model,
@@ -275,7 +277,8 @@ async def acompletion(
         "acompletion": True,  # assuming this is a required parameter
     }
     _, custom_llm_provider, _, _ = get_llm_provider(
-        model=model, api_base=completion_kwargs.get("base_url", None)
+        model=model,
+        api_base=completion_kwargs.get("base_url", kwargs.get("api_base", None)),
     )
     try:
         # Use a partial function to pass your keyword arguments
@@ -285,9 +288,6 @@ async def acompletion(
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
-        )
         if (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
