@@ -95,7 +95,7 @@ class ProxyLogging:
                     "db_exceptions",
                 ]
             ]
-        ],
+        ] = None,
     ):
         self.alerting = alerting
         if alerting_threshold is not None:
