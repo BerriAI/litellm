@@ -22,6 +22,12 @@ class PrometheusLogger:
             verbose_logger.debug(f"in init prometheus metrics")
             from prometheus_client import Counter
 
+            self.litellm_failed_requests_metric = Counter(
+                name="litellm_failed_requests_metric",
+                documentation="Total number of failed LLM calls to litellm",
+                labelnames=["end_user", "hashed_api_key", "model", "team"],
+            )
+
             self.litellm_requests_metric = Counter(
                 name="litellm_requests_metric",
                 documentation="Total number of LLM calls to litellm",
@@ -69,7 +75,10 @@ class PrometheusLogger:
             user_api_team = litellm_params.get("metadata", {}).get(
                 "user_api_key_team_id", None
             )
-            tokens_used = response_obj.get("usage", {}).get("total_tokens", 0)
+            if response_obj is not None:
+                tokens_used = response_obj.get("usage", {}).get("total_tokens", 0)
+            else:
+                tokens_used = 0
 
             print_verbose(
                 f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
@@ -93,6 +102,12 @@ class PrometheusLogger:
             self.litellm_tokens_metric.labels(
                 end_user_id, user_api_key, model, user_api_team
             ).inc(tokens_used)
+
+            ### FAILURE INCREMENT ###
+            if "exception" in kwargs:
+                self.litellm_failed_requests_metric.labels(
+                    end_user_id, user_api_key, model, user_api_team
+                ).inc()
         except Exception as e:
             traceback.print_exc()
             verbose_logger.debug(
