@@ -19,7 +19,7 @@ from litellm.proxy.enterprise.enterprise_hooks.banned_keywords import (
     _ENTERPRISE_BannedKeywords,
 )
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
@@ -36,6 +36,7 @@ async def test_banned_keywords_check():
     banned_keywords_obj = _ENTERPRISE_BannedKeywords()
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
