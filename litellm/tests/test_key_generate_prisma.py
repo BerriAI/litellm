@@ -1925,3 +1925,46 @@ async def test_proxy_load_test_db(prisma_client):
         raise Exception(f"it worked! key={key.key}")
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
+
+
+@pytest.mark.asyncio()
+async def test_master_key_hashing(prisma_client):
+    try:
+
+        print("prisma client=", prisma_client)
+
+        master_key = "sk-1234"
+
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+        await litellm.proxy.proxy_server.prisma_client.connect()
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        _response = await new_user(
+            data=NewUserRequest(
+                models=["azure-gpt-3.5"],
+                team_id="ishaans-special-team",
+                tpm_limit=20,
+            )
+        )
+        print(_response)
+        assert _response.models == ["azure-gpt-3.5"]
+        assert _response.team_id == "ishaans-special-team"
+        assert _response.tpm_limit == 20
+
+        bearer_token = "Bearer " + master_key
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        # use generated key to auth in
+        result: UserAPIKeyAuth = await user_api_key_auth(
+            request=request, api_key=bearer_token
+        )
+
+        assert result.api_key == hash_token(master_key)
+
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")

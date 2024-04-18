@@ -220,6 +220,17 @@ tools_schema = [
 # test_completion_cohere_stream()
 
 
+def test_completion_azure_stream_special_char():
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
+    response = completion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+    response_str = ""
+    for part in response:
+        response_str += part.choices[0].delta.content or ""
+    print(f"response_str: {response_str}")
+    assert len(response_str) > 0
+
+
 def test_completion_cohere_stream_bad_key():
     try:
         litellm.cache = None
