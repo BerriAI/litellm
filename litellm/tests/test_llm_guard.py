@@ -18,7 +18,7 @@ import pytest
 import litellm
 from litellm.proxy.enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMGuard
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
@@ -40,6 +40,7 @@ async def test_llm_guard_valid_response():
     )
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -76,6 +77,7 @@ async def test_llm_guard_error_raising():
     )
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
