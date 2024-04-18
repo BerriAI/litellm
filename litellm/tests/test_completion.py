@@ -33,6 +33,7 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
+@pytest.mark.skip(reason="Local test")
 def test_response_model_none():
     """
     Addresses - https://github.com/BerriAI/litellm/issues/2972
