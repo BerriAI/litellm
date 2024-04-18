@@ -64,12 +64,38 @@ class ProxyLogging:
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
+        self.alert_types: List[
+            Literal[
+                "llm_exceptions",
+                "llm_too_slow",
+                "llm_requests_hanging",
+                "budget_alerts",
+                "db_exceptions",
+            ]
+        ] = [
+            "llm_exceptions",
+            "llm_too_slow",
+            "llm_requests_hanging",
+            "budget_alerts",
+            "db_exceptions",
+        ]
 
     def update_values(
         self,
         alerting: Optional[List],
         alerting_threshold: Optional[float],
         redis_cache: Optional[RedisCache],
+        alert_types: Optional[
+            List[
+                Literal[
+                    "llm_exceptions",
+                    "llm_too_slow",
+                    "llm_requests_hanging",
+                    "budget_alerts",
+                    "db_exceptions",
+                ]
+            ]
+        ] = None,
     ):
         self.alerting = alerting
         if alerting_threshold is not None:
@@ -77,6 +103,9 @@ class ProxyLogging:
 
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache
+
+        if alert_types is not None:
+            self.alert_types = alert_types
 
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
@@ -213,6 +242,8 @@ class ProxyLogging:
     ):
         if self.alerting is None:
             return
+        if "llm_too_slow" not in self.alert_types:
+            return
         time_difference_float, model, api_base, messages = (
             self._response_taking_too_long_callback(
                 kwargs=kwargs,
@@ -259,6 +290,8 @@ class ProxyLogging:
 
         if type == "hanging_request":
             # Simulate a long-running operation that could take more than 5 minutes
+            if "llm_requests_hanging" not in self.alert_types:
+                return
             await asyncio.sleep(
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
@@ -306,6 +339,8 @@ class ProxyLogging:
     ):
         if self.alerting is None:
             # do nothing if alerting is not switched on
+            return
+        if "budget_alerts" not in self.alert_types:
             return
         _id: str = "default_id"  # used for caching
         if type == "user_and_proxy_budget":
@@ -465,6 +500,8 @@ class ProxyLogging:
         Currently only logs exceptions to sentry
         """
         ### ALERTING ###
+        if "db_exceptions" not in self.alert_types:
+            return
         if isinstance(original_exception, HTTPException):
             if isinstance(original_exception.detail, str):
                 error_message = original_exception.detail
@@ -499,6 +536,8 @@ class ProxyLogging:
         """
 
         ### ALERTING ###
+        if "llm_exceptions" not in self.alert_types:
+            return
         asyncio.create_task(
             self.alerting_handler(
                 message=f"LLM API call failed: {str(original_exception)}", level="High"
