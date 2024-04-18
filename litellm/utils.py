@@ -4739,6 +4739,8 @@ def get_optional_params(
             optional_params["stop_sequences"] = stop
         if tools is not None:
             optional_params["tools"] = tools
+        if seed is not None:
+            optional_params["seed"] = seed
     elif custom_llm_provider == "maritalk":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -5517,6 +5519,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "n",
             "tools",
             "tool_choice",
+            "seed",
         ]
     elif custom_llm_provider == "maritalk":
         return [
