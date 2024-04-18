@@ -48,9 +48,10 @@ http://localhost:4000/metrics
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
-| `litellm_requests_metric`             | Number of requests made, per `"user", "key", "model"`          |
-| `litellm_spend_metric`                | Total Spend, per `"user", "key", "model"`                 |
-| `litellm_total_tokens`         | input + output tokens per `"user", "key", "model"`     |
+| `litellm_requests_metric`             | Number of requests made, per `"user", "key", "model", "team", "end-user"`          |
+| `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
+| `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
+| `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
 
 ## Monitor System Health
 
