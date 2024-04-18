@@ -677,7 +677,7 @@ def anthropic_messages_pt_xml(messages: list):
                     {
                         "type": "text",
                         "text": (
-                            convert_to_anthropic_tool_result(messages[msg_i])
+                            convert_to_anthropic_tool_result_xml(messages[msg_i])
                             if messages[msg_i]["role"] == "tool"
                             else messages[msg_i]["content"]
                         ),
