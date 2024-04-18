@@ -8856,7 +8856,16 @@ class CustomStreamWrapper:
             raise e
 
     def check_special_tokens(self, chunk: str, finish_reason: Optional[str]):
+        """
+        Output parse <s> / </s> special tokens for sagemaker + hf streaming.
+        """
         hold = False
+        if (
+            self.custom_llm_provider != "huggingface"
+            and self.custom_llm_provider != "sagemaker"
+        ):
+            return hold, chunk
+
         if finish_reason:
             for token in self.special_tokens:
                 if token in chunk:
