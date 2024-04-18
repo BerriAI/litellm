@@ -7842,6 +7842,15 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response,
                     )
+                elif "None Unknown Error." in error_str:
+                    exception_mapping_worked = True
+                    raise APIError(
+                        message=f"VertexAIException - {error_str}",
+                        status_code=500,
+                        model=model,
+                        llm_provider="vertex_ai",
+                        request=original_exception.request,
+                    )
                 elif "403" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
