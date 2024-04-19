@@ -12,6 +12,9 @@ import {
   Metric,
   Text,
   Grid,
+  Accordion,
+  AccordionHeader,
+  AccordionBody,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
@@ -220,7 +223,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       max_tokens = model_info?.max_tokens;
     }
 
-    // let cleanedLitellmParams == litellm_params without model, api_base
     if (curr_model?.litellm_params) {
       cleanedLitellmParams = Object.fromEntries(
         Object.entries(curr_model?.litellm_params).filter(
@@ -460,9 +462,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }
 
                   <TableCell>
-                    <pre>
+
+                <Accordion>
+                  <AccordionHeader>
+                    <Text>Litellm params</Text>
+                  </AccordionHeader>
+                  <AccordionBody>
+                  <pre>
                     {JSON.stringify(model.cleanedLitellmParams, null, 2)}
                     </pre>
+                  </AccordionBody>
+                </Accordion>
+                   
                   </TableCell>
 
                   <TableCell>{model.input_cost}</TableCell>
