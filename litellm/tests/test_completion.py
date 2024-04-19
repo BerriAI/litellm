@@ -2644,3 +2644,81 @@ def test_moderation():
 
 
 # test_moderation()
+
+
+def test_bedrock_claude_3():
+    """
+    Bedrock claude-3 Haiku model tests - after a single tool has already been called
+    """
+    messages = {
+        "object": "MessageGenerationLog",
+        "session_id": "rand0m5ession1d",
+        "event": "chat_completion",
+        "event_id": "rand0mEvent1d",
+        "event_step": "input",
+        "timestamp": 1713510867262,
+        "content": {
+            "model_id": "m0de11d",
+            "model_schema_id": "custom_host/openai-tool-calls",
+            "provider_model_id": "openai-tool-calls",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "[INST]You are a helpful assistant thats capable of converting json objects into CONVERSATION like answers[/INST]",
+                },
+                {"role": "user", "content": "the multiple of 8 and 8 is?"},
+                {
+                    "role": "assistant",
+                    "function_calls": [
+                        {
+                            "id": "rand0mFunct10n1d",
+                            "name": "multiply",
+                            "arguments": {"number_1": 8, "number_2": 8},
+                        }
+                    ],
+                },
+                {
+                    "role": "function",
+                    "content": '{"result": 64}',
+                    "id": "rand0mFunct10n1d",
+                },
+            ],
+            "functions": [
+                {
+                    "name": "multiply",
+                    "description": "",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "number_1": {
+                                "type": "number",
+                                "description": "",
+                                "enum": None,
+                            },
+                            "number_2": {
+                                "type": "number",
+                                "description": "",
+                                "enum": None,
+                            },
+                        },
+                        "required": ["number_1", "number_2"],
+                    },
+                },
+            ],
+        },
+    }
+
+    try:
+        response = completion(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            logger_fn=logger_fn,
+            stream=False,
+        )
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
