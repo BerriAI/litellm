@@ -12,6 +12,7 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
+
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -341,6 +342,7 @@ async def acompletion(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=completion_kwargs,
+            extra_kwargs=kwargs,
         )
 
 
@@ -2137,6 +2139,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -2498,6 +2501,7 @@ async def aembedding(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -2939,7 +2943,10 @@ def embedding(
         )
         ## Map to OpenAI Exception
         raise exception_type(
-            model=model, original_exception=e, custom_llm_provider=custom_llm_provider
+            model=model,
+            original_exception=e,
+            custom_llm_provider=custom_llm_provider,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3033,6 +3040,7 @@ async def atext_completion(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3370,6 +3378,7 @@ async def aimage_generation(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3569,6 +3578,7 @@ def image_generation(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=locals(),
+            extra_kwargs=kwargs,
         )
 
 
@@ -3618,6 +3628,7 @@ async def atranscription(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 

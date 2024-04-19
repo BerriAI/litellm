@@ -2283,6 +2283,7 @@ class ProxyConfig:
             proxy_logging_obj.update_values(
                 alerting=general_settings.get("alerting", None),
                 alerting_threshold=general_settings.get("alerting_threshold", 600),
+                alert_types=general_settings.get("alert_types", None),
                 redis_cache=redis_usage_cache,
             )
             ### CONNECT TO DATABASE ###
@@ -2619,6 +2620,9 @@ class ProxyConfig:
             if "alerting" in _general_settings:
                 general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
+            if "alert_types" in _general_settings:
+                general_settings["alert_types"] = _general_settings["alert_types"]
+                proxy_logging_obj.alert_types = general_settings["alert_types"]
 
             # router settings
             _router_settings = config_data.get("router_settings", {})
@@ -3417,7 +3421,10 @@ async def completion(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "Invalid model name passed in"},
+                detail={
+                    "error": "Invalid model name passed in model="
+                    + data.get("model", "")
+                },
             )
 
         if hasattr(response, "_hidden_params"):
@@ -3648,7 +3655,10 @@ async def chat_completion(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "Invalid model name passed in"},
+                detail={
+                    "error": "Invalid model name passed in model="
+                    + data.get("model", "")
+                },
             )
 
         # wait for call to end
@@ -3872,7 +3882,10 @@ async def embeddings(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "Invalid model name passed in"},
+                detail={
+                    "error": "Invalid model name passed in model="
+                    + data.get("model", "")
+                },
             )
 
         ### ALERTING ###
@@ -4021,7 +4034,10 @@ async def image_generation(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "Invalid model name passed in"},
+                detail={
+                    "error": "Invalid model name passed in model="
+                    + data.get("model", "")
+                },
             )
 
         ### ALERTING ###
@@ -4181,7 +4197,10 @@ async def audio_transcriptions(
                 else:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={"error": "Invalid model name passed in"},
+                        detail={
+                            "error": "Invalid model name passed in model="
+                            + data.get("model", "")
+                        },
                     )
 
             except Exception as e:
@@ -4340,7 +4359,10 @@ async def moderations(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "Invalid model name passed in"},
+                detail={
+                    "error": "Invalid model name passed in model="
+                    + data.get("model", "")
+                },
             )
 
         ### ALERTING ###
@@ -8178,10 +8200,12 @@ async def update_config(config_info: ConfigYAML):
             updated_general_settings = config_info.general_settings.dict(
                 exclude_none=True
             )
-            config["general_settings"] = {
-                **updated_general_settings,
-                **config["general_settings"],
-            }
+
+            _existing_settings = config["general_settings"]
+            for k, v in updated_general_settings.items():
+                # overwrite existing settings with updated values
+                _existing_settings[k] = v
+            config["general_settings"] = _existing_settings
 
         if config_info.environment_variables is not None:
             config.setdefault("environment_variables", {})
@@ -8354,7 +8378,16 @@ async def get_config():
                     )
                     _slack_env_vars[_var] = _decrypted_value
 
-            _data_to_return.append({"name": "slack", "variables": _slack_env_vars})
+            _alerting_types = proxy_logging_obj.alert_types
+            _all_alert_types = proxy_logging_obj._all_possible_alert_types()
+            _data_to_return.append(
+                {
+                    "name": "slack",
+                    "variables": _slack_env_vars,
+                    "alerting_types": _alerting_types,
+                    "all_alert_types": _all_alert_types,
+                }
+            )
 
         _router_settings = llm_router.get_settings()
         return {

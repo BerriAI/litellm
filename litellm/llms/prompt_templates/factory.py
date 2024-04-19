@@ -218,6 +218,18 @@ def phind_codellama_pt(messages):
     return prompt
 
 
+known_tokenizer_config = {
+    "mistralai/Mistral-7B-Instruct-v0.1": {
+        "tokenizer": {
+            "chat_template": "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+        },
+        "status": "success",
+    }
+}
+
+
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
@@ -246,20 +258,23 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             else:
                 return {"status": "failure"}
 
-        tokenizer_config = _get_tokenizer_config(model)
+        if model in known_tokenizer_config:
+            tokenizer_config = known_tokenizer_config[model]
+        else:
+            tokenizer_config = _get_tokenizer_config(model)
         if (
             tokenizer_config["status"] == "failure"
             or "chat_template" not in tokenizer_config["tokenizer"]
         ):
             raise Exception("No chat template found")
         ## read the bos token, eos token and chat template from the json
-        tokenizer_config = tokenizer_config["tokenizer"]
-        bos_token = tokenizer_config["bos_token"]
-        eos_token = tokenizer_config["eos_token"]
-        chat_template = tokenizer_config["chat_template"]
+        tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
 
+        bos_token = tokenizer_config["bos_token"]  # type: ignore
+        eos_token = tokenizer_config["eos_token"]  # type: ignore
+        chat_template = tokenizer_config["chat_template"]  # type: ignore
     try:
-        template = env.from_string(chat_template)
+        template = env.from_string(chat_template)  # type: ignore
     except Exception as e:
         raise e
 

@@ -4739,6 +4739,8 @@ def get_optional_params(
             optional_params["stop_sequences"] = stop
         if tools is not None:
             optional_params["tools"] = tools
+        if seed is not None:
+            optional_params["seed"] = seed
     elif custom_llm_provider == "maritalk":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -5517,6 +5519,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "n",
             "tools",
             "tool_choice",
+            "seed",
         ]
     elif custom_llm_provider == "maritalk":
         return [
@@ -5940,6 +5943,9 @@ def get_llm_provider(
         if isinstance(e, litellm.exceptions.BadRequestError):
             raise e
         else:
+            error_str = (
+                f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}"
+            )
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
                 model=model,
@@ -7320,6 +7326,7 @@ def exception_type(
     original_exception,
     custom_llm_provider,
     completion_kwargs={},
+    extra_kwargs={},
 ):
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
@@ -7817,15 +7824,22 @@ def exception_type(
                 if completion_kwargs is not None:
                     # add model, deployment and model_group to the exception message
                     _model = completion_kwargs.get("model")
-                    _kwargs = completion_kwargs.get("kwargs", {}) or {}
-                    _metadata = _kwargs.get("metadata", {}) or {}
+                    error_str += f"\nmodel: {_model}\n"
+                if extra_kwargs is not None:
+                    _vertex_project = extra_kwargs.get("vertex_project")
+                    _vertex_location = extra_kwargs.get("vertex_location")
+                    _metadata = extra_kwargs.get("metadata", {}) or {}
                     _model_group = _metadata.get("model_group")
                     _deployment = _metadata.get("deployment")
-                    error_str += f"\nmodel: {_model}\n"
+
                     if _model_group is not None:
                         error_str += f"model_group: {_model_group}\n"
                     if _deployment is not None:
                         error_str += f"deployment: {_deployment}\n"
+                    if _vertex_project is not None:
+                        error_str += f"vertex_project: {_vertex_project}\n"
+                    if _vertex_location is not None:
+                        error_str += f"vertex_location: {_vertex_location}\n"
 
                 if (
                     "Vertex AI API has not been used in project" in error_str
