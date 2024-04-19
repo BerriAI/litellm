@@ -7,9 +7,10 @@ const { Option } = Select;
 interface CreateuserProps {
   userID: string;
   accessToken: string;
+  teams: any[] | null;
 }
 
-const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
+const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<string | null>(null);
@@ -90,37 +91,26 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <Form.Item label="User ID" name="user_id">
-            <Input placeholder="Enter User ID" />
+          <Form.Item label="User Email" name="user_email">
+            <Input placeholder="Enter User Email" />
           </Form.Item>
           <Form.Item label="Team ID" name="team_id">
-            <Input placeholder="ai_team" />
-          </Form.Item>
-          <Form.Item label="Models" name="models">
-            <Select
-              mode="multiple"
-              placeholder="Select models"
+          <Select
+              placeholder="Select Team ID"
               style={{ width: "100%" }}
             >
-              {userModels.map((model) => (
-                <Option key={model} value={model}>
-                  {model}
+              {teams ? (
+                teams.map((team: any) => (
+                  <Option key={team.team_id} value={team.team_id}>
+                    {team.team_alias}
+                  </Option>
+                ))
+              ) : (
+                <Option key="default" value={null}>
+                  Default Team
                 </Option>
-              ))}
+              )}
             </Select>
-          </Form.Item>
-
-          <Form.Item label="Max Budget (USD)" name="max_budget">
-            <InputNumber step={0.01} precision={2} width={200} />
-          </Form.Item>
-          <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-            <InputNumber step={1} width={400} />
-          </Form.Item>
-          <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-            <InputNumber step={1} width={400} />
-          </Form.Item>
-          <Form.Item label="Duration (eg: 30s, 30h, 30d)" name="duration">
-            <Input />
           </Form.Item>
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
