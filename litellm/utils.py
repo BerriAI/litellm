@@ -3543,6 +3543,12 @@ def _select_tokenizer(model: str):
     elif "llama-2" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    elif model in litellm.mistral_tokenizer_models:
+        from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
+
+        tokenizer = MistralTokenizer.from_model(model)
+        return {"type": "mistral_tokenizer", "tokenizer": tokenizer}
+
     # default - tiktoken
     else:
         return {"type": "openai_tokenizer", "tokenizer": encoding}
@@ -3806,6 +3812,21 @@ def token_counter(
             )
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
+        elif tokenizer_json["type"] == "mistral_tokenizer":
+            from mistral_common.tokens.instruct.normalize import ChatCompletionRequest
+            from mistral_common.protocol.instruct.messages import UserMessage
+
+            num_tokens = len(
+                tokenizer_json["tokenizer"]
+                .encode_chat_completion(
+                    ChatCompletionRequest(
+                        messages=[
+                            UserMessage(content=text),
+                        ]
+                    )
+                )
+                .tokens
+            )
         elif tokenizer_json["type"] == "openai_tokenizer":
             if (
                 model in litellm.open_ai_chat_completion_models

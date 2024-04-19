@@ -571,6 +571,16 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
+####### TOKENIZER MODELS ###################
+mistral_tokenizer_models = [
+    "open-mistral-7b",
+    "open-mixtral-8x7b",
+    "mistral-embed",
+    "mistral-small-latest",
+    "mistral-large-latest",
+    "open-mixtral-8x22b",
+]
+
 
 from .timeout import timeout
 from .utils import (

@@ -69,13 +69,16 @@ def test_tokenizers():
             model="meta-llama/Llama-2-7b-chat", text=sample_text
         )
 
+        # Mistral tokenizer
+        mistral_tokens = token_counter(model="open-mistral-7b", text=sample_text)
+
         print(
-            f"openai tokens: {openai_tokens}; claude tokens: {claude_tokens}; cohere tokens: {cohere_tokens}; llama2 tokens: {llama2_tokens}"
+            f"openai tokens: {openai_tokens}; claude tokens: {claude_tokens}; cohere tokens: {cohere_tokens}; llama2 tokens: {llama2_tokens}; mistral tokens: {mistral_tokens}"
         )
 
         # assert that all token values are different
         assert (
-            openai_tokens != cohere_tokens != llama2_tokens
+            openai_tokens != cohere_tokens != llama2_tokens != mistral_tokens
         ), "Token values are not different."
 
         print("test tokenizer: It worked!")

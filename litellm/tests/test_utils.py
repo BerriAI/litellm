@@ -343,6 +343,11 @@ def test_token_counter():
         print("anthropic.claude-instant-v1")
         print(tokens)
         assert tokens > 0
+
+        tokens = token_counter(model="open-mistral-7b", messages=messages)
+        print("open-mistral-7b")
+        print(tokens)
+        assert tokens > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
