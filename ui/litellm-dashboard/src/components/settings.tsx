@@ -182,7 +182,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   </li>
 ))}
         </ul>
-        {callback.alerting_types && (
+        {callback.all_alert_types && (
           <div>
             <Text className="mt-2">Alerting Types</Text>
             <Select
@@ -193,7 +193,7 @@ const Settings: React.FC<SettingsPageProps> = ({
               onChange={handleChange}
               defaultValue={callback.alerting_types}
             >
-              {callback.alerting_types.map((type: string) => (
+              {callback.all_alert_types.map((type: string) => (
                 <Select.Option key={type} value={type} label={type}>
                   {type}
                 </Select.Option>
