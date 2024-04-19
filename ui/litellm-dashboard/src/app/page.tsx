@@ -145,6 +145,7 @@ const CreateKeyPage = () => {
               userRole={userRole}
               token={token}
               keys={keys}
+              teams={teams}
               accessToken={accessToken}
               setKeys={setKeys}
             />
