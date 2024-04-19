@@ -282,7 +282,6 @@ class LangFuseLogger:
                     if key in [
                         "user_api_key_alias",
                         "user_api_key_user_id",
-                        "user_api_key_team_id",
                         "user_api_key_team_alias",
                         "semantic-similarity",
                     ]:
