@@ -67,21 +67,15 @@ async def test_completion_with_caching_bad_call():
     litellm.set_verbose = True
     sl = ServiceLogging(mock_testing=True)
     try:
-        litellm.cache = Cache(type="redis", host="hello-world")
+        from litellm.caching import RedisCache
+
         litellm.service_callback = ["prometheus_system"]
 
-        litellm.cache.cache.service_logger_obj = sl
-
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        response1 = await acompletion(
-            model="gpt-3.5-turbo", messages=messages, caching=True
-        )
-        response1 = await acompletion(
-            model="gpt-3.5-turbo", messages=messages, caching=True
-        )
+        RedisCache(host="hello-world", **{"service_logger_obj": sl})
     except Exception as e:
-        pass
+        print(f"Receives exception = {str(e)}")
 
+    await asyncio.sleep(5)
     assert sl.mock_testing_async_failure_hook > 0
     assert sl.mock_testing_async_success_hook == 0
     assert sl.mock_testing_sync_success_hook == 0
