@@ -36,6 +36,7 @@ interface ViewUserDashboardProps {
   keys: any[] | null;
   userRole: string | null;
   userID: string | null;
+  teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
 
@@ -45,6 +46,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   keys,
   userRole,
   userID,
+  teams,
   setKeys,
 }) => {
   const [userData, setUserData] = useState<null | any[]>(null);
@@ -151,7 +153,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   return (
     <div style={{ width: "100%" }}>
       <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
-        <CreateUser userID={userID} accessToken={accessToken} />
+        <CreateUser userID={userID} accessToken={accessToken} teams={teams}/>
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
           <TabGroup>
             <TabList variant="line" defaultValue="1">
