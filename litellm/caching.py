@@ -89,6 +89,13 @@ class InMemoryCache(BaseCache):
             return_val.append(val)
         return return_val
 
+    def increment_cache(self, key, value: int, **kwargs) -> int:
+        # get the value
+        init_value = self.get_cache(key=key) or 0
+        value = init_value + value
+        self.set_cache(key, value, **kwargs)
+        return value
+
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
 
@@ -198,6 +205,42 @@ class RedisCache(BaseCache):
                 f"LiteLLM Caching: set() - Got exception from REDIS : {str(e)}"
             )
 
+    def increment_cache(self, key, value: int, **kwargs) -> int:
+        _redis_client = self.redis_client
+        start_time = time.time()
+        try:
+            result = _redis_client.incr(name=key, amount=value)
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type="increment_cache",
+                )
+            )
+            return result
+        except Exception as e:
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="increment_cache",
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, Writing value=%s",
+                str(e),
+                value,
+            )
+            traceback.print_exc()
+            raise e
+
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
         start_time = time.time()
         try:
@@ -302,6 +345,10 @@ class RedisCache(BaseCache):
         """
         _redis_client = self.init_async_client()
         start_time = time.time()
+
+        print_verbose(
+            f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}"
+        )
         try:
             async with _redis_client as redis_client:
                 async with redis_client.pipeline(transaction=True) as pipe:
@@ -1093,6 +1140,30 @@ class DualCache(BaseCache):
         except Exception as e:
             print_verbose(e)
 
+    def increment_cache(
+        self, key, value: int, local_only: bool = False, **kwargs
+    ) -> int:
+        """
+        Key - the key in cache
+
+        Value - int - the value you want to increment by
+
+        Returns - int - the incremented value
+        """
+        try:
+            result: int = value
+            if self.in_memory_cache is not None:
+                result = self.in_memory_cache.increment_cache(key, value, **kwargs)
+
+            if self.redis_cache is not None and local_only == False:
+                result = self.redis_cache.increment_cache(key, value, **kwargs)
+
+            return result
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
+            traceback.print_exc()
+            raise e
+
     def get_cache(self, key, local_only: bool = False, **kwargs):
         # Try to fetch from in-memory cache first
         try:
@@ -1198,7 +1269,6 @@ class DualCache(BaseCache):
                 print_verbose(f"in_memory_result: {in_memory_result}")
                 if in_memory_result is not None:
                     result = in_memory_result
-
             if None in result and self.redis_cache is not None and local_only == False:
                 """
                 - for the none values in the result
@@ -1214,14 +1284,12 @@ class DualCache(BaseCache):
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
-                    for key in redis_result:
-                        await self.in_memory_cache.async_set_cache(
-                            key, redis_result[key], **kwargs
-                        )
-
-                sublist_dict = dict(zip(sublist_keys, redis_result))
-
-                for key, value in sublist_dict.items():
+                    for key, value in redis_result.items():
+                        if value is not None:
+                            await self.in_memory_cache.async_set_cache(
+                                key, redis_result[key], **kwargs
+                            )
+                for key, value in redis_result.items():
                     result[sublist_keys.index(key)] = value
 
             print_verbose(f"async batch get cache: cache result: {result}")
@@ -1230,6 +1298,9 @@ class DualCache(BaseCache):
             traceback.print_exc()
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+        print_verbose(
+            f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}"
+        )
         try:
             if self.in_memory_cache is not None:
                 await self.in_memory_cache.async_set_cache(key, value, **kwargs)
