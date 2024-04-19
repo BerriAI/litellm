@@ -19,12 +19,16 @@ import {
   TabPanel,
   Select,
   SelectItem,
+  Dialog, 
+  DialogPanel,
+  Icon
 } from "@tremor/react";
 import { userInfoCall, adminTopEndUsersCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
 import Paragraph from "antd/es/skeleton/Paragraph";
+import InformationCircleIcon from "@heroicons/react/outline/InformationCircleIcon";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -46,6 +50,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(0);
+  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
+  const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const defaultPageSize = 25;
 
   useEffect(() => {
@@ -158,19 +164,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Role</TableHeaderCell>
+                      <TableHeaderCell>User Email</TableHeaderCell>
                       <TableHeaderCell>User Models</TableHeaderCell>
                       <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
                       <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
+                      <TableHeaderCell>User API Key Aliases</TableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {userData.map((user: any) => (
                       <TableRow key={user.user_id}>
                         <TableCell>{user.user_id}</TableCell>
-                        <TableCell>
-                          {user.user_role ? user.user_role : "app_owner"}
-                        </TableCell>
+                        <TableCell>{user.user_email}</TableCell>
+                        
                         <TableCell>
                           {user.models && user.models.length > 0
                             ? user.models
@@ -180,6 +186,23 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         <TableCell>
                           {user.max_budget ? user.max_budget : "Unlimited"}
                         </TableCell>
+                        <TableCell>
+                          <Grid numItems={2}>
+                          {user && user.key_aliases
+                              ? user.key_aliases.filter((key: any) => key !== null).length > 0
+                                ? <Badge size={"xs"} color={"indigo"}>{user.key_aliases.filter((key: any) => key !== null).join(', ') }</Badge>
+                                : <Badge size={"xs"} color={"gray"}>No Keys</Badge>
+                              : <Badge size={"xs"} color={"gray"}>No Keys</Badge>}
+                          {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
+                        {/* <Icon icon={InformationCircleIcon} onClick= {() => {
+                          setOpenDialogId(user.user_id)
+                          setSelectedItem(user)
+                        }}>View Keys</Icon> */}
+
+                          </Grid>
+
+                        </TableCell>
+
                       </TableRow>
                     ))}
                   </TableBody>
@@ -236,7 +259,29 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         </Card>
         {renderPagination()}
       </Grid>
+      {/* <Dialog
+  open={openDialogId !== null}
+  onClose={() => {
+    setOpenDialogId(null);
+  }}
+
+>
+  <DialogPanel>
+  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+    <Title>Key Aliases</Title>
+
+    <Text>
+    {selectedItem && selectedItem.key_aliases
+ ? selectedItem.key_aliases.filter(key => key !== null).length > 0
+   ? selectedItem.key_aliases.filter(key => key !== null).join(', ')
+   : 'No Keys'
+ : "No Keys"}
+    </Text>
     </div>
+  </DialogPanel>
+</Dialog> */}
+    </div>
+
   );
 };
 

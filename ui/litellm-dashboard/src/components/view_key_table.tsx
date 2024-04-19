@@ -20,7 +20,7 @@ import {
   Icon,
   BarChart,
 } from "@tremor/react";
-
+import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -52,6 +52,7 @@ interface ViewKeyTableProps {
   selectedTeam: any | null;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: any[] | null;
 }
 
 interface ItemData {
@@ -78,6 +79,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   selectedTeam,
   data,
   setData,
+  teams
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -92,6 +94,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
   const [userModels, setUserModels] = useState([]);
+  const initialKnownTeamIDs: Set<string> = new Set();
+
+  const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
   useEffect(() => {
     const fetchUserModels = async () => {
@@ -116,13 +121,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
+  useEffect(() => {
+    if (teams) {
+      const teamIDSet: Set<string> = new Set();
+      teams.forEach((team: any, index: number) => {
+        const team_obj: string = team.team_id
+        teamIDSet.add(team_obj);
+      });
+      setKnownTeamIDs(teamIDSet)
+    }
+  }, [teams])
   const EditKeyModal: React.FC<EditKeyModalProps> = ({ visible, onCancel, token, onSubmit }) => {
     const [form] = Form.useForm();
-
-    console.log("in edit key modal:", token);
-    console.log("in edit key modal, team:", selectedTeam);
-
-    
+    const [keyTeam, setKeyTeam] = useState(selectedTeam);
+    const [errorModels, setErrorModels] = useState<string[]>([]);
+    const [errorBudget, setErrorBudget] = useState<boolean>(false);
 
     const handleOk = () => {
       form
@@ -135,8 +148,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         .catch((error) => {
           console.error("Validation failed:", error);
         });
-  };
-  
+      };
+
     return (
         <Modal
               title="Edit Key"
@@ -164,7 +177,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 <Input />
               </Form.Item>
 
-              <Form.Item label="Models" name="models">
+              <Form.Item label="Models" name="models" rules={[
+                {
+                  validator: (rule, value) => {
+                    const errorModels = value.filter((model: string) => (
+                      !keyTeam.models.includes(model) && 
+                      model !== "all-team-models" && 
+                      model !== "all-proxy-models"
+                    ));
+                    console.log(`errorModels: ${errorModels}`)
+                    if (errorModels.length > 0) {
+                      return Promise.reject(`Some models are not part of the new team\'s models - ${errorModels}`);
+                    } else {
+                      return Promise.resolve();
+                    }
+                  }
+                }
+              ]}>
                 <Select
                   mode="multiple"
                   placeholder="Select models"
@@ -173,42 +202,40 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Option key="all-team-models" value="all-team-models">
                     All Team Models
                   </Option>                
-                  {selectedTeam && selectedTeam.models ? (
-  selectedTeam.models.includes("all-proxy-models") ? (
-    userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
-      <Option key={model} value={model}>
-        {model}
-      </Option>
-    ))
-  ) : (
-    selectedTeam.models.map((model: string) => (
-      <Option key={model} value={model}>
-        {model}
-      </Option>
-    ))
-  )
-) : (
-  userModels.map((model: string) => (
-    <Option key={model} value={model}>
-      {model}
-    </Option>
-  ))
-)}
-
-
-
+                  {keyTeam && keyTeam.models ? (
+                    keyTeam.models.includes("all-proxy-models") ? (
+                      userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    ) : (
+                      keyTeam.models.map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    )
+                  ) : (
+                    userModels.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                  )}
                 </Select>
               </Form.Item>
               <Form.Item 
                 className="mt-8"
                 label="Max Budget (USD)" 
                 name="max_budget" 
-                help={`Budget cannot exceed team max budget: $${selectedTeam?.max_budget !== null && selectedTeam?.max_budget !== undefined ? selectedTeam?.max_budget : 'unlimited'}`}
+                help={`Budget cannot exceed team max budget: ${keyTeam?.max_budget !== null && keyTeam?.max_budget !== undefined ? keyTeam?.max_budget : 'unlimited'}`}
                 rules={[
                   {
                       validator: async (_, value) => {
-                          if (value && selectedTeam && selectedTeam.max_budget !== null && value > selectedTeam.max_budget) {
-                              throw new Error(`Budget cannot exceed team max budget: $${selectedTeam.max_budget}`);
+                          if (value && keyTeam && keyTeam.max_budget !== null && value > keyTeam.max_budget) {
+                              console.log(`keyTeam.max_budget: ${keyTeam.max_budget}`)
+                              throw new Error(`Budget cannot exceed team max budget: $${keyTeam.max_budget}`);
                           }
                       },
                   },
@@ -221,7 +248,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   name="token"
                   hidden={true}
                 ></Form.Item>
-
+              <Form.Item 
+                label="Team" 
+                name="team_id"
+                help="the team this key belongs to"
+              >
+                <Select3 value={token.team_alias}>
+                {teams?.map((team_obj, index) => (
+                    <SelectItem
+                      key={index}
+                      value={team_obj.team_id}
+                      onClick={() => setKeyTeam(team_obj)}
+                    >
+                      {team_obj.team_alias}
+                    </SelectItem>
+                  ))}
+              </Select3>
+              </Form.Item>
             </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Edit Key</Button2>
@@ -247,19 +290,24 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setEditModalVisible(true);
   };
 
-const handleEditCancel = () => {
-  setEditModalVisible(false);
-  setSelectedToken(null);
-};
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedToken(null);
+  };
 
-const handleEditSubmit = async (formValues: Record<string, any>) => {
-  // Call API to update team with teamId and values
+  const handleEditSubmit = async (formValues: Record<string, any>) => {
+  /**
+   * Call API to update team with teamId and values
+   * 
+   * Client-side validation: For selected team, ensure models in team + max budget < team max budget
+   */
   if (accessToken == null) {
     return;
   }
+
   const currentKey = formValues.token; 
   formValues.key = currentKey;
-  
+
   console.log("handleEditSubmit:", formValues);
 
   let newKeyValues = await keyUpdateCall(accessToken, formValues);
@@ -276,7 +324,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   setEditModalVisible(false);
   setSelectedToken(null);
-};
+  };
 
 
 
@@ -384,12 +432,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
-            {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
-            {/* <TableHeaderCell>Team</TableHeaderCell> */}
-            {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-            {/* <TableHeaderCell>Expires</TableHeaderCell> */}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -400,9 +444,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               return null;
             }
             if (selectedTeam) {
-              if (item.team_id != selectedTeam.team_id) {
+              /**
+               * if selected team id is null -> show the keys with no team id or team id's that don't exist in db
+               */
+              console.log(`item team id: ${item.team_id}, knownTeamIDs.has(item.team_id): ${knownTeamIDs.has(item.team_id)}, selectedTeam id: ${selectedTeam.team_id}`)
+              if (selectedTeam.team_id == null && item.team_id !== null && !knownTeamIDs.has(item.team_id)) {
+                // do nothing -> returns a row with this key
+              }
+              else if (item.team_id != selectedTeam.team_id) {
                 return null;
               }
+              console.log(`item team id: ${item.team_id}, is returned`)
             }
             return (
               <TableRow key={item.token}>

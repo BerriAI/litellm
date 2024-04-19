@@ -173,6 +173,22 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
+@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-3-opus-20240229"])
+def test_trimming_with_model_cost_max_input_tokens(model):
+    messages = [
+        {"role": "system", "content": "This is a normal system message"},
+        {
+            "role": "user",
+            "content": "This is a sentence" * 100000,
+        },
+    ]
+    trimmed_messages = trim_messages(messages, model=model)
+    assert (
+        get_token_count(trimmed_messages, model=model)
+        < litellm.model_cost[model]["max_input_tokens"]
+    )
+
+
 def test_get_valid_models():
     old_environ = os.environ
     os.environ = {"OPENAI_API_KEY": "temp"}  # mock set only openai key in environ

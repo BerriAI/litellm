@@ -252,7 +252,10 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         messages = [
-            {"role": "user", "content": "What's the weather like in Boston today?"}
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in fahrenheit?",
+            }
         ]
         response: ModelResponse = completion(
             model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",

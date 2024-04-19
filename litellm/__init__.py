@@ -583,6 +583,7 @@ from .utils import (
     completion_cost,
     supports_function_calling,
     supports_parallel_function_calling,
+    supports_vision,
     get_litellm_params,
     Logging,
     acreate,

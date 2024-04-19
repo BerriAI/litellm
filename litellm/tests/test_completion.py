@@ -33,6 +33,22 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
+@pytest.mark.skip(reason="Local test")
+def test_response_model_none():
+    """
+    Addresses - https://github.com/BerriAI/litellm/issues/2972
+    """
+    x = completion(
+        model="mymodel",
+        custom_llm_provider="openai",
+        messages=[{"role": "user", "content": "Hello!"}],
+        api_base="http://0.0.0.0:8080",
+        api_key="my-api-key",
+    )
+    print(f"x: {x}")
+    assert isinstance(x, litellm.ModelResponse)
+
+
 def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
@@ -167,7 +183,12 @@ def test_completion_claude_3_function_call():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -376,7 +397,12 @@ def test_completion_claude_3_function_plus_image():
     ]
 
     tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
 
     response = completion(
         model="claude-3-sonnet-20240229",
@@ -387,6 +413,51 @@ def test_completion_claude_3_function_plus_image():
     )
 
     print(response)
+
+
+def test_completion_azure_mistral_large_function_calling():
+    """
+    This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
+    """
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
+    response = completion(
+        model="azure/mistral-large-latest",
+        api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
+        api_key=os.getenv("AZURE_MISTRAL_API_KEY"),
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+    )
+    # Add any assertions, here to check response args
+    print(response)
+    assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+    assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
 
 
 def test_completion_mistral_api():
