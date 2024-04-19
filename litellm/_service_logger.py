@@ -21,7 +21,9 @@ class ServiceLogging(CustomLogger):
         if "prometheus_system" in litellm.service_callback:
             self.prometheusServicesLogger = PrometheusServicesLogger()
 
-    def service_success_hook(self, service: ServiceTypes, duration: float):
+    def service_success_hook(
+        self, service: ServiceTypes, duration: float, call_type: str
+    ):
         """
         [TODO] Not implemented for sync calls yet. V0 is focused on async monitoring (used by proxy).
         """
@@ -29,7 +31,7 @@ class ServiceLogging(CustomLogger):
             self.mock_testing_sync_success_hook += 1
 
     def service_failure_hook(
-        self, service: ServiceTypes, duration: float, error: Exception
+        self, service: ServiceTypes, duration: float, error: Exception, call_type: str
     ):
         """
         [TODO] Not implemented for sync calls yet. V0 is focused on async monitoring (used by proxy).
