@@ -60,7 +60,7 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
       message.info("Making API Call");
       setIsModalVisible(true);
       console.log("formValues in create user:", formValues);
-      const response = await userCreateCall(accessToken, userID, formValues);
+      const response = await userCreateCall(accessToken, null, formValues);
       console.log("user create Response:", response);
       setApiuser(response["key"]);
       message.success("API user Created");
@@ -122,23 +122,19 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
       </Modal>
       {apiuser && (
         <Modal
-          title="Save Your User"
+          title="User Created Successfully"
           visible={isModalVisible}
           onOk={handleOk}
           onCancel={handleCancel}
           footer={null}
         >
           <p>
-            Please save this secret user somewhere safe and accessible. For
-            security reasons, <b>you will not be able to view it again</b>{" "}
-            through your LiteLLM account. If you lose this secret user, you will
-            need to generate a new one.
+            User has been created to access your proxy. Please Ask them to Log In.
           </p>
-          <p>
-            {apiuser != null
-              ? `API user: ${apiuser}`
-              : "User being created, this might take 30s"}
-          </p>
+          <br></br>
+
+          <p><b>Note: This Feature is only supported through SSO on the Admin UI</b></p>
+          
         </Modal>
       )}
     </div>
