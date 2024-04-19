@@ -16,11 +16,24 @@ dotenv.load_dotenv()
 if set_verbose == True:
     _turn_on_debug()
 #############################################
+### Callbacks /Logging / Success / Failure Handlers ###
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+_langfuse_default_tags: Optional[
+    List[
+        Literal[
+            "user_api_key_alias",
+            "user_api_key_user_id",
+            "user_api_key_user_email",
+            "user_api_key_team_alias",
+            "semantic-similarity",
+            "proxy_base_url",
+        ]
+    ]
+] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -32,6 +45,8 @@ _async_failure_callback: List[Callable] = (
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
+## end of callbacks #############
+
 email: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
