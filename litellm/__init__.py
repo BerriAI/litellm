@@ -51,6 +51,7 @@ replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
+ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
