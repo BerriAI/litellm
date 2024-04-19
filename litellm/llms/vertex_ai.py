@@ -87,6 +87,60 @@ class VertexAIConfig:
             and v is not None
         }
 
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "n",
+            "stop",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "n":
+                optional_params["candidate_count"] = value
+            if param == "stop":
+                if isinstance(value, str):
+                    optional_params["stop_sequences"] = [value]
+                elif isinstance(value, list):
+                    optional_params["stop_sequences"] = value
+            if param == "max_tokens":
+                optional_params["max_output_tokens"] = value
+            if param == "response_format" and value["type"] == "json_object":
+                optional_params["response_mime_type"] = "application/json"
+            if param == "tools" and isinstance(value, list):
+                from vertexai.preview import generative_models
+
+                gtool_func_declarations = []
+                for tool in value:
+                    gtool_func_declaration = generative_models.FunctionDeclaration(
+                        name=tool["function"]["name"],
+                        description=tool["function"].get("description", ""),
+                        parameters=tool["function"].get("parameters", {}),
+                    )
+                    gtool_func_declarations.append(gtool_func_declaration)
+                optional_params["tools"] = [
+                    generative_models.Tool(
+                        function_declarations=gtool_func_declarations
+                    )
+                ]
+            if param == "tool_choice" and (
+                isinstance(value, str) or isinstance(value, dict)
+            ):
+                pass
+        return optional_params
+
 
 import asyncio
 
@@ -349,8 +403,17 @@ def completion(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
+        if vertex_credentials is not None and isinstance(vertex_credentials, str):
+            import google.oauth2.service_account
 
-        creds, _ = google.auth.default(quota_project_id=vertex_project)
+            json_obj = json.loads(vertex_credentials)
+
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            creds, _ = google.auth.default(quota_project_id=vertex_project)
         print_verbose(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
         )
@@ -813,8 +876,8 @@ async def async_completion(
                 tools=tools,
             )
 
-            if tools is not None and hasattr(
-                response.candidates[0].content.parts[0], "function_call"
+            if tools is not None and bool(
+                getattr(response.candidates[0].content.parts[0], "function_call", None)
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
@@ -1171,6 +1234,7 @@ def embedding(
     encoding=None,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     aembedding=False,
     print_verbose=None,
 ):
@@ -1191,7 +1255,17 @@ def embedding(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
-        creds, _ = google.auth.default(quota_project_id=vertex_project)
+        if vertex_credentials is not None and isinstance(vertex_credentials, str):
+            import google.oauth2.service_account
+
+            json_obj = json.loads(vertex_credentials)
+
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            creds, _ = google.auth.default(quota_project_id=vertex_project)
         print_verbose(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
         )

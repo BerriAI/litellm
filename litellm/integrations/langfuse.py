@@ -133,6 +133,7 @@ class LangFuseLogger:
                 self._log_langfuse_v2(
                     user_id,
                     metadata,
+                    litellm_params,
                     output,
                     start_time,
                     end_time,
@@ -224,6 +225,7 @@ class LangFuseLogger:
         self,
         user_id,
         metadata,
+        litellm_params,
         output,
         start_time,
         end_time,
@@ -298,12 +300,45 @@ class LangFuseLogger:
                     else:
                         clean_metadata[key] = value
 
+            api_base = litellm_params.get("api_base", None)
+            if api_base:
+                clean_metadata["api_base"] = api_base
+
+            vertex_location = kwargs.get("vertex_location", None)
+            if vertex_location:
+                clean_metadata["vertex_location"] = vertex_location
+
+            aws_region_name = kwargs.get("aws_region_name", None)
+            if aws_region_name:
+                clean_metadata["aws_region_name"] = aws_region_name
+
             if supports_tags:
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
                     tags.append(f"cache_hit:{kwargs['cache_hit']}")
+                    clean_metadata["cache_hit"] = kwargs["cache_hit"]
                 trace_params.update({"tags": tags})
+
+            proxy_server_request = litellm_params.get("proxy_server_request", None)
+            if proxy_server_request:
+                method = proxy_server_request.get("method", None)
+                url = proxy_server_request.get("url", None)
+                headers = proxy_server_request.get("headers", None)
+                clean_headers = {}
+                if headers:
+                    for key, value in headers.items():
+                        # these headers can leak our API keys and/or JWT tokens
+                        if key.lower() not in ["authorization", "cookie", "referer"]:
+                            clean_headers[key] = value
+
+                clean_metadata["request"] = {
+                    "method": method,
+                    "url": url,
+                    "headers": clean_headers,
+                }
+
+            print_verbose(f"trace_params: {trace_params}")
 
             trace = self.Langfuse.trace(**trace_params)
 
@@ -321,13 +356,17 @@ class LangFuseLogger:
                 # just log `litellm-{call_type}` as the generation name
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
+            system_fingerprint = response_obj.get("system_fingerprint", None)
+            if system_fingerprint is not None:
+                optional_params["system_fingerprint"] = system_fingerprint
+
             generation_params = {
                 "name": generation_name,
                 "id": metadata.get("generation_id", generation_id),
-                "startTime": start_time,
-                "endTime": end_time,
+                "start_time": start_time,
+                "end_time": end_time,
                 "model": kwargs["model"],
-                "modelParameters": optional_params,
+                "model_parameters": optional_params,
                 "input": input,
                 "output": output,
                 "usage": usage,
@@ -339,12 +378,14 @@ class LangFuseLogger:
                 generation_params["prompt"] = metadata.get("prompt", None)
 
             if output is not None and isinstance(output, str) and level == "ERROR":
-                generation_params["statusMessage"] = output
+                generation_params["status_message"] = output
 
             if supports_completion_start_time:
                 generation_params["completion_start_time"] = kwargs.get(
                     "completion_start_time", None
                 )
+
+            print_verbose(f"generation_params: {generation_params}")
 
             trace.generation(**generation_params)
         except Exception as e:
