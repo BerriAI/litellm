@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Button, Modal, Form, Input, message, Select, InputNumber } from "antd";
-import { Button as Button2 } from "@tremor/react";
+import { Button as Button2, Text } from "@tremor/react";
 import { userCreateCall, modelAvailableCall } from "./networking";
 const { Option } = Select;
 
@@ -74,16 +74,18 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
   return (
     <div>
       <Button2 className="mx-auto" onClick={() => setIsModalVisible(true)}>
-        + Create New User
+        + Invite User
       </Button2>
       <Modal
-        title="Create User"
+        title="Invite User"
         visible={isModalVisible}
         width={800}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
       >
+        <Text className="mb-1">Invite a user to login to the Admin UI and create Keys</Text>
+        <Text className="mb-6"><b>Note: SSO Setup Required for this</b></Text>
         <Form
           form={form}
           onFinish={handleCreate}
