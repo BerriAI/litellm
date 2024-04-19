@@ -8379,12 +8379,13 @@ async def get_config():
                     _slack_env_vars[_var] = _decrypted_value
 
             _alerting_types = proxy_logging_obj.alert_types
-
+            _all_alert_types = proxy_logging_obj._all_possible_alert_types()
             _data_to_return.append(
                 {
                     "name": "slack",
                     "variables": _slack_env_vars,
                     "alerting_types": _alerting_types,
+                    "all_alert_types": _all_alert_types,
                 }
             )
 
