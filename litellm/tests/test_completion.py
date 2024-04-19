@@ -330,7 +330,7 @@ def test_completion_claude_3_base64():
         litellm.set_verbose = True
         litellm.num_retries = 3
         image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64-string
+        # Getting the base64 string
         base64_image = encode_image(image_path)
         resp = litellm.completion(
             model="anthropic/claude-3-opus-20240229",
