@@ -5,11 +5,12 @@ from typing import Optional
 
 class ServiceTypes(enum.Enum):
     """
-    Enum for litellm-adjacent services (redis/postgres/etc.)
+    Enum for litellm + litellm-adjacent services (redis/postgres/etc.)
     """
 
     REDIS = "redis"
     DB = "postgres"
+    LITELLM = "self"
 
 
 class ServiceLoggerPayload(BaseModel):
@@ -21,6 +22,7 @@ class ServiceLoggerPayload(BaseModel):
     error: Optional[str] = Field(None, description="what was the error")
     service: ServiceTypes = Field(description="who is this for? - postgres/redis")
     duration: float = Field(description="How long did the request take?")
+    call_type: str = Field(description="The call of the service, being made")
 
     def to_json(self, **kwargs):
         try:

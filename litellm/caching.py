@@ -13,7 +13,6 @@ import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any, BinaryIO
 from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
-from litellm._service_logger import ServiceLogging
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 import traceback
 
@@ -132,6 +131,7 @@ class RedisCache(BaseCache):
         **kwargs,
     ):
         from ._redis import get_redis_client, get_redis_connection_pool
+        from litellm._service_logger import ServiceLogging
         import redis
 
         redis_kwargs = {}
@@ -216,7 +216,9 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_success_hook(
-                        service=ServiceTypes.REDIS, duration=_duration
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="async_scan_iter",
                     )
                 )  # DO NOT SLOW DOWN CALL B/C OF THIS
             return keys
@@ -227,7 +229,10 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS, duration=_duration, error=e
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_scan_iter",
                 )
             )
             raise e
@@ -267,7 +272,9 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_success_hook(
-                        service=ServiceTypes.REDIS, duration=_duration
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="async_set_cache",
                     )
                 )
             except Exception as e:
@@ -275,7 +282,10 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_failure_hook(
-                        service=ServiceTypes.REDIS, duration=_duration, error=e
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        error=e,
+                        call_type="async_set_cache",
                     )
                 )
                 # NON blocking - notify users Redis is throwing an exception
@@ -316,7 +326,9 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.REDIS, duration=_duration
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type="async_set_cache_pipeline",
                 )
             )
             return results
@@ -326,7 +338,10 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS, duration=_duration, error=e
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_set_cache_pipeline",
                 )
             )
 
@@ -359,6 +374,7 @@ class RedisCache(BaseCache):
                     self.service_logger_obj.async_service_success_hook(
                         service=ServiceTypes.REDIS,
                         duration=_duration,
+                        call_type="async_increment",
                     )
                 )
                 return result
@@ -368,7 +384,10 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS, duration=_duration, error=e
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_increment",
                 )
             )
             verbose_logger.error(
@@ -459,7 +478,9 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_success_hook(
-                        service=ServiceTypes.REDIS, duration=_duration
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="async_get_cache",
                     )
                 )
                 return response
@@ -469,7 +490,10 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_failure_hook(
-                        service=ServiceTypes.REDIS, duration=_duration, error=e
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        error=e,
+                        call_type="async_get_cache",
                     )
                 )
                 # NON blocking - notify users Redis is throwing an exception
@@ -497,7 +521,9 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.REDIS, duration=_duration
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type="async_batch_get_cache",
                 )
             )
 
@@ -519,7 +545,10 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS, duration=_duration, error=e
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_batch_get_cache",
                 )
             )
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
