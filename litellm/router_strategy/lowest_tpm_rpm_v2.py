@@ -39,7 +39,81 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         self.router_cache = router_cache
         self.model_list = model_list
 
-    async def pre_call_rpm_check(self, deployment: dict) -> dict:
+    def pre_call_check(self, deployment: Dict) -> Dict | None:
+        """
+        Pre-call check + update model rpm
+
+        Returns - deployment
+
+        Raises - RateLimitError if deployment over defined RPM limit
+        """
+        try:
+
+            # ------------
+            # Setup values
+            # ------------
+            dt = get_utc_datetime()
+            current_minute = dt.strftime("%H-%M")
+            model_id = deployment.get("model_info", {}).get("id")
+            rpm_key = f"{model_id}:rpm:{current_minute}"
+            local_result = self.router_cache.get_cache(
+                key=rpm_key, local_only=True
+            )  # check local result first
+
+            deployment_rpm = None
+            if deployment_rpm is None:
+                deployment_rpm = deployment.get("rpm")
+            if deployment_rpm is None:
+                deployment_rpm = deployment.get("litellm_params", {}).get("rpm")
+            if deployment_rpm is None:
+                deployment_rpm = deployment.get("model_info", {}).get("rpm")
+            if deployment_rpm is None:
+                deployment_rpm = float("inf")
+
+            if local_result is not None and local_result >= deployment_rpm:
+                raise litellm.RateLimitError(
+                    message="Deployment over defined rpm limit={}. current usage={}".format(
+                        deployment_rpm, local_result
+                    ),
+                    llm_provider="",
+                    model=deployment.get("litellm_params", {}).get("model"),
+                    response=httpx.Response(
+                        status_code=429,
+                        content="{} rpm limit={}. current usage={}".format(
+                            RouterErrors.user_defined_ratelimit_error.value,
+                            deployment_rpm,
+                            local_result,
+                        ),
+                        request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    ),
+                )
+            else:
+                # if local result below limit, check redis ## prevent unnecessary redis checks
+                result = self.router_cache.increment_cache(key=rpm_key, value=1)
+                if result is not None and result > deployment_rpm:
+                    raise litellm.RateLimitError(
+                        message="Deployment over defined rpm limit={}. current usage={}".format(
+                            deployment_rpm, result
+                        ),
+                        llm_provider="",
+                        model=deployment.get("litellm_params", {}).get("model"),
+                        response=httpx.Response(
+                            status_code=429,
+                            content="{} rpm limit={}. current usage={}".format(
+                                RouterErrors.user_defined_ratelimit_error.value,
+                                deployment_rpm,
+                                result,
+                            ),
+                            request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        ),
+                    )
+            return deployment
+        except Exception as e:
+            if isinstance(e, litellm.RateLimitError):
+                raise e
+            return deployment  # don't fail calls if eg. redis fails to connect
+
+    async def async_pre_call_check(self, deployment: Dict) -> Dict | None:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
@@ -58,8 +132,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             # ------------
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
-            model_group = deployment.get("model_name", "")
-            rpm_key = f"{model_group}:rpm:{current_minute}"
+            model_id = deployment.get("model_info", {}).get("id")
+            rpm_key = f"{model_id}:rpm:{current_minute}"
             local_result = await self.router_cache.async_get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
@@ -246,21 +320,26 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             for deployment in healthy_deployments:
                 tpm_dict[deployment["model_info"]["id"]] = 0
         else:
+            dt = get_utc_datetime()
+            current_minute = dt.strftime(
+                "%H-%M"
+            )  # use the same timezone regardless of system clock
+
             for d in healthy_deployments:
                 ## if healthy deployment not yet used
-                if d["model_info"]["id"] not in tpm_dict:
-                    tpm_dict[d["model_info"]["id"]] = 0
+                tpm_key = f"{d['model_info']['id']}:tpm:{current_minute}"
+                if tpm_key not in tpm_dict or tpm_dict[tpm_key] is None:
+                    tpm_dict[tpm_key] = 0
 
         all_deployments = tpm_dict
-
         deployment = None
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
             _deployment = None
+            item = item.split(":")[0]
             for m in healthy_deployments:
                 if item == m["model_info"]["id"]:
                     _deployment = m
-
             if _deployment is None:
                 continue  # skip to next one
 
@@ -283,7 +362,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 _deployment_rpm = _deployment.get("model_info", {}).get("rpm")
             if _deployment_rpm is None:
                 _deployment_rpm = float("inf")
-
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
             elif (rpm_dict is not None and item in rpm_dict) and (
