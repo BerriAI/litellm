@@ -154,13 +154,6 @@ class RedisCache(BaseCache):
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
 
-        if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-            parsed_kwargs = redis.connection.parse_url(redis_kwargs["url"])
-            redis_kwargs.update(parsed_kwargs)
-            self.redis_kwargs.update(parsed_kwargs)
-            # pop url
-            self.redis_kwargs.pop("url")
-
         # redis namespaces
         self.namespace = namespace
         # for high traffic, we store the redis results in memory and then batch write to redis
@@ -174,6 +167,12 @@ class RedisCache(BaseCache):
 
         ### HEALTH MONITORING OBJECT ###
         self.service_logger_obj = ServiceLogging()
+
+        ### ASYNC HEALTH PING ###
+        try:
+            asyncio.get_running_loop().create_task(self.ping())
+        except Exception:
+            pass
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
@@ -601,13 +600,31 @@ class RedisCache(BaseCache):
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
             return key_value_dict
 
-    async def ping(self):
+    def sync_ping(self) -> bool:
+        """
+        Tests if the sync redis client is correctly setup.
+        """
+        print_verbose(f"Pinging Async Redis Cache")
+        try:
+            response = self.redis_client.ping()
+            print_verbose(f"Redis Cache PING: {response}")
+            return response
+        except Exception as e:
+            # NON blocking - notify users Redis is throwing an exception
+            print_verbose(
+                f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
+            )
+            traceback.print_exc()
+            raise e
+
+    async def ping(self) -> bool:
         _redis_client = self.init_async_client()
         async with _redis_client as redis_client:
             print_verbose(f"Pinging Async Redis Cache")
             try:
                 response = await redis_client.ping()
                 print_verbose(f"Redis Cache PING: {response}")
+                return response
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
                 print_verbose(
