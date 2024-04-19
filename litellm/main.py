@@ -12,6 +12,7 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
+
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -341,6 +342,7 @@ async def acompletion(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=completion_kwargs,
+            extra_kwargs=kwargs,
         )
 
 
@@ -1709,6 +1711,7 @@ def completion(
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
                     logging_obj=logging,
                     acompletion=acompletion,
                 )
@@ -2136,6 +2139,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -2497,6 +2501,7 @@ async def aembedding(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -2806,6 +2811,11 @@ def embedding(
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
 
             response = vertex_ai.embedding(
                 model=model,
@@ -2816,6 +2826,7 @@ def embedding(
                 model_response=EmbeddingResponse(),
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
                 aembedding=aembedding,
                 print_verbose=print_verbose,
             )
@@ -2932,7 +2943,10 @@ def embedding(
         )
         ## Map to OpenAI Exception
         raise exception_type(
-            model=model, original_exception=e, custom_llm_provider=custom_llm_provider
+            model=model,
+            original_exception=e,
+            custom_llm_provider=custom_llm_provider,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3026,6 +3040,7 @@ async def atext_completion(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3363,6 +3378,7 @@ async def aimage_generation(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3562,6 +3578,7 @@ def image_generation(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=locals(),
+            extra_kwargs=kwargs,
         )
 
 
@@ -3611,6 +3628,7 @@ async def atranscription(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 

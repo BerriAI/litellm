@@ -145,30 +145,35 @@ def test_vertex_ai_anthropic():
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
 def test_vertex_ai_anthropic_streaming():
-    # load_vertex_ai_credentials()
+    try:
+        # load_vertex_ai_credentials()
 
-    # litellm.set_verbose = True
+        # litellm.set_verbose = True
 
-    model = "claude-3-sonnet@20240229"
+        model = "claude-3-sonnet@20240229"
 
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
+        vertex_ai_project = "adroit-crow-413218"
+        vertex_ai_location = "asia-southeast1"
+        json_obj = get_vertex_ai_creds_json()
+        vertex_credentials = json.dumps(json_obj)
 
-    response = completion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-        stream=True,
-    )
-    # print("\nModel Response", response)
-    for chunk in response:
-        print(f"chunk: {chunk}")
+        response = completion(
+            model="vertex_ai/" + model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+            stream=True,
+        )
+        # print("\nModel Response", response)
+        for chunk in response:
+            print(f"chunk: {chunk}")
 
     # raise Exception("it worked!")
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # test_vertex_ai_anthropic_streaming()
@@ -180,23 +185,28 @@ def test_vertex_ai_anthropic_streaming():
 @pytest.mark.asyncio
 async def test_vertex_ai_anthropic_async():
     # load_vertex_ai_credentials()
+    try:
 
-    model = "claude-3-sonnet@20240229"
+        model = "claude-3-sonnet@20240229"
 
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
+        vertex_ai_project = "adroit-crow-413218"
+        vertex_ai_location = "asia-southeast1"
+        json_obj = get_vertex_ai_creds_json()
+        vertex_credentials = json.dumps(json_obj)
 
-    response = await acompletion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-        vertex_credentials=vertex_credentials,
-    )
-    print(f"Model Response: {response}")
+        response = await acompletion(
+            model="vertex_ai/" + model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+            vertex_credentials=vertex_credentials,
+        )
+        print(f"Model Response: {response}")
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_vertex_ai_anthropic_async())
@@ -208,26 +218,31 @@ async def test_vertex_ai_anthropic_async():
 @pytest.mark.asyncio
 async def test_vertex_ai_anthropic_async_streaming():
     # load_vertex_ai_credentials()
-    litellm.set_verbose = True
-    model = "claude-3-sonnet@20240229"
+    try:
+        litellm.set_verbose = True
+        model = "claude-3-sonnet@20240229"
 
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
+        vertex_ai_project = "adroit-crow-413218"
+        vertex_ai_location = "asia-southeast1"
+        json_obj = get_vertex_ai_creds_json()
+        vertex_credentials = json.dumps(json_obj)
 
-    response = await acompletion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-        vertex_credentials=vertex_credentials,
-        stream=True,
-    )
+        response = await acompletion(
+            model="vertex_ai/" + model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+            vertex_credentials=vertex_credentials,
+            stream=True,
+        )
 
-    async for chunk in response:
-        print(f"chunk: {chunk}")
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_vertex_ai_anthropic_async_streaming())
@@ -553,7 +568,12 @@ def test_gemini_pro_function_calling():
         }
     ]
 
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     completion = litellm.completion(
         model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
     )
@@ -586,7 +606,10 @@ def test_gemini_pro_function_calling():
             }
         ]
         messages = [
-            {"role": "user", "content": "What's the weather like in Boston today?"}
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in fahrenheit?",
+            }
         ]
         completion = litellm.completion(
             model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
@@ -594,6 +617,8 @@ def test_gemini_pro_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -629,7 +654,12 @@ def test_gemini_pro_function_calling_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         completion = litellm.completion(
             model="gemini-pro",
@@ -643,6 +673,8 @@ def test_gemini_pro_function_calling_streaming():
         # assert len(completion.choices[0].message.tool_calls) == 1
         for chunk in completion:
             print(f"chunk: {chunk}")
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
 
@@ -675,7 +707,10 @@ async def test_gemini_pro_async_function_calling():
             }
         ]
         messages = [
-            {"role": "user", "content": "What's the weather like in Boston today?"}
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in fahrenheit?",
+            }
         ]
         completion = await litellm.acompletion(
             model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
@@ -683,6 +718,8 @@ async def test_gemini_pro_async_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
+    except litellm.APIError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:

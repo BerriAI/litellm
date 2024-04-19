@@ -220,6 +220,17 @@ tools_schema = [
 # test_completion_cohere_stream()
 
 
+def test_completion_azure_stream_special_char():
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
+    response = completion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+    response_str = ""
+    for part in response:
+        response_str += part.choices[0].delta.content or ""
+    print(f"response_str: {response_str}")
+    assert len(response_str) > 0
+
+
 def test_completion_cohere_stream_bad_key():
     try:
         litellm.cache = None
@@ -2252,7 +2263,12 @@ def test_completion_claude_3_function_call_with_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -2306,7 +2322,12 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = await acompletion(

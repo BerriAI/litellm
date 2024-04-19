@@ -6,7 +6,7 @@ import requests
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
-from typing import Literal, Union
+from typing import Literal, Union, Optional
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -44,6 +44,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    #### PRE-CALL CHECKS - router/proxy only ####
+    """
+    Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
+    """
+
+    async def async_pre_call_check(self, deployment: dict) -> Optional[dict]:
+        pass
+
+    def pre_call_check(self, deployment: dict) -> Optional[dict]:
         pass
 
     #### CALL HOOKS - proxy only ####

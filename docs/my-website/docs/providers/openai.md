@@ -163,6 +163,8 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4-turbo   | `response = completion(model="gpt-4-turbo", messages=messages)` |
+| gpt-4-turbo-preview   | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
 | gpt-4-0125-preview    | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
 | gpt-4-1106-preview    | `response = completion(model="gpt-4-1106-preview", messages=messages)` |
 | gpt-3.5-turbo-1106    | `response = completion(model="gpt-3.5-turbo-1106", messages=messages)` |
@@ -184,6 +186,7 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 ## OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4-turbo    | `response = completion(model="gpt-4-turbo", messages=messages)` |
 | gpt-4-vision-preview    | `response = completion(model="gpt-4-vision-preview", messages=messages)` |
 
 #### Usage

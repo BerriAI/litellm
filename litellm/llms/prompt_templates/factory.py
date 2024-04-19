@@ -218,6 +218,18 @@ def phind_codellama_pt(messages):
     return prompt
 
 
+known_tokenizer_config = {
+    "mistralai/Mistral-7B-Instruct-v0.1": {
+        "tokenizer": {
+            "chat_template": "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+        },
+        "status": "success",
+    }
+}
+
+
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
@@ -246,20 +258,23 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             else:
                 return {"status": "failure"}
 
-        tokenizer_config = _get_tokenizer_config(model)
+        if model in known_tokenizer_config:
+            tokenizer_config = known_tokenizer_config[model]
+        else:
+            tokenizer_config = _get_tokenizer_config(model)
         if (
             tokenizer_config["status"] == "failure"
             or "chat_template" not in tokenizer_config["tokenizer"]
         ):
             raise Exception("No chat template found")
         ## read the bos token, eos token and chat template from the json
-        tokenizer_config = tokenizer_config["tokenizer"]
-        bos_token = tokenizer_config["bos_token"]
-        eos_token = tokenizer_config["eos_token"]
-        chat_template = tokenizer_config["chat_template"]
+        tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
 
+        bos_token = tokenizer_config["bos_token"]  # type: ignore
+        eos_token = tokenizer_config["eos_token"]  # type: ignore
+        chat_template = tokenizer_config["chat_template"]  # type: ignore
     try:
-        template = env.from_string(chat_template)
+        template = env.from_string(chat_template)  # type: ignore
     except Exception as e:
         raise e
 
@@ -705,7 +720,7 @@ def anthropic_messages_pt_xml(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -884,7 +899,7 @@ def anthropic_messages_pt(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -1286,7 +1301,11 @@ def prompt_factory(
             messages=messages, prompt_format=prompt_format, chat_template=chat_template
         )
     elif custom_llm_provider == "gemini":
-        if model == "gemini-pro-vision":
+        if (
+            model == "gemini-pro-vision"
+            or litellm.supports_vision(model=model)
+            or litellm.supports_vision(model=custom_llm_provider + "/" + model)
+        ):
             return _gemini_vision_convert_messages(messages=messages)
         else:
             return gemini_text_image_pt(messages=messages)
