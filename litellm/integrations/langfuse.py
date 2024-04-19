@@ -280,13 +280,13 @@ class LangFuseLogger:
             clean_metadata = {}
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
-                    # generate langfuse tags
-                    if key in [
-                        "user_api_key_alias",
-                        "user_api_key_user_id",
-                        "user_api_key_team_alias",
-                        "semantic-similarity",
-                    ]:
+
+                    # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
+                    if (
+                        litellm._langfuse_default_tags is not None
+                        and isinstance(litellm._langfuse_default_tags, list)
+                        and key in litellm._langfuse_default_tags
+                    ):
                         tags.append(f"{key}:{value}")
 
                     # clean litellm metadata before logging
@@ -299,6 +299,15 @@ class LangFuseLogger:
                         continue
                     else:
                         clean_metadata[key] = value
+
+            if (
+                litellm._langfuse_default_tags is not None
+                and isinstance(litellm._langfuse_default_tags, list)
+                and "proxy_base_url" in litellm._langfuse_default_tags
+            ):
+                proxy_base_url = os.environ.get("PROXY_BASE_URL", None)
+                if proxy_base_url is not None:
+                    tags.append(f"proxy_base_url:{proxy_base_url}")
 
             api_base = litellm_params.get("api_base", None)
             if api_base:
