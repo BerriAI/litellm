@@ -143,26 +143,18 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # Setup values
                 # ------------
                 dt = get_utc_datetime()
-                current_minute = dt.strftime("%H-%M")
-                tpm_key = f"{model_group}:tpm:{current_minute}"
-                rpm_key = f"{model_group}:rpm:{current_minute}"
+                current_minute = dt.strftime(
+                    "%H-%M"
+                )  # use the same timezone regardless of system clock
 
+                tpm_key = f"{id}:tpm:{current_minute}"
                 # ------------
                 # Update usage
                 # ------------
+                # update cache
 
                 ## TPM
-                request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
-
-                self.router_cache.set_cache(key=tpm_key, value=request_count_dict)
-
-                ## RPM
-                request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + 1
-
-                self.router_cache.set_cache(key=rpm_key, value=request_count_dict)
-
+                self.router_cache.increment_cache(key=tpm_key, value=total_tokens)
                 ### TESTING ###
                 if self.test_flag:
                     self.logged_success += 1

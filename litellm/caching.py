@@ -89,6 +89,13 @@ class InMemoryCache(BaseCache):
             return_val.append(val)
         return return_val
 
+    def increment_cache(self, key, value: int, **kwargs) -> int:
+        # get the value
+        init_value = self.get_cache(key=key) or 0
+        value = init_value + value
+        self.set_cache(key, value, **kwargs)
+        return value
+
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
 
@@ -197,6 +204,38 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"LiteLLM Caching: set() - Got exception from REDIS : {str(e)}"
             )
+
+    def increment_cache(self, key, value: int, **kwargs) -> int:
+        _redis_client = self.redis_client
+        start_time = time.time()
+        try:
+            result = _redis_client.incr(name=key, amount=value)
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                )
+            )
+            return result
+        except Exception as e:
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS, duration=_duration, error=e
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, Writing value=%s",
+                str(e),
+                value,
+            )
+            traceback.print_exc()
+            raise e
 
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
         start_time = time.time()
@@ -1092,6 +1131,30 @@ class DualCache(BaseCache):
                 self.redis_cache.set_cache(key, value, **kwargs)
         except Exception as e:
             print_verbose(e)
+
+    def increment_cache(
+        self, key, value: int, local_only: bool = False, **kwargs
+    ) -> int:
+        """
+        Key - the key in cache
+
+        Value - int - the value you want to increment by
+
+        Returns - int - the incremented value
+        """
+        try:
+            result: int = value
+            if self.in_memory_cache is not None:
+                result = self.in_memory_cache.increment_cache(key, value, **kwargs)
+
+            if self.redis_cache is not None and local_only == False:
+                result = self.redis_cache.increment_cache(key, value, **kwargs)
+
+            return result
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
+            traceback.print_exc()
+            raise e
 
     def get_cache(self, key, local_only: bool = False, **kwargs):
         # Try to fetch from in-memory cache first
