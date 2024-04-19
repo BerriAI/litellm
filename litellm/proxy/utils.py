@@ -1055,9 +1055,21 @@ class PrismaClient:
                             },
                         )
                     else:
-                        response = await self.db.litellm_usertable.find_many(  # type: ignore
-                            order={"spend": "desc"}, take=limit, skip=offset
-                        )
+                        # return all users in the table, get their key aliases ordered by spend
+                        sql_query = """
+                        SELECT
+                            u.*,
+                            json_agg(v.key_alias) AS key_aliases
+                        FROM
+                            "LiteLLM_UserTable" u
+                        LEFT JOIN "LiteLLM_VerificationToken" v ON u.user_id = v.user_id
+                        GROUP BY
+                            u.user_id
+                        ORDER BY u.spend DESC
+                        LIMIT $1
+                        OFFSET $2
+                        """
+                        response = await self.db.query_raw(sql_query, limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(
