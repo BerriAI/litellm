@@ -280,9 +280,10 @@ class LangFuseLogger:
                 for key, value in metadata.items():
                     # generate langfuse tags
                     if key in [
-                        "user_api_key",
+                        "user_api_key_alias",
                         "user_api_key_user_id",
                         "user_api_key_team_id",
+                        "user_api_key_team_alias",
                         "semantic-similarity",
                     ]:
                         tags.append(f"{key}:{value}")
