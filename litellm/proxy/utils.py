@@ -81,6 +81,17 @@ class ProxyLogging:
             "db_exceptions",
         ]
 
+    def _all_possible_alert_types(self):
+        # used by the UI to show all supported alert types
+        # Note: This is not the alerts the user has configured, instead it's all possible alert types a user can select
+        return [
+            "llm_exceptions",
+            "llm_too_slow",
+            "llm_requests_hanging",
+            "budget_alerts",
+            "db_exceptions",
+        ]
+
     def update_values(
         self,
         alerting: Optional[List],
