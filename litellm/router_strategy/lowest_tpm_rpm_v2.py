@@ -39,7 +39,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         self.router_cache = router_cache
         self.model_list = model_list
 
-    def pre_call_check(self, deployment: Dict) -> Dict | None:
+    def pre_call_check(self, deployment: Dict) -> Optional[Dict]:
         """
         Pre-call check + update model rpm
 
@@ -113,7 +113,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
-    async def async_pre_call_check(self, deployment: Dict) -> Dict | None:
+    async def async_pre_call_check(self, deployment: Dict) -> Optional[Dict]:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
