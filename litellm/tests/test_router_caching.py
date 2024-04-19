@@ -33,7 +33,7 @@ async def test_router_async_caching_with_ssl_url():
                     "rpm": 10000,
                 },
             ],
-            redis_url=os.getenv("REDIS_URL"),
+            redis_url=os.getenv("REDIS_SSL_URL"),
         )
 
         response = await router.cache.redis_cache.ping()
@@ -60,7 +60,7 @@ def test_router_sync_caching_with_ssl_url():
                     "rpm": 10000,
                 },
             ],
-            redis_url=os.getenv("REDIS_URL"),
+            redis_url=os.getenv("REDIS_SSL_URL"),
         )
 
         response = router.cache.redis_cache.sync_ping()

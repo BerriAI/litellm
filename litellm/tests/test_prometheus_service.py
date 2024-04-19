@@ -65,13 +65,14 @@ async def test_completion_with_caching_bad_call():
     - Assert failure callback gets called
     """
     litellm.set_verbose = True
-    sl = ServiceLogging(mock_testing=True)
+
     try:
         from litellm.caching import RedisCache
 
         litellm.service_callback = ["prometheus_system"]
+        sl = ServiceLogging(mock_testing=True)
 
-        RedisCache(host="hello-world", **{"service_logger_obj": sl})
+        RedisCache(host="hello-world", service_logger_obj=sl)
     except Exception as e:
         print(f"Receives exception = {str(e)}")
 
