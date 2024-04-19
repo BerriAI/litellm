@@ -412,7 +412,7 @@ async def test_cost_tracking_with_caching():
     """
     from litellm import Cache
 
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     litellm.cache = Cache(
         type="redis",
         host=os.environ["REDIS_HOST"],
