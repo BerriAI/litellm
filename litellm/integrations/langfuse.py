@@ -306,7 +306,7 @@ class LangFuseLogger:
                 and "proxy_base_url" in litellm._langfuse_default_tags
             ):
                 proxy_base_url = os.environ.get("PROXY_BASE_URL", None)
-                if proxy_base_url:
+                if proxy_base_url is not None:
                     tags.append(f"proxy_base_url:{proxy_base_url}")
 
             api_base = litellm_params.get("api_base", None)
