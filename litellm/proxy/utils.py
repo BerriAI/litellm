@@ -327,6 +327,16 @@ class ProxyLogging:
                         _api_base = ""
 
                     request_info += f"\nAPI Base: {_api_base}"
+                elif request_data.get("metadata", None) is not None and isinstance(
+                    request_data["metadata"], dict
+                ):
+                    # In hanging requests sometime it has not made it to the point where the deployment has been set
+                    # in that case we fallback to the api base set in the request metadata
+                    _metadata = request_data["metadata"]
+                    _api_base = _metadata.get("api_base", "")
+                    if _api_base is None:
+                        _api_base = ""
+                    request_info += f"\nAPI Base: {_api_base}"
                 # only alert hanging responses if they have not been marked as success
                 alerting_message = (
                     f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
