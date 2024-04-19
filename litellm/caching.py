@@ -174,6 +174,9 @@ class RedisCache(BaseCache):
         except Exception:
             pass
 
+        ### SYNC HEALTH PING ###
+        self.redis_client.ping()
+
     def init_async_client(self):
         from ._redis import get_redis_async_client
 
