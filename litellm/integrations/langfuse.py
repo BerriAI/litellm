@@ -300,6 +300,11 @@ class LangFuseLogger:
                     else:
                         clean_metadata[key] = value
 
+            # if user has set proxy_base_url in env -> log to langfuse as a tag
+            proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+            if proxy_base_url is not None:
+                tags.append(f"proxy_base_url:{proxy_base_url}")
+
             api_base = litellm_params.get("api_base", None)
             if api_base:
                 clean_metadata["api_base"] = api_base
