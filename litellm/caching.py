@@ -478,7 +478,9 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_success_hook(
-                        service=ServiceTypes.REDIS, duration=_duration
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="async_get_cache",
                     )
                 )
                 return response
@@ -488,7 +490,10 @@ class RedisCache(BaseCache):
                 _duration = end_time - start_time
                 asyncio.create_task(
                     self.service_logger_obj.async_service_failure_hook(
-                        service=ServiceTypes.REDIS, duration=_duration, error=e
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        error=e,
+                        call_type="async_get_cache",
                     )
                 )
                 # NON blocking - notify users Redis is throwing an exception
