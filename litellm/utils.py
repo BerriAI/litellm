@@ -5943,6 +5943,9 @@ def get_llm_provider(
         if isinstance(e, litellm.exceptions.BadRequestError):
             raise e
         else:
+            error_str = (
+                f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}"
+            )
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
                 model=model,
