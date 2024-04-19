@@ -30,6 +30,7 @@ class PrometheusServicesLogger:
                 raise Exception(
                     "Missing prometheus_client. Run `pip install prometheus-client`"
                 )
+            print("INITIALIZES PROMETHEUS SERVICE LOGGER!")
 
             self.Histogram = Histogram
             self.Counter = Counter
@@ -151,6 +152,7 @@ class PrometheusServicesLogger:
         if self.mock_testing:
             self.mock_testing_success_calls += 1
 
+        print(f"LOGS SUCCESSFUL CALL TO PROMETHEUS - payload={payload}")
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:

@@ -14,6 +14,7 @@ model_list:
       model: gpt-3.5-turbo
 litellm_settings:
   success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
 ```
 
 Start the proxy
@@ -70,3 +71,4 @@ litellm_settings:
 |----------------------|--------------------------------------|
 | `litellm_redis_latency`         | histogram latency for redis calls     |
 | `litellm_redis_fails`         | Number of failed redis calls    |
+| `litellm_self_latency`         | Histogram latency for successful litellm api call    |
