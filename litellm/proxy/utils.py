@@ -1065,6 +1065,7 @@ class PrismaClient:
                         LEFT JOIN "LiteLLM_VerificationToken" v ON u.user_id = v.user_id
                         GROUP BY
                             u.user_id
+                        ORDER BY u.spend DESC
                         LIMIT $1
                         OFFSET $2
                         """
