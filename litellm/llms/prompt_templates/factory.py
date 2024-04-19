@@ -674,7 +674,7 @@ def anthropic_messages_pt_xml(messages: list):
                     {
                         "type": "text",
                         "text": (
-                            convert_to_anthropic_tool_result(messages[msg_i])
+                            json.dumps(convert_to_anthropic_tool_result(messages[msg_i]))
                             if messages[msg_i]["role"] == "tool"
                             else messages[msg_i]["content"]
                         ),
@@ -695,9 +695,9 @@ def anthropic_messages_pt_xml(messages: list):
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
-                assistant_text += convert_to_anthropic_tool_invoke(  # type: ignore
+                assistant_text += json.dumps(convert_to_anthropic_tool_invoke(  # type: ignore
                     messages[msg_i]["tool_calls"]
-                )
+                ))
 
             assistant_content.append({"type": "text", "text": assistant_text})
             msg_i += 1
