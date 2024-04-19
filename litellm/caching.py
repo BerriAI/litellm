@@ -282,9 +282,6 @@ class RedisCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs):
         start_time = time.time()
-        print_verbose(
-            f"Set Async Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
-        )
         try:
             _redis_client = self.init_async_client()
         except Exception as e:
