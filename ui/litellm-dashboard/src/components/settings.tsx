@@ -60,7 +60,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     setSelectedCallback(null);
   };
 
-  const handleChange = (values) => {
+  const handleChange = (values: any) => {
     setSelectedAlertValues(values);
     // Here, you can perform any additional logic with the selected values
     console.log('Selected values:', values);
