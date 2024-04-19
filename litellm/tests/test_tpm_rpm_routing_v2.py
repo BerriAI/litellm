@@ -1,5 +1,5 @@
 #### What this tests ####
-#    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2'
+#    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
 
 import sys, os, asyncio, time, random
 from datetime import datetime
@@ -18,6 +18,7 @@ import litellm
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
+from litellm.utils import get_utc_datetime
 from litellm.caching import DualCache
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
@@ -43,20 +44,23 @@ def test_tpm_rpm_updated():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 50}}
     end_time = time.time()
+    lowest_tpm_logger.pre_call_check(deployment=kwargs["litellm_params"])
     lowest_tpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
         end_time=end_time,
     )
-    current_minute = datetime.now().strftime("%H-%M")
-    tpm_count_api_key = f"{model_group}:tpm:{current_minute}"
-    rpm_count_api_key = f"{model_group}:rpm:{current_minute}"
-    assert (
-        response_obj["usage"]["total_tokens"]
-        == test_cache.get_cache(key=tpm_count_api_key)[deployment_id]
+    dt = get_utc_datetime()
+    current_minute = dt.strftime("%H-%M")
+    tpm_count_api_key = f"{deployment_id}:tpm:{current_minute}"
+    rpm_count_api_key = f"{deployment_id}:rpm:{current_minute}"
+
+    print(f"tpm_count_api_key={tpm_count_api_key}")
+    assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(
+        key=tpm_count_api_key
     )
-    assert 1 == test_cache.get_cache(key=rpm_count_api_key)[deployment_id]
+    assert 1 == test_cache.get_cache(key=rpm_count_api_key)
 
 
 # test_tpm_rpm_updated()
@@ -122,13 +126,6 @@ def test_get_available_deployments():
     )
 
     ## CHECK WHAT'S SELECTED ##
-    print(
-        lowest_tpm_logger.get_available_deployments(
-            model_group=model_group,
-            healthy_deployments=model_list,
-            input=["Hello world"],
-        )
-    )
     assert (
         lowest_tpm_logger.get_available_deployments(
             model_group=model_group,
@@ -170,7 +167,7 @@ def test_router_get_available_deployments():
     ]
     router = Router(
         model_list=model_list,
-        routing_strategy="usage-based-routing",
+        routing_strategy="usage-based-routing-v2",
         set_verbose=False,
         num_retries=3,
     )  # type: ignore
@@ -189,7 +186,7 @@ def test_router_get_available_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 50}}
     end_time = time.time()
-    router.lowesttpm_logger.log_success_event(
+    router.lowesttpm_logger_v2.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -208,7 +205,7 @@ def test_router_get_available_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 20}}
     end_time = time.time()
-    router.lowesttpm_logger.log_success_event(
+    router.lowesttpm_logger_v2.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -216,7 +213,7 @@ def test_router_get_available_deployments():
     )
 
     ## CHECK WHAT'S SELECTED ##
-    # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
+    # print(router.lowesttpm_logger_v2.get_available_deployments(model_group="azure-model"))
     assert (
         router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
     )
@@ -244,7 +241,7 @@ def test_router_skip_rate_limited_deployments():
     ]
     router = Router(
         model_list=model_list,
-        routing_strategy="usage-based-routing",
+        routing_strategy="usage-based-routing-v2",
         set_verbose=False,
         num_retries=3,
     )  # type: ignore
@@ -262,7 +259,7 @@ def test_router_skip_rate_limited_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 1439}}
     end_time = time.time()
-    router.lowesttpm_logger.log_success_event(
+    router.lowesttpm_logger_v2.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -270,7 +267,7 @@ def test_router_skip_rate_limited_deployments():
     )
 
     ## CHECK WHAT'S SELECTED ##
-    # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
+    # print(router.lowesttpm_logger_v2.get_available_deployments(model_group="azure-model"))
     try:
         router.get_available_deployment(
             model="azure-model",
@@ -299,7 +296,7 @@ def test_single_deployment_tpm_zero():
 
     router = litellm.Router(
         model_list=model_list,
-        routing_strategy="usage-based-routing",
+        routing_strategy="usage-based-routing-v2",
         cache_responses=True,
     )
 
@@ -345,7 +342,7 @@ async def test_router_completion_streaming():
     ]
     router = Router(
         model_list=model_list,
-        routing_strategy="usage-based-routing",
+        routing_strategy="usage-based-routing-v2",
         set_verbose=False,
     )  # type: ignore
 
@@ -362,8 +359,9 @@ async def test_router_completion_streaming():
     if response is not None:
         ## CALL 3
         await asyncio.sleep(1)  # let the token update happen
-        current_minute = datetime.now().strftime("%H-%M")
-        picked_deployment = router.lowesttpm_logger.get_available_deployments(
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
+        picked_deployment = router.lowesttpm_logger_v2.get_available_deployments(
             model_group=model,
             healthy_deployments=router.healthy_deployments,
             messages=messages,
