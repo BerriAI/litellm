@@ -63,6 +63,7 @@ from .llms import (
     vertex_ai,
     vertex_ai_anthropic,
     maritalk,
+    watsonx,
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
@@ -1856,6 +1857,43 @@ def completion(
                     original_response=response,
                 )
 
+            ## RESPONSE OBJECT
+            response = response
+        elif custom_llm_provider == "watsonx":
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            response = watsonx.completion(
+                model=model,
+                messages=messages,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging,
+                timeout=timeout,
+            )
+            if (
+                "stream" in optional_params
+                and optional_params["stream"] == True
+                and not isinstance(response, CustomStreamWrapper)
+            ):
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    iter(response),
+                    model,
+                    custom_llm_provider="watsonx",
+                    logging_obj=logging,
+                )
+
+            if optional_params.get("stream", False):
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=None,
+                    original_response=response,
+                )
             ## RESPONSE OBJECT
             response = response
         elif custom_llm_provider == "vllm":
