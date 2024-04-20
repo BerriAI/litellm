@@ -16,7 +16,7 @@ Expected Performance in Production
 | `/chat/completions` Requests/hour | `126K` |
 
 
-## 1. Switch of Debug Logging
+## 1. Switch off Debug Logging
 
 Remove `set_verbose: True` from your config.yaml
 ```yaml
@@ -40,7 +40,7 @@ Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
-## 2. Batch write spend updates every 60s
+## 3. Batch write spend updates every 60s
 
 The default proxy batch write is 10s. This is to make it easy to see spend when debugging locally. 
 
@@ -49,11 +49,35 @@ In production, we recommend using a longer interval period of 60s. This reduces 
 ```yaml
 general_settings:
   master_key: sk-1234
-  proxy_batch_write_at: 5 # 👈 Frequency of batch writing logs to server (in seconds)
+  proxy_batch_write_at: 60 # 👈 Frequency of batch writing logs to server (in seconds)
 ```
 
+## 4. use Redis 'port','host', 'password'. NOT 'redis_url'
 
-## 3. Move spend logs to separate server
+When connecting to Redis use redis port, host, and password params. Not 'redis_url'. We've seen a 80 RPS difference between these 2 approaches when using the async redis client. 
+
+This is still something we're investigating. Keep track of it [here](https://github.com/BerriAI/litellm/issues/3188)
+
+Recommended to do this for prod: 
+
+```yaml
+router_settings:
+  routing_strategy: usage-based-routing-v2 
+  # redis_url: "os.environ/REDIS_URL"
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+```
+
+## 5. Switch off resetting budgets
+
+Add this to your config.yaml. (Only spend per Key, User and Team will be tracked - spend per API Call will not be written to the LiteLLM Database)
+```yaml
+general_settings:
+  disable_reset_budget: true
+```
+
+## 6. Move spend logs to separate server (BETA)
 
 Writing each spend log to the db can slow down your proxy. In testing we saw a 70% improvement in median response time, by moving writing spend logs to a separate server. 
 
@@ -140,24 +164,6 @@ Flushed 1 log to the DB.
 A t2.micro should be sufficient to handle 1k logs / minute on this server. 
 
 This consumes at max 120MB, and <0.1 vCPU. 
-
-## 4. Switch off resetting budgets
-
-Add this to your config.yaml. (Only spend per Key, User and Team will be tracked - spend per API Call will not be written to the LiteLLM Database)
-```yaml
-general_settings:
-  disable_spend_logs: true
-  disable_reset_budget: true
-```
-
-## 5. Switch of `litellm.telemetry`
-
-Switch of all telemetry tracking done by litellm
-
-```yaml
-litellm_settings:
-  telemetry: False
-```
 
 ## Machine Specifications to Deploy LiteLLM
 
