@@ -6532,6 +6532,13 @@ async def team_member_add(
     existing_team_row = await prisma_client.get_data(  # type: ignore
         team_id=data.team_id, table_name="team", query_type="find_unique"
     )
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Team not found for team_id={getattr(data, 'team_id', None)}"
+            },
+        )
 
     new_member = data.member
 
