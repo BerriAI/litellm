@@ -204,6 +204,7 @@ class Router:
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
 
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
+        self.default_max_parallel_requests = default_max_parallel_requests
 
         if model_list:
             model_list = copy.deepcopy(model_list)
@@ -219,7 +220,7 @@ class Router:
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
         self.num_retries = num_retries or litellm.num_retries or 0
         self.timeout = timeout or litellm.request_timeout
-        self.default_max_parallel_requests = default_max_parallel_requests
+
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
         self.fallbacks = fallbacks or litellm.fallbacks
