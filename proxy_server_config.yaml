@@ -96,9 +96,9 @@ litellm_settings:
 
 router_settings:
   routing_strategy: usage-based-routing-v2 
-  redis_host: os.environ/REDIS_HOST
-  redis_password: os.environ/REDIS_PASSWORD
-  redis_port: os.environ/REDIS_PORT
+  # redis_host: os.environ/REDIS_HOST
+  # redis_password: os.environ/REDIS_PASSWORD
+  # redis_port: os.environ/REDIS_PORT
   enable_pre_call_checks: true
 
 general_settings: 
