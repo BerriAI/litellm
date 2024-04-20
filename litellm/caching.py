@@ -1281,7 +1281,7 @@ class DualCache(BaseCache):
                         self.in_memory_cache.set_cache(key, redis_result[key], **kwargs)
 
                 for key, value in redis_result.items():
-                    result[sublist_keys.index(key)] = value
+                    result[keys.index(key)] = value
 
             print_verbose(f"async batch get cache: cache result: {result}")
             return result
@@ -1331,7 +1331,6 @@ class DualCache(BaseCache):
                     keys, **kwargs
                 )
 
-                print_verbose(f"in_memory_result: {in_memory_result}")
                 if in_memory_result is not None:
                     result = in_memory_result
             if None in result and self.redis_cache is not None and local_only == False:
@@ -1355,9 +1354,9 @@ class DualCache(BaseCache):
                                 key, redis_result[key], **kwargs
                             )
                 for key, value in redis_result.items():
-                    result[sublist_keys.index(key)] = value
+                    index = keys.index(key)
+                    result[index] = value
 
-            print_verbose(f"async batch get cache: cache result: {result}")
             return result
         except Exception as e:
             traceback.print_exc()
