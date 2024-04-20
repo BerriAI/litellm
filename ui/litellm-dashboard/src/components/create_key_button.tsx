@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Card, Metric, Text, Title, Subtitle } from "@tremor/react";
+import { Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody, } from "@tremor/react";
 import { CopyToClipboard } from 'react-copy-to-clipboard';
 import {
   Button as Button2,
@@ -307,6 +307,83 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
                 </Select>
               </Form.Item>
+
+              <Accordion className="mt-8">
+                <AccordionHeader>
+                  <b>Optional Settings</b>
+                </AccordionHeader>
+                <AccordionBody>
+                <Form.Item 
+                className="mt-8"
+                label="Max Budget (USD)" 
+                name="max_budget" 
+                help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : 'unlimited'}`}
+                rules={[
+                  {
+                      validator: async (_, value) => {
+                          if (value && team && team.max_budget !== null && value > team.max_budget) {
+                              throw new Error(`Budget cannot exceed team max budget: $${team.max_budget}`);
+                          }
+                      },
+                  },
+              ]}
+              >
+                <InputNumber step={0.01} precision={2} width={200} />
+              </Form.Item>
+              <Form.Item 
+              className="mt-8"
+              label="Reset Budget" 
+              name="budget_duration"
+              help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : 'None'}`}
+              >
+                <Select defaultValue={null} placeholder="n/a">
+                  <Select.Option value="24h">daily</Select.Option>
+                  <Select.Option value="30d">monthly</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item 
+                className="mt-8"
+                label="Tokens per minute Limit (TPM)" 
+                name="tpm_limit" 
+                help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : 'unlimited'}`}
+                rules={[
+                  {
+                      validator: async (_, value) => {
+                          if (value && team && team.tpm_limit !== null && value > team.tpm_limit) {
+                              throw new Error(`TPM limit cannot exceed team TPM limit: ${team.tpm_limit}`);
+                          }
+                      },
+                  },
+              ]}
+                >
+                <InputNumber step={1} width={400} />
+              </Form.Item>
+              <Form.Item
+                className="mt-8"
+                label="Requests per minute Limit (RPM)"
+                name="rpm_limit"
+                help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : 'unlimited'}`}
+                rules={[
+                  {
+                      validator: async (_, value) => {
+                          if (value && team && team.rpm_limit !== null && value > team.rpm_limit) {
+                              throw new Error(`RPM limit cannot exceed team RPM limit: ${team.rpm_limit}`);
+                          }
+                      },
+                  },
+              ]}
+              >
+                <InputNumber step={1} width={400} />
+              </Form.Item>
+              <Form.Item label="Expire Key (eg: 30s, 30h, 30d)" name="duration" className="mt-8">
+                <Input />
+              </Form.Item>
+              <Form.Item label="Metadata" name="metadata">
+                <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+              </Form.Item>
+
+                </AccordionBody>
+              </Accordion>
 
             </>
           )}
