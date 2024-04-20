@@ -390,6 +390,7 @@ async def test_embedding_caching_azure_individual_items_reordered():
 @pytest.mark.asyncio
 async def test_embedding_caching_base_64():
     """ """
+    litellm.set_verbose = True
     litellm.cache = Cache(
         type="redis",
         host=os.environ["REDIS_HOST"],
@@ -408,6 +409,8 @@ async def test_embedding_caching_base_64():
         caching=True,
         encoding_format="base64",
     )
+    await asyncio.sleep(5)
+    print("\n\nCALL2\n\n")
     embedding_val_2 = await aembedding(
         model="azure/azure-embedding-model",
         input=inputs,
@@ -1094,10 +1097,6 @@ def test_custom_redis_cache_params():
             port=os.environ["REDIS_PORT"],
             password=os.environ["REDIS_PASSWORD"],
             db=0,
-            ssl=True,
-            ssl_certfile="./redis_user.crt",
-            ssl_keyfile="./redis_user_private.key",
-            ssl_ca_certs="./redis_ca.pem",
         )
 
         print(litellm.cache.cache.redis_client)
@@ -1105,7 +1104,7 @@ def test_custom_redis_cache_params():
         litellm.success_callback = []
         litellm._async_success_callback = []
     except Exception as e:
-        pytest.fail(f"Error occurred:", e)
+        pytest.fail(f"Error occurred: {str(e)}")
 
 
 def test_get_cache_key():
