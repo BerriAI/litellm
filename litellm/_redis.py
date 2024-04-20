@@ -110,7 +110,7 @@ def _get_redis_client_logic(**env_overrides):
         redis_kwargs.pop("password", None)
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
-    litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
+    # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
     return redis_kwargs
 
 
@@ -142,6 +142,7 @@ def get_redis_async_client(**env_overrides):
                     )
                 )
         return async_redis.Redis.from_url(**url_kwargs)
+
     return async_redis.Redis(
         socket_timeout=5,
         **redis_kwargs,
@@ -154,4 +155,9 @@ def get_redis_connection_pool(**env_overrides):
         return async_redis.BlockingConnectionPool.from_url(
             timeout=5, url=redis_kwargs["url"]
         )
+    connection_class = async_redis.Connection
+    if "ssl" in redis_kwargs and redis_kwargs["ssl"] is not None:
+        connection_class = async_redis.SSLConnection
+        redis_kwargs.pop("ssl", None)
+        redis_kwargs["connection_class"] = connection_class
     return async_redis.BlockingConnectionPool(timeout=5, **redis_kwargs)
