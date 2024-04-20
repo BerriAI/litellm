@@ -14,6 +14,24 @@ sys.path.insert(
 import litellm
 
 
+async def generate_team(session):
+    url = "http://0.0.0.0:4000/team/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "team_id": "litellm-dashboard",
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response (Status code: {status}):")
+        print(response_text)
+        print()
+        _json_response = await response.json()
+        return _json_response
+
+
 async def generate_user(
     session,
     user_role="app_owner",
@@ -680,6 +698,7 @@ async def test_key_delete():
         key = key_gen["key"]
 
         # generate a admin UI key
+        generate_team(session=session)
         admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
         print(
             "trying to delete key=",
