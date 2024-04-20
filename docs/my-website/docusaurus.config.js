@@ -106,6 +106,12 @@ const config = {
             to: "docs/enterprise"
           },
           {
+            sidebarId: 'tutorialSidebar',
+            position: 'left',
+            label: '🚀 Hosted',
+            to: "docs/hosted"
+          },
+          {
             href: 'https://github.com/BerriAI/litellm',
             label: 'GitHub',
             position: 'right',
