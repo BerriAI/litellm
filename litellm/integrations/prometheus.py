@@ -19,7 +19,7 @@ class PrometheusLogger:
         **kwargs,
     ):
         try:
-            verbose_logger.debug(f"in init prometheus metrics")
+            print(f"in init prometheus metrics")
             from prometheus_client import Counter
 
             self.litellm_llm_api_failed_requests_metric = Counter(
