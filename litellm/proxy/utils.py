@@ -238,7 +238,10 @@ class ProxyLogging:
             litellm_params = kwargs.get("litellm_params", {})
             model = kwargs.get("model", "")
             api_base = litellm.get_api_base(model=model, optional_params=litellm_params)
-            messages = kwargs.get("messages", "")
+            messages = kwargs.get("messages", None)
+            # if messages does not exist fallback to "input"
+            if messages is None:
+                messages = kwargs.get("input", None)
 
             # only use first 100 chars for alerting
             _messages = str(messages)[:100]
@@ -282,7 +285,10 @@ class ProxyLogging:
     ):
         if request_data is not None:
             model = request_data.get("model", "")
-            messages = request_data.get("messages", "")
+            messages = request_data.get("messages", None)
+            if messages is None:
+                # if messages does not exist fallback to "input"
+                messages = request_data.get("input", None)
             trace_id = request_data.get("metadata", {}).get(
                 "trace_id", None
             )  # get langfuse trace id
