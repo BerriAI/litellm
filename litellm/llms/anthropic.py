@@ -258,8 +258,9 @@ class AnthropicChatCompletion(BaseLLM):
         self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
+        data["stream"] = True
         response = await self.async_handler.post(
-            api_base, headers=headers, data=json.dumps(data)
+            api_base, headers=headers, data=json.dumps(data), stream=True
         )
 
         if response.status_code != 200:

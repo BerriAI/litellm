@@ -1186,6 +1186,7 @@ class PrismaClient:
                     t.rpm_limit AS team_rpm_limit,
                     t.models AS team_models,
                     t.blocked AS team_blocked,
+                    t.team_alias AS team_alias,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
                     LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
