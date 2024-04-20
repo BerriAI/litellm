@@ -23,6 +23,10 @@ from litellm.caching import DualCache
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
 
+"""
+- Given 2 deployments, make sure it's shuffling deployments correctly.
+"""
+
 
 def test_tpm_rpm_updated():
     test_cache = DualCache()
