@@ -1052,7 +1052,8 @@ def cohere_message_pt(messages: list):
             tool_result = convert_openai_message_to_cohere_tool_result(message)
             tool_results.append(tool_result)
         else:
-            prompt += message["content"]
+            prompt += message["content"] + "\n\n"
+    prompt = prompt.rstrip()
     return prompt, tool_results
 
 
