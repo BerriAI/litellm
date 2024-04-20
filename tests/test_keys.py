@@ -686,7 +686,7 @@ async def test_key_rate_limit():
 
 
 @pytest.mark.asyncio
-async def test_key_delete():
+async def test_key_delete_ui():
     """
     Admin UI flow - DO NOT DELETE
     -> Create a key with user_id = "ishaan"
@@ -698,7 +698,8 @@ async def test_key_delete():
         key = key_gen["key"]
 
         # generate a admin UI key
-        generate_team(session=session)
+        team = await generate_team(session=session)
+        print("generated team: ", team)
         admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
         print(
             "trying to delete key=",
