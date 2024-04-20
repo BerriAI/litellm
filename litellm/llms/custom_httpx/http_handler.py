@@ -41,13 +41,12 @@ class AsyncHTTPHandler:
         data: Optional[Union[dict, str]] = None,  # type: ignore
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
+        stream: bool = False,
     ):
-        response = await self.client.post(
-            url,
-            data=data,  # type: ignore
-            params=params,
-            headers=headers,
+        req = self.client.build_request(
+            "POST", url, data=data, params=params, headers=headers  # type: ignore
         )
+        response = await self.client.send(req, stream=stream)
         return response
 
     def __del__(self) -> None:
