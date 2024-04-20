@@ -26,7 +26,12 @@ from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
 )
-from litellm.utils import ModelResponse, CustomStreamWrapper, get_utc_datetime
+from litellm.utils import (
+    ModelResponse,
+    CustomStreamWrapper,
+    get_utc_datetime,
+    calculate_max_parallel_requests,
+)
 import copy
 from litellm._logging import verbose_router_logger
 import logging
@@ -61,6 +66,7 @@ class Router:
         num_retries: int = 0,
         timeout: Optional[float] = None,
         default_litellm_params={},  # default params for Router.chat.completion.create
+        default_max_parallel_requests: Optional[int] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
         fallbacks: List = [],
@@ -198,6 +204,7 @@ class Router:
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
 
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
+        self.default_max_parallel_requests = default_max_parallel_requests
 
         if model_list:
             model_list = copy.deepcopy(model_list)
@@ -213,6 +220,7 @@ class Router:
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
         self.num_retries = num_retries or litellm.num_retries or 0
         self.timeout = timeout or litellm.request_timeout
+
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
         self.fallbacks = fallbacks or litellm.fallbacks
@@ -298,7 +306,7 @@ class Router:
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         verbose_router_logger.info(
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}"
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
         )
         self.routing_strategy_args = routing_strategy_args
 
@@ -496,7 +504,9 @@ class Router:
             )
 
             rpm_semaphore = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="rpm_client"
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
             )
 
             if rpm_semaphore is not None and isinstance(
@@ -681,7 +691,9 @@ class Router:
 
             ### CONCURRENCY-SAFE RPM CHECKS ###
             rpm_semaphore = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="rpm_client"
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
             )
 
             if rpm_semaphore is not None and isinstance(
@@ -803,7 +815,9 @@ class Router:
 
             ### CONCURRENCY-SAFE RPM CHECKS ###
             rpm_semaphore = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="rpm_client"
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
             )
 
             if rpm_semaphore is not None and isinstance(
@@ -1049,7 +1063,9 @@ class Router:
             )
 
             rpm_semaphore = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="rpm_client"
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
             )
 
             if rpm_semaphore is not None and isinstance(
@@ -1243,7 +1259,9 @@ class Router:
 
             ### CONCURRENCY-SAFE RPM CHECKS ###
             rpm_semaphore = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="rpm_client"
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
             )
 
             if rpm_semaphore is not None and isinstance(
@@ -1862,16 +1880,22 @@ class Router:
         model_id = model["model_info"]["id"]
         # ### IF RPM SET - initialize a semaphore ###
         rpm = litellm_params.get("rpm", None)
-        if rpm:
-            semaphore = asyncio.Semaphore(rpm)
-            cache_key = f"{model_id}_rpm_client"
+        tpm = litellm_params.get("tpm", None)
+        max_parallel_requests = litellm_params.get("max_parallel_requests", None)
+        calculated_max_parallel_requests = calculate_max_parallel_requests(
+            rpm=rpm,
+            max_parallel_requests=max_parallel_requests,
+            tpm=tpm,
+            default_max_parallel_requests=self.default_max_parallel_requests,
+        )
+        if calculated_max_parallel_requests:
+            semaphore = asyncio.Semaphore(calculated_max_parallel_requests)
+            cache_key = f"{model_id}_max_parallel_requests_client"
             self.cache.set_cache(
                 key=cache_key,
                 value=semaphore,
                 local_only=True,
             )
-
-        #     print("STORES SEMAPHORE IN CACHE")
 
         ####  for OpenAI / Azure we need to initalize the Client for High Traffic ########
         custom_llm_provider = litellm_params.get("custom_llm_provider")
@@ -2537,8 +2561,8 @@ class Router:
             The appropriate client based on the given client_type and kwargs.
         """
         model_id = deployment["model_info"]["id"]
-        if client_type == "rpm_client":
-            cache_key = "{}_rpm_client".format(model_id)
+        if client_type == "max_parallel_requests":
+            cache_key = "{}_max_parallel_requests_client".format(model_id)
             client = self.cache.get_cache(key=cache_key, local_only=True)
             return client
         elif client_type == "async":
@@ -2778,6 +2802,7 @@ class Router:
         """
         if (
             self.routing_strategy != "usage-based-routing-v2"
+            and self.routing_strategy != "simple-shuffle"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -2828,6 +2853,25 @@ class Router:
                 messages=messages,
                 input=input,
             )
+        elif self.routing_strategy == "simple-shuffle":
+            # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
+            ############## Check if we can do a RPM/TPM based weighted pick #################
+            rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
+            if rpm is not None:
+                # use weight-random pick if rpms provided
+                rpms = [m["litellm_params"].get("rpm", 0) for m in healthy_deployments]
+                verbose_router_logger.debug(f"\nrpms {rpms}")
+                total_rpm = sum(rpms)
+                weights = [rpm / total_rpm for rpm in rpms]
+                verbose_router_logger.debug(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(rpms)), weights=weights)[0]
+                verbose_router_logger.debug(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
+                verbose_router_logger.info(
+                    f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
+                )
+                return deployment or deployment[0]
 
         if deployment is None:
             verbose_router_logger.info(

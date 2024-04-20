@@ -2489,7 +2489,7 @@ def test_completion_deep_infra_mistral():
 # Gemini tests
 def test_completion_gemini():
     litellm.set_verbose = True
-    model_name = "gemini/gemini-pro"
+    model_name = "gemini/gemini-1.5-pro-latest"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         response = completion(model=model_name, messages=messages)

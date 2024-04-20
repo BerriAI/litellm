@@ -187,6 +187,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                     )
+
             return deployment
         except Exception as e:
             if isinstance(e, litellm.RateLimitError):
@@ -406,12 +407,14 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)
 
-        tpm_values = await self.router_cache.async_batch_get_cache(
-            keys=tpm_keys
+        combined_tpm_rpm_keys = tpm_keys + rpm_keys
+
+        combined_tpm_rpm_values = await self.router_cache.async_batch_get_cache(
+            keys=combined_tpm_rpm_keys
         )  # [1, 2, None, ..]
-        rpm_values = await self.router_cache.async_batch_get_cache(
-            keys=rpm_keys
-        )  # [1, 2, None, ..]
+
+        tpm_values = combined_tpm_rpm_values[: len(tpm_keys)]
+        rpm_values = combined_tpm_rpm_values[len(tpm_keys) :]
 
         return self._common_checks_available_deployment(
             model_group=model_group,

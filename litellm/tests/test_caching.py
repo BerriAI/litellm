@@ -33,6 +33,51 @@ def generate_random_word(length=4):
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
 
 
+@pytest.mark.asyncio
+async def test_dual_cache_async_batch_get_cache():
+    """
+    Unit testing for Dual Cache async_batch_get_cache()
+    - 2 item query
+    - in_memory result has a partial hit (1/2)
+    - hit redis for the other -> expect to return None
+    - expect result = [in_memory_result, None]
+    """
+    from litellm.caching import DualCache, InMemoryCache, RedisCache
+
+    in_memory_cache = InMemoryCache()
+    redis_cache = RedisCache()  # get credentials from environment
+    dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=redis_cache)
+
+    in_memory_cache.set_cache(key="test_value", value="hello world")
+
+    result = await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
+
+    assert result[0] == "hello world"
+    assert result[1] == None
+
+
+def test_dual_cache_batch_get_cache():
+    """
+    Unit testing for Dual Cache batch_get_cache()
+    - 2 item query
+    - in_memory result has a partial hit (1/2)
+    - hit redis for the other -> expect to return None
+    - expect result = [in_memory_result, None]
+    """
+    from litellm.caching import DualCache, InMemoryCache, RedisCache
+
+    in_memory_cache = InMemoryCache()
+    redis_cache = RedisCache()  # get credentials from environment
+    dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=redis_cache)
+
+    in_memory_cache.set_cache(key="test_value", value="hello world")
+
+    result = dual_cache.batch_get_cache(keys=["test_value", "test_value_2"])
+
+    assert result[0] == "hello world"
+    assert result[1] == None
+
+
 # @pytest.mark.skip(reason="")
 def test_caching_dynamic_args():  # test in memory cache
     try:
@@ -390,6 +435,7 @@ async def test_embedding_caching_azure_individual_items_reordered():
 @pytest.mark.asyncio
 async def test_embedding_caching_base_64():
     """ """
+    litellm.set_verbose = True
     litellm.cache = Cache(
         type="redis",
         host=os.environ["REDIS_HOST"],
@@ -408,6 +454,8 @@ async def test_embedding_caching_base_64():
         caching=True,
         encoding_format="base64",
     )
+    await asyncio.sleep(5)
+    print("\n\nCALL2\n\n")
     embedding_val_2 = await aembedding(
         model="azure/azure-embedding-model",
         input=inputs,
@@ -1094,10 +1142,6 @@ def test_custom_redis_cache_params():
             port=os.environ["REDIS_PORT"],
             password=os.environ["REDIS_PASSWORD"],
             db=0,
-            ssl=True,
-            ssl_certfile="./redis_user.crt",
-            ssl_keyfile="./redis_user_private.key",
-            ssl_ca_certs="./redis_ca.pem",
         )
 
         print(litellm.cache.cache.redis_client)
@@ -1105,7 +1149,7 @@ def test_custom_redis_cache_params():
         litellm.success_callback = []
         litellm._async_success_callback = []
     except Exception as e:
-        pytest.fail(f"Error occurred:", e)
+        pytest.fail(f"Error occurred: {str(e)}")
 
 
 def test_get_cache_key():
