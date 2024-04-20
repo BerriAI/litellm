@@ -5429,7 +5429,10 @@ def calculate_max_parallel_requests(
     elif rpm is not None:
         return rpm
     elif tpm is not None:
-        return int(tpm / 1000 / 6)
+        calculated_rpm = int(tpm / 1000 / 6)
+        if calculated_rpm == 0:
+            calculated_rpm = 1
+        return calculated_rpm
     elif default_max_parallel_requests is not None:
         return default_max_parallel_requests
     return None

@@ -2562,7 +2562,7 @@ class Router:
         """
         model_id = deployment["model_info"]["id"]
         if client_type == "max_parallel_requests":
-            cache_key = "{}_max_parallel_requests".format(model_id)
+            cache_key = "{}_max_parallel_requests_client".format(model_id)
             client = self.cache.get_cache(key=cache_key, local_only=True)
             return client
         elif client_type == "async":
