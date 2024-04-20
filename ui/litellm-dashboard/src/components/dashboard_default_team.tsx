@@ -4,6 +4,7 @@ import { Select, SelectItem, Text, Title } from "@tremor/react";
 interface DashboardTeamProps {
   teams: Object[] | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
+  userRole: string | null;
 }
 
 type TeamInterface = {
@@ -15,6 +16,7 @@ type TeamInterface = {
 const DashboardTeam: React.FC<DashboardTeamProps> = ({
   teams,
   setSelectedTeam,
+  userRole,
 }) => {
   const defaultTeam: TeamInterface = {
     models: [],
@@ -25,8 +27,13 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
 
   const [value, setValue] = useState(defaultTeam);
 
-  const updatedTeams = teams ? [...teams, defaultTeam] : [defaultTeam];
-
+  let updatedTeams;
+  if (userRole === "App User") {
+    // Non-Admin SSO users should only see their own team - they should not see "Default Team"
+    updatedTeams = teams;
+  } else {
+    updatedTeams = teams ? [...teams, defaultTeam] : [defaultTeam];
+  }
 
   return (
     <div className="mt-5 mb-5">
