@@ -87,6 +87,14 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
     ]
 
+    sso_only_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/global/spend/logs",
+        "/global/predict/spend/logs",
+    ]
+
     management_routes: List = [  # key
         "/key/generate",
         "/key/update",
