@@ -149,17 +149,18 @@ class RedisCache(BaseCache):
         if password is not None:
             redis_kwargs["password"] = password
 
+        ### HEALTH MONITORING OBJECT ###
+        if kwargs.get("service_logger_obj", None) is not None and isinstance(
+            kwargs["service_logger_obj"], ServiceLogging
+        ):
+            self.service_logger_obj = kwargs.pop("service_logger_obj")
+        else:
+            self.service_logger_obj = ServiceLogging()
+
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
-
-        if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-            parsed_kwargs = redis.connection.parse_url(redis_kwargs["url"])
-            redis_kwargs.update(parsed_kwargs)
-            self.redis_kwargs.update(parsed_kwargs)
-            # pop url
-            self.redis_kwargs.pop("url")
 
         # redis namespaces
         self.namespace = namespace
@@ -172,8 +173,15 @@ class RedisCache(BaseCache):
         except Exception as e:
             pass
 
-        ### HEALTH MONITORING OBJECT ###
-        self.service_logger_obj = ServiceLogging()
+        ### ASYNC HEALTH PING ###
+        try:
+            # asyncio.get_running_loop().create_task(self.ping())
+            result = asyncio.get_running_loop().create_task(self.ping())
+        except Exception:
+            pass
+
+        ### SYNC HEALTH PING ###
+        self.redis_client.ping()
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
@@ -601,15 +609,72 @@ class RedisCache(BaseCache):
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
             return key_value_dict
 
-    async def ping(self):
+    def sync_ping(self) -> bool:
+        """
+        Tests if the sync redis client is correctly setup.
+        """
+        print_verbose(f"Pinging Sync Redis Cache")
+        start_time = time.time()
+        try:
+            response = self.redis_client.ping()
+            print_verbose(f"Redis Cache PING: {response}")
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            self.service_logger_obj.service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                call_type="sync_ping",
+            )
+            return response
+        except Exception as e:
+            # NON blocking - notify users Redis is throwing an exception
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            self.service_logger_obj.service_failure_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                error=e,
+                call_type="sync_ping",
+            )
+            print_verbose(
+                f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
+            )
+            traceback.print_exc()
+            raise e
+
+    async def ping(self) -> bool:
         _redis_client = self.init_async_client()
+        start_time = time.time()
         async with _redis_client as redis_client:
             print_verbose(f"Pinging Async Redis Cache")
             try:
                 response = await redis_client.ping()
-                print_verbose(f"Redis Cache PING: {response}")
+                ## LOGGING ##
+                end_time = time.time()
+                _duration = end_time - start_time
+                asyncio.create_task(
+                    self.service_logger_obj.async_service_success_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="async_ping",
+                    )
+                )
+                return response
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
+                ## LOGGING ##
+                end_time = time.time()
+                _duration = end_time - start_time
+                asyncio.create_task(
+                    self.service_logger_obj.async_service_failure_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        error=e,
+                        call_type="async_ping",
+                    )
+                )
                 print_verbose(
                     f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
                 )

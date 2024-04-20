@@ -30,7 +30,6 @@ class PrometheusServicesLogger:
                 raise Exception(
                     "Missing prometheus_client. Run `pip install prometheus-client`"
                 )
-            print("INITIALIZES PROMETHEUS SERVICE LOGGER!")
 
             self.Histogram = Histogram
             self.Counter = Counter
