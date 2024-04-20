@@ -67,7 +67,7 @@ class PrometheusLogger:
 
             # unpack kwargs
             model = kwargs.get("model", "")
-            response_cost = kwargs.get("response_cost", 0.0)
+            response_cost = kwargs.get("response_cost", 0.0) or 0
             litellm_params = kwargs.get("litellm_params", {}) or {}
             proxy_server_request = litellm_params.get("proxy_server_request") or {}
             end_user_id = proxy_server_request.get("body", {}).get("user", None)
