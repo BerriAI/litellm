@@ -4166,6 +4166,14 @@ async def audio_transcriptions(
             file.filename is not None
         )  # make sure filename passed in (needed for type)
 
+        _original_filename = file.filename
+        file_extension = os.path.splitext(file.filename)[1]
+        # rename the file to a random hash file name -> we eventuall remove the file and don't want to remove any local files
+        file.filename = f"tmp-request" + str(uuid.uuid4()) + file_extension
+
+        # IMP - Asserts that we've renamed the uploaded file, since we run os.remove(file.filename), we should rename the original file
+        assert file.filename != _original_filename
+
         with open(file.filename, "wb+") as f:
             f.write(await file.read())
             try:
