@@ -1972,7 +1972,7 @@ async def test_master_key_hashing(prisma_client):
 
         await new_team(
             NewTeamRequest(
-                team_id="ishaan-special-team",
+                team_id="ishaans-special-team",
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role="proxy_admin", api_key="sk-1234", user_id="1234"
