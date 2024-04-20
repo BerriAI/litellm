@@ -7927,6 +7927,8 @@ def exception_type(
                 elif (
                     "429 Quota exceeded" in error_str
                     or "IndexError: list index out of range" in error_str
+                    or "429 Unable to submit request because the service is temporarily out of capacity."
+                    in error_str
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
