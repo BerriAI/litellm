@@ -5713,6 +5713,20 @@ async def new_user(data: NewUserRequest):
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
     response = await generate_key_helper_fn(**data_json)
+
+    # Admin UI Logic
+    # if team_id passed add this user to the team
+    if data_json.get("team_id", None) is not None:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=data_json.get("team_id", None),
+                member=Member(
+                    user_id=data_json.get("user_id", None),
+                    role="user",
+                    user_email=data_json.get("user_email", None),
+                ),
+            )
+        )
     return NewUserResponse(
         key=response.get("token", ""),
         expires=response.get("expires", None),
@@ -8112,36 +8126,33 @@ async def auth_callback(request: Request):
                 }
                 user_role = getattr(user_info, "user_role", None)
 
-            else:
-                ## check if user-email in db ##
-                user_info = await prisma_client.db.litellm_usertable.find_first(
-                    where={"user_email": user_email}
-                )
-                if user_info is not None:
-                    user_defined_values = {
-                        "models": getattr(user_info, "models", user_id_models),
-                        "user_id": getattr(user_info, "user_id", user_id),
-                        "user_email": getattr(user_info, "user_id", user_email),
-                        "user_role": getattr(user_info, "user_role", None),
-                    }
-                    user_role = getattr(user_info, "user_role", None)
+            ## check if user-email in db ##
+            user_info = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_email": user_email}
+            )
+            if user_info is not None:
+                user_defined_values = {
+                    "models": getattr(user_info, "models", user_id_models),
+                    "user_id": getattr(user_info, "user_id", user_id),
+                    "user_email": getattr(user_info, "user_id", user_email),
+                    "user_role": getattr(user_info, "user_role", None),
+                }
+                user_role = getattr(user_info, "user_role", None)
 
-                    # update id
-                    await prisma_client.db.litellm_usertable.update_many(
-                        where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
-                    )
-                elif litellm.default_user_params is not None and isinstance(
-                    litellm.default_user_params, dict
-                ):
-                    user_defined_values = {
-                        "models": litellm.default_user_params.get(
-                            "models", user_id_models
-                        ),
-                        "user_id": litellm.default_user_params.get("user_id", user_id),
-                        "user_email": litellm.default_user_params.get(
-                            "user_email", user_email
-                        ),
-                    }
+                # update id
+                await prisma_client.db.litellm_usertable.update_many(
+                    where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
+                )
+            elif litellm.default_user_params is not None and isinstance(
+                litellm.default_user_params, dict
+            ):
+                user_defined_values = {
+                    "models": litellm.default_user_params.get("models", user_id_models),
+                    "user_id": litellm.default_user_params.get("user_id", user_id),
+                    "user_email": litellm.default_user_params.get(
+                        "user_email", user_email
+                    ),
+                }
     except Exception as e:
         pass
 
