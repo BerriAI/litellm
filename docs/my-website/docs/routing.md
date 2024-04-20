@@ -279,7 +279,7 @@ router_settings:
 ```
 
 </TabItem>
-<TabItem value="simple-shuffle" label="(Default) Weighted Pick">
+<TabItem value="simple-shuffle" label="(Default) Weighted Pick (Async)">
 
 **Default** Picks a deployment based on the provided **Requests per minute (rpm) or Tokens per minute (tpm)**
 
