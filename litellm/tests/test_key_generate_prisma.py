@@ -48,7 +48,7 @@ from litellm.proxy.proxy_server import (
     generate_key_fn,
     generate_key_helper_fn,
     spend_user_fn,
-    spend_per_user_fn,
+    spend_per_end_user_fn,
     spend_key_fn,
     view_spend_logs,
     user_info,
@@ -364,10 +364,10 @@ def test_call_with_user_over_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -1546,11 +1546,12 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
 
 @pytest.mark.asyncio()
-async def test_view_spend_user_per_model(prisma_client):
+async def test_view_spend_end_user_per_model(prisma_client):
+    import uuid
+
     from litellm.proxy.proxy_server import (
         _PROXY_track_cost_callback as track_cost_callback,
     )
-    import uuid
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -1675,7 +1676,7 @@ async def test_view_spend_user_per_model(prisma_client):
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        user_by_spend = await spend_per_user_fn(
+        user_by_spend = await spend_per_end_user_fn(
             user_id=key.user_id, start_date=None, end_date=None
         )
 
@@ -1693,7 +1694,7 @@ async def test_view_spend_user_per_model(prisma_client):
         assert chatgpt_stats["prompt_tokens"] == 620
         assert chatgpt_stats["completion_tokens"] == 600
 
-        user_by_spend_with_start_date = await spend_per_user_fn(
+        user_by_spend_with_start_date = await spend_per_end_user_fn(
             user_id=key.user_id,
             start_date="2024-01-14",
             end_date=None,
@@ -1712,7 +1713,7 @@ async def test_view_spend_user_per_model(prisma_client):
         assert gpt_turbo_stats["prompt_tokens"] == 210
         assert gpt_turbo_stats["completion_tokens"] == 200
 
-        user_by_spend_with_end_date = await spend_per_user_fn(
+        user_by_spend_with_end_date = await spend_per_end_user_fn(
             user_id=key.user_id,
             start_date=None,
             end_date="2024-01-14",
@@ -1723,7 +1724,7 @@ async def test_view_spend_user_per_model(prisma_client):
         assert user_by_spend_with_end_date[0]["prompt_tokens"] == 410
         assert user_by_spend_with_end_date[0]["completion_tokens"] == 400
 
-        user_by_spend_with_start_and_end_date = await spend_per_user_fn(
+        user_by_spend_with_start_and_end_date = await spend_per_end_user_fn(
             user_id=key.user_id,
             start_date="2024-01-14",
             end_date="2024-01-16",

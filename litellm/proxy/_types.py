@@ -114,11 +114,11 @@ class LiteLLMRoutes(enum.Enum):
     spend_tracking_routes: List = [
         # spend
         "/spend/keys",
-        "/spend/user",
         "/spend/users",
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/spend/end_user",
     ]
 
     global_spend_tracking_routes: List = [
@@ -871,9 +871,9 @@ class LiteLLM_SpendLogs(LiteLLMBase):
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
 
-class LiteLLM_UserSpend(LiteLLMBase):
+
+class LiteLLM_EndUserSpend(LiteLLMBase):
     model: str
     spend: float
     prompt_tokens: int
     completion_tokens: int
-

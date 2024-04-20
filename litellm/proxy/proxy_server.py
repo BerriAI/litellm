@@ -4867,16 +4867,15 @@ async def spend_key_fn():
 
 
 @router.get(
-    "/spend/user",
+    "/spend/end_user",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_UserSpend]},
+        200: {"model": List[LiteLLM_EndUserSpend]},
     },
-
 )
-async def spend_per_user_fn(
-    user_id: str = fastapi.Query(
+async def spend_per_end_user_fn(
+    end_user_id: str = fastapi.Query(
         description="User ID to view spend for",
     ),
     start_date: Optional[str] = fastapi.Query(
@@ -4893,19 +4892,19 @@ async def spend_per_user_fn(
 
     Example Request: 
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234" \
+    curl -X GET "http://0.0.0.0:8000/spend/end_user?end_user_id=end_user_1234" \
 -H "Authorization: Bearer sk-1234"
     ```
 
     With Date Range:
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234&start_date=2022-01-01&end_date=2022-01-31" \
+    curl -X GET "http://0.0.0.0:8000/spend/end_user?end_user_id=end_user_1234&start_date=2022-01-01&end_date=2022-01-31" \
 -H "Authorization: Bearer sk-1234"
     ```
 
     With Start Date:
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234&start_date=2022-01-01" \
+    curl -X GET "http://0.0.0.0:8000/spend/end_user?end_user_id=end_user_1234&start_date=2022-01-01" \
 -H "Authorization" Bearer sk-1234"
     ```
     """
@@ -4914,15 +4913,14 @@ async def spend_per_user_fn(
         verbose_proxy_logger.debug("inside view_spend_logs")
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        filter_query = {"user": user_id, "startTime": {}}
-        print('filter_query', filter_query)
+        filter_query = {"user": end_user_id, "startTime": {}}
 
         if start_date is not None:
             start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            filter_query["startTime"]["gte"] = start_date_obj 
+            filter_query["startTime"]["gte"] = start_date_obj
 
         if end_date is not None:
             end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
