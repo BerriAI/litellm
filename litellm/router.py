@@ -306,7 +306,7 @@ class Router:
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         verbose_router_logger.info(
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter caching: {self.cache}"
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
         )
         self.routing_strategy_args = routing_strategy_args
 
