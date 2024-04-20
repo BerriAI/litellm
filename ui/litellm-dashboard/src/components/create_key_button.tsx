@@ -116,7 +116,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          {userRole === "App Owner" || userRole === "Admin" ? (
+          {userRole === "App Owner" || userRole === "Admin" || userRole === "App User" ? (
             <>
               <Form.Item 
                 label="Key Name" 
