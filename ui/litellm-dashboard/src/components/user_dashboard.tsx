@@ -257,7 +257,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             data={keys}
             setData={setKeys}
           />
-          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
+          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} userRole={userRole}/>
         </Col>
       </Grid>
     </div>
