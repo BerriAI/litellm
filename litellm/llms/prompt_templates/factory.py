@@ -1122,12 +1122,6 @@ def _gemini_vision_convert_messages(messages: list):
     Returns:
         tuple: A tuple containing the prompt (a string) and the processed images (a list of objects representing the images).
     """
-    try:
-        from PIL import Image
-    except:
-        raise Exception(
-            "gemini image conversion failed please run `pip install Pillow`"
-        )
 
     try:
         # given messages for gpt-4 vision, convert them for gemini
@@ -1154,6 +1148,12 @@ def _gemini_vision_convert_messages(messages: list):
                 image = _load_image_from_url(img)
                 processed_images.append(image)
             else:
+                try:
+                    from PIL import Image
+                except:
+                    raise Exception(
+                        "gemini image conversion failed please run `pip install Pillow`"
+                    )
                 # Case 2: Image filepath (e.g. temp.jpeg) given
                 image = Image.open(img)
                 processed_images.append(image)
