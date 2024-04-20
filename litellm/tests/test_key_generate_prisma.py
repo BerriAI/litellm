@@ -120,6 +120,15 @@ async def test_new_user_response(prisma_client):
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
 
+        await new_team(
+            NewTeamRequest(
+                team_id="ishaan-special-team",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            ),
+        )
+
         _response = await new_user(
             data=NewUserRequest(
                 models=["azure-gpt-3.5"],
@@ -999,10 +1008,32 @@ def test_generate_and_update_key(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
+
+            # create team "litellm-core-infra@gmail.com""
+            print("creating team litellm-core-infra@gmail.com")
+            await new_team(
+                NewTeamRequest(
+                    team_id="litellm-core-infra@gmail.com",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                ),
+            )
+
+            await new_team(
+                NewTeamRequest(
+                    team_id="ishaan-special-team",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                ),
+            )
+
             request = NewUserRequest(
-                metadata={"team": "litellm-team3", "project": "litellm-project3"},
+                metadata={"project": "litellm-project3"},
                 team_id="litellm-core-infra@gmail.com",
             )
+
             key = await new_user(request)
             print(key)
 
@@ -1015,7 +1046,6 @@ def test_generate_and_update_key(prisma_client):
             print("\n info for key=", result["info"])
             assert result["info"]["max_parallel_requests"] == None
             assert result["info"]["metadata"] == {
-                "team": "litellm-team3",
                 "project": "litellm-project3",
             }
             assert result["info"]["team_id"] == "litellm-core-infra@gmail.com"
@@ -1037,7 +1067,7 @@ def test_generate_and_update_key(prisma_client):
             # update the team id
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id="ishaan"),
+                data=UpdateKeyRequest(key=generated_key, team_id="ishaan-special-team"),
             )
             print("response2=", response2)
 
@@ -1048,11 +1078,10 @@ def test_generate_and_update_key(prisma_client):
             print("\n info for key=", result["info"])
             assert result["info"]["max_parallel_requests"] == None
             assert result["info"]["metadata"] == {
-                "team": "litellm-team3",
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == "ishaan"
+            assert result["info"]["team_id"] == "ishaan-special-team"
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -1940,6 +1969,15 @@ async def test_master_key_hashing(prisma_client):
 
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
+
+        await new_team(
+            NewTeamRequest(
+                team_id="ishaans-special-team",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            ),
+        )
 
         _response = await new_user(
             data=NewUserRequest(

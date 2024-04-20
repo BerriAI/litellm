@@ -4207,9 +4207,7 @@ def supports_vision(model: str):
             return True
         return False
     else:
-        raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}."
-        )
+        return False
 
 
 def supports_parallel_function_calling(model: str):
@@ -5395,6 +5393,49 @@ def get_optional_params(
                 optional_params[k] = passed_params[k]
     print_verbose(f"Final returned optional params: {optional_params}")
     return optional_params
+
+
+def calculate_max_parallel_requests(
+    max_parallel_requests: Optional[int],
+    rpm: Optional[int],
+    tpm: Optional[int],
+    default_max_parallel_requests: Optional[int],
+) -> Optional[int]:
+    """
+    Returns the max parallel requests to send to a deployment.
+
+    Used in semaphore for async requests on router.
+
+    Parameters:
+    - max_parallel_requests - Optional[int] - max_parallel_requests allowed for that deployment
+    - rpm - Optional[int] - requests per minute allowed for that deployment
+    - tpm - Optional[int] - tokens per minute allowed for that deployment
+    - default_max_parallel_requests - Optional[int] - default_max_parallel_requests allowed for any deployment
+
+    Returns:
+    - int or None (if all params are None)
+
+    Order:
+    max_parallel_requests > rpm > tpm / 6 (azure formula) > default max_parallel_requests
+
+    Azure RPM formula:
+    6 rpm per 1000 TPM
+    https://learn.microsoft.com/en-us/azure/ai-services/openai/quotas-limits
+
+
+    """
+    if max_parallel_requests is not None:
+        return max_parallel_requests
+    elif rpm is not None:
+        return rpm
+    elif tpm is not None:
+        calculated_rpm = int(tpm / 1000 / 6)
+        if calculated_rpm == 0:
+            calculated_rpm = 1
+        return calculated_rpm
+    elif default_max_parallel_requests is not None:
+        return default_max_parallel_requests
+    return None
 
 
 def get_api_base(model: str, optional_params: dict) -> Optional[str]:
@@ -7886,6 +7927,8 @@ def exception_type(
                 elif (
                     "429 Quota exceeded" in error_str
                     or "IndexError: list index out of range" in error_str
+                    or "429 Unable to submit request because the service is temporarily out of capacity."
+                    in error_str
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
