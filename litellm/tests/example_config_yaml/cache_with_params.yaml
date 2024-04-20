@@ -8,4 +8,4 @@ litellm_settings:
   cache_params:
     type: "redis"
     supported_call_types: ["embedding", "aembedding"]
-    host: "localhost"
+    host: "os.environ/REDIS_HOST"
