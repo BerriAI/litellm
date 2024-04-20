@@ -16,10 +16,16 @@ Our proxy is already used in production by customers.
 
 See our status page for [**live reliability**](https://status.litellm.ai/)
 
-### **Benefits**: 
+### **Benefits**
 - **No Maintenance, No Infra**: We'll maintain the proxy, and spin up any additional infrastructure (e.g.: separate server for spend logs) to make sure you can load balance + track spend across multiple LLM projects. 
 - **Reliable**: Our hosted proxy is tested on 1k requests per second, making it reliable for high load.
 - **Secure**: LiteLLM is currently undergoing SOC-2 compliance, to make sure your data is as secure as possible.
+
+### Pricing
+
+Pricing is based on usage. We can figure out a price that works for your team, on the call. 
+
+[**🚨 Schedule Call**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 ## **Screenshots**
 
