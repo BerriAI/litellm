@@ -116,7 +116,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          {userRole === "App Owner" || userRole === "Admin" || userRole === "App User" ? (
+          {userRole === "App Owner" || userRole === "Admin" ? (
             <>
               <Form.Item 
                 label="Key Name" 
@@ -248,16 +248,66 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             </>
           ) : (
             <>
-              <Form.Item label="Key Name" name="key_alias">
+              <Form.Item 
+                label="Key Name" 
+                name="key_alias"
+                rules={[{ required: true, message: 'Please input a key name' }]}
+                help="required"
+              >
                 <Input />
               </Form.Item>
-              <Form.Item label="Team ID (Contact Group)" name="team_id">
-                <Input placeholder="default team (create a new team)" />
+              <Form.Item
+                label="Team ID"
+                name="team_id"
+                hidden={true}
+                initialValue={team ? team["team_id"] : null}
+                valuePropName="team_id"
+                className="mt-8"
+              >
+                <Input value={team ? team["team_alias"] : ""} disabled />
               </Form.Item>
 
-              <Form.Item label="Description" name="description">
-                <Input.TextArea placeholder="Enter description" rows={4} />
+              <Form.Item 
+                label="Models" 
+                name="models"
+                rules={[{ required: true, message: 'Please select a model' }]}
+                help="required"
+              >
+                <Select
+                  mode="multiple"
+                  placeholder="Select models"
+                  style={{ width: "100%" }}
+                >
+                    <Option key="all-team-models" value="all-team-models">
+                      All Team Models
+                    </Option>
+                    {team && team.models ? (
+                      team.models.includes("all-proxy-models") ? (
+                        userModels.map((model: string) => (
+                          (
+                            <Option key={model} value={model}>
+                              {model}
+                            </Option>
+                          )
+                        ))
+                      ) : (
+                        team.models.map((model: string) => (
+                          <Option key={model} value={model}>
+                            {model}
+                          </Option>
+                        ))
+                      )
+                    ) : (
+                      userModels.map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    )}
+
+                </Select>
               </Form.Item>
+
             </>
           )}
           <div style={{ textAlign: "right", marginTop: "10px" }}>
