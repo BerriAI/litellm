@@ -1053,6 +1053,11 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail="key not allowed to access this team's info",
                             )
+                elif (
+                    _has_user_setup_sso()
+                    and route in LiteLLMRoutes.sso_only_routes.value
+                ):
+                    pass
                 else:
                     raise Exception(
                         f"Only master key can be used to generate, delete, update info for new keys/users/teams. Route={route}"
@@ -1101,6 +1106,13 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key, user_role="proxy_admin", **valid_token_dict
+                    )
+                elif (
+                    _has_user_setup_sso()
+                    and route in LiteLLMRoutes.sso_only_routes.value
+                ):
+                    return UserAPIKeyAuth(
+                        api_key=api_key, user_role="app_owner", **valid_token_dict
                     )
                 else:
                     raise Exception(
@@ -6545,7 +6557,7 @@ async def team_member_add(
     existing_team_row.members_with_roles.append(new_member)
 
     complete_team_data = LiteLLM_TeamTable(
-        **existing_team_row.model_dump(),
+        **_get_pydantic_json_dict(existing_team_row),
     )
 
     team_row = await prisma_client.update_data(
