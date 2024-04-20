@@ -187,6 +187,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                     )
+
             return deployment
         except Exception as e:
             if isinstance(e, litellm.RateLimitError):
