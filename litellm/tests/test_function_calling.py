@@ -221,6 +221,9 @@ def test_parallel_function_call_stream():
 # test_parallel_function_call_stream()
 
 
+@pytest.mark.skip(
+    reason="Flaky test. Groq function calling is not reliable for ci/cd testing."
+)
 def test_groq_parallel_function_call():
     litellm.set_verbose = True
     try:

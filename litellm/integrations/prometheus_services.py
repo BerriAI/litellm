@@ -30,7 +30,6 @@ class PrometheusServicesLogger:
                 raise Exception(
                     "Missing prometheus_client. Run `pip install prometheus-client`"
                 )
-            print("INITIALIZES PROMETHEUS SERVICE LOGGER!")
 
             self.Histogram = Histogram
             self.Counter = Counter
@@ -45,9 +44,18 @@ class PrometheusServicesLogger:
             )  # store the prometheus histogram/counter we need to call for each field in payload
 
             for service in self.services:
-                histogram = self.create_histogram(service)
-                counter = self.create_counter(service)
-                self.payload_to_prometheus_map[service] = [histogram, counter]
+                histogram = self.create_histogram(service, type_of_request="latency")
+                counter_failed_request = self.create_counter(
+                    service, type_of_request="failed_requests"
+                )
+                counter_total_requests = self.create_counter(
+                    service, type_of_request="total_requests"
+                )
+                self.payload_to_prometheus_map[service] = [
+                    histogram,
+                    counter_failed_request,
+                    counter_total_requests,
+                ]
 
             self.prometheus_to_amount_map: dict = (
                 {}
@@ -75,26 +83,26 @@ class PrometheusServicesLogger:
                     return metric
         return None
 
-    def create_histogram(self, label: str):
-        metric_name = "litellm_{}_latency".format(label)
+    def create_histogram(self, service: str, type_of_request: str):
+        metric_name = "litellm_{}_{}".format(service, type_of_request)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
             return self.get_metric(metric_name)
         return self.Histogram(
             metric_name,
-            "Latency for {} service".format(label),
-            labelnames=[label],
+            "Latency for {} service".format(service),
+            labelnames=[service],
         )
 
-    def create_counter(self, label: str):
-        metric_name = "litellm_{}_failed_requests".format(label)
+    def create_counter(self, service: str, type_of_request: str):
+        metric_name = "litellm_{}_{}".format(service, type_of_request)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
             return self.get_metric(metric_name)
         return self.Counter(
             metric_name,
-            "Total failed requests for {} service".format(label),
-            labelnames=[label],
+            "Total {} for {} service".format(type_of_request, service),
+            labelnames=[service],
         )
 
     def observe_histogram(
@@ -121,6 +129,8 @@ class PrometheusServicesLogger:
         if self.mock_testing:
             self.mock_testing_success_calls += 1
 
+        print(f"payload call type: {payload.call_type}")
+
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
@@ -130,10 +140,18 @@ class PrometheusServicesLogger:
                         labels=payload.service.value,
                         amount=payload.duration,
                     )
+                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
+                    self.increment_counter(
+                        counter=obj,
+                        labels=payload.service.value,
+                        amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
+                    )
 
     def service_failure_hook(self, payload: ServiceLoggerPayload):
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
+
+        print(f"payload call type: {payload.call_type}")
 
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
@@ -142,7 +160,7 @@ class PrometheusServicesLogger:
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
-                        amount=1,  # LOG ERROR COUNT TO PROMETHEUS
+                        amount=1,  # LOG ERROR COUNT / TOTAL REQUESTS TO PROMETHEUS
                     )
 
     async def async_service_success_hook(self, payload: ServiceLoggerPayload):
@@ -152,7 +170,8 @@ class PrometheusServicesLogger:
         if self.mock_testing:
             self.mock_testing_success_calls += 1
 
-        print(f"LOGS SUCCESSFUL CALL TO PROMETHEUS - payload={payload}")
+        print(f"payload call type: {payload.call_type}")
+
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
@@ -162,11 +181,19 @@ class PrometheusServicesLogger:
                         labels=payload.service.value,
                         amount=payload.duration,
                     )
+                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
+                    self.increment_counter(
+                        counter=obj,
+                        labels=payload.service.value,
+                        amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
+                    )
 
     async def async_service_failure_hook(self, payload: ServiceLoggerPayload):
         print(f"received error payload: {payload.error}")
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
+
+        print(f"payload call type: {payload.call_type}")
 
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]

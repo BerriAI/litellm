@@ -102,6 +102,47 @@ async def chat_completion(session, key, model="gpt-4"):
         return await response.json()
 
 
+async def chat_completion_with_headers(session, key, model="gpt-4"):
+    url = "http://0.0.0.0:4000/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello!"},
+        ],
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_header_check(
+            response
+        )  # calling the function to check response headers
+
+        raw_headers = response.raw_headers
+        raw_headers_json = {}
+
+        for (
+            item
+        ) in (
+            response.raw_headers
+        ):  # ((b'date', b'Fri, 19 Apr 2024 21:17:29 GMT'), (), )
+            raw_headers_json[item[0].decode("utf-8")] = item[1].decode("utf-8")
+
+        return raw_headers_json
+
+
 async def completion(session, key):
     url = "http://0.0.0.0:4000/completions"
     headers = {
@@ -218,6 +259,39 @@ async def test_chat_completion_ratelimit():
         try:
             await asyncio.gather(*tasks)
             pytest.fail("Expected at least 1 call to fail")
+        except Exception as e:
+            if "Request did not return a 200 status code: 429" in str(e):
+                pass
+            else:
+                pytest.fail(f"Wrong error received - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_different_deployments():
+    """
+    - call model group with 2 deployments
+    - make 5 calls
+    - expect 2 unique deployments
+    """
+    async with aiohttp.ClientSession() as session:
+        # key_gen = await generate_key(session=session)
+        key = "sk-1234"
+        results = []
+        for _ in range(5):
+            results.append(
+                await chat_completion_with_headers(
+                    session=session, key=key, model="fake-openai-endpoint-3"
+                )
+            )
+        try:
+            print(f"results: {results}")
+            init_model_id = results[0]["x-litellm-model-id"]
+            deployments_shuffled = False
+            for result in results[1:]:
+                if init_model_id != result["x-litellm-model-id"]:
+                    deployments_shuffled = True
+            if deployments_shuffled == False:
+                pytest.fail("Expected at least 1 shuffled call")
         except Exception as e:
             pass
 

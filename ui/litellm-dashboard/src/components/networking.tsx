@@ -296,6 +296,9 @@ export const userInfoCall = async (
     if (userRole == "App Owner" && userID) {
       url = `${url}?user_id=${userID}`;
     }
+    if (userRole == "App User" && userID) {
+      url = `${url}?user_id=${userID}`;
+    }
     console.log("in userInfoCall viewAll=", viewAll);
     if (viewAll && page_size && (page != null) && (page != undefined)) {
       url = `${url}?view_all=true&page=${page}&page_size=${page_size}`;

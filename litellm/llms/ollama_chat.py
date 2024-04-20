@@ -148,7 +148,7 @@ class OllamaChatConfig:
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "frequency_penalty":
-                optional_params["repeat_penalty"] = param
+                optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
             if param == "response_format" and value["type"] == "json_object":

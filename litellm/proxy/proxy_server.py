@@ -1053,6 +1053,11 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail="key not allowed to access this team's info",
                             )
+                elif (
+                    _has_user_setup_sso()
+                    and route in LiteLLMRoutes.sso_only_routes.value
+                ):
+                    pass
                 else:
                     raise Exception(
                         f"Only master key can be used to generate, delete, update info for new keys/users/teams. Route={route}"
@@ -1101,6 +1106,13 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key, user_role="proxy_admin", **valid_token_dict
+                    )
+                elif (
+                    _has_user_setup_sso()
+                    and route in LiteLLMRoutes.sso_only_routes.value
+                ):
+                    return UserAPIKeyAuth(
+                        api_key=api_key, user_role="app_owner", **valid_token_dict
                     )
                 else:
                     raise Exception(
@@ -4166,6 +4178,14 @@ async def audio_transcriptions(
             file.filename is not None
         )  # make sure filename passed in (needed for type)
 
+        _original_filename = file.filename
+        file_extension = os.path.splitext(file.filename)[1]
+        # rename the file to a random hash file name -> we eventuall remove the file and don't want to remove any local files
+        file.filename = f"tmp-request" + str(uuid.uuid4()) + file_extension
+
+        # IMP - Asserts that we've renamed the uploaded file, since we run os.remove(file.filename), we should rename the original file
+        assert file.filename != _original_filename
+
         with open(file.filename, "wb+") as f:
             f.write(await file.read())
             try:
@@ -5713,6 +5733,20 @@ async def new_user(data: NewUserRequest):
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
     response = await generate_key_helper_fn(**data_json)
+
+    # Admin UI Logic
+    # if team_id passed add this user to the team
+    if data_json.get("team_id", None) is not None:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=data_json.get("team_id", None),
+                member=Member(
+                    user_id=data_json.get("user_id", None),
+                    role="user",
+                    user_email=data_json.get("user_email", None),
+                ),
+            )
+        )
     return NewUserResponse(
         key=response.get("token", ""),
         expires=response.get("expires", None),
@@ -6518,13 +6552,20 @@ async def team_member_add(
     existing_team_row = await prisma_client.get_data(  # type: ignore
         team_id=data.team_id, table_name="team", query_type="find_unique"
     )
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Team not found for team_id={getattr(data, 'team_id', None)}"
+            },
+        )
 
     new_member = data.member
 
     existing_team_row.members_with_roles.append(new_member)
 
     complete_team_data = LiteLLM_TeamTable(
-        **existing_team_row.model_dump(),
+        **_get_pydantic_json_dict(existing_team_row),
     )
 
     team_row = await prisma_client.update_data(
@@ -8112,36 +8153,33 @@ async def auth_callback(request: Request):
                 }
                 user_role = getattr(user_info, "user_role", None)
 
-            else:
-                ## check if user-email in db ##
-                user_info = await prisma_client.db.litellm_usertable.find_first(
-                    where={"user_email": user_email}
-                )
-                if user_info is not None:
-                    user_defined_values = {
-                        "models": getattr(user_info, "models", user_id_models),
-                        "user_id": getattr(user_info, "user_id", user_id),
-                        "user_email": getattr(user_info, "user_id", user_email),
-                        "user_role": getattr(user_info, "user_role", None),
-                    }
-                    user_role = getattr(user_info, "user_role", None)
+            ## check if user-email in db ##
+            user_info = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_email": user_email}
+            )
+            if user_info is not None:
+                user_defined_values = {
+                    "models": getattr(user_info, "models", user_id_models),
+                    "user_id": getattr(user_info, "user_id", user_id),
+                    "user_email": getattr(user_info, "user_id", user_email),
+                    "user_role": getattr(user_info, "user_role", None),
+                }
+                user_role = getattr(user_info, "user_role", None)
 
-                    # update id
-                    await prisma_client.db.litellm_usertable.update_many(
-                        where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
-                    )
-                elif litellm.default_user_params is not None and isinstance(
-                    litellm.default_user_params, dict
-                ):
-                    user_defined_values = {
-                        "models": litellm.default_user_params.get(
-                            "models", user_id_models
-                        ),
-                        "user_id": litellm.default_user_params.get("user_id", user_id),
-                        "user_email": litellm.default_user_params.get(
-                            "user_email", user_email
-                        ),
-                    }
+                # update id
+                await prisma_client.db.litellm_usertable.update_many(
+                    where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
+                )
+            elif litellm.default_user_params is not None and isinstance(
+                litellm.default_user_params, dict
+            ):
+                user_defined_values = {
+                    "models": litellm.default_user_params.get("models", user_id_models),
+                    "user_id": litellm.default_user_params.get("user_id", user_id),
+                    "user_email": litellm.default_user_params.get(
+                        "user_email", user_email
+                    ),
+                }
     except Exception as e:
         pass
 
