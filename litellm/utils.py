@@ -4207,9 +4207,7 @@ def supports_vision(model: str):
             return True
         return False
     else:
-        raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}."
-        )
+        return False
 
 
 def supports_parallel_function_calling(model: str):
