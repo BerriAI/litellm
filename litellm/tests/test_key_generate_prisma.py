@@ -35,6 +35,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm, asyncio
+from litellm.utils import ModelResponse, Choices, Message, Usage
+
 from litellm.proxy.proxy_server import (
     new_user,
     generate_key_fn,
@@ -46,6 +48,7 @@ from litellm.proxy.proxy_server import (
     generate_key_fn,
     generate_key_helper_fn,
     spend_user_fn,
+    spend_per_user_fn,
     spend_key_fn,
     view_spend_logs,
     user_info,
@@ -1540,6 +1543,200 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
+
+
+@pytest.mark.asyncio()
+async def test_view_spend_user_per_model(prisma_client):
+    from litellm.proxy.proxy_server import (
+        _PROXY_track_cost_callback as track_cost_callback,
+    )
+    import uuid
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        # reset spend logs
+        await litellm.proxy.proxy_server.prisma_client.db.query_raw(
+            'DELETE FROM "LiteLLM_SpendLogs";'
+        )
+
+        litellm.proxy.proxy_server.prisma_client.spend_log_transactions = []
+
+        request = GenerateKeyRequest(user_id="user-1")
+        key = await generate_key_fn(request)
+
+        request_id_1 = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
+        request_id_2 = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
+        request_id_3 = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
+
+        resp = ModelResponse(
+            id=request_id_1,
+            choices=[
+                Choices(
+                    finish_reason=None,
+                    index=0,
+                    message=Message(
+                        content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                        role="assistant",
+                    ),
+                )
+            ],
+            model="gpt-3.5-turbo",
+            usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
+        )
+        await track_cost_callback(
+            kwargs={
+                "call_type": "acompletion",
+                "model": "gpt-3.5-turbo",
+                "stream": False,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": hash_token(key.key),
+                        "user_api_key_user_id": key.user_id,
+                    }
+                },
+                "response_cost": 1.0,
+            },
+            completion_response=resp,
+            start_time=datetime(2024, 1, 15, 12, 0),
+            end_time=datetime(2024, 1, 15, 12, 1),
+        )
+
+        resp = ModelResponse(
+            id=request_id_2,
+            choices=[
+                Choices(
+                    finish_reason=None,
+                    index=0,
+                    message=Message(
+                        content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                        role="assistant",
+                    ),
+                )
+            ],
+            model="gpt-3.5-turbo",
+            usage=Usage(prompt_tokens=410, completion_tokens=400, total_tokens=810),
+        )
+        await track_cost_callback(
+            kwargs={
+                "call_type": "acompletion",
+                "model": "gpt-3.5-turbo",
+                "stream": False,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": hash_token(key.key),
+                        "user_api_key_user_id": key.user_id,
+                    }
+                },
+                "response_cost": 2.5,
+            },
+            completion_response=resp,
+            start_time=datetime(2024, 1, 13, 12, 0),
+            end_time=datetime(2024, 1, 13, 12, 1),
+        )
+
+        resp = ModelResponse(
+            id=request_id_3,
+            choices=[
+                Choices(
+                    finish_reason=None,
+                    index=0,
+                    message=Message(
+                        content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                        role="assistant",
+                    ),
+                )
+            ],
+            model="chatgpt-v-2",
+            usage=Usage(prompt_tokens=310, completion_tokens=300, total_tokens=610),
+        )
+        await track_cost_callback(
+            kwargs={
+                "call_type": "acompletion",
+                "model": "chatgpt-v-2",
+                "stream": False,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": hash_token(key.key),
+                        "user_api_key_user_id": key.user_id,
+                    }
+                },
+                "response_cost": 2.5,
+            },
+            completion_response=resp,
+            start_time=datetime(2024, 1, 17, 12, 0),
+            end_time=datetime(2024, 1, 17, 12, 1),
+        )
+
+        await update_spend(
+            prisma_client=prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        user_by_spend = await spend_per_user_fn(
+            user_id=key.user_id, start_date=None, end_date=None
+        )
+
+        assert len(user_by_spend) == 2
+
+        gpt_turbo_stats = user_by_spend[0]
+        assert gpt_turbo_stats["model"] == "chatgpt-v-2"
+        assert gpt_turbo_stats["spend"] == 2.5
+        assert gpt_turbo_stats["prompt_tokens"] == 310
+        assert gpt_turbo_stats["completion_tokens"] == 300
+
+        chatgpt_stats = user_by_spend[1]
+        assert chatgpt_stats["model"] == "gpt-3.5-turbo"
+        assert chatgpt_stats["spend"] == 3.5
+        assert chatgpt_stats["prompt_tokens"] == 620
+        assert chatgpt_stats["completion_tokens"] == 600
+
+        user_by_spend_with_start_date = await spend_per_user_fn(
+            user_id=key.user_id,
+            start_date="2024-01-14",
+            end_date=None,
+        )
+        assert len(user_by_spend_with_start_date) == 2
+
+        chatgpt_stats = user_by_spend_with_start_date[0]
+        assert chatgpt_stats["model"] == "chatgpt-v-2"
+        assert chatgpt_stats["spend"] == 2.5
+        assert chatgpt_stats["prompt_tokens"] == 310
+        assert chatgpt_stats["completion_tokens"] == 300
+
+        gpt_turbo_stats = user_by_spend_with_start_date[1]
+        assert gpt_turbo_stats["model"] == "gpt-3.5-turbo"
+        assert gpt_turbo_stats["spend"] == 1.0
+        assert gpt_turbo_stats["prompt_tokens"] == 210
+        assert gpt_turbo_stats["completion_tokens"] == 200
+
+        user_by_spend_with_end_date = await spend_per_user_fn(
+            user_id=key.user_id,
+            start_date=None,
+            end_date="2024-01-14",
+        )
+        assert len(user_by_spend_with_end_date) == 1
+        assert user_by_spend_with_end_date[0]["model"] == "gpt-3.5-turbo"
+        assert user_by_spend_with_end_date[0]["spend"] == 2.5
+        assert user_by_spend_with_end_date[0]["prompt_tokens"] == 410
+        assert user_by_spend_with_end_date[0]["completion_tokens"] == 400
+
+        user_by_spend_with_start_and_end_date = await spend_per_user_fn(
+            user_id=key.user_id,
+            start_date="2024-01-14",
+            end_date="2024-01-16",
+        )
+        assert len(user_by_spend_with_start_and_end_date) == 1
+        assert user_by_spend_with_start_and_end_date[0]["model"] == "gpt-3.5-turbo"
+        assert user_by_spend_with_start_and_end_date[0]["spend"] == 1.0
+        assert user_by_spend_with_start_and_end_date[0]["prompt_tokens"] == 210
+        assert user_by_spend_with_start_and_end_date[0]["completion_tokens"] == 200
+
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
 
 
 @pytest.mark.asyncio()
