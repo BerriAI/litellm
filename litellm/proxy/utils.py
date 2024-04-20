@@ -1080,11 +1080,11 @@ class PrismaClient:
                     sql_query = f"""
                     SELECT *
                     FROM "LiteLLM_UserTable"
-                    WHERE "user_id" IN ({user_id_values})
+                    WHERE "user_id" IN ($1)
                     """
                     # Execute the raw query
                     # The asterisk before `user_id_list` unpacks the list into separate arguments
-                    response = await self.db.query_raw(sql_query)
+                    response = await self.db.query_raw(sql_query, user_id_values)
                 elif query_type == "find_all":
                     if expires is not None:
                         response = await self.db.litellm_usertable.find_many(  # type: ignore
