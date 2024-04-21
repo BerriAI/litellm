@@ -484,6 +484,76 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_mistral_api_mistral_large_function_call():
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
+    try:
+        # test without max tokens
+        response = completion(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        # Add any assertions, here to check response args
+        print(response)
+        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+
+        messages.append(
+            response.choices[0].message.model_dump()
+        )  # Add assistant tool invokes
+        tool_result = (
+            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+        )
+        # Add user submitted tool results in the OpenAI format
+        messages.append(
+            {
+                "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                "role": "tool",
+                "name": response.choices[0].message.tool_calls[0].function.name,
+                "content": tool_result,
+            }
+        )
+        # In the second response, Mistral should deduce answer from tool results
+        second_response = completion(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(second_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(
     reason="Since we already test mistral/mistral-tiny in test_completion_mistral_api. This is only for locally verifying azure mistral works"
 )
