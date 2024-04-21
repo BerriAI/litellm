@@ -147,6 +147,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
+                  onChange={(values) => {
+                    // Check if "All Team Models" is selected
+                    const isAllTeamModelsSelected = values.includes("all-team-models");
+              
+                    // If "All Team Models" is selected, deselect all other models
+                    if (isAllTeamModelsSelected) {
+                      const newValues = ["all-team-models"];
+                      // You can call the form's setFieldsValue method to update the value
+                      form.setFieldsValue({ models: newValues });
+                    }
+                  }}
                 >
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
@@ -270,6 +281,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item 
                 label="Models" 
                 name="models"
+                className="mb-12"
                 rules={[{ required: true, message: 'Please select a model' }]}
                 help="required"
               >
@@ -277,6 +289,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
+                  onChange={(values) => {
+                    const isAllTeamModelsSelected = values.includes("all-team-models");
+              
+                    if (isAllTeamModelsSelected) {
+                      const newValues = ["all-team-models"];
+                      form.setFieldsValue({ models: newValues });
+                    }
+                  }}
+
                 >
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
@@ -308,7 +329,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Select>
               </Form.Item>
 
-              <Accordion className="mt-8">
+              <Accordion className="mt-20 mb-8" >
                 <AccordionHeader>
                   <b>Optional Settings</b>
                 </AccordionHeader>
