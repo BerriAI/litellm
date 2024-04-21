@@ -244,6 +244,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             userSpend={teamSpend}
+            selectedTeam = {selectedTeam ? selectedTeam : null}
+
           />
 
           <ViewKeyTable
