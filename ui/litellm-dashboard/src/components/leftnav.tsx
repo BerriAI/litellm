@@ -63,15 +63,13 @@ const Sidebar: React.FC<SidebarProps> = ({
             Test Key
             </Text>
           </Menu.Item>
-          {
-            userRole == "App User" ? (
+
               <Menu.Item key="11" onClick={() => setPage("api_ref")}>
               <Text>
                 API Reference
                 </Text>
               </Menu.Item>
-            ) : null
-          }
+
           {
             userRole == "Admin" ? (
               <Menu.Item key="2" onClick={() => setPage("models")}>
