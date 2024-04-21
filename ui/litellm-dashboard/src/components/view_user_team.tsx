@@ -53,7 +53,6 @@ const ViewUserTeam: React.FC<ViewUserTeamProps> = ({ userID, userRole, selectedT
       
         fetchUserModels();
       }, [accessToken, userID, userRole]);
-    if (userRole !== 'App User') return null;
 
     // logic to decide what models to display
     let modelsToDisplay = [];
@@ -69,24 +68,8 @@ const ViewUserTeam: React.FC<ViewUserTeamProps> = ({ userID, userRole, selectedT
     return (
         <>
         <div className="mb-5">
-        <p className="text-3xl mb-2 text-tremor-content-strong dark:text-dark-tremor-content-strong">Team: {selectedTeam?.team_alias}</p>
-        <Accordion>
-            <AccordionHeader>
-            <Text><b>Team Models</b></Text>
-            </AccordionHeader>
-            <AccordionBody>
-            <List>
-            {modelsToDisplay.map((model: string, index: number) => (
-                <ListItem>
-                    {model}
-                </ListItem>
-            ))}
-            </List>
-            </AccordionBody>
-        </Accordion>
+        <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">{selectedTeam?.team_alias}</p>
         </div>
-
-        
     </>
     )
 }

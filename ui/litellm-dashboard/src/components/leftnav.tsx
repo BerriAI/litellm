@@ -46,8 +46,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
   }
   return (
-    <Layout style={{ minHeight: "100vh", maxWidth: "120px" }}>
-      <Sider width={120}>
+    <Layout style={{ minHeight: "100vh", maxWidth: "130px" }}>
+      <Sider width={130}>
         <Menu
           mode="inline"
           defaultSelectedKeys={defaultSelectedKey ? defaultSelectedKey : ["1"]}
@@ -63,6 +63,15 @@ const Sidebar: React.FC<SidebarProps> = ({
             Test Key
             </Text>
           </Menu.Item>
+          {
+            userRole == "App User" ? (
+              <Menu.Item key="11" onClick={() => setPage("api_ref")}>
+              <Text>
+                API Reference
+                </Text>
+              </Menu.Item>
+            ) : null
+          }
           {
             userRole == "Admin" ? (
               <Menu.Item key="2" onClick={() => setPage("models")}>
