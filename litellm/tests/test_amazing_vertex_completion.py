@@ -90,7 +90,7 @@ def load_vertex_ai_credentials():
 
     # Create a temporary file
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
-        # Write the updated content to the temporary file
+        # Write the updated content to the temporary files
         json.dump(service_account_key_data, temp_file, indent=2)
 
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
