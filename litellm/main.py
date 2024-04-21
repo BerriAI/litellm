@@ -610,6 +610,7 @@ def completion(
         "client",
         "rpm",
         "tpm",
+        "max_parallel_requests",
         "input_cost_per_token",
         "output_cost_per_token",
         "input_cost_per_second",
@@ -2598,6 +2599,7 @@ def embedding(
     client = kwargs.pop("client", None)
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
+    max_parallel_requests = kwargs.pop("max_parallel_requests", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
     encoding_format = kwargs.get("encoding_format", None)
@@ -2655,6 +2657,7 @@ def embedding(
         "client",
         "rpm",
         "tpm",
+        "max_parallel_requests",
         "input_cost_per_token",
         "output_cost_per_token",
         "input_cost_per_second",
@@ -3514,6 +3517,7 @@ def image_generation(
             "client",
             "rpm",
             "tpm",
+            "max_parallel_requests",
             "input_cost_per_token",
             "output_cost_per_token",
             "hf_model_name",

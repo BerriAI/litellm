@@ -507,10 +507,11 @@ def construct_tool_use_system_prompt(
 ):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
     tool_str_list = []
     for tool in tools:
+        tool_function = get_attribute_or_key(tool, "function")
         tool_str = construct_format_tool_for_claude_prompt(
-            tool["function"]["name"],
-            tool["function"].get("description", ""),
-            tool["function"].get("parameters", {}),
+            get_attribute_or_key(tool_function, "name"),
+            get_attribute_or_key(tool_function, "description", ""),
+            get_attribute_or_key(tool_function, "parameters", {}),
         )
         tool_str_list.append(tool_str)
     tool_use_system_prompt = (
@@ -634,7 +635,8 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
     </function_results>
     """
     name = message.get("name")
-    content = message.get("content")
+    content = message.get("content", "")
+    content = content.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
@@ -655,13 +657,15 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
 def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
     invokes = ""
     for tool in tool_calls:
-        if tool["type"] != "function":
+        if get_attribute_or_key(tool, "type") != "function":
             continue
 
-        tool_name = tool["function"]["name"]
+        tool_function =  get_attribute_or_key(tool,"function")
+        tool_name = get_attribute_or_key(tool_function, "name")
+        tool_arguments = get_attribute_or_key(tool_function, "arguments")
         parameters = "".join(
             f"<{param}>{val}</{param}>\n"
-            for param, val in json.loads(tool["function"]["arguments"]).items()
+            for param, val in json.loads(tool_arguments).items()
         )
         invokes += (
             "<invoke>\n"
@@ -715,7 +719,7 @@ def anthropic_messages_pt_xml(messages: list):
                     {
                         "type": "text",
                         "text": (
-                            convert_to_anthropic_tool_result(messages[msg_i])
+                            convert_to_anthropic_tool_result_xml(messages[msg_i])
                             if messages[msg_i]["role"] == "tool"
                             else messages[msg_i]["content"]
                         ),
@@ -736,7 +740,7 @@ def anthropic_messages_pt_xml(messages: list):
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
-                assistant_text += convert_to_anthropic_tool_invoke(  # type: ignore
+                assistant_text += convert_to_anthropic_tool_invoke_xml(  # type: ignore
                     messages[msg_i]["tool_calls"]
                 )
 
@@ -848,12 +852,12 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
     anthropic_tool_invoke = [
         {
             "type": "tool_use",
-            "id": tool["id"],
-            "name": tool["function"]["name"],
-            "input": json.loads(tool["function"]["arguments"]),
+            "id": get_attribute_or_key(tool, "id"),
+            "name": get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            "input": json.loads(get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments")),
         }
         for tool in tool_calls
-        if tool["type"] == "function"
+        if get_attribute_or_key(tool, "type") == "function"
     ]
 
     return anthropic_tool_invoke
@@ -1074,7 +1078,8 @@ def cohere_message_pt(messages: list):
             tool_result = convert_openai_message_to_cohere_tool_result(message)
             tool_results.append(tool_result)
         else:
-            prompt += message["content"]
+            prompt += message["content"] + "\n\n"
+    prompt = prompt.rstrip()
     return prompt, tool_results
 
 
@@ -1414,3 +1419,8 @@ def prompt_factory(
         return default_pt(
             messages=messages
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
+
+def get_attribute_or_key(tool_or_function, attribute, default=None):
+    if hasattr(tool_or_function, attribute):
+        return getattr(tool_or_function, attribute)
+    return tool_or_function.get(attribute, default)

@@ -260,7 +260,10 @@ async def test_chat_completion_ratelimit():
             await asyncio.gather(*tasks)
             pytest.fail("Expected at least 1 call to fail")
         except Exception as e:
-            pass
+            if "Request did not return a 200 status code: 429" in str(e):
+                pass
+            else:
+                pytest.fail(f"Wrong error received - {str(e)}")
 
 
 @pytest.mark.asyncio

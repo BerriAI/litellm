@@ -46,8 +46,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
   }
   return (
-    <Layout style={{ minHeight: "100vh", maxWidth: "120px" }}>
-      <Sider width={120}>
+    <Layout style={{ minHeight: "100vh", maxWidth: "130px" }}>
+      <Sider width={130}>
         <Menu
           mode="inline"
           defaultSelectedKeys={defaultSelectedKey ? defaultSelectedKey : ["1"]}
@@ -63,11 +63,23 @@ const Sidebar: React.FC<SidebarProps> = ({
             Test Key
             </Text>
           </Menu.Item>
-          <Menu.Item key="2" onClick={() => setPage("models")}>
-          <Text>
-            Models
-            </Text>
-          </Menu.Item>
+
+              <Menu.Item key="11" onClick={() => setPage("api_ref")}>
+              <Text>
+                API Reference
+                </Text>
+              </Menu.Item>
+
+          {
+            userRole == "Admin" ? (
+              <Menu.Item key="2" onClick={() => setPage("models")}>
+              <Text>
+                Models
+                </Text>
+              </Menu.Item>
+            ) : null
+          }
+
           {userRole == "Admin" ? (
             <Menu.Item key="6" onClick={() => setPage("teams")}>
               <Text>
@@ -75,11 +87,18 @@ const Sidebar: React.FC<SidebarProps> = ({
               </Text>
             </Menu.Item>
           ) : null}
-          <Menu.Item key="4" onClick={() => setPage("usage")}>
-          <Text>
-            Usage
-            </Text>
-          </Menu.Item>
+
+          {
+            userRole == "Admin" ? (
+              <Menu.Item key="4" onClick={() => setPage("usage")}>
+            <Text>
+              Usage
+              </Text>
+            </Menu.Item>
+
+              ) : null
+          }
+          
             {userRole == "Admin" ? (
             <Menu.Item key="5" onClick={() => setPage("users")}>
               <Text>
@@ -87,16 +106,27 @@ const Sidebar: React.FC<SidebarProps> = ({
               </Text>
             </Menu.Item>
           ) : null}
-          <Menu.Item key="8" onClick={() => setPage("settings")}>
-          <Text>
-            Integrations
-          </Text>
-          </Menu.Item>
-          <Menu.Item key="9" onClick={() => setPage("general-settings")}>
-          <Text>
-            Settings
-          </Text>
-          </Menu.Item>
+
+          {
+            userRole == "Admin" ? (
+              <Menu.Item key="8" onClick={() => setPage("settings")}>
+                <Text>
+                  Integrations
+                </Text>
+                </Menu.Item>
+              ) : null
+          }
+          
+          {
+            userRole == "Admin" ? (
+              <Menu.Item key="9" onClick={() => setPage("general-settings")}>
+              <Text>
+                Settings
+              </Text>
+              </Menu.Item>
+            ) : null
+          }
+
           {userRole == "Admin" ? (
             <Menu.Item key="7" onClick={() => setPage("admin-panel")}>
               <Text>
