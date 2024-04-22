@@ -266,6 +266,14 @@ class LangFuseLogger:
                 "session_id": metadata.pop("session_id", None),
             }
 
+            trace_version = metadata.pop("trace_version", None)
+            if trace_version is not None:
+                trace_params["version"] = trace_version
+
+            trace_release = metadata.pop("trace_release", None)
+            if trace_release is not None:
+                trace_params["release"] = trace_release
+
             trace_input = metadata.pop("trace_input", None)
             trace_output = metadata.pop("trace_output", None)
 
@@ -300,6 +308,8 @@ class LangFuseLogger:
 
             # We don't allow generation_output, because it doesn't really make sense to allow the override of the output
             generation_input = metadata.pop("generation_input", None)
+
+            generation_version = metadata.pop("generation_version", None),
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
@@ -395,6 +405,9 @@ class LangFuseLogger:
                 "metadata": clean_metadata,
                 "level": level,
             }
+
+            if generation_version:
+                generation_params["version"] = generation_version
 
             if generation_input is not None:
                 generation_params["input"] = generation_input
