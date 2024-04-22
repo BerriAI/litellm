@@ -512,3 +512,76 @@ async def test_wildcard_openai_routing():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+"""
+Test async router get deployment (Simpl-shuffle)
+"""
+
+rpm_list = [[None, None], [6, 1440]]
+tpm_list = [[None, None], [6, 1440]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rpm_list, tpm_list",
+    [(rpm, tpm) for rpm in rpm_list for tpm in tpm_list],
+)
+async def test_weighted_selection_router_async(rpm_list, tpm_list):
+    # this tests if load balancing works based on the provided rpms in the router
+    # it's a fast test, only tests get_available_deployment
+    # users can pass rpms as a litellm_param
+    try:
+        litellm.set_verbose = False
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo-0613",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "rpm": rpm_list[0],
+                    "tpm": tpm_list[0],
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "rpm": rpm_list[1],
+                    "tpm": tpm_list[1],
+                },
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+        )
+        selection_counts = defaultdict(int)
+
+        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        for _ in range(1000):
+            selected_model = await router.async_get_available_deployment(
+                "gpt-3.5-turbo"
+            )
+            selected_model_id = selected_model["litellm_params"]["model"]
+            selected_model_name = selected_model_id
+            selection_counts[selected_model_name] += 1
+        print(selection_counts)
+
+        total_requests = sum(selection_counts.values())
+
+        if rpm_list[0] is not None or tpm_list[0] is not None:
+            # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+            assert (
+                selection_counts["azure/chatgpt-v-2"] / total_requests > 0.89
+            ), f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        else:
+            # Assert both are used
+            assert selection_counts["azure/chatgpt-v-2"] > 0
+            assert selection_counts["gpt-3.5-turbo-0613"] > 0
+        router.reset()
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
