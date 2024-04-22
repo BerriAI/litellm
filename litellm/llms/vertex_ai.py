@@ -34,6 +34,8 @@ class ExtendedGenerationConfig(dict):
         max_output_tokens: Optional[int] = None,
         stop_sequences: Optional[List[str]] = None,
         response_mime_type: Optional[str] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ):
         super().__init__(
             temperature=temperature,
@@ -43,6 +45,8 @@ class ExtendedGenerationConfig(dict):
             max_output_tokens=max_output_tokens,
             stop_sequences=stop_sequences,
             response_mime_type=response_mime_type,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
         )
 
 class VertexAIConfig:
@@ -66,6 +70,10 @@ class VertexAIConfig:
 
     - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
 
+    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
+
+    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
+
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
@@ -76,6 +84,8 @@ class VertexAIConfig:
     response_mime_type: Optional[str] = None
     candidate_count: Optional[int] = None
     stop_sequences: Optional[list] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
 
     def __init__(
         self,
@@ -86,6 +96,8 @@ class VertexAIConfig:
         response_mime_type: Optional[str] = None,
         candidate_count: Optional[int] = None,
         stop_sequences: Optional[list] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -142,6 +154,10 @@ class VertexAIConfig:
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and value["type"] == "json_object":
                 optional_params["response_mime_type"] = "application/json"
+            if param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
             if param == "tools" and isinstance(value, list):
                 from vertexai.preview import generative_models
 
