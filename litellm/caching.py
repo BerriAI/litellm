@@ -217,6 +217,11 @@ class RedisCache(BaseCache):
         _redis_client = self.redis_client
         start_time = time.time()
         try:
+            try:
+                if isinstance(value, str):
+                    value = int(value)
+            except:
+                pass
             result = _redis_client.incr(name=key, amount=value)
             ## LOGGING ##
             end_time = time.time()
@@ -242,9 +247,10 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, Writing value=%s, Type of value=%s",
                 str(e),
                 value,
+                type(value),
             )
             traceback.print_exc()
             raise e

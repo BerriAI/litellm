@@ -25,7 +25,7 @@ def test_empty_content():
         pass
 
     function_setup(
-        original_function=completion,
+        original_function=completion.__name__,
         rules_obj=rules_obj,
         start_time=datetime.now(),
         messages=[],

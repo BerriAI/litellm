@@ -387,6 +387,65 @@ async def test_router_completion_streaming():
 
 
 # asyncio.run(test_router_completion_streaming())
+@pytest.mark.parametrize("sync_mode", [True])  # Use parametrization for sync/async
+@pytest.mark.asyncio
+async def test_router_caching_tpm_rpm_values(sync_mode):
+    """
+    - sync_mode: if call is sync or async
+
+    make sure model usage values are not incremented if request is a cache hit
+    """
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_id = 1
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": model_id},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+        cache_responses=True,
+    )  # type: ignore
+
+    if sync_mode == True:
+        # make 1st call - no cache
+        router.completion(
+            model="azure-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        # make 2nd call - cache hit
+        router.completion(
+            model="azure-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        # check if model rpm == 1
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
+        rpm_key = f"{model_id}:rpm:{current_minute}"
+        value = router.cache.get_cache(key=rpm_key)
+
+        assert value == 1
+    else:
+        pass
+        # make 1st call - no cache
+        # router.acompletion()
+
+        # make 2nd call - cache hit
+
+        # check if model rpm == 1
+
 
 """
 - Unit test for sync 'pre_call_checks' 
