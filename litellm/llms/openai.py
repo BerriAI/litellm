@@ -1221,6 +1221,8 @@ class OpenAITextCompletion(BaseLLM):
         else:
             openai_client = client
 
+        # Prompt should be a string, not an array.
+        data["prompt"] = data["prompt"][0]
         response = await openai_client.completions.create(**data)
 
         streamwrapper = CustomStreamWrapper(
