@@ -57,7 +57,7 @@ os.environ["LANGSMITH_API_KEY"] = ""
 os.environ['OPENAI_API_KEY']=""
 
 # set langfuse as a callback, litellm will send the data to langfuse
-litellm.success_callback = ["langfuse"] 
+litellm.success_callback = ["langsmith"] 
  
 response = litellm.completion(
     model="gpt-3.5-turbo",
