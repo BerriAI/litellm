@@ -271,10 +271,42 @@ class ProxyLogging:
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
         if time_difference_float > self.alerting_threshold:
+            if "langfuse" in litellm.success_callback:
+                request_info = self._add_langfuse_trace_id_to_alert(
+                    request_info=request_info, kwargs=kwargs
+                )
             await self.alerting_handler(
                 message=slow_message + request_info,
                 level="Low",
             )
+
+    def _add_langfuse_trace_id_to_alert(
+        self,
+        request_info: str,
+        request_data: Optional[dict] = None,
+        kwargs: Optional[dict] = None,
+    ):
+        import uuid
+
+        if request_data is not None:
+            trace_id = request_data.get("metadata", {}).get(
+                "trace_id", None
+            )  # get langfuse trace id
+            if trace_id is None:
+                trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
+                request_data["metadata"]["trace_id"] = trace_id
+        elif kwargs is not None:
+            _litellm_params = kwargs.get("litellm_params", {})
+            trace_id = _litellm_params.get("metadata", {}).get(
+                "trace_id", None
+            )  # get langfuse trace id
+            if trace_id is None:
+                trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
+                _litellm_params["metadata"]["trace_id"] = trace_id
+
+        _langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        request_info += f"\n🪢 Langfuse Trace: {_langfuse_host}/trace/{trace_id}"
+        return request_info
 
     async def response_taking_too_long(
         self,
@@ -289,22 +321,18 @@ class ProxyLogging:
             if messages is None:
                 # if messages does not exist fallback to "input"
                 messages = request_data.get("input", None)
-            trace_id = request_data.get("metadata", {}).get(
-                "trace_id", None
-            )  # get langfuse trace id
-            if trace_id is not None:
+
+            # try casting messages to str and get the first 100 characters, else mark as None
+            try:
                 messages = str(messages)
                 messages = messages[:100]
-                messages = f"{messages}\nLangfuse Trace Id: {trace_id}"
-            else:
-                # try casting messages to str and get the first 100 characters, else mark as None
-                try:
-                    messages = str(messages)
-                    messages = messages[:100]
-                except:
-                    messages = None
-
+            except:
+                messages = ""
             request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
+            if "langfuse" in litellm.success_callback:
+                request_info = self._add_langfuse_trace_id_to_alert(
+                    request_info=request_info, request_data=request_data
+                )
         else:
             request_info = ""
 
@@ -493,14 +521,19 @@ class ProxyLogging:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
         """
+        if self.alerting is None:
+            return
+
         from datetime import datetime
 
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
-        _proxy_base_url = os.getenv("PROXY_BASE_URL", "None")
-        formatted_message = f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message} \n\nProxy URL: `{_proxy_base_url}`"
-        if self.alerting is None:
-            return
+        _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+        formatted_message = (
+            f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+        )
+        if _proxy_base_url is not None:
+            formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
         for client in self.alerting:
             if client == "slack":
