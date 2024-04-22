@@ -149,8 +149,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
             if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
-                    message="[Local Async Cache] Deployment over defined rpm limit={}. current usage={}, rpm key={}".format(
-                        deployment_rpm, local_result, rpm_key
+                    message="[Local Async Cache] Deployment over defined rpm limit={}. current usage={}".format(
+                        deployment_rpm, local_result
                     ),
                     llm_provider="",
                     model=deployment.get("litellm_params", {}).get("model"),
