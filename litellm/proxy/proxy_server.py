@@ -5552,10 +5552,12 @@ async def global_spend_per_tea():
             # get the team_id for this entry
             # get the spend for this entry
             spend = row["total_spend"]
+            spend = round(spend, 2)
             current_date_entries = spend_by_date[row_date]
             current_date_entries[team_alias] = spend
         else:
             spend = row["total_spend"]
+            spend = round(spend, 2)
             spend_by_date[row_date] = {team_alias: spend}
 
         if team_alias in total_spend_per_team:
