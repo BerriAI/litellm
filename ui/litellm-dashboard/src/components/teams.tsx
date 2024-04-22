@@ -20,6 +20,7 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
+  TextInput,
   Card,
   Icon,
   Button,
@@ -480,7 +481,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   name="team_alias"
                   rules={[{ required: true, message: 'Please input a team name' }]}
                 >
-                  <Input />
+                  <TextInput placeholder="" />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
                   <Select2
