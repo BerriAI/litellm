@@ -1190,6 +1190,8 @@ class PrismaClient:
                     response = await self.db.litellm_teamtable.find_many(
                         where={"team_id": {"in": team_id_list}}
                     )
+                elif query_type == "find_all" and team_id_list is None:
+                    response = await self.db.litellm_teamtable.find_many(take=20)
                 return response
             elif table_name == "user_notification":
                 if query_type == "find_unique":
