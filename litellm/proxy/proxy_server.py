@@ -3471,6 +3471,7 @@ async def completion(
         fastapi_response.headers["x-litellm-model-id"] = model_id
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
         verbose_proxy_logger.debug(
             "\033[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
@@ -3720,6 +3721,7 @@ async def chat_completion(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         traceback.print_exc()
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
@@ -3914,6 +3916,7 @@ async def embeddings(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
@@ -4069,6 +4072,7 @@ async def image_generation(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
@@ -4247,6 +4251,7 @@ async def audio_transcriptions(
         data["litellm_status"] = "success"  # used for alerting
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
@@ -4408,6 +4413,7 @@ async def moderations(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
