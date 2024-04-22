@@ -392,6 +392,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   index="date"
                   categories={uniqueTeamIds}
                   yAxisWidth={80}
+                  colors={["blue", "green", "yellow", "red", "purple"]}
                   
                   stack={true}
                 />
