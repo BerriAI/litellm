@@ -109,6 +109,10 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
     if (modelsToDisplay && modelsToDisplay.includes("all-proxy-models")) {
         console.log("user models:", userModels);
         modelsToDisplay = userModels;
+    } else if (modelsToDisplay && modelsToDisplay.includes("all-team-models")) {
+        modelsToDisplay = selectedTeam.models;
+    } else if (modelsToDisplay && modelsToDisplay.length === 0) {
+      modelsToDisplay = userModels;
     }
 
 
@@ -129,7 +133,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
         </div>
         <div className="ml-auto">
           <Accordion>
-            <AccordionHeader>Models</AccordionHeader>
+            <AccordionHeader><Text>Team Models</Text></AccordionHeader>
             <AccordionBody className="absolute right-0 z-10 bg-white p-2 shadow-lg max-w-xs">
               <List>
                 {modelsToDisplay.map((model: string) => (
