@@ -282,6 +282,25 @@ class LangFuseLogger:
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
 
+            generation_id = metadata.pop("generation_id", None)
+            usage = None
+            if response_obj is not None and response_obj.get("id", None) is not None:
+                if generation_id is None:
+                    generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+
+                usage = {
+                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
+                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                    "total_cost": cost if supports_costs else None,
+                }
+            generation_name = metadata.pop("generation_name", None)
+            if generation_name is None:
+                # just log `litellm-{call_type}` as the generation name
+                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+
+            # We don't allow generation_output, because it doesn't really make sense to allow the override of the output
+            generation_input = metadata.pop("generation_input", None)
+
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
@@ -359,27 +378,13 @@ class LangFuseLogger:
 
             trace = self.Langfuse.trace(**trace_params)
 
-            generation_id = None
-            usage = None
-            if response_obj is not None and response_obj.get("id", None) is not None:
-                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
-                usage = {
-                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
-                    "completion_tokens": response_obj["usage"]["completion_tokens"],
-                    "total_cost": cost if supports_costs else None,
-                }
-            generation_name = metadata.get("generation_name", None)
-            if generation_name is None:
-                # just log `litellm-{call_type}` as the generation name
-                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
-
             system_fingerprint = response_obj.get("system_fingerprint", None)
             if system_fingerprint is not None:
                 optional_params["system_fingerprint"] = system_fingerprint
 
             generation_params = {
                 "name": generation_name,
-                "id": metadata.get("generation_id", generation_id),
+                "id": generation_id,
                 "start_time": start_time,
                 "end_time": end_time,
                 "model": kwargs["model"],
@@ -391,8 +396,8 @@ class LangFuseLogger:
                 "level": level,
             }
 
-            if supports_prompt:
-                generation_params["prompt"] = metadata.get("prompt", None)
+            if generation_input is not None:
+                generation_params["input"] = generation_input
 
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output
