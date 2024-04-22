@@ -638,7 +638,7 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     try:
-        if "openhermes" in model: # openhermes should take higher precedence than mistral or mixtral
+        if "openhermes" in model or "dolphin" in model: # openhermes should take higher precedence than mistral or mixtral
             return chatml_chat_pt(messages=messages)
         elif ("mistral" in model or "mixtral" in model) and "instruct" in model:
             return mistral_instruct_pt(messages=messages)
