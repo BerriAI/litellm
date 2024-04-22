@@ -5711,6 +5711,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "frequency_penalty",
             "logit_bias",
             "user",
+            "response_format",
         ]
     elif custom_llm_provider == "perplexity":
         return [
