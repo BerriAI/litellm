@@ -295,6 +295,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             userSpend={null}
+            selectedTeam={null}
           />
       <TabGroup>
         <TabList className="mt-2">
