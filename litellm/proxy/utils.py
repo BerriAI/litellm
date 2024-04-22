@@ -346,6 +346,7 @@ class ProxyLogging:
             if (
                 request_data is not None
                 and request_data.get("litellm_status", "") != "success"
+                and request_data.get("litellm_status", "") != "fail"
             ):
                 if request_data.get("deployment", None) is not None and isinstance(
                     request_data["deployment"], dict
