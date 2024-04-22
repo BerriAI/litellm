@@ -2814,17 +2814,6 @@ def client(original_function):
                     )
 
             # [OPTIONAL] CHECK CACHE HIT
-            (
-                model,
-                custom_llm_provider,
-                dynamic_api_key,
-                api_base,
-            ) = litellm.get_llm_provider(
-                model=model,
-                custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                api_base=kwargs.get("api_base", None),
-                api_key=kwargs.get("api_key", None),
-            )
             response = check_cache_hit(
                 function_name=original_function.__name__,
                 model=model,
