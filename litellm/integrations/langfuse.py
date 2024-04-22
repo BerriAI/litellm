@@ -250,10 +250,10 @@ class LangFuseLogger:
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
             if supports_tags:
-                metadata_tags = metadata.get("tags", [])
+                metadata_tags = metadata.pop("tags", [])
                 tags = metadata_tags
 
-            trace_name = metadata.get("trace_name", None)
+            trace_name = metadata.pop("trace_name", None)
             if trace_name is None:
                 # just log `litellm-{call_type}` as the trace name
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
@@ -261,9 +261,9 @@ class LangFuseLogger:
             trace_params = {
                 "name": trace_name,
                 "input": input,
-                "user_id": metadata.get("trace_user_id", user_id),
-                "id": metadata.get("trace_id", None),
-                "session_id": metadata.get("session_id", None),
+                "user_id": metadata.pop("trace_user_id", user_id),
+                "id": metadata.pop("trace_id", None),
+                "session_id": metadata.pop("session_id", None),
             }
 
             trace_input = metadata.pop("trace_input", None)
