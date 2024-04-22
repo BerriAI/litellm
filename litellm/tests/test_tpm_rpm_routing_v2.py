@@ -145,7 +145,7 @@ def test_get_available_deployments():
 
 def test_router_get_available_deployments():
     """
-    Test if routers 'get_available_deployments' returns the least busy deployment
+    Test if routers 'get_available_deployments' returns the lowest tpm deployment
     """
     model_list = [
         {
@@ -391,4 +391,66 @@ async def test_router_completion_streaming():
 """
 - Unit test for sync 'pre_call_checks' 
 - Unit test for async 'async_pre_call_checks' 
+- unit test to make sure router.pre_call_checks doesn't raise rate limit errors when using usage-based-routing-v2
 """
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "enable_pre_call_check",
+    [False, True],
+)
+async def test_router_exception_check(enable_pre_call_check):
+    """ """
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1,
+            },
+            "model_info": {"id": 1},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+        enable_pre_call_checks=enable_pre_call_check,
+    )  # type: ignore
+
+    expected_exception = "[Local Async Cache] Deployment over defined rpm limit=1."
+
+    # with pytest.raises(Exception) as exc:
+    # Code that is expected to raise a ValueError
+    tasks = []
+    for _ in range(3):
+        tasks.append(
+            router.acompletion(
+                model="azure-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+        )
+
+    error_tasks = []
+    for task in tasks:
+        error_task = asyncio.create_task(task)
+        error_task.add_done_callback(lambda t: t.exception())
+        error_tasks.append(error_task)
+
+    await asyncio.gather(*error_tasks, return_exceptions=True)
+
+    all_errors = [
+        task._exception for task in error_tasks if task._exception is not None
+    ]
+
+    for error_str in all_errors:
+        assert expected_exception in str(
+            error_str
+        ), f"Wrong error raised: {expected_exception} not found in error message: {str(error_str)}"

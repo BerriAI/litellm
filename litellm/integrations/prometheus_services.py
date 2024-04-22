@@ -12,6 +12,7 @@ import datetime, subprocess, sys
 import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from typing import List, Union
 
 
 class PrometheusServicesLogger:
@@ -118,7 +119,7 @@ class PrometheusServicesLogger:
     def increment_counter(
         self,
         counter,
-        labels: str,
+        labels: Union[str, list],
         amount: float,
     ):
         assert isinstance(counter, self.Counter)
@@ -189,18 +190,22 @@ class PrometheusServicesLogger:
                     )
 
     async def async_service_failure_hook(self, payload: ServiceLoggerPayload):
-        print(f"received error payload: {payload.error}")
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
-
-        print(f"payload call type: {payload.call_type}")
 
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Counter):
-                    self.increment_counter(
-                        counter=obj,
-                        labels=payload.service.value,
-                        amount=1,  # LOG ERROR COUNT TO PROMETHEUS
-                    )
+                    if payload.error is not None:
+                        self.increment_counter(
+                            counter=obj,
+                            labels=[payload.service.value, payload.error],
+                            amount=1,  # LOG ERROR COUNT TO PROMETHEUS
+                        )
+                    else:
+                        self.increment_counter(
+                            counter=obj,
+                            labels=payload.service.value,
+                            amount=1,  # LOG ERROR COUNT TO PROMETHEUS
+                        )

@@ -72,7 +72,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
             if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
-                    message="Deployment over defined rpm limit={}. current usage={}".format(
+                    message="[Local Cache] Deployment over defined rpm limit={}. current usage={}".format(
                         deployment_rpm, local_result
                     ),
                     llm_provider="",
@@ -92,7 +92,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 result = self.router_cache.increment_cache(key=rpm_key, value=1)
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
-                        message="Deployment over defined rpm limit={}. current usage={}".format(
+                        message="[Redis Cache] Deployment over defined rpm limit={}. current usage={}".format(
                             deployment_rpm, result
                         ),
                         llm_provider="",
@@ -137,7 +137,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             local_result = await self.router_cache.async_get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
-
             deployment_rpm = None
             if deployment_rpm is None:
                 deployment_rpm = deployment.get("rpm")
@@ -150,8 +149,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
             if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
-                    message="Deployment over defined rpm limit={}. current usage={}".format(
-                        deployment_rpm, local_result
+                    message="[Local Async Cache] Deployment over defined rpm limit={}. current usage={}, rpm key={}".format(
+                        deployment_rpm, local_result, rpm_key
                     ),
                     llm_provider="",
                     model=deployment.get("litellm_params", {}).get("model"),
@@ -172,7 +171,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
-                        message="Deployment over defined rpm limit={}. current usage={}".format(
+                        message="[Redis Async Cache] Deployment over defined rpm limit={}. current usage={}".format(
                             deployment_rpm, result
                         ),
                         llm_provider="",

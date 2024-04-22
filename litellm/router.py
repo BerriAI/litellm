@@ -37,6 +37,7 @@ from litellm._logging import verbose_router_logger
 import logging
 from litellm.types.router import Deployment, ModelInfo, LiteLLM_Params, RouterErrors
 from litellm.integrations.custom_logger import CustomLogger
+from litellm._service_logger import ServiceLogging, ServiceTypes
 
 
 class Router:
@@ -86,6 +87,7 @@ class Router:
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based routing
         semaphore: Optional[asyncio.Semaphore] = None,
+        service_logger_obj: Optional[ServiceLogging] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -166,6 +168,12 @@ class Router:
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
+        ### HEALTH MONITORING OBJECT ###
+        if service_logger_obj is not None:
+            self.service_logger_obj = service_logger_obj
+        else:
+            self.service_logger_obj = ServiceLogging()
+
         ### CACHING ###
         cache_type: Literal["local", "redis"] = "local"  # default to an in-memory cache
         redis_cache = None
@@ -434,6 +442,7 @@ class Router:
         - in the semaphore,  make a check against it's local rpm before running
         """
         model_name = None
+        start_time = time.time()
         try:
             verbose_router_logger.debug(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
@@ -539,6 +548,16 @@ class Router:
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.ROUTER,
+                    duration=_duration,
+                    error=str(e),
+                    call_type="_acompletion",
+                )
+            )
             raise e
 
     def image_generation(self, prompt: str, model: str, **kwargs):
@@ -2652,10 +2671,10 @@ class Router:
                     base_model = deployment.get("litellm_params", {}).get(
                         "base_model", None
                     )
-                model = base_model or deployment.get("litellm_params", {}).get(
+                _model = base_model or deployment.get("litellm_params", {}).get(
                     "model", None
                 )
-                model_info = litellm.get_model_info(model=model)
+                model_info = litellm.get_model_info(model=_model)
 
                 if (
                     isinstance(model_info, dict)
@@ -2671,15 +2690,19 @@ class Router:
             except Exception as e:
                 verbose_router_logger.debug("An error occurs - {}".format(str(e)))
 
-            ## RPM CHECK ##
+            ## RPM CHECK ## (for usage-based-routing-v1)
             _litellm_params = deployment.get("litellm_params", {})
             model_id = deployment.get("model_info", {}).get("id", "")
             ### get local router cache ###
             current_request_cache_local = (
                 self.cache.get_cache(key=model_id, local_only=True) or 0
             )
+
             ### get usage based cache ###
-            if isinstance(model_group_cache, dict):
+            if (
+                isinstance(model_group_cache, dict)
+                and self.routing_strategy == "usage-based-routing"
+            ):
                 model_group_cache[model_id] = model_group_cache.get(model_id, 0)
 
                 current_request = max(
@@ -2707,7 +2730,7 @@ class Router:
 
             if _rate_limit_error == True:  # allow generic fallback logic to take place
                 raise ValueError(
-                    f"No deployments available for selected model, passed model={model}"
+                    f"[Pre-Call-Check] No deployments available for selected model, passed model={model}"
                 )
             elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(

@@ -11,6 +11,7 @@ class ServiceTypes(enum.Enum):
     REDIS = "redis"
     DB = "postgres"
     LITELLM = "self"
+    ROUTER = "litellm_router"
 
 
 class ServiceLoggerPayload(BaseModel):
