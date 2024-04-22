@@ -266,8 +266,16 @@ class LangFuseLogger:
                 "session_id": metadata.get("session_id", None),
             }
 
+            trace_input = metadata.pop("trace_input", None)
+            trace_output = metadata.pop("trace_output", None)
+
+            if trace_input is not None:
+                trace_params["input"] = trace_input
+
             if level == "ERROR":
                 trace_params["status_message"] = output
+            elif trace_output is not None:
+                trace_params["output"] = trace_output
             else:
                 trace_params["output"] = output
 
