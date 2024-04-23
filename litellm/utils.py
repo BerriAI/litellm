@@ -2722,14 +2722,16 @@ def client(original_function):
             if (
                 (
                     (
-                        kwargs.get("caching", None) is None
-                        and kwargs.get("cache", None) is None
-                        and litellm.cache is not None
+                        (
+                            kwargs.get("caching", None) is None
+                            and kwargs.get("cache", None) is None
+                            and litellm.cache is not None
+                        )
+                        or kwargs.get("caching", False) == True
                     )
-                    or kwargs.get("caching", False) == True
-                    or (
-                        kwargs.get("cache", None) is not None
-                        and kwargs.get("cache", {}).get("no-cache", False) != True
+                    and (
+                        kwargs.get("cache", None) is None
+                        or kwargs["cache"].get("no-cache", False) != True
                     )
                 )
                 and kwargs.get("aembedding", False) != True
@@ -3011,9 +3013,8 @@ def client(original_function):
                     )
 
             # [OPTIONAL] CHECK CACHE
-            print_verbose(f"litellm.cache: {litellm.cache}")
             print_verbose(
-                f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}"
+                f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
             # if caching is false, don't run this
             final_embedding_cached_response = None
@@ -3025,10 +3026,9 @@ def client(original_function):
                     and litellm.cache is not None
                 )
                 or kwargs.get("caching", False) == True
-                or (
-                    kwargs.get("cache", None) is not None
-                    and kwargs.get("cache").get("no-cache", False) != True
-                )
+            ) and (
+                kwargs.get("cache", None) is None
+                or kwargs["cache"].get("no-cache", False) != True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose("INSIDE CHECKING CACHE")
