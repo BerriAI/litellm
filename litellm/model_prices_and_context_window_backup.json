@@ -809,7 +809,8 @@
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000125,
         "litellm_provider": "anthropic",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "claude-3-opus-20240229": {
         "max_tokens": 4096,
@@ -818,7 +819,8 @@
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000075,
         "litellm_provider": "anthropic",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "claude-3-sonnet-20240229": {
         "max_tokens": 4096,
@@ -827,7 +829,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "anthropic",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "text-bison": {
         "max_tokens": 1024,
@@ -1133,7 +1136,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "vertex_ai-anthropic_models",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "vertex_ai/claude-3-haiku@20240307": {
         "max_tokens": 4096, 
@@ -1142,7 +1146,8 @@
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000125,
         "litellm_provider": "vertex_ai-anthropic_models",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "vertex_ai/claude-3-opus@20240229": {
         "max_tokens": 4096,
@@ -1151,7 +1156,8 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.0000075,
         "litellm_provider": "vertex_ai-anthropic_models",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "textembedding-gecko": {
         "max_tokens": 3072,
@@ -1789,7 +1795,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096, 
@@ -1798,7 +1805,8 @@
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000125,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
@@ -1807,7 +1815,8 @@
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000075,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "anthropic.claude-v1": {
         "max_tokens": 8191, 
