@@ -12,7 +12,6 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
-
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -1684,13 +1683,14 @@ def completion(
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
+            new_params = deepcopy(optional_params)
             if "claude-3" in model:
                 model_response = vertex_ai_anthropic.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
-                    optional_params=optional_params,
+                    optional_params=new_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     encoding=encoding,
@@ -1706,7 +1706,7 @@ def completion(
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
-                    optional_params=optional_params,
+                    optional_params=new_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     encoding=encoding,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Button, Modal, Form, Input, message, Select, InputNumber } from "antd";
-import { Button as Button2, Text } from "@tremor/react";
+import { Button as Button2, Text, TextInput } from "@tremor/react";
 import { userCreateCall, modelAvailableCall } from "./networking";
 const { Option } = Select;
 
@@ -94,7 +94,7 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
           labelAlign="left"
         >
           <Form.Item label="User Email" name="user_email">
-            <Input placeholder="Enter User Email" />
+            <TextInput placeholder="" />
           </Form.Item>
           <Form.Item label="Team ID" name="team_id">
           <Select
