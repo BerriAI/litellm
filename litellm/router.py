@@ -206,12 +206,16 @@ class Router:
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
 
-        if model_list:
+        if model_list is not None:
             model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
-            self.healthy_deployments: List = self.model_list
+            self.healthy_deployments: List = self.model_list  # type: ignore
             for m in model_list:
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
+        else:
+            self.model_list: List = (
+                []
+            )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
         self.allowed_fails = allowed_fails or litellm.allowed_fails
         self.cooldown_time = cooldown_time or 1

@@ -15,8 +15,9 @@ sys.path.insert(
 import pytest, litellm
 from pydantic import BaseModel
 from litellm.proxy.proxy_server import ProxyConfig
-from litellm.proxy.utils import encrypt_value
+from litellm.proxy.utils import encrypt_value, ProxyLogging, DualCache
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from typing import Literal
 
 
 class DBModel(BaseModel):
@@ -163,6 +164,116 @@ async def test_add_existing_deployment():
     assert num_added == 0
 
 
+litellm_params = LiteLLM_Params(
+    model="azure/chatgpt-v-2",
+    api_key=os.getenv("AZURE_API_KEY"),
+    api_base=os.getenv("AZURE_API_BASE"),
+    api_version=os.getenv("AZURE_API_VERSION"),
+)
+
+deployment = Deployment(model_name="gpt-3.5-turbo", litellm_params=litellm_params)
+deployment_2 = Deployment(model_name="gpt-3.5-turbo-2", litellm_params=litellm_params)
+
+
+def _create_model_list(flag_value: Literal[0, 1], master_key: str):
+    """
+    0 - empty list
+    1 - list with an element
+    """
+    import base64
+
+    new_litellm_params = LiteLLM_Params(
+        model="azure/chatgpt-v-2-3",
+        api_key=os.getenv("AZURE_API_KEY"),
+        api_base=os.getenv("AZURE_API_BASE"),
+        api_version=os.getenv("AZURE_API_VERSION"),
+    )
+
+    encrypted_litellm_params = new_litellm_params.dict(exclude_none=True)
+
+    for k, v in encrypted_litellm_params.items():
+        if isinstance(v, str):
+            encrypted_value = encrypt_value(v, master_key)
+            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode(
+                "utf-8"
+            )
+    db_model = DBModel(
+        model_id="12345",
+        model_name="gpt-3.5-turbo",
+        litellm_params=encrypted_litellm_params,
+        model_info={"id": "12345"},
+    )
+
+    db_models = [db_model]
+
+    if flag_value == 0:
+        return []
+    elif flag_value == 1:
+        return db_models
+
+
+@pytest.mark.parametrize(
+    "llm_router",
+    [
+        None,
+        litellm.Router(),
+        litellm.Router(
+            model_list=[
+                deployment.to_json(exclude_none=True),
+                deployment_2.to_json(exclude_none=True),
+            ]
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "model_list_flag_value",
+    [0, 1],
+)
 @pytest.mark.asyncio
-async def test_add_and_delete_deployments():
-    pass
+async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
+    """
+    Test add + delete logic in 3 scenarios
+    - when router is none
+    - when router is init but empty
+    - when router is init and not empty
+    """
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    pc = ProxyConfig()
+    pl = ProxyLogging(DualCache())
+
+    async def _monkey_patch_get_config(*args, **kwargs):
+        print(f"ENTERS MP GET CONFIG")
+        if llm_router is None:
+            return {}
+        else:
+            print(f"llm_router.model_list: {llm_router.model_list}")
+            return {"model_list": llm_router.model_list}
+
+    pc.get_config = _monkey_patch_get_config
+
+    model_list = _create_model_list(
+        flag_value=model_list_flag_value, master_key=master_key
+    )
+
+    if llm_router is None:
+        prev_llm_router_val = None
+    else:
+        prev_llm_router_val = len(llm_router.model_list)
+
+    await pc._update_llm_router(new_models=model_list, proxy_logging_obj=pl)
+
+    llm_router = getattr(litellm.proxy.proxy_server, "llm_router")
+
+    if model_list_flag_value == 0:
+        if prev_llm_router_val is None:
+            assert prev_llm_router_val == llm_router
+        else:
+            assert prev_llm_router_val == len(llm_router.model_list)
+    else:
+        if prev_llm_router_val is None:
+            assert len(llm_router.model_list) == len(model_list)
+        else:
+            assert len(llm_router.model_list) == len(model_list) + prev_llm_router_val
