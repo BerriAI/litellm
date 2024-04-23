@@ -2546,11 +2546,24 @@ class Router:
             "retry_after",
         ]
 
+        _int_settings = [
+            "timeout",
+            "num_retries",
+            "retry_after",
+            "allowed_fails",
+            "cooldown_time",
+        ]
+
         for var in kwargs:
             if var in _allowed_settings:
-                setattr(self, var, kwargs[var])
+                if var in _int_settings:
+                    _casted_value = int(kwargs[var])
+                    setattr(self, var, _casted_value)
+                else:
+                    setattr(self, var, kwargs[var])
             else:
                 verbose_router_logger.debug("Setting {} is not allowed".format(var))
+        verbose_router_logger.debug(f"Updated Router settings: {self.get_settings()}")
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
