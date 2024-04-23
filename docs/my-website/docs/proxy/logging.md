@@ -9,9 +9,9 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
-- [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
+- [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
 - [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
@@ -538,6 +538,36 @@ print(response)
 </TabItem>
 </Tabs>
 
+
+### Team based Logging to Langfuse
+
+**Example:**
+
+This config would send langfuse logs to 2 different langfuse projects, based on the team id 
+
+```yaml
+litellm_settings:
+  default_team_settings: 
+    - team_id: my-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
+    - team_id: ishaans-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
+      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
+```
+
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "ishaans-secret-project"}'
+```
+
+All requests made with these keys will log data to their team-specific logging.
 
 ## Logging Proxy Input/Output - DataDog
 We will use the `--config` to set `litellm.success_callback = ["datadog"]` this will log all successfull LLM calls to DataDog

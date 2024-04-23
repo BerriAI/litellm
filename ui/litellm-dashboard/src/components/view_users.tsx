@@ -19,12 +19,17 @@ import {
   TabPanel,
   Select,
   SelectItem,
+  Dialog, 
+  DialogPanel,
+  Icon,
+  TextInput,
 } from "@tremor/react";
 import { userInfoCall, adminTopEndUsersCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
 import Paragraph from "antd/es/skeleton/Paragraph";
+import InformationCircleIcon from "@heroicons/react/outline/InformationCircleIcon";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -32,6 +37,7 @@ interface ViewUserDashboardProps {
   keys: any[] | null;
   userRole: string | null;
   userID: string | null;
+  teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
 
@@ -41,11 +47,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   keys,
   userRole,
   userID,
+  teams,
   setKeys,
 }) => {
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
+  const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const defaultPageSize = 25;
 
   useEffect(() => {
@@ -113,19 +122,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   function renderPagination() {
     if (!userData) return null;
 
-    // const totalPages = Math.ceil(userData.length / defaultPageSize);
-    const startItem = (currentPage - 1) * defaultPageSize + 1;
-    const endItem = Math.min(currentPage * defaultPageSize, userData.length);
+    const totalPages = Math.ceil(userData.length / defaultPageSize);
 
     return (
       <div className="flex justify-between items-center">
         <div>
-          Showing {startItem} – {endItem} of {userData.length}
+          Showing Page {currentPage+1} of {totalPages}
         </div>
         <div className="flex">
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 1}
+            disabled={currentPage === 0}
             onClick={() => setCurrentPage(currentPage - 1)}
           >
             &larr; Prev
@@ -147,7 +154,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   return (
     <div style={{ width: "100%" }}>
       <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
-        <CreateUser userID={userID} accessToken={accessToken} />
+        <CreateUser userID={userID} accessToken={accessToken} teams={teams}/>
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
           <TabGroup>
             <TabList variant="line" defaultValue="1">
@@ -160,19 +167,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Role</TableHeaderCell>
+                      <TableHeaderCell>User Email</TableHeaderCell>
                       <TableHeaderCell>User Models</TableHeaderCell>
                       <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
                       <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
+                      <TableHeaderCell>User API Key Aliases</TableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {userData.map((user: any) => (
                       <TableRow key={user.user_id}>
                         <TableCell>{user.user_id}</TableCell>
-                        <TableCell>
-                          {user.user_role ? user.user_role : "app_owner"}
-                        </TableCell>
+                        <TableCell>{user.user_email}</TableCell>
+                        
                         <TableCell>
                           {user.models && user.models.length > 0
                             ? user.models
@@ -182,6 +189,23 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         <TableCell>
                           {user.max_budget ? user.max_budget : "Unlimited"}
                         </TableCell>
+                        <TableCell>
+                          <Grid numItems={2}>
+                          {user && user.key_aliases
+                              ? user.key_aliases.filter((key: any) => key !== null).length > 0
+                                ? <Badge size={"xs"} color={"indigo"}>{user.key_aliases.filter((key: any) => key !== null).join(', ') }</Badge>
+                                : <Badge size={"xs"} color={"gray"}>No Keys</Badge>
+                              : <Badge size={"xs"} color={"gray"}>No Keys</Badge>}
+                          {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
+                        {/* <Icon icon={InformationCircleIcon} onClick= {() => {
+                          setOpenDialogId(user.user_id)
+                          setSelectedItem(user)
+                        }}>View Keys</Icon> */}
+
+                          </Grid>
+
+                        </TableCell>
+
                       </TableRow>
                     ))}
                   </TableBody>
@@ -238,7 +262,29 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         </Card>
         {renderPagination()}
       </Grid>
+      {/* <Dialog
+  open={openDialogId !== null}
+  onClose={() => {
+    setOpenDialogId(null);
+  }}
+
+>
+  <DialogPanel>
+  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+    <Title>Key Aliases</Title>
+
+    <Text>
+    {selectedItem && selectedItem.key_aliases
+ ? selectedItem.key_aliases.filter(key => key !== null).length > 0
+   ? selectedItem.key_aliases.filter(key => key !== null).join(', ')
+   : 'No Keys'
+ : "No Keys"}
+    </Text>
     </div>
+  </DialogPanel>
+</Dialog> */}
+    </div>
+
   );
 };
 

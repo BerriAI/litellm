@@ -398,6 +398,40 @@ async def test_async_router_context_window_fallback():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
+def test_router_rpm_pre_call_check():
+    """
+    - for a given model not in model cost map
+    - with rpm set
+    - check if rpm check is run
+    """
+    try:
+        model_list = [
+            {
+                "model_name": "fake-openai-endpoint",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "openai/my-fake-model",
+                    "api_key": "my-fake-key",
+                    "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
+                    "rpm": 0,
+                },
+            },
+        ]
+
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+
+        try:
+            router._pre_call_checks(
+                model="fake-openai-endpoint",
+                healthy_deployments=model_list,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+            pytest.fail("Expected this to fail")
+        except:
+            pass
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+
 def test_router_context_window_check_pre_call_check_in_group():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)

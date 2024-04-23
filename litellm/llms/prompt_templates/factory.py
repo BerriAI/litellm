@@ -4,7 +4,6 @@ import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, meta, BaseLoader
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing import Optional, Any
-import imghdr, base64
 from typing import List
 import litellm
 
@@ -219,6 +218,18 @@ def phind_codellama_pt(messages):
     return prompt
 
 
+known_tokenizer_config = {
+    "mistralai/Mistral-7B-Instruct-v0.1": {
+        "tokenizer": {
+            "chat_template": "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+        },
+        "status": "success",
+    }
+}
+
+
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
@@ -247,20 +258,23 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             else:
                 return {"status": "failure"}
 
-        tokenizer_config = _get_tokenizer_config(model)
+        if model in known_tokenizer_config:
+            tokenizer_config = known_tokenizer_config[model]
+        else:
+            tokenizer_config = _get_tokenizer_config(model)
         if (
             tokenizer_config["status"] == "failure"
             or "chat_template" not in tokenizer_config["tokenizer"]
         ):
             raise Exception("No chat template found")
         ## read the bos token, eos token and chat template from the json
-        tokenizer_config = tokenizer_config["tokenizer"]
-        bos_token = tokenizer_config["bos_token"]
-        eos_token = tokenizer_config["eos_token"]
-        chat_template = tokenizer_config["chat_template"]
+        tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
 
+        bos_token = tokenizer_config["bos_token"]  # type: ignore
+        eos_token = tokenizer_config["eos_token"]  # type: ignore
+        chat_template = tokenizer_config["chat_template"]  # type: ignore
     try:
-        template = env.from_string(chat_template)
+        template = env.from_string(chat_template)  # type: ignore
     except Exception as e:
         raise e
 
@@ -467,10 +481,11 @@ def construct_tool_use_system_prompt(
 ):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
     tool_str_list = []
     for tool in tools:
+        tool_function = get_attribute_or_key(tool, "function")
         tool_str = construct_format_tool_for_claude_prompt(
-            tool["function"]["name"],
-            tool["function"].get("description", ""),
-            tool["function"].get("parameters", {}),
+            get_attribute_or_key(tool_function, "name"),
+            get_attribute_or_key(tool_function, "description", ""),
+            get_attribute_or_key(tool_function, "parameters", {}),
         )
         tool_str_list.append(tool_str)
     tool_use_system_prompt = (
@@ -594,7 +609,8 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
     </function_results>
     """
     name = message.get("name")
-    content = message.get("content")
+    content = message.get("content", "")
+    content = content.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
@@ -615,13 +631,15 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
 def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
     invokes = ""
     for tool in tool_calls:
-        if tool["type"] != "function":
+        if get_attribute_or_key(tool, "type") != "function":
             continue
 
-        tool_name = tool["function"]["name"]
+        tool_function =  get_attribute_or_key(tool,"function")
+        tool_name = get_attribute_or_key(tool_function, "name")
+        tool_arguments = get_attribute_or_key(tool_function, "arguments")
         parameters = "".join(
             f"<{param}>{val}</{param}>\n"
-            for param, val in json.loads(tool["function"]["arguments"]).items()
+            for param, val in json.loads(tool_arguments).items()
         )
         invokes += (
             "<invoke>\n"
@@ -675,7 +693,7 @@ def anthropic_messages_pt_xml(messages: list):
                     {
                         "type": "text",
                         "text": (
-                            convert_to_anthropic_tool_result(messages[msg_i])
+                            convert_to_anthropic_tool_result_xml(messages[msg_i])
                             if messages[msg_i]["role"] == "tool"
                             else messages[msg_i]["content"]
                         ),
@@ -696,7 +714,7 @@ def anthropic_messages_pt_xml(messages: list):
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
-                assistant_text += convert_to_anthropic_tool_invoke(  # type: ignore
+                assistant_text += convert_to_anthropic_tool_invoke_xml(  # type: ignore
                     messages[msg_i]["tool_calls"]
                 )
 
@@ -706,7 +724,7 @@ def anthropic_messages_pt_xml(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -808,12 +826,12 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
     anthropic_tool_invoke = [
         {
             "type": "tool_use",
-            "id": tool["id"],
-            "name": tool["function"]["name"],
-            "input": json.loads(tool["function"]["arguments"]),
+            "id": get_attribute_or_key(tool, "id"),
+            "name": get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            "input": json.loads(get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments")),
         }
         for tool in tool_calls
-        if tool["type"] == "function"
+        if get_attribute_or_key(tool, "type") == "function"
     ]
 
     return anthropic_tool_invoke
@@ -885,7 +903,7 @@ def anthropic_messages_pt(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -1034,7 +1052,8 @@ def cohere_message_pt(messages: list):
             tool_result = convert_openai_message_to_cohere_tool_result(message)
             tool_results.append(tool_result)
         else:
-            prompt += message["content"]
+            prompt += message["content"] + "\n\n"
+    prompt = prompt.rstrip()
     return prompt, tool_results
 
 
@@ -1108,12 +1127,6 @@ def _gemini_vision_convert_messages(messages: list):
     Returns:
         tuple: A tuple containing the prompt (a string) and the processed images (a list of objects representing the images).
     """
-    try:
-        from PIL import Image
-    except:
-        raise Exception(
-            "gemini image conversion failed please run `pip install Pillow`"
-        )
 
     try:
         # given messages for gpt-4 vision, convert them for gemini
@@ -1140,6 +1153,12 @@ def _gemini_vision_convert_messages(messages: list):
                 image = _load_image_from_url(img)
                 processed_images.append(image)
             else:
+                try:
+                    from PIL import Image
+                except:
+                    raise Exception(
+                        "gemini image conversion failed please run `pip install Pillow`"
+                    )
                 # Case 2: Image filepath (e.g. temp.jpeg) given
                 image = Image.open(img)
                 processed_images.append(image)
@@ -1287,7 +1306,11 @@ def prompt_factory(
             messages=messages, prompt_format=prompt_format, chat_template=chat_template
         )
     elif custom_llm_provider == "gemini":
-        if model == "gemini-pro-vision":
+        if (
+            model == "gemini-pro-vision"
+            or litellm.supports_vision(model=model)
+            or litellm.supports_vision(model=custom_llm_provider + "/" + model)
+        ):
             return _gemini_vision_convert_messages(messages=messages)
         else:
             return gemini_text_image_pt(messages=messages)
@@ -1352,3 +1375,8 @@ def prompt_factory(
         return default_pt(
             messages=messages
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
+
+def get_attribute_or_key(tool_or_function, attribute, default=None):
+    if hasattr(tool_or_function, attribute):
+        return getattr(tool_or_function, attribute)
+    return tool_or_function.get(attribute, default)

@@ -41,13 +41,12 @@ class AsyncHTTPHandler:
         data: Optional[Union[dict, str]] = None,  # type: ignore
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
+        stream: bool = False,
     ):
-        response = await self.client.post(
-            url,
-            data=data,  # type: ignore
-            params=params,
-            headers=headers,
+        req = self.client.build_request(
+            "POST", url, data=data, params=params, headers=headers  # type: ignore
         )
+        response = await self.client.send(req, stream=stream)
         return response
 
     def __del__(self) -> None:
@@ -58,13 +57,16 @@ class AsyncHTTPHandler:
 
 
 class HTTPHandler:
-    def __init__(self, concurrent_limit=1000):
+    def __init__(
+        self, timeout: httpx.Timeout = _DEFAULT_TIMEOUT, concurrent_limit=1000
+    ):
         # Create a client with a connection pool
         self.client = httpx.Client(
+            timeout=timeout,
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
                 max_keepalive_connections=concurrent_limit,
-            )
+            ),
         )
 
     def close(self):

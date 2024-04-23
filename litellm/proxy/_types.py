@@ -51,7 +51,8 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
 
 
 class LiteLLMRoutes(enum.Enum):
-    openai_routes: List = [  # chat completions
+    openai_routes: List = [
+        # chat completions
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
@@ -77,7 +78,22 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
     ]
 
-    info_routes: List = ["/key/info", "/team/info", "/user/info", "/model/info"]
+    info_routes: List = [
+        "/key/info",
+        "/team/info",
+        "/user/info",
+        "/model/info",
+        "/v2/model/info",
+        "/v2/key/info",
+    ]
+
+    sso_only_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/global/spend/logs",
+        "/global/predict/spend/logs",
+    ]
 
     management_routes: List = [  # key
         "/key/generate",
@@ -103,6 +119,26 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
     ]
 
+    spend_tracking_routes: List = [
+        # spend
+        "/spend/keys",
+        "/spend/users",
+        "/spend/tags",
+        "/spend/calculate",
+        "/spend/logs",
+    ]
+
+    global_spend_tracking_routes: List = [
+        # global spend
+        "/global/spend/logs",
+        "/global/spend",
+        "/global/spend/keys",
+        "/global/spend/teams",
+        "/global/spend/end_users",
+        "/global/spend/models",
+        "/global/predict/spend/logs",
+    ]
+
     public_routes: List = [
         "/routes",
         "/",
@@ -112,6 +148,18 @@ class LiteLLMRoutes(enum.Enum):
         "/config/yaml",
         "/metrics",
     ]
+
+
+# class LiteLLMAllowedRoutes(LiteLLMBase):
+#     """
+#     Defines allowed routes based on key type.
+
+#     Types = ["admin", "team", "user", "unmapped"]
+#     """
+
+#     admin_allowed_routes: List[
+#         Literal["openai_routes", "info_routes", "management_routes", "spend_tracking_routes", "global_spend_tracking_routes"]
+#     ] = ["management_routes"]
 
 
 class LiteLLM_JWTAuth(LiteLLMBase):
@@ -124,7 +172,8 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     - team_jwt_scope: The JWT scope required for proxy team roles.
     - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
     - team_allowed_routes: list of allowed routes for proxy team roles.
-    - end_user_id_jwt_field: Default - `sub`. The field in the JWT token that stores the end-user ID. Turn this off by setting to `None`. Enables end-user cost tracking.
+    - user_id_jwt_field: The field in the JWT token that stores the user id (maps to `LiteLLMUserTable`). Use this for internal employees.
+    - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
 
     See `auth_checks.py` for the specific routes
@@ -139,7 +188,9 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
-    end_user_id_jwt_field: Optional[str] = "sub"
+    org_id_jwt_field: Optional[str] = None
+    user_id_jwt_field: Optional[str] = None
+    end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
 
     def __init__(self, **kwargs: Any) -> None:
@@ -455,8 +506,16 @@ class TeamMemberDeleteRequest(LiteLLMBase):
         return values
 
 
-class UpdateTeamRequest(TeamBase):
+class UpdateTeamRequest(LiteLLMBase):
     team_id: str  # required
+    team_alias: Optional[str] = None
+    organization_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: Optional[list] = None
+    blocked: Optional[bool] = None
 
 
 class DeleteTeamRequest(LiteLLMBase):
@@ -512,6 +571,7 @@ class LiteLLM_BudgetTable(LiteLLMBase):
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
+    organization_id: Optional[str] = None
     organization_alias: str
     models: List = []
     budget_id: Optional[str] = None
@@ -520,6 +580,7 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
 class LiteLLM_OrganizationTable(LiteLLMBase):
     """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
+    organization_id: Optional[str] = None
     organization_alias: Optional[str] = None
     budget_id: str
     metadata: Optional[dict] = None
@@ -644,6 +705,21 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
     )
+    alert_types: Optional[
+        List[
+            Literal[
+                "llm_exceptions",
+                "llm_too_slow",
+                "llm_requests_hanging",
+                "budget_alerts",
+                "db_exceptions",
+            ]
+        ]
+    ] = Field(
+        None,
+        description="List of alerting types. By default it is all alerts",
+    )
+
     alerting_threshold: Optional[int] = Field(
         None,
         description="sends alerts if requests hang for 5min+",
@@ -674,6 +750,10 @@ class ConfigYAML(LiteLLMBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: Optional[ConfigGeneralSettings] = None
+    router_settings: Optional[dict] = Field(
+        None,
+        description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
+    )
 
     class Config:
         protected_namespaces = ()
@@ -704,6 +784,8 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     soft_budget_cooldown: bool = False
     litellm_budget_table: Optional[dict] = None
 
+    org_id: Optional[str] = None  # org id for a given key
+
     # hidden params used for parallel request limiting, not required to create a token
     user_id_rate_limits: Optional[dict] = None
     team_id_rate_limits: Optional[dict] = None
@@ -718,6 +800,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
 
     team_spend: Optional[float] = None
+    team_alias: Optional[str] = None
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
@@ -741,6 +824,10 @@ class UserAPIKeyAuth(
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
             values.update({"token": hash_token(values.get("api_key"))})
+            if isinstance(values.get("api_key"), str) and values.get(
+                "api_key"
+            ).startswith("sk-"):
+                values.update({"api_key": hash_token(values.get("api_key"))})
         return values
 
 

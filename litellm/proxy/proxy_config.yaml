@@ -4,6 +4,17 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+
+
 general_settings:
   store_model_in_db: true
   master_key: sk-1234
+  alerting: ["slack"]
+
+litellm_settings:
+  success_callback: ["langfuse"]
+  _langfuse_default_tags: ["user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"]
