@@ -32,6 +32,7 @@ from litellm.utils import (
     get_utc_datetime,
     calculate_max_parallel_requests,
     check_cache_hit,
+    async_check_cache_hit,
     function_setup,
 )
 import copy
@@ -440,11 +441,33 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
-            kwargs["original_function"] = self._acompletion
+
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
+            ### CHECK CACHE HIT ### - prevents unnecessary calls
+            current_time = get_utc_datetime()
+            kwargs["litellm_call_id"] = str(uuid.uuid4())
+            logging_obj, kwargs = function_setup(
+                original_function="completion",
+                rules_obj=litellm.utils.Rules(),
+                start_time=current_time,
+                **kwargs,
+            )
+            response = await async_check_cache_hit(
+                function_name="acompletion",
+                model=model,
+                logging_obj=logging_obj,
+                start_time=current_time,
+                args=(),
+                kwargs=kwargs,
+            )
+            if response is not None:
+                return response
+
+            ### MAKE CALL ###
+            kwargs["original_function"] = self._acompletion
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response

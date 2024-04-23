@@ -387,7 +387,9 @@ async def test_router_completion_streaming():
 
 
 # asyncio.run(test_router_completion_streaming())
-@pytest.mark.parametrize("sync_mode", [True])  # Use parametrization for sync/async
+@pytest.mark.parametrize(
+    "sync_mode", [True, False]
+)  # Use parametrization for sync/async
 @pytest.mark.asyncio
 async def test_router_caching_tpm_rpm_values(sync_mode):
     """
@@ -438,13 +440,25 @@ async def test_router_caching_tpm_rpm_values(sync_mode):
 
         assert value == 1
     else:
-        pass
-        # make 1st call - no cache
-        # router.acompletion()
-
+        response_1 = await router.acompletion(
+            model="azure-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        await asyncio.sleep(10)
         # make 2nd call - cache hit
+        response_2 = await router.acompletion(
+            model="azure-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        print(f"response_2: {response_2}")
 
         # check if model rpm == 1
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
+        rpm_key = f"{model_id}:rpm:{current_minute}"
+        value = await router.cache.async_get_cache(key=rpm_key)
+
+        assert value == 1
 
 
 """

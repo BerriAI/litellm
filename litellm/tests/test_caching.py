@@ -93,8 +93,6 @@ def test_caching_dynamic_args():  # test in memory cache
         )
         response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
         litellm.cache = None  # disable cache
         litellm.success_callback = []
         litellm._async_success_callback = []
