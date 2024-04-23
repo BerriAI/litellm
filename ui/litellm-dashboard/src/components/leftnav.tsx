@@ -46,8 +46,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
   }
   return (
-    <Layout style={{ minHeight: "100vh", maxWidth: "130px" }}>
-      <Sider width={130}>
+    <Layout style={{ minHeight: "100vh", maxWidth: "145px" }}>
+      <Sider width={145}>
         <Menu
           mode="inline"
           defaultSelectedKeys={defaultSelectedKey ? defaultSelectedKey : ["1"]}
@@ -64,11 +64,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </Text>
           </Menu.Item>
 
-              <Menu.Item key="11" onClick={() => setPage("api_ref")}>
-              <Text>
-                API Reference
-                </Text>
-              </Menu.Item>
+              
 
           {
             userRole == "Admin" ? (
@@ -79,15 +75,6 @@ const Sidebar: React.FC<SidebarProps> = ({
               </Menu.Item>
             ) : null
           }
-
-          {userRole == "Admin" ? (
-            <Menu.Item key="6" onClick={() => setPage("teams")}>
-              <Text>
-              Teams
-              </Text>
-            </Menu.Item>
-          ) : null}
-
           {
             userRole == "Admin" ? (
               <Menu.Item key="4" onClick={() => setPage("usage")}>
@@ -98,6 +85,16 @@ const Sidebar: React.FC<SidebarProps> = ({
 
               ) : null
           }
+
+          {userRole == "Admin" ? (
+            <Menu.Item key="6" onClick={() => setPage("teams")}>
+              <Text>
+              Teams
+              </Text>
+            </Menu.Item>
+          ) : null}
+
+
           
             {userRole == "Admin" ? (
             <Menu.Item key="5" onClick={() => setPage("users")}>
@@ -111,7 +108,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             userRole == "Admin" ? (
               <Menu.Item key="8" onClick={() => setPage("settings")}>
                 <Text>
-                  Integrations
+                  Logging & Alerts
                 </Text>
                 </Menu.Item>
               ) : null
@@ -134,6 +131,11 @@ const Sidebar: React.FC<SidebarProps> = ({
               </Text>
             </Menu.Item>
           ) : null}
+          <Menu.Item key="11" onClick={() => setPage("api_ref")}>
+              <Text>
+                API Reference
+                </Text>
+              </Menu.Item>
         </Menu>
       </Sider>
     </Layout>
