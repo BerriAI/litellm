@@ -560,7 +560,7 @@ def completion(
                     stream=True,
                     tools=tools,
                 )
-                optional_params["stream"] = True
+
                 return model_response
 
             request_str += f"response = llm_model.generate_content({content})\n"
@@ -632,7 +632,7 @@ def completion(
                     },
                 )
                 model_response = chat.send_message_streaming(prompt, **optional_params)
-                optional_params["stream"] = True
+
                 return model_response
 
             request_str += f"chat.send_message({prompt}, **{optional_params}).text\n"
@@ -664,7 +664,7 @@ def completion(
                     },
                 )
                 model_response = llm_model.predict_streaming(prompt, **optional_params)
-                optional_params["stream"] = True
+
                 return model_response
 
             request_str += f"llm_model.predict({prompt}, **{optional_params}).text\n"
@@ -1045,8 +1045,7 @@ async def async_streaming(
             generation_config=optional_params,
             tools=tools,
         )
-        optional_params["stream"] = True
-        optional_params["tools"] = tools
+
     elif mode == "chat":
         chat = llm_model.start_chat()
         optional_params.pop(
@@ -1065,7 +1064,7 @@ async def async_streaming(
             },
         )
         response = chat.send_message_streaming_async(prompt, **optional_params)
-        optional_params["stream"] = True
+
     elif mode == "text":
         optional_params.pop(
             "stream", None
