@@ -61,6 +61,22 @@ litellm_settings:
     ttl: 600 # will be cached on redis for 600s
 ```
 
+
+## SSL
+
+just set `REDIS_SSL="True"` in your .env, and LiteLLM will pick this up. 
+
+```env
+REDIS_SSL="True"
+```
+
+For quick testing, you can also use REDIS_URL, eg.:
+
+```
+REDIS_URL="rediss://.."
+```
+
+but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between using it vs. redis_host, port, etc. 
 #### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 

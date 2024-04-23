@@ -5274,7 +5274,7 @@ def get_optional_params(
         if tool_choice is not None:
             optional_params["tool_choice"] = tool_choice
         if response_format is not None:
-            optional_params["response_format"] = tool_choice
+            optional_params["response_format"] = response_format
 
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
@@ -5711,6 +5711,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "frequency_penalty",
             "logit_bias",
             "user",
+            "response_format",
         ]
     elif custom_llm_provider == "perplexity":
         return [

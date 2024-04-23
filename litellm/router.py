@@ -206,12 +206,16 @@ class Router:
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
 
-        if model_list:
+        if model_list is not None:
             model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
-            self.healthy_deployments: List = self.model_list
+            self.healthy_deployments: List = self.model_list  # type: ignore
             for m in model_list:
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
+        else:
+            self.model_list: List = (
+                []
+            )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
         self.allowed_fails = allowed_fails or litellm.allowed_fails
         self.cooldown_time = cooldown_time or 1
@@ -2542,11 +2546,24 @@ class Router:
             "retry_after",
         ]
 
+        _int_settings = [
+            "timeout",
+            "num_retries",
+            "retry_after",
+            "allowed_fails",
+            "cooldown_time",
+        ]
+
         for var in kwargs:
             if var in _allowed_settings:
-                setattr(self, var, kwargs[var])
+                if var in _int_settings:
+                    _casted_value = int(kwargs[var])
+                    setattr(self, var, _casted_value)
+                else:
+                    setattr(self, var, kwargs[var])
             else:
                 verbose_router_logger.debug("Setting {} is not allowed".format(var))
+        verbose_router_logger.debug(f"Updated Router settings: {self.get_settings()}")
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
@@ -2872,7 +2889,27 @@ class Router:
                     f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
                 )
                 return deployment or deployment[0]
+            ############## Check if we can do a RPM/TPM based weighted pick #################
+            tpm = healthy_deployments[0].get("litellm_params").get("tpm", None)
+            if tpm is not None:
+                # use weight-random pick if rpms provided
+                tpms = [m["litellm_params"].get("tpm", 0) for m in healthy_deployments]
+                verbose_router_logger.debug(f"\ntpms {tpms}")
+                total_tpm = sum(tpms)
+                weights = [tpm / total_tpm for tpm in tpms]
+                verbose_router_logger.debug(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(tpms)), weights=weights)[0]
+                verbose_router_logger.debug(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
+                verbose_router_logger.info(
+                    f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
+                )
+                return deployment or deployment[0]
 
+            ############## No RPM/TPM passed, we do a random pick #################
+            item = random.choice(healthy_deployments)
+            return item or item[0]
         if deployment is None:
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, No deployment available"

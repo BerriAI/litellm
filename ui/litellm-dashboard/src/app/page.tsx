@@ -9,6 +9,7 @@ import Teams from "@/components/teams";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
+import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
@@ -165,6 +166,8 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
               showSSOBanner={showSSOBanner}
             />
+          ) : page == "api_ref" ? (
+              <APIRef/>
           ) : page == "settings" ? (
             <Settings
               userID={userID}
