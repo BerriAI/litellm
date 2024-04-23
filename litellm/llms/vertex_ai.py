@@ -21,6 +21,7 @@ class VertexAIError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+
 class ExtendedGenerationConfig(dict):
     """Extended parameters for the generation."""
 
@@ -48,6 +49,7 @@ class ExtendedGenerationConfig(dict):
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
         )
+
 
 class VertexAIConfig:
     """
@@ -553,7 +555,7 @@ def completion(
 
                 model_response = llm_model.generate_content(
                     contents=content,
-                    generation_config=ExtendedGenerationConfig(**optional_params),
+                    generation_config=optional_params,
                     safety_settings=safety_settings,
                     stream=True,
                     tools=tools,
@@ -575,7 +577,7 @@ def completion(
             ## LLM Call
             response = llm_model.generate_content(
                 contents=content,
-                generation_config=ExtendedGenerationConfig(**optional_params),
+                generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
             )
@@ -836,7 +838,7 @@ async def async_completion(
             ## LLM Call
             response = await llm_model._generate_content_async(
                 contents=content,
-                generation_config=ExtendedGenerationConfig(**optional_params),
+                generation_config=optional_params,
                 tools=tools,
             )
 
@@ -1040,7 +1042,7 @@ async def async_streaming(
 
         response = await llm_model._generate_content_streaming_async(
             contents=content,
-            generation_config=ExtendedGenerationConfig(**optional_params),
+            generation_config=optional_params,
             tools=tools,
         )
         optional_params["stream"] = True
