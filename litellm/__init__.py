@@ -656,7 +656,7 @@ from .llms.bedrock import (
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
-from .llms.watsonx import IBMWatsonXConfig
+from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (

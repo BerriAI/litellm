@@ -1862,7 +1862,7 @@ def completion(
             response = response
         elif custom_llm_provider == "watsonx":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = watsonx.completion(
+            response = watsonx.IBMWatsonXAI().completion(
                 model=model,
                 messages=messages,
                 custom_prompt_dict=custom_prompt_dict,
@@ -2975,6 +2975,15 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider == "watsonx":
+            response = watsonx.IBMWatsonXAI().embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
             )
         else:
             args = locals()
