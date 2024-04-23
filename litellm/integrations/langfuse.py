@@ -309,7 +309,7 @@ class LangFuseLogger:
             # We don't allow generation_output, because it doesn't really make sense to allow the override of the output
             generation_input = metadata.get("generation_input", None)
 
-            generation_version = metadata.get("generation_version", None),
+            generation_version = metadata.get("generation_version", None)
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
@@ -406,7 +406,7 @@ class LangFuseLogger:
                 "level": level,
             }
 
-            if generation_version:
+            if generation_version is not None:
                 generation_params["version"] = generation_version
 
             if generation_input is not None:
