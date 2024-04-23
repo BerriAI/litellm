@@ -1111,6 +1111,7 @@ async def test_cache_control_overrides():
                 "content": "hello who are you" + unique_num,
             }
         ],
+        caching=True,
     )
 
     print(response1)
@@ -1125,6 +1126,55 @@ async def test_cache_control_overrides():
                 "content": "hello who are you" + unique_num,
             }
         ],
+        caching=True,
+        cache={"no-cache": True},
+    )
+
+    print(response2)
+
+    assert response1.id != response2.id
+
+
+def test_sync_cache_control_overrides():
+    # we use the cache controls to ensure there is no cache hit on this test
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    print("Testing cache override")
+    litellm.set_verbose = True
+    import uuid
+
+    unique_num = str(uuid.uuid4())
+
+    start_time = time.time()
+
+    response1 = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you" + unique_num,
+            }
+        ],
+        caching=True,
+    )
+
+    print(response1)
+
+    time.sleep(2)
+
+    response2 = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you" + unique_num,
+            }
+        ],
+        caching=True,
         cache={"no-cache": True},
     )
 
