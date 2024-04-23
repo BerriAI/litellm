@@ -178,32 +178,61 @@ def test_caching_with_default_ttl():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_caching_with_cache_controls():
+@pytest.mark.parametrize(
+    "sync_flag",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_caching_with_cache_controls(sync_flag):
     try:
         litellm.set_verbose = True
         litellm.cache = Cache()
         message = [{"role": "user", "content": f"Hey, how's it going? {uuid.uuid4()}"}]
-        ## TTL = 0
-        response1 = completion(
-            model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}
-        )
-        response2 = completion(
-            model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 10}
-        )
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        assert response2["id"] != response1["id"]
+        if sync_flag:
+            ## TTL = 0
+            response1 = completion(
+                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}
+            )
+            response2 = completion(
+                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 10}
+            )
+
+            assert response2["id"] != response1["id"]
+        else:
+            ## TTL = 0
+            response1 = await litellm.acompletion(
+                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}
+            )
+            await asyncio.sleep(10)
+            response2 = await litellm.acompletion(
+                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 10}
+            )
+
+            assert response2["id"] != response1["id"]
+
         message = [{"role": "user", "content": f"Hey, how's it going? {uuid.uuid4()}"}]
         ## TTL = 5
-        response1 = completion(
-            model="gpt-3.5-turbo", messages=messages, cache={"ttl": 5}
-        )
-        response2 = completion(
-            model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 5}
-        )
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        assert response2["id"] == response1["id"]
+        if sync_flag:
+            response1 = completion(
+                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 5}
+            )
+            response2 = completion(
+                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 5}
+            )
+            print(f"response1: {response1}")
+            print(f"response2: {response2}")
+            assert response2["id"] == response1["id"]
+        else:
+            response1 = await litellm.acompletion(
+                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 25}
+            )
+            await asyncio.sleep(10)
+            response2 = await litellm.acompletion(
+                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 25}
+            )
+            print(f"response1: {response1}")
+            print(f"response2: {response2}")
+            assert response2["id"] == response1["id"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
