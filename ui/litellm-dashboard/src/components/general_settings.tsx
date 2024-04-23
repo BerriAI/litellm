@@ -37,6 +37,16 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
 
+  let paramExplanation: { [key: string]: string } = {
+    "routing_strategy_args": "(dict) Arguments to pass to the routing strategy",
+    "routing_strategy": "(string) Routing strategy to use",
+    "allowed_fails": "(int) Number of times a deployment can fail before being added to cooldown",
+    "cooldown_time": "(int) time in seconds to cooldown a deployment after failure",
+    "num_retries": "(int) Number of retries for failed requests. Defaults to 0.",
+    "timeout": "(float) Timeout for requests. Defaults to None.",
+    "retry_after": "(int) Minimum time to wait before retrying a failed request",
+  }
+
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
       return;
@@ -108,6 +118,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   <TableRow key={param}>
     <TableCell>
       <Text>{param}</Text>
+      <p style={{fontSize: '0.65rem', color: '#808080', fontStyle: 'italic'}} className="mt-1">{paramExplanation[param]}</p>
     </TableCell>
     <TableCell>
       <TextInput
