@@ -5275,6 +5275,8 @@ def get_optional_params(
             optional_params["tool_choice"] = tool_choice
         if response_format is not None:
             optional_params["response_format"] = response_format
+        if seed is not None:
+            optional_params["seed"] = seed
 
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
@@ -5535,6 +5537,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "tools",
             "tool_choice",
             "response_format",
+            "seed",
         ]
     elif custom_llm_provider == "cohere":
         return [
