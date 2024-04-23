@@ -8146,6 +8146,7 @@ async def auth_callback(request: Request):
         "user_id": user_id,
         "user_email": user_email,
     }
+    _user_id_from_sso = user_id
     try:
         user_role = None
         if prisma_client is not None:
@@ -8169,7 +8170,7 @@ async def auth_callback(request: Request):
             if user_info is not None:
                 user_defined_values = {
                     "models": getattr(user_info, "models", user_id_models),
-                    "user_id": getattr(user_info, "user_id", user_id),
+                    "user_id": user_id,
                     "user_email": getattr(user_info, "user_id", user_email),
                     "user_role": getattr(user_info, "user_role", None),
                 }
@@ -8200,6 +8201,10 @@ async def auth_callback(request: Request):
     )
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
+
+    # This should always be true
+    # User_id on SSO == user_id in the LiteLLM_VerificationToken Table
+    assert user_id == _user_id_from_sso
     litellm_dashboard_ui = "/ui/"
     user_role = user_role or "app_owner"
     if (
