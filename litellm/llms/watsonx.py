@@ -258,7 +258,11 @@ class IBMWatsonXAI(BaseLLM):
                 or get_secret("WML_URL")
             )
         if api_key is None:
-            api_key = get_secret("WATSONX_API_KEY") or get_secret("WX_API_KEY")
+            api_key = (
+                get_secret("WATSONX_APIKEY")
+                or get_secret("WATSONX_API_KEY")
+                or get_secret("WX_API_KEY")
+            )
         if token is None:
             token = get_secret("WATSONX_TOKEN") or get_secret("WX_TOKEN")
         if project_id is None:
