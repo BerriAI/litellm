@@ -305,7 +305,14 @@ class ProxyLogging:
                 _litellm_params["metadata"]["trace_id"] = trace_id
 
         _langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
-        request_info += f"\n🪢 Langfuse Trace: {_langfuse_host}/trace/{trace_id}"
+        _langfuse_project_id = os.environ.get("LANGFUSE_PROJECT_ID")
+
+        # langfuse urls look like: https://us.cloud.langfuse.com/project/************/traces/litellm-alert-trace-ididi9dk-09292-************
+
+        _langfuse_url = (
+            f"{_langfuse_host}/project/{_langfuse_project_id}/traces/{trace_id}"
+        )
+        request_info += f"\n🪢 Langfuse Trace: {_langfuse_url}"
         return request_info
 
     async def response_taking_too_long(
