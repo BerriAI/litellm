@@ -34,6 +34,14 @@ class LangFuseLogger:
             flush_interval=1,  # flush interval in seconds
         )
 
+        # set the current langfuse project id in the environ
+        # this is used by Alerting to link to the correct project
+        try:
+            project_id = self.Langfuse.client.projects.get().data[0].id
+        except:
+            project_id = None
+        os.environ["LANGFUSE_PROJECT_ID"] = project_id
+
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
             self.upstream_langfuse_secret_key = os.getenv(
                 "UPSTREAM_LANGFUSE_SECRET_KEY"
