@@ -295,6 +295,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             userSpend={null}
+            selectedTeam={null}
           />
       <TabGroup>
         <TabList className="mt-2">
@@ -391,6 +392,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   index="date"
                   categories={uniqueTeamIds}
                   yAxisWidth={80}
+                  colors={["blue", "green", "yellow", "red", "purple"]}
                   
                   stack={true}
                 />

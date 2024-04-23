@@ -3471,6 +3471,7 @@ async def completion(
         fastapi_response.headers["x-litellm-model-id"] = model_id
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
         verbose_proxy_logger.debug(
             "\033[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
@@ -3720,6 +3721,7 @@ async def chat_completion(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         traceback.print_exc()
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
@@ -3914,6 +3916,7 @@ async def embeddings(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
@@ -4069,6 +4072,7 @@ async def image_generation(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
@@ -4247,6 +4251,7 @@ async def audio_transcriptions(
         data["litellm_status"] = "success"  # used for alerting
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
@@ -4408,6 +4413,7 @@ async def moderations(
 
         return response
     except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
@@ -5552,10 +5558,12 @@ async def global_spend_per_tea():
             # get the team_id for this entry
             # get the spend for this entry
             spend = row["total_spend"]
+            spend = round(spend, 2)
             current_date_entries = spend_by_date[row_date]
             current_date_entries[team_alias] = spend
         else:
             spend = row["total_spend"]
+            spend = round(spend, 2)
             spend_by_date[row_date] = {team_alias: spend}
 
         if team_alias in total_spend_per_team:
@@ -5909,11 +5917,18 @@ async def user_info(
                 user_id=user_api_key_dict.user_id
             )
             # *NEW* get all teams in user 'teams' field
-            teams_2 = await prisma_client.get_data(
-                team_id_list=caller_user_info.teams,
-                table_name="team",
-                query_type="find_all",
-            )
+            if getattr(caller_user_info, "user_role", None) == "proxy_admin":
+                teams_2 = await prisma_client.get_data(
+                    table_name="team",
+                    query_type="find_all",
+                    team_id_list=None,
+                )
+            else:
+                teams_2 = await prisma_client.get_data(
+                    team_id_list=caller_user_info.teams,
+                    table_name="team",
+                    query_type="find_all",
+                )
 
             if teams_2 is not None and isinstance(teams_2, list):
                 for team in teams_2:
@@ -7873,7 +7888,7 @@ async def login(request: Request):
         )
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
-                **{"user_role": "proxy_admin", "duration": "1hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
+                **{"user_role": "proxy_admin", "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
             )
         else:
             raise ProxyException(
@@ -8125,7 +8140,7 @@ async def auth_callback(request: Request):
     # User might not be already created on first generation of key
     # But if it is, we want their models preferences
     default_ui_key_values = {
-        "duration": "1hr",
+        "duration": "2hr",
         "key_max_budget": 0.01,
         "aliases": {},
         "config": {},
@@ -8137,6 +8152,7 @@ async def auth_callback(request: Request):
         "user_id": user_id,
         "user_email": user_email,
     }
+    _user_id_from_sso = user_id
     try:
         user_role = None
         if prisma_client is not None:
@@ -8160,7 +8176,7 @@ async def auth_callback(request: Request):
             if user_info is not None:
                 user_defined_values = {
                     "models": getattr(user_info, "models", user_id_models),
-                    "user_id": getattr(user_info, "user_id", user_id),
+                    "user_id": user_id,
                     "user_email": getattr(user_info, "user_id", user_email),
                     "user_role": getattr(user_info, "user_role", None),
                 }
@@ -8191,6 +8207,10 @@ async def auth_callback(request: Request):
     )
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
+
+    # This should always be true
+    # User_id on SSO == user_id in the LiteLLM_VerificationToken Table
+    assert user_id == _user_id_from_sso
     litellm_dashboard_ui = "/ui/"
     user_role = user_role or "app_owner"
     if (
