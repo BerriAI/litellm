@@ -250,10 +250,10 @@ class LangFuseLogger:
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
             if supports_tags:
-                metadata_tags = metadata.pop("tags", [])
+                metadata_tags = metadata.get("tags", [])
                 tags = metadata_tags
 
-            trace_name = metadata.pop("trace_name", None)
+            trace_name = metadata.get("trace_name", None)
             if trace_name is None:
                 # just log `litellm-{call_type}` as the trace name
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
@@ -261,21 +261,21 @@ class LangFuseLogger:
             trace_params = {
                 "name": trace_name,
                 "input": input,
-                "user_id": metadata.pop("trace_user_id", user_id),
-                "id": metadata.pop("trace_id", None),
-                "session_id": metadata.pop("session_id", None),
+                "user_id": metadata.get("trace_user_id", user_id),
+                "id": metadata.get("trace_id", None),
+                "session_id": metadata.get("session_id", None),
             }
 
-            trace_version = metadata.pop("trace_version", None)
+            trace_version = metadata.get("trace_version", None)
             if trace_version is not None:
                 trace_params["version"] = trace_version
 
-            trace_release = metadata.pop("trace_release", None)
+            trace_release = metadata.get("trace_release", None)
             if trace_release is not None:
                 trace_params["release"] = trace_release
 
-            trace_input = metadata.pop("trace_input", None)
-            trace_output = metadata.pop("trace_output", None)
+            trace_input = metadata.get("trace_input", None)
+            trace_output = metadata.get("trace_output", None)
 
             if trace_input is not None:
                 trace_params["input"] = trace_input
@@ -290,7 +290,7 @@ class LangFuseLogger:
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
 
-            generation_id = metadata.pop("generation_id", None)
+            generation_id = metadata.get("generation_id", None)
             usage = None
             if response_obj is not None and response_obj.get("id", None) is not None:
                 if generation_id is None:
@@ -301,15 +301,15 @@ class LangFuseLogger:
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
                 }
-            generation_name = metadata.pop("generation_name", None)
+            generation_name = metadata.get("generation_name", None)
             if generation_name is None:
                 # just log `litellm-{call_type}` as the generation name
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             # We don't allow generation_output, because it doesn't really make sense to allow the override of the output
-            generation_input = metadata.pop("generation_input", None)
+            generation_input = metadata.get("generation_input", None)
 
-            generation_version = metadata.pop("generation_version", None),
+            generation_version = metadata.get("generation_version", None),
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
