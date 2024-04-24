@@ -35,7 +35,14 @@ from litellm.utils import (
 import copy
 from litellm._logging import verbose_router_logger
 import logging
-from litellm.types.router import Deployment, ModelInfo, LiteLLM_Params, RouterErrors
+from litellm.types.router import (
+    Deployment,
+    ModelInfo,
+    LiteLLM_Params,
+    RouterErrors,
+    updateDeployment,
+    updateLiteLLMParams,
+)
 from litellm.integrations.custom_logger import CustomLogger
 
 
