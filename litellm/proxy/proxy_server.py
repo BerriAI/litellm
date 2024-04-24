@@ -2312,7 +2312,7 @@ class ProxyConfig:
                 master_key = litellm.get_secret(master_key)
 
             if master_key is not None and isinstance(master_key, str):
-                litellm_master_key_hash = master_key
+                litellm_master_key_hash = hash_token(master_key)
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
@@ -5977,6 +5977,13 @@ async def user_info(
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = []
         for key in keys:
+            if (
+                key.token == litellm_master_key_hash
+                and general_settings.get("disable_master_key_return", False)
+                == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
+            ):
+                continue
+
             try:
                 key = key.model_dump()  # noqa
             except:
