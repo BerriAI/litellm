@@ -634,9 +634,10 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       <TabPanels>
           <TabPanel>
       <Grid>
+      <div className="flex items-center">
         <Text>Filter by Public Model Name</Text>
       <Select
-              className="mb-4 mt-2"
+              className="mb-4 mt-2 ml-2 w-50"
               defaultValue="all"
               onValueChange={(value) => setSelectedModelGroup(value === "all" ? null : value)}
             >
@@ -655,6 +656,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </SelectItem>
               ))}
             </Select>
+          </div>
         <Card>
           <Table className="mt-5">
             <TableHead>
