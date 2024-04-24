@@ -192,6 +192,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>('');
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
   const [selectedModel, setSelectedModel] = useState<any>(null);
+  const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
+  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -406,7 +408,16 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
 
-       
+        // loop through modelDataResponse and get all`model_name` values 
+
+        let all_model_groups: Set<string> = new Set();
+        for (let i = 0; i < modelDataResponse.data.length; i++) {
+          const model = modelDataResponse.data[i];
+          all_model_groups.add(model.model_name)
+        }
+        console.log("all_model_groups:", all_model_groups)
+        let _array_model_groups = Array.from(all_model_groups)
+        setAvailableModelGroups(_array_model_groups);
 
         // if userRole is Admin, show the pending requests
         if (userRole === "Admin" && accessToken) {
@@ -623,12 +634,33 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       <TabPanels>
           <TabPanel>
       <Grid>
+        <Text>Filter by Public Model Name</Text>
+      <Select
+              className="mb-4 mt-2"
+              defaultValue="all"
+              onValueChange={(value) => setSelectedModelGroup(value === "all" ? null : value)}
+            >
+              <SelectItem 
+                  value={"all"}
+                >
+                  All Models
+                </SelectItem>
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => setSelectedModelGroup(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
         <Card>
           <Table className="mt-5">
             <TableHead>
               <TableRow>
 
-                  <TableHeaderCell>Model Name </TableHeaderCell>
+                  <TableHeaderCell>Public Model Name </TableHeaderCell>
 
                 <TableHeaderCell>
                   Provider
@@ -649,7 +681,11 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {modelData.data.map((model: any, index: number) => (
+              { modelData.data
+                  .filter((model: any) =>
+                    selectedModelGroup === null || model.model_name === selectedModelGroup
+                  )
+                  .map((model: any, index: number) => (
                 <TableRow key={index}>
                   <TableCell>
                     <Text>{model.model_name}</Text>
