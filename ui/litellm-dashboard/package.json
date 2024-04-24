@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "jest",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@headlessui/react": "^1.7.18",
@@ -27,15 +29,22 @@
     "react-syntax-highlighter": "^15.5.0"
   },
   "devDependencies": {
+    "@babel/preset-env": "^7.24.4",
+    "@babel/preset-react": "^7.24.1",
     "@tailwindcss/forms": "^0.5.7",
+    "@testing-library/jest-dom": "^6.4.2",
+    "@testing-library/react": "^15.0.4",
     "@types/node": "^20",
     "@types/react": "18.2.48",
     "@types/react-copy-to-clipboard": "^5.0.7",
     "@types/react-dom": "^18",
     "@types/react-syntax-highlighter": "^15.5.11",
     "autoprefixer": "^10.4.17",
+    "babel-jest": "^29.7.0",
     "eslint": "^8",
     "eslint-config-next": "14.1.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
     "typescript": "5.3.3"

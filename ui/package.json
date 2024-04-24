@@ -5,6 +5,7 @@
     "@tremor/react": "^3.13.3"
   },
   "devDependencies": {
-    "@tailwindcss/forms": "^0.5.7"
+    "@tailwindcss/forms": "^0.5.7",
+    "jest": "^29.7.0"
   }
 }
