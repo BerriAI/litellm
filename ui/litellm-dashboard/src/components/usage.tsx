@@ -493,6 +493,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </TabPanel>
             
             <TabPanel>
+              <Title>Filter By Model Group</Title>
+              <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
+              <p style={{fontSize: '0.85rem', color: '#808080', fontStyle: 'italic'}}>(Beta feature) only supported for Azure Model Groups</p>
+
 
             <Select
               className="mb-4 mt-2"
