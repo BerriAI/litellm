@@ -1,4 +1,4 @@
-# Greenscale Tutorial
+# Greenscale - Track LLM Spend and Responsible Usage
 
 [Greenscale](https://greenscale.ai/) is a production monitoring platform for your LLM-powered app that provides you granular key insights into your GenAI spending and responsible usage. Greenscale only captures metadata to minimize the exposure risk of personally identifiable information (PII).
 
