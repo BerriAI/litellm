@@ -17,20 +17,24 @@ import {
   TextInput,
   Col,
 } from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
+import AddFallbacks from "./add_fallbacks"
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  modelData: any
 }
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   accessToken,
   userRole,
   userID,
+  modelData
 }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -103,6 +107,13 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
 
   return (
     <div className="w-full mx-4">
+      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+        <TabList variant="line" defaultValue="1">
+          <Tab value="1">General Settings</Tab>
+          <Tab value="2">Fallbacks</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
       <Title>Router Settings</Title>
         <Card >
@@ -114,23 +125,23 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
               </TableRow>
             </TableHead>
             <TableBody>
-            {Object.entries(routerSettings).map(([param, value]) => (
-  <TableRow key={param}>
-    <TableCell>
-      <Text>{param}</Text>
-      <p style={{fontSize: '0.65rem', color: '#808080', fontStyle: 'italic'}} className="mt-1">{paramExplanation[param]}</p>
-    </TableCell>
-    <TableCell>
-      <TextInput
-        name={param}
-        defaultValue={
-          typeof value === 'object' ? JSON.stringify(value, null, 2) : value.toString()
-        }
-      />
-    </TableCell>
-  </TableRow>
-))}
-</TableBody>
+              {Object.entries(routerSettings).map(([param, value]) => (
+                <TableRow key={param}>
+                  <TableCell>
+                    <Text>{param}</Text>
+                    <p style={{fontSize: '0.65rem', color: '#808080', fontStyle: 'italic'}} className="mt-1">{paramExplanation[param]}</p>
+                  </TableCell>
+                  <TableCell>
+                    <TextInput
+                      name={param}
+                      defaultValue={
+                        typeof value === 'object' ? JSON.stringify(value, null, 2) : value.toString()
+                      }
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
         </Table>
         </Card>
         <Col>
@@ -139,7 +150,34 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
             </Button>
         </Col>
       </Grid>
+      </TabPanel>
+      <TabPanel>
+      <Table>
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Model Name</TableHeaderCell>
+          <TableHeaderCell>Fallbacks</TableHeaderCell>
+        </TableRow>
+      </TableHead>
 
+        <TableBody>
+          {
+            routerSettings["fallbacks"] &&
+            routerSettings["fallbacks"].map((item: Object, index: number) =>
+              Object.entries(item).map(([key, value]) => (
+                <TableRow key={index.toString() + key}>
+                  <TableCell>{key}</TableCell>
+                  <TableCell>{Array.isArray(value) ? value.join(', ') : value}</TableCell>
+                </TableRow>
+              ))
+            )
+          }
+        </TableBody>
+      </Table>
+      <AddFallbacks models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []} accessToken={accessToken} routerSettings={routerSettings} setRouterSettings={setRouterSettings}/>
+      </TabPanel>
+      </TabPanels>
+    </TabGroup>
     </div>
   );
 };

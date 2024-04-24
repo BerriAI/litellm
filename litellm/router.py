@@ -2533,6 +2533,8 @@ class Router:
             "timeout",
             "max_retries",
             "retry_after",
+            "fallbacks",
+            "context_window_fallbacks",
         ]
 
         for var in vars_to_include:

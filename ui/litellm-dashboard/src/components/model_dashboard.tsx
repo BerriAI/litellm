@@ -49,6 +49,8 @@ interface ModelDashboardProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  modelData: any, 
+  setModelData: any
 }
 
 interface EditModelModalProps {
@@ -176,8 +178,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   token,
   userRole,
   userID,
+  modelData = { data: [] },
+  setModelData
 }) => {
-  const [modelData, setModelData] = useState<any>({ data: [] });
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
