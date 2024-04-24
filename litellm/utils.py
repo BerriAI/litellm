@@ -2716,23 +2716,22 @@ def client(original_function):
 
             # [OPTIONAL] CHECK CACHE
             print_verbose(
-                f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}"
+                f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
             )
             # if caching is false or cache["no-cache"]==True, don't run this
             if (
                 (
                     (
-                        kwargs.get("caching", None) is None
-                        and kwargs.get("cache", None) is None
-                        and litellm.cache is not None
+                        (
+                            kwargs.get("caching", None) is None
+                            and litellm.cache is not None
+                        )
+                        or kwargs.get("caching", False) == True
                     )
-                    or kwargs.get("caching", False) == True
-                    or (
-                        kwargs.get("cache", None) is not None
-                        and kwargs.get("cache", {}).get("no-cache", False) != True
-                    )
+                    and kwargs.get("cache", {}).get("no-cache", False) != True
                 )
                 and kwargs.get("aembedding", False) != True
+                and kwargs.get("atext_completion", False) != True
                 and kwargs.get("acompletion", False) != True
                 and kwargs.get("aimg_generation", False) != True
                 and kwargs.get("atranscription", False) != True
@@ -3011,24 +3010,17 @@ def client(original_function):
                     )
 
             # [OPTIONAL] CHECK CACHE
-            print_verbose(f"litellm.cache: {litellm.cache}")
             print_verbose(
-                f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}"
+                f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
             # if caching is false, don't run this
             final_embedding_cached_response = None
 
             if (
-                (
-                    kwargs.get("caching", None) is None
-                    and kwargs.get("cache", None) is None
-                    and litellm.cache is not None
-                )
+                (kwargs.get("caching", None) is None and litellm.cache is not None)
                 or kwargs.get("caching", False) == True
-                or (
-                    kwargs.get("cache", None) is not None
-                    and kwargs.get("cache").get("no-cache", False) != True
-                )
+            ) and (
+                kwargs.get("cache", {}).get("no-cache", False) != True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose("INSIDE CHECKING CACHE")
@@ -3074,7 +3066,6 @@ def client(original_function):
                             preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
                         )
                         cached_result = litellm.cache.get_cache(*args, **kwargs)
-
                     if cached_result is not None and not isinstance(
                         cached_result, list
                     ):
