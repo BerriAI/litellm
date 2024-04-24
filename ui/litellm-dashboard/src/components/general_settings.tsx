@@ -125,7 +125,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
               </TableRow>
             </TableHead>
             <TableBody>
-              {Object.entries(routerSettings).map(([param, value]) => (
+              {Object.entries(routerSettings).filter(([param, value]) => param != "fallbacks" && param != "context_window_fallbacks").map(([param, value]) => (
                 <TableRow key={param}>
                   <TableCell>
                     <Text>{param}</Text>

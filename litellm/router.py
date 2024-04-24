@@ -2553,6 +2553,8 @@ class Router:
             "timeout",
             "max_retries",
             "retry_after",
+            "fallbacks",
+            "context_window_fallbacks",
         ]
 
         _int_settings = [
