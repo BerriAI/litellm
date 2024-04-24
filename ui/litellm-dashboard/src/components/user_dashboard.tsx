@@ -32,6 +32,12 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
 
+type TeamInterface = {
+  models: any[];
+  team_id: null;
+  team_alias: String
+}
+
 const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
@@ -56,8 +62,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const defaultTeam: TeamInterface = {
+    "models": [],
+    "team_alias": "Default Team",
+    "team_id": null
+  }
   const [selectedTeam, setSelectedTeam] = useState<any | null>(
-    teams ? teams[0] : null
+    teams ? teams[0] : defaultTeam
   );
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -141,7 +152,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             }
             setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
-            setSelectedTeam(response["teams"] ? response["teams"][0] : null);
+            const teamsArray = [...response['teams']];
+            if (teamsArray.length > 0) {
+                console.log(`response['teams']: ${teamsArray}`);
+                setSelectedTeam(teamsArray[0]);
+            } else {
+                setSelectedTeam(defaultTeam);
+            }
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
