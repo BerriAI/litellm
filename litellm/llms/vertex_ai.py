@@ -225,8 +225,7 @@ def _get_image_bytes_from_url(image_url: str) -> bytes:
         image_bytes = response.content
         return image_bytes
     except requests.exceptions.RequestException as e:
-        # Handle any request exceptions (e.g., connection error, timeout)
-        return b""  # Return an empty bytes object or handle the error as needed
+        raise Exception(f"An exception occurs with this image - {str(e)}")
 
 
 def _load_image_from_url(image_url: str):
@@ -247,7 +246,8 @@ def _load_image_from_url(image_url: str):
     )
 
     image_bytes = _get_image_bytes_from_url(image_url)
-    return Image.from_bytes(image_bytes)
+
+    return Image.from_bytes(data=image_bytes)
 
 
 def _gemini_vision_convert_messages(messages: list):
@@ -817,7 +817,7 @@ async def async_completion(
     """
     try:
         if mode == "vision":
-            print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
+            print_verbose("\nMaking VertexAI Gemini Pro/Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
             tools = optional_params.pop("tools", None)
 
@@ -836,6 +836,7 @@ async def async_completion(
             )
 
             ## LLM Call
+            # print(f"final content: {content}")
             response = await llm_model._generate_content_async(
                 contents=content,
                 generation_config=optional_params,
