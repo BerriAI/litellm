@@ -14,6 +14,24 @@ sys.path.insert(
 import litellm
 
 
+async def generate_team(session):
+    url = "http://0.0.0.0:4000/team/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "team_id": "litellm-dashboard",
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response (Status code: {status}):")
+        print(response_text)
+        print()
+        _json_response = await response.json()
+        return _json_response
+
+
 async def generate_user(
     session,
     user_role="app_owner",
@@ -44,9 +62,13 @@ async def generate_key(
     models=["azure-models", "gpt-4", "dall-e-3"],
     max_parallel_requests: Optional[int] = None,
     user_id: Optional[str] = None,
+    calling_key="sk-1234",
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {calling_key}",
+        "Content-Type": "application/json",
+    }
     data = {
         "models": models,
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
@@ -78,6 +100,35 @@ async def test_key_gen():
     async with aiohttp.ClientSession() as session:
         tasks = [generate_key(session, i) for i in range(1, 11)]
         await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_key_gen_bad_key():
+    """
+    Test if you can create a key with a non-admin key, even with UI setup
+    """
+    async with aiohttp.ClientSession() as session:
+        ## LOGIN TO UI
+        form_data = {"username": "admin", "password": "sk-1234"}
+        async with session.post(
+            "http://0.0.0.0:4000/login", data=form_data
+        ) as response:
+            assert (
+                response.status == 200
+            )  # Assuming the endpoint returns a 500 status code for error handling
+            text = await response.text()
+            print(text)
+        ## create user key with admin key -> expect to work
+        key_data = await generate_key(session=session, i=0, user_id="user-1234")
+        key = key_data["key"]
+        ## create new key with user key -> expect to fail
+        try:
+            await generate_key(
+                session=session, i=0, user_id="user-1234", calling_key=key
+            )
+            pytest.fail("Expected to fail")
+        except Exception as e:
+            pass
 
 
 async def update_key(session, get_key):
@@ -635,7 +686,7 @@ async def test_key_rate_limit():
 
 
 @pytest.mark.asyncio
-async def test_key_delete():
+async def test_key_delete_ui():
     """
     Admin UI flow - DO NOT DELETE
     -> Create a key with user_id = "ishaan"
@@ -647,6 +698,8 @@ async def test_key_delete():
         key = key_gen["key"]
 
         # generate a admin UI key
+        team = await generate_team(session=session)
+        print("generated team: ", team)
         admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
         print(
             "trying to delete key=",

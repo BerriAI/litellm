@@ -253,6 +253,7 @@ litellm.vertex_location = "us-central1 # Your Location
 ## Anthropic 
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
+| claude-3-opus@20240229   | `completion('vertex_ai/claude-3-opus@20240229', messages)` |
 | claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
 | claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
 

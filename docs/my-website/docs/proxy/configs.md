@@ -600,6 +600,7 @@ general_settings:
   "general_settings": {
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
+    "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
     "disable_reset_budget": "boolean", # turn off reset budget scheduled task
     "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
     "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
