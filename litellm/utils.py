@@ -5930,6 +5930,7 @@ def get_llm_provider(
             or model in litellm.vertex_code_text_models
             or model in litellm.vertex_language_models
             or model in litellm.vertex_embedding_models
+            or model in litellm.vertex_vision_models
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21
