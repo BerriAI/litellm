@@ -82,14 +82,18 @@ class UnprocessableEntityError(UnprocessableEntityError):  # type: ignore
 
 class Timeout(APITimeoutError):  # type: ignore
     def __init__(self, message, model, llm_provider):
-        self.status_code = 408
-        self.message = message
-        self.model = model
-        self.llm_provider = llm_provider
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(
             request=request
         )  # Call the base class constructor with the parameters it needs
+        self.status_code = 408
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+
+    # custom function to convert to str
+    def __str__(self):
+        return str(self.message)
 
 
 class PermissionDeniedError(PermissionDeniedError):  # type:ignore
