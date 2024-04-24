@@ -403,13 +403,17 @@ export const modelInfoCall = async (
 export const modelMetricsCall = async (
   accessToken: String,
   userID: String,
-  userRole: String
+  userRole: String, 
+  modelGroup: String | null,
 ) => {
   /**
    * Get all models on proxy
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics` : `/model/metrics`;
+    if (modelGroup) {
+      url = `${url}?_selected_model_group=${modelGroup}`
+    }
     // message.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
