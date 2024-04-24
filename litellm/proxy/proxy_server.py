@@ -106,7 +106,7 @@ import pydantic
 from litellm.proxy._types import *
 from litellm.caching import DualCache, RedisCache
 from litellm.proxy.health_check import perform_health_check
-from litellm.router import LiteLLM_Params, Deployment
+from litellm.router import LiteLLM_Params, Deployment, updateDeployment
 from litellm.router import ModelInfo as RouterModelInfo
 from litellm._logging import verbose_router_logger, verbose_proxy_logger
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -7224,6 +7224,89 @@ async def add_new_model(
 
         return model_response
 
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+#### MODEL MANAGEMENT ####
+@router.post(
+    "/model/update",
+    description="Edit existing model params",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_model(
+    model_params: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db, proxy_logging_obj
+    try:
+        import base64
+
+        global prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
+                },
+            )
+        # update DB
+        if store_model_in_db == True:
+            _model_id = None
+            _model_info = getattr(model_params, "model_info", None)
+            if _model_info is None:
+                raise Exception("model_info not provided")
+
+            _model_id = _model_info.id
+            if _model_id is None:
+                raise Exception("model_info.id not provided")
+            _existing_litellm_params = (
+                await prisma_client.db.litellm_proxymodeltable.find_unique(
+                    where={"model_id": _model_id}
+                )
+            )
+            if _existing_litellm_params is None:
+                raise Exception("model not found")
+            _existing_litellm_params_dict = dict(
+                _existing_litellm_params.litellm_params
+            )
+
+            if model_params.litellm_params is None:
+                raise Exception("litellm_params not provided")
+
+            _new_litellm_params_dict = model_params.litellm_params.dict(
+                exclude_none=True
+            )
+
+            for key, value in _existing_litellm_params_dict.items():
+                if key in _new_litellm_params_dict:
+                    _existing_litellm_params_dict[key] = _new_litellm_params_dict[key]
+
+            _data: dict = {
+                "litellm_params": json.dumps(_existing_litellm_params_dict),  # type: ignore
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }
+            model_response = await prisma_client.db.litellm_proxymodeltable.update(
+                where={"model_id": _model_id},
+                data=_data,  # type: ignore
+            )
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):

@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall } from "./networking";
 import { BarChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -49,6 +49,13 @@ interface ModelDashboardProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+}
+
+interface EditModelModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  model: any; // Assuming TeamType is a type representing your team object
+  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
@@ -183,6 +190,169 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>('');
+  const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
+  const [selectedModel, setSelectedModel] = useState<any>(null);
+
+  const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
+    const [form] = Form.useForm();
+    let litellm_params_to_edit: Record<string, any> = {}
+    let model_name = "";
+    let model_id = "";
+    if (model) {
+      litellm_params_to_edit = model.litellm_params
+      model_name = model.model_name;
+      let model_info = model.model_info;
+      if (model_info ) {
+        model_id = model_info.id;
+        console.log(`model_id: ${model_id}`)
+        litellm_params_to_edit.model_id = model_id;
+      }
+    }
+   
+  
+    const handleOk = () => {
+      form
+        .validateFields()
+        .then((values) => {
+          onSubmit(values);
+          form.resetFields();
+        })
+        .catch((error) => {
+          console.error("Validation failed:", error);
+        });
+  };
+  
+    return (
+        <Modal
+              title={"Edit Model " + model_name}
+              visible={visible}
+              width={800}
+              footer={null}
+              onOk={handleOk}
+              onCancel={onCancel}
+            >
+        <Form
+          form={form}
+          onFinish={handleEditSubmit}
+          initialValues={litellm_params_to_edit} // Pass initial values here
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+                <>
+
+                <Form.Item className="mt-8"
+                    label="api_base" 
+                    name="api_base"
+                    
+                  >
+                  <TextInput/>
+
+                  </Form.Item>
+                  
+                  <Form.Item 
+                    label="tpm" 
+                    name="tpm"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="rpm" 
+                    name="rpm"
+                  >
+                  <InputNumber min={0} step={1} />
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="max_retries" 
+                    name="max_retries"
+                  >
+
+                    
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  
+
+                  <Form.Item 
+                    label="model_id" 
+                    name="model_id"
+                    hidden={true}
+                  >
+                  </Form.Item>
+
+                  
+
+                  
+                </>
+                <div style={{ textAlign: "right", marginTop: "10px" }}>
+                  <Button2 htmlType="submit">Save</Button2>
+                </div>
+              </Form>
+      </Modal>
+    );
+  };
+  
+
+  const handleEditClick = (model: any) => {
+    setSelectedModel(model);
+    setEditModalVisible(true);
+  };
+
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  };
+
+
+const handleEditSubmit = async (formValues: Record<string, any>) => {
+  // Call API to update team with teamId and values
+  
+  console.log("handleEditSubmit:", formValues);
+  if (accessToken == null) {
+    return;
+  }
+
+  let newLiteLLMParams: Record<string, any> = {}
+  let model_info_model_id = null;
+
+  for (const [key, value] of Object.entries(formValues)) {
+    if (key !== "model_id") {
+      newLiteLLMParams[key] = value;
+    } else {
+      model_info_model_id = value;
+    }
+  }
+
+  let payload = {
+    litellm_params: newLiteLLMParams, 
+    model_info: {
+      "id": model_info_model_id
+    }
+  }
+
+  console.log("handleEditSubmit payload:", payload);
+
+  let newModelValue = await modelUpdateCall(accessToken, payload);
+
+  // Update the teams state with the updated team data
+  // if (teams) {
+  //   const updatedTeams = teams.map((team) =>
+  //     team.team_id === teamId ? newTeamValues.data : team
+  //   );
+  //   setTeams(updatedTeams);
+  // }
+  message.success("Model updated successfully, restart server to see updates");
+
+  setEditModalVisible(false);
+  setSelectedModel(null);
+};
+
+
+  
 
 
   const props: UploadProps = {
@@ -510,15 +680,27 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <TableCell>{model.output_cost}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
                   <TableCell>
+                        <Icon
+                            icon={PencilAltIcon}
+                            size="sm"
+                            onClick={() => handleEditClick(model)}
+                          />
                           <DeleteModelButton modelID={model.model_info.id} accessToken={accessToken} />
                         </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+
         </Card>
 
       </Grid>
+      <EditModelModal
+          visible={editModalVisible}
+          onCancel={handleEditCancel}
+          model={selectedModel}
+          onSubmit={handleEditSubmit}
+        />
       </TabPanel>
       <TabPanel className="h-full">
       <Title2 level={2}>Add new model</Title2>
