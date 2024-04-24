@@ -2624,9 +2624,16 @@ class ProxyConfig:
         if "alerting" in _general_settings:
             general_settings["alerting"] = _general_settings["alerting"]
             proxy_logging_obj.alerting = general_settings["alerting"]
+            proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
+                "alerting"
+            ]
+
         if "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
             proxy_logging_obj.alert_types = general_settings["alert_types"]
+            proxy_logging_obj.slack_alerting_instance.alert_types = general_settings[
+                "alert_types"
+            ]
 
         # router settings
         if llm_router is not None:
@@ -8470,8 +8477,10 @@ async def get_config():
                     )
                     _slack_env_vars[_var] = _decrypted_value
 
-            _alerting_types = proxy_logging_obj.alert_types
-            _all_alert_types = proxy_logging_obj._all_possible_alert_types()
+            _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
+            _all_alert_types = (
+                proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
+            )
             _data_to_return.append(
                 {
                     "name": "slack",
