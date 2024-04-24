@@ -1765,7 +1765,7 @@ class Logging:
                                     "reaches greenscale for streaming logging!"
                                 )
                                 result = kwargs["complete_streaming_response"]
-          
+
                         greenscaleLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
@@ -7415,11 +7415,18 @@ def exception_type(
                 exception_type = type(original_exception).__name__
             else:
                 exception_type = ""
+            _api_base = ""
+            try:
+                _api_base = litellm.get_api_base(
+                    model=model, optional_params=extra_kwargs
+                )
+            except:
+                _api_base = ""
 
             if "Request Timeout Error" in error_str or "Request timed out" in error_str:
                 exception_mapping_worked = True
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out",
+                    message=f"APITimeoutError - Request timed out. \n model: {model} \n api_base: {_api_base} \n error_str: {error_str}",
                     model=model,
                     llm_provider=custom_llm_provider,
                 )
