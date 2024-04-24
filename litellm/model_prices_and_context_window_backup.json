@@ -650,6 +650,7 @@
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "mistral",
+        "supports_function_calling": true,
         "mode": "chat"
     },
     "mistral/mistral-small-latest": {
@@ -659,6 +660,7 @@
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "mistral",
+        "supports_function_calling": true,
         "mode": "chat"
     },
     "mistral/mistral-medium": {

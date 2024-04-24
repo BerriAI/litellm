@@ -10000,6 +10000,22 @@ class CustomStreamWrapper:
                                                 t.function.arguments = ""
                             _json_delta = delta.model_dump()
                             print_verbose(f"_json_delta: {_json_delta}")
+                            if "role" not in _json_delta or _json_delta["role"] is None:
+                                _json_delta["role"] = (
+                                    "assistant"  # mistral's api returns role as None
+                                )
+                            if "tool_calls" in _json_delta and isinstance(
+                                _json_delta["tool_calls"], list
+                            ):
+                                for tool in _json_delta["tool_calls"]:
+                                    if (
+                                        isinstance(tool, dict)
+                                        and "function" in tool
+                                        and isinstance(tool["function"], dict)
+                                        and ("type" not in tool or tool["type"] is None)
+                                    ):
+                                        # if function returned but type set to None - mistral's api returns type: None
+                                        tool["type"] = "function"
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
                             traceback.print_exc()
