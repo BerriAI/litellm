@@ -38,9 +38,9 @@ class LangFuseLogger:
         # this is used by Alerting to link to the correct project
         try:
             project_id = self.Langfuse.client.projects.get().data[0].id
+            os.environ["LANGFUSE_PROJECT_ID"] = project_id
         except:
             project_id = None
-        os.environ["LANGFUSE_PROJECT_ID"] = project_id
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
             self.upstream_langfuse_secret_key = os.getenv(
