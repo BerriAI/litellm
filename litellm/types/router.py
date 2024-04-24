@@ -101,12 +101,39 @@ class LiteLLM_Params(BaseModel):
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
 
-    def __init__(self, max_retries: Optional[Union[int, str]] = None, **params):
+    def __init__(
+        self,
+        model: str,
+        max_retries: Optional[Union[int, str]] = None,
+        tpm: Optional[int] = None,
+        rpm: Optional[int] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        timeout: Optional[Union[float, str]] = None,  # if str, pass in as os.environ/
+        stream_timeout: Optional[Union[float, str]] = (
+            None  # timeout when making stream=True calls, if str, pass in as os.environ/
+        ),
+        organization: Optional[str] = None,  # for openai orgs
+        ## VERTEX AI ##
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        ## AWS BEDROCK / SAGEMAKER ##
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_region_name: Optional[str] = None,
+        **params
+    ):
+        args = locals()
+        args.pop("max_retries", None)
+        args.pop("self", None)
+        args.pop("params", None)
+        args.pop("__class__", None)
         if max_retries is None:
             max_retries = 2
         elif isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
-        super().__init__(max_retries=max_retries, **params)
+        super().__init__(max_retries=max_retries, **args, **params)
 
     class Config:
         extra = "allow"
@@ -133,12 +160,23 @@ class Deployment(BaseModel):
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
 
-    def __init__(self, model_info: Optional[Union[ModelInfo, dict]] = None, **params):
+    def __init__(
+        self,
+        model_name: str,
+        litellm_params: LiteLLM_Params,
+        model_info: Optional[Union[ModelInfo, dict]] = None,
+        **params
+    ):
         if model_info is None:
             model_info = ModelInfo()
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
-        super().__init__(model_info=model_info, **params)
+        super().__init__(
+            model_info=model_info,
+            model_name=model_name,
+            litellm_params=litellm_params,
+            **params
+        )
 
     def to_json(self, **kwargs):
         try:

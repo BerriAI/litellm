@@ -3,7 +3,7 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem } from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -11,7 +11,10 @@ import {
   adminTopKeysCall,
   adminTopModelsCall,
   teamSpendLogsCall,
-  tagsSpendLogsCall
+  tagsSpendLogsCall,
+  modelMetricsCall,
+  modelAvailableCall,
+  modelInfoCall,
 } from "./networking";
 import { start } from "repl";
 
@@ -143,6 +146,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
+  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
+  const [modelGroups, setModelGroups] = useState<any[]>([]);
+  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -223,6 +230,26 @@ const UsagePage: React.FC<UsagePageProps> = ({
             //get top tags
             const top_tags = await tagsSpendLogsCall(accessToken);
             setTopTagsData(top_tags.top_10_tags);
+
+            // get model groups 
+            const _model_groups = await modelInfoCall(accessToken, userID, userRole);
+            let model_groups = _model_groups.data;
+            console.log("model groups in model dashboard", model_groups);
+
+            let available_model_groups = [];
+            // loop through each model in model_group, access litellm_params and only inlclude the model if model["litellm_params"]["model"] startswith "azure/"
+            for (let i = 0; i < model_groups.length; i++) {
+              let model = model_groups[i];
+              console.log("model check", model);
+              let model_group = model["litellm_params"]["model"];
+              console.log("model group", model_group);
+              if (model_group.startsWith("azure/")) {
+                available_model_groups.push(model["model_name"]);
+              }
+            }
+            setModelGroups(available_model_groups);
+
+
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -259,6 +286,22 @@ const UsagePage: React.FC<UsagePageProps> = ({
               }
             });
           }
+
+          const modelMetricsResponse = await modelMetricsCall(
+            accessToken,
+            userID,
+            userRole,
+            null
+          );
+  
+          console.log("Model metrics response:", modelMetricsResponse);
+          // Sort by latency (avg_latency_seconds)
+          const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
+          console.log("Sorted by latency:", sortedByLatency);
+
+          setModelMetrics(modelMetricsResponse);
+          setModelLatencyMetrics(sortedByLatency);
+
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
@@ -268,6 +311,31 @@ const UsagePage: React.FC<UsagePageProps> = ({
     }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
+
+  const updateModelMetrics = async (modelGroup: string | null) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole) {
+      return
+    }
+    setSelectedModelGroup(modelGroup);  // If you want to store the selected model group in state
+
+  
+    try {
+      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup);
+      console.log("Model metrics response:", modelMetricsResponse);
+  
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
+      console.log("Sorted by latency:", sortedByLatency);
+  
+      setModelMetrics(modelMetricsResponse);
+      setModelLatencyMetrics(sortedByLatency);
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  }
+  
+
   return (
     <div style={{ width: "100%" }} className="p-8">
       <ViewUserSpend
@@ -275,12 +343,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             userSpend={null}
+            selectedTeam={null}
           />
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
            <Tab>Tag Based Usage</Tab>
+           <Tab>Model Based Usage</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -370,6 +440,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   index="date"
                   categories={uniqueTeamIds}
                   yAxisWidth={80}
+                  colors={["blue", "green", "yellow", "red", "purple"]}
                   
                   stack={true}
                 />
@@ -381,7 +452,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
-              <Col numColSpan={2}>
+            <Col numColSpan={2}>
 
               <Card>
               <Title>Spend Per Tag - Last 30 Days</Title>
@@ -419,6 +490,61 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Col numColSpan={2}>
               </Col>
             </Grid>
+            </TabPanel>
+            
+            <TabPanel>
+              <Title>Filter By Model Group</Title>
+              <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
+              <p style={{fontSize: '0.85rem', color: '#808080', fontStyle: 'italic'}}>(Beta feature) only supported for Azure Model Groups</p>
+
+
+            <Select
+              className="mb-4 mt-2"
+              defaultValue="all"
+            >
+              <SelectItem 
+                  value={"all"}
+                  onClick={() => updateModelMetrics(null)}
+                >
+                  All Model Groups
+                </SelectItem>
+              {modelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => updateModelMetrics(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+            <Card>
+          <Title>Number Requests per Model</Title>
+              <BarChart
+                data={modelMetrics}
+                className="h-[50vh]"
+                index="model"
+                categories={["num_requests"]}
+                colors={["blue"]}
+                yAxisWidth={400}
+                layout="vertical"
+                tickGap={5}
+              />
+        </Card>
+        <Card className="mt-4">
+          <Title>Latency Per Model</Title>
+              <BarChart
+                data={modelLatencyMetrics}
+                className="h-[50vh]"
+                index="model"
+                categories={["avg_latency_seconds"]}
+                colors={["red"]}
+                yAxisWidth={400}
+                layout="vertical"
+                tickGap={5}
+              />
+        </Card>
+
             </TabPanel>
         </TabPanels>
       </TabGroup>

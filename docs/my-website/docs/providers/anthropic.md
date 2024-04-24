@@ -224,6 +224,91 @@ assert isinstance(
 ```
 
 
+### Parallel Function Calling 
+
+Here's how to pass the result of a function call back to an anthropic model: 
+
+```python
+from litellm import completion
+import os 
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant.."
+
+
+litellm.set_verbose = True
+
+### 1ST FUNCTION CALL ###
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [
+    {
+        "role": "user",
+        "content": "What's the weather like in Boston today in Fahrenheit?",
+    }
+]
+try:
+    # test without max tokens
+    response = completion(
+        model="anthropic/claude-3-opus-20240229",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+    )
+    # Add any assertions, here to check response args
+    print(response)
+    assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+    assert isinstance(
+        response.choices[0].message.tool_calls[0].function.arguments, str
+    )
+
+    messages.append(
+        response.choices[0].message.model_dump()
+    )  # Add assistant tool invokes
+    tool_result = (
+        '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+    )
+    # Add user submitted tool results in the OpenAI format
+    messages.append(
+        {
+            "tool_call_id": response.choices[0].message.tool_calls[0].id,
+            "role": "tool",
+            "name": response.choices[0].message.tool_calls[0].function.name,
+            "content": tool_result,
+        }
+    )
+    ### 2ND FUNCTION CALL ###
+    # In the second response, Claude should deduce answer from tool results
+    second_response = completion(
+        model="anthropic/claude-3-opus-20240229",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+    )
+    print(second_response)
+except Exception as e:
+    print(f"An error occurred - {str(e)}")
+```
+
+s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
+
 ## Usage - Vision 
 
 ```python
