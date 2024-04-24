@@ -812,7 +812,8 @@
         "output_cost_per_token": 0.00000125,
         "litellm_provider": "anthropic",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "tool_use_system_prompt_tokens": 264
     },
     "claude-3-opus-20240229": {
         "max_tokens": 4096,
@@ -822,7 +823,8 @@
         "output_cost_per_token": 0.000075,
         "litellm_provider": "anthropic",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "tool_use_system_prompt_tokens": 395
     },
     "claude-3-sonnet-20240229": {
         "max_tokens": 4096,
@@ -832,7 +834,8 @@
         "output_cost_per_token": 0.000015,
         "litellm_provider": "anthropic",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "tool_use_system_prompt_tokens": 159
     },
     "text-bison": {
         "max_tokens": 1024,
