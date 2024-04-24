@@ -11,6 +11,7 @@ from typing import List, Literal, Any, Union, Optional
 from litellm.caching import DualCache
 import asyncio
 import aiohttp
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 class SlackAlerting:
@@ -41,6 +42,7 @@ class SlackAlerting:
         self.alerting = alerting
         self.alert_types = alert_types
         self.internal_usage_cache = DualCache()
+        self.async_http_handler = AsyncHTTPHandler()
 
         pass
 
@@ -392,6 +394,7 @@ class SlackAlerting:
             return
 
         from datetime import datetime
+        import json
 
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
@@ -407,13 +410,13 @@ class SlackAlerting:
             raise Exception("Missing SLACK_WEBHOOK_URL from environment")
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
-        async with aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(ssl=False)
-        ) as session:
-            async with session.post(
-                slack_webhook_url, json=payload, headers=headers
-            ) as response:
-                if response.status == 200:
-                    pass
-                else:
-                    print("Error sending slack alert. Error=", response.text)
+
+        response = await self.async_http_handler.post(
+            url=slack_webhook_url,
+            headers=headers,
+            data=json.dumps(payload),
+        )
+        if response.status_code == 200:
+            pass
+        else:
+            print("Error sending slack alert. Error=", response.text)  # noqa
