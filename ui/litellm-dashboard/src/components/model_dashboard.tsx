@@ -639,7 +639,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       <Select
               className="mb-4 mt-2 ml-2 w-50"
               defaultValue="all"
-              onValueChange={(value) => setSelectedModelGroup(value === "all" ? null : value)}
+              onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
             >
               <SelectItem 
                   value={"all"}
@@ -685,7 +685,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             <TableBody>
               { modelData.data
                   .filter((model: any) =>
-                    selectedModelGroup === null || model.model_name === selectedModelGroup
+                    selectedModelGroup === "all" || model.model_name === selectedModelGroup || selectedModelGroup === null || selectedModelGroup === undefined || selectedModelGroup === ""
                   )
                   .map((model: any, index: number) => (
                 <TableRow key={index}>
