@@ -7343,6 +7343,7 @@ async def model_metrics(
                 _litellm_params = model["litellm_params"]
                 _api_base = _litellm_params.get("api_base", "")
                 _relevant_api_bases.append(_api_base)
+                _relevant_api_bases.append(_api_base + "/openai/")
 
         sql_query = """
             SELECT
