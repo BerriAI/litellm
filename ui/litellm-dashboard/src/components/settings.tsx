@@ -27,6 +27,18 @@ interface SettingsPageProps {
   userID: string | null;
 }
 
+interface AlertingVariables {
+  SLACK_WEBHOOK_URL: string | null,
+  LANGFUSE_PUBLIC_KEY: string | null, 
+  LANGFUSE_SECRET_KEY: string | null, 
+  LANGFUSE_HOST: string | null
+}
+
+interface AlertingObject {
+  name: string, 
+  variables: AlertingVariables
+}
+
 const Settings: React.FC<SettingsPageProps> = ({
   accessToken,
   userRole,
@@ -36,6 +48,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
+  const [selectedAlertValues, setSelectedAlertValues] = useState([]);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -59,6 +72,12 @@ const Settings: React.FC<SettingsPageProps> = ({
     setSelectedCallback(null);
   };
 
+  const handleChange = (values: any) => {
+    setSelectedAlertValues(values);
+    // Here, you can perform any additional logic with the selected values
+    console.log('Selected values:', values);
+  };
+
   const handleSaveChanges = (callback: any) => {
     if (!accessToken) {
       return;
@@ -68,8 +87,14 @@ const Settings: React.FC<SettingsPageProps> = ({
       Object.entries(callback.variables).map(([key, value]) => [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value])
     );
 
+    console.log("updatedVariables", updatedVariables);
+    console.log("updateAlertTypes", selectedAlertValues);
+
     const payload = {
       environment_variables: updatedVariables,
+      general_settings: {
+        alert_types: selectedAlertValues
+      }
     };
 
     try {
@@ -101,10 +126,19 @@ const Settings: React.FC<SettingsPageProps> = ({
           }
         };
         setCallbacksCall(accessToken, payload);
-
+        let newCallback: AlertingObject = {
+          "name": values.callback,
+          "variables": {
+            "SLACK_WEBHOOK_URL": null,
+            "LANGFUSE_HOST": null, 
+            "LANGFUSE_PUBLIC_KEY": values.langfusePublicKey, 
+            "LANGFUSE_SECRET_KEY": values.langfusePrivateKey
+          }
+        }
         // add langfuse to callbacks
-        setCallbacks(callbacks ? [...callbacks, values.callback] : [values.callback]);
+        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
       } else if (values.callback === 'slack') {
+        console.log(`values.slackWebhookUrl: ${values.slackWebhookUrl}`)
         payload = {
           general_settings: {
             alerting: ["slack"],
@@ -117,7 +151,18 @@ const Settings: React.FC<SettingsPageProps> = ({
         setCallbacksCall(accessToken, payload);
 
         // add slack to callbacks
-        setCallbacks(callbacks ? [...callbacks, values.callback] : [values.callback]);
+        console.log(`values.callback: ${values.callback}`)
+
+        let newCallback: AlertingObject = {
+          "name": values.callback,
+          "variables": {
+            "SLACK_WEBHOOK_URL": values.slackWebhookUrl,
+            "LANGFUSE_HOST": null, 
+            "LANGFUSE_PUBLIC_KEY": null, 
+            "LANGFUSE_SECRET_KEY": null
+          }
+        }
+        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
       } else {
         payload = {
           error: 'Invalid callback value'
@@ -137,6 +182,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     return null;
   }
 
+  console.log(`callbacks: ${callbacks}`)
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
@@ -157,7 +203,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       </TableCell>
       <TableCell>
         <ul>
-        {Object.entries(callback.variables).map(([key, value]) => (
+        {Object.entries(callback.variables ?? {}).filter(([key, value]) => value !== null).map(([key, value]) => (
   <li key={key}>
     <Text className="mt-2">{key}</Text>
     {key === "LANGFUSE_HOST" ? (
@@ -169,6 +215,25 @@ const Settings: React.FC<SettingsPageProps> = ({
   </li>
 ))}
         </ul>
+        {callback.all_alert_types && (
+          <div>
+            <Text className="mt-2">Alerting Types</Text>
+            <Select
+              mode="multiple"
+              style={{ width: '100%' }}
+              placeholder="Select Alerting Types"
+              optionLabelProp="label"
+              onChange={handleChange}
+              defaultValue={callback.alerting_types}
+            >
+              {callback.all_alert_types.map((type: string) => (
+                <Select.Option key={type} value={type} label={type}>
+                  {type}
+                </Select.Option>
+              ))}
+            </Select>
+          </div>
+        )}
         <Button className="mt-2" onClick={() => handleSaveChanges(callback)}>
           Save Changes
         </Button>
@@ -217,7 +282,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                   { required: true, message: "Please enter the public key" },
                 ]}
               >
-                <Input.Password />
+                <TextInput type="password"/>
               </Form.Item>
 
               <Form.Item
@@ -227,7 +292,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                   { required: true, message: "Please enter the private key" },
                 ]}
               >
-                <Input.Password />
+                <TextInput type="password"/>
               </Form.Item>
             </>
           )}
@@ -240,7 +305,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                 { required: true, message: "Please enter the Slack webhook URL" },
               ]}
             >
-              <Input />
+              <TextInput/>
             </Form.Item>
           )}
 

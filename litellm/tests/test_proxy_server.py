@@ -362,7 +362,9 @@ def test_load_router_config():
         ]  # init with all call types
 
     except Exception as e:
-        pytest.fail("Proxy: Got exception reading config", e)
+        pytest.fail(
+            f"Proxy: Got exception reading config: {str(e)}\n{traceback.format_exc()}"
+        )
 
 
 # test_load_router_config()

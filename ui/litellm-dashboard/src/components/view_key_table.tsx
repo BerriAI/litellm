@@ -94,6 +94,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
   const [userModels, setUserModels] = useState([]);
+  const initialKnownTeamIDs: Set<string> = new Set();
+
+  const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
   useEffect(() => {
     const fetchUserModels = async () => {
@@ -118,6 +121,16 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
+  useEffect(() => {
+    if (teams) {
+      const teamIDSet: Set<string> = new Set();
+      teams.forEach((team: any, index: number) => {
+        const team_obj: string = team.team_id
+        teamIDSet.add(team_obj);
+      });
+      setKnownTeamIDs(teamIDSet)
+    }
+  }, [teams])
   const EditKeyModal: React.FC<EditKeyModalProps> = ({ visible, onCancel, token, onSubmit }) => {
     const [form] = Form.useForm();
     const [keyTeam, setKeyTeam] = useState(selectedTeam);
@@ -277,12 +290,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setEditModalVisible(true);
   };
 
-const handleEditCancel = () => {
-  setEditModalVisible(false);
-  setSelectedToken(null);
-};
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedToken(null);
+  };
 
-const handleEditSubmit = async (formValues: Record<string, any>) => {
+  const handleEditSubmit = async (formValues: Record<string, any>) => {
   /**
    * Call API to update team with teamId and values
    * 
@@ -294,7 +307,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   const currentKey = formValues.token; 
   formValues.key = currentKey;
-  
+
   console.log("handleEditSubmit:", formValues);
 
   let newKeyValues = await keyUpdateCall(accessToken, formValues);
@@ -311,7 +324,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   setEditModalVisible(false);
   setSelectedToken(null);
-};
+  };
 
 
 
@@ -419,12 +432,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
-            {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
-            {/* <TableHeaderCell>Team</TableHeaderCell> */}
-            {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-            {/* <TableHeaderCell>Expires</TableHeaderCell> */}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -435,9 +444,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               return null;
             }
             if (selectedTeam) {
-              if (item.team_id != selectedTeam.team_id) {
+              /**
+               * if selected team id is null -> show the keys with no team id or team id's that don't exist in db
+               */
+              console.log(`item team id: ${item.team_id}, knownTeamIDs.has(item.team_id): ${knownTeamIDs.has(item.team_id)}, selectedTeam id: ${selectedTeam.team_id}`)
+              if (selectedTeam.team_id == null && item.team_id !== null && !knownTeamIDs.has(item.team_id)) {
+                // do nothing -> returns a row with this key
+              }
+              else if (item.team_id != selectedTeam.team_id) {
                 return null;
               }
+              console.log(`item team id: ${item.team_id}, is returned`)
             }
             return (
               <TableRow key={item.token}>

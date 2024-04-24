@@ -34,6 +34,14 @@ class LangFuseLogger:
             flush_interval=1,  # flush interval in seconds
         )
 
+        # set the current langfuse project id in the environ
+        # this is used by Alerting to link to the correct project
+        try:
+            project_id = self.Langfuse.client.projects.get().data[0].id
+            os.environ["LANGFUSE_PROJECT_ID"] = project_id
+        except:
+            project_id = None
+
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
             self.upstream_langfuse_secret_key = os.getenv(
                 "UPSTREAM_LANGFUSE_SECRET_KEY"
@@ -133,6 +141,7 @@ class LangFuseLogger:
                 self._log_langfuse_v2(
                     user_id,
                     metadata,
+                    litellm_params,
                     output,
                     start_time,
                     end_time,
@@ -224,6 +233,7 @@ class LangFuseLogger:
         self,
         user_id,
         metadata,
+        litellm_params,
         output,
         start_time,
         end_time,
@@ -278,13 +288,13 @@ class LangFuseLogger:
             clean_metadata = {}
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
-                    # generate langfuse tags
-                    if key in [
-                        "user_api_key",
-                        "user_api_key_user_id",
-                        "user_api_key_team_id",
-                        "semantic-similarity",
-                    ]:
+
+                    # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
+                    if (
+                        litellm._langfuse_default_tags is not None
+                        and isinstance(litellm._langfuse_default_tags, list)
+                        and key in litellm._langfuse_default_tags
+                    ):
                         tags.append(f"{key}:{value}")
 
                     # clean litellm metadata before logging
@@ -298,12 +308,52 @@ class LangFuseLogger:
                     else:
                         clean_metadata[key] = value
 
+            if (
+                litellm._langfuse_default_tags is not None
+                and isinstance(litellm._langfuse_default_tags, list)
+                and "proxy_base_url" in litellm._langfuse_default_tags
+            ):
+                proxy_base_url = os.environ.get("PROXY_BASE_URL", None)
+                if proxy_base_url is not None:
+                    tags.append(f"proxy_base_url:{proxy_base_url}")
+
+            api_base = litellm_params.get("api_base", None)
+            if api_base:
+                clean_metadata["api_base"] = api_base
+
+            vertex_location = kwargs.get("vertex_location", None)
+            if vertex_location:
+                clean_metadata["vertex_location"] = vertex_location
+
+            aws_region_name = kwargs.get("aws_region_name", None)
+            if aws_region_name:
+                clean_metadata["aws_region_name"] = aws_region_name
+
             if supports_tags:
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
                     tags.append(f"cache_hit:{kwargs['cache_hit']}")
+                    clean_metadata["cache_hit"] = kwargs["cache_hit"]
                 trace_params.update({"tags": tags})
+
+            proxy_server_request = litellm_params.get("proxy_server_request", None)
+            if proxy_server_request:
+                method = proxy_server_request.get("method", None)
+                url = proxy_server_request.get("url", None)
+                headers = proxy_server_request.get("headers", None)
+                clean_headers = {}
+                if headers:
+                    for key, value in headers.items():
+                        # these headers can leak our API keys and/or JWT tokens
+                        if key.lower() not in ["authorization", "cookie", "referer"]:
+                            clean_headers[key] = value
+
+                clean_metadata["request"] = {
+                    "method": method,
+                    "url": url,
+                    "headers": clean_headers,
+                }
 
             print_verbose(f"trace_params: {trace_params}")
 

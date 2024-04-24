@@ -51,7 +51,8 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
 
 
 class LiteLLMRoutes(enum.Enum):
-    openai_routes: List = [  # chat completions
+    openai_routes: List = [
+        # chat completions
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
@@ -77,7 +78,22 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
     ]
 
-    info_routes: List = ["/key/info", "/team/info", "/user/info", "/model/info"]
+    info_routes: List = [
+        "/key/info",
+        "/team/info",
+        "/user/info",
+        "/model/info",
+        "/v2/model/info",
+        "/v2/key/info",
+    ]
+
+    sso_only_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/global/spend/logs",
+        "/global/predict/spend/logs",
+    ]
 
     management_routes: List = [  # key
         "/key/generate",
@@ -689,6 +705,21 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
     )
+    alert_types: Optional[
+        List[
+            Literal[
+                "llm_exceptions",
+                "llm_too_slow",
+                "llm_requests_hanging",
+                "budget_alerts",
+                "db_exceptions",
+            ]
+        ]
+    ] = Field(
+        None,
+        description="List of alerting types. By default it is all alerts",
+    )
+
     alerting_threshold: Optional[int] = Field(
         None,
         description="sends alerts if requests hang for 5min+",
@@ -719,6 +750,10 @@ class ConfigYAML(LiteLLMBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: Optional[ConfigGeneralSettings] = None
+    router_settings: Optional[dict] = Field(
+        None,
+        description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
+    )
 
     class Config:
         protected_namespaces = ()
@@ -765,6 +800,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
 
     team_spend: Optional[float] = None
+    team_alias: Optional[str] = None
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
@@ -788,6 +824,10 @@ class UserAPIKeyAuth(
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
             values.update({"token": hash_token(values.get("api_key"))})
+            if isinstance(values.get("api_key"), str) and values.get(
+                "api_key"
+            ).startswith("sk-"):
+                values.update({"api_key": hash_token(values.get("api_key"))})
         return values
 
 

@@ -63,7 +63,7 @@ const sidebars = {
           label: "Logging, Alerting",
           items: ["proxy/logging", "proxy/alerting", "proxy/streaming_logging"],
         },
-        "proxy/grafana_metrics",
+        "proxy/prometheus",
         "proxy/call_hooks",
         "proxy/rules",
         "proxy/cli", 
