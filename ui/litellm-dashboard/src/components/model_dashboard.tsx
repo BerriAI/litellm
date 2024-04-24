@@ -37,7 +37,7 @@ import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from '@ant-design/icons';
@@ -174,6 +174,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
+  const [lastRefreshed, setLastRefreshed] = useState('');
 
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
@@ -212,6 +213,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       }
     },
   };
+
+  const handleRefreshClick = () => {
+    // Update the 'lastRefreshed' state to the current date and time
+    const currentDate = new Date();
+    setLastRefreshed(currentDate.toLocaleString());
+  };
+
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
@@ -253,7 +261,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (modelMap == null) {
       fetchModelMap()
     }
-  }, [accessToken, token, userRole, userID, modelMap]);
+
+    handleRefreshClick()
+  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed]);
 
   if (!modelData) {
     return <div>Loading...</div>;
@@ -418,12 +428,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   return (
     <div style={{ width: "100%", height: "100%"}}>
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <TabList className="mt-2">
+      <TabList className="flex justify-between mt-2 w-full items-center">
+        <div className="flex">
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
           <Tab><pre>/health Models</pre></Tab>
-        </TabList>
-      
+        </div>
+
+        <div className="flex items-center space-x-2">
+          {lastRefreshed && (
+            <Text>
+              Last Refreshed: {lastRefreshed}
+            </Text>
+          )}
+          <Icon
+            icon={RefreshIcon} // Modify as necessary for correct icon name
+            variant="shadow"
+            size="xs"
+            className="self-center"
+            onClick={handleRefreshClick}
+          />
+        </div>
+      </TabList>
       <TabPanels>
           <TabPanel>
       <Grid>
