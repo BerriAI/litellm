@@ -194,14 +194,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
-    let litellm_params_to_edit = {}
+    let litellm_params_to_edit: Record<string, any> = {}
     let model_name = "";
     let model_id = "";
     if (model) {
       litellm_params_to_edit = model.litellm_params
       model_name = model.model_name;
       let model_info = model.model_info;
-      if (model_info) {
+      if (model_info ) {
         model_id = model_info.id;
         console.log(`model_id: ${model_id}`)
         litellm_params_to_edit.model_id = model_id;
@@ -315,7 +315,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     return;
   }
 
-  let newLiteLLMParams = {}
+  let newLiteLLMParams: Record<string, any> = {}
   let model_info_model_id = null;
 
   for (const [key, value] of Object.entries(formValues)) {
