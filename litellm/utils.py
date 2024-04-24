@@ -529,9 +529,6 @@ class ModelResponse(OpenAIObject):
     backend changes have been made that might impact determinism.
     """
 
-    usage: Optional[Usage] = None
-    """Usage statistics for the completion request."""
-
     _hidden_params: dict = {}
 
     def __init__(
@@ -586,20 +583,27 @@ class ModelResponse(OpenAIObject):
         else:
             created = created
         model = model
-        if usage:
+        if usage is not None:
             usage = usage
-        else:
+        elif stream is None or stream == False:
             usage = Usage()
         if hidden_params:
             self._hidden_params = hidden_params
+
+        init_values = {
+            "id": id,
+            "choices": choices,
+            "created": created,
+            "model": model,
+            "object": object,
+            "system_fingerprint": system_fingerprint,
+        }
+
+        if usage is not None:
+            init_values["usage"] = usage
+
         super().__init__(
-            id=id,
-            choices=choices,
-            created=created,
-            model=model,
-            object=object,
-            system_fingerprint=system_fingerprint,
-            usage=usage,
+            **init_values,
             **params,
         )
 
@@ -6852,10 +6856,14 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        model_response_object.usage = Usage(
-            completion_tokens=response_object["usage"].get("completion_tokens", 0),
-            prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-            total_tokens=response_object["usage"].get("total_tokens", 0),
+        setattr(
+            model_response_object,
+            "usage",
+            Usage(
+                completion_tokens=response_object["usage"].get("completion_tokens", 0),
+                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
+                total_tokens=response_object["usage"].get("total_tokens", 0),
+            ),
         )
 
     if "id" in response_object:
@@ -10042,6 +10050,7 @@ class CustomStreamWrapper:
                 "content" in completion_obj
                 and isinstance(completion_obj["content"], str)
                 and len(completion_obj["content"]) == 0
+                and hasattr(model_response, "usage")
                 and hasattr(model_response.usage, "prompt_tokens")
             ):
                 if self.sent_first_chunk == False:
