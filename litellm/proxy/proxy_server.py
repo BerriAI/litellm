@@ -7323,8 +7323,11 @@ async def model_info_v2(
 )
 async def model_metrics(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = None,
+    startTime: Optional[datetime] = datetime.now() - timedelta(days=30),
+    endTime: Optional[datetime] = datetime.now(),
 ):
-    global prisma_client
+    global prisma_client, llm_router
     if prisma_client is None:
         raise ProxyException(
             message="Prisma Client is not initialized",
@@ -7332,24 +7335,49 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    if _selected_model_group and llm_router is not None:
+        _model_list = llm_router.get_model_list()
+        _relevant_api_bases = []
+        for model in _model_list:
+            if model["model_name"] == _selected_model_group:
+                _litellm_params = model["litellm_params"]
+                _api_base = _litellm_params.get("api_base", "")
+                _relevant_api_bases.append(_api_base)
 
-    sql_query = """
-        SELECT
-            CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-            COUNT(*) AS num_requests,
-            AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
-        FROM
-            "LiteLLM_SpendLogs"
-        WHERE
-            "startTime" >= NOW() - INTERVAL '10000 hours'
-        GROUP BY
-            CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-        ORDER BY
-            num_requests DESC
-        LIMIT 50;
-    """
+        sql_query = """
+            SELECT
+                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
+                COUNT(*) AS num_requests,
+                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
+            AND api_base = ANY($3)
+            GROUP BY CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
+            ORDER BY num_requests DESC
+            LIMIT 50;
+        """
 
-    db_response = await prisma_client.db.query_raw(query=sql_query)
+        db_response = await prisma_client.db.query_raw(
+            sql_query, startTime, endTime, _relevant_api_bases
+        )
+    else:
+
+        sql_query = """
+            SELECT
+                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
+                COUNT(*) AS num_requests,
+                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
+            FROM
+                "LiteLLM_SpendLogs"
+            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
+            GROUP BY
+                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
+            ORDER BY
+                num_requests DESC
+            LIMIT 50;
+        """
+
+        db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
     response: List[dict] = []
     if response is not None:
         # loop through all models
