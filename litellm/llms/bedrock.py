@@ -11,6 +11,7 @@ from .prompt_templates.factory import (
     construct_tool_use_system_prompt,
     extract_between_tags,
     parse_xml_params,
+    contains_tag,
 )
 import httpx
 
@@ -78,11 +79,13 @@ class AmazonTitanConfig:
 
 class AmazonAnthropicClaude3Config:
     """
-    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
+    Reference:
+        https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
+        https://docs.anthropic.com/claude/docs/models-overview#model-comparison
 
     Supported Params for the Amazon / Anthropic Claude 3 models:
 
-    - `max_tokens` Required (integer) max tokens,
+    - `max_tokens` Required (integer) max tokens. Default is 4096
     - `anthropic_version` Required (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
     - `system` Optional (string) the system prompt, conversion from openai format to this is handled in factory.py
     - `temperature` Optional (float) The amount of randomness injected into the response
@@ -91,7 +94,7 @@ class AmazonAnthropicClaude3Config:
     - `stop_sequences` Optional (List[str]) Custom text sequences that cause the model to stop generating
     """
 
-    max_tokens: Optional[int] = litellm.max_tokens
+    max_tokens: Optional[int] = 4096  # Opus, Sonnet, and Haiku default
     anthropic_version: Optional[str] = "bedrock-2023-05-31"
     system: Optional[str] = None
     temperature: Optional[float] = None
@@ -128,7 +131,17 @@ class AmazonAnthropicClaude3Config:
         }
 
     def get_supported_openai_params(self):
-        return ["max_tokens", "tools", "tool_choice", "stream", "extra_headers"]
+        return [
+            "max_tokens",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stop",
+            "temperature",
+            "top_p",
+            "extra_headers"
+        ]
+
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
@@ -691,6 +704,8 @@ def completion(
     extra_headers: Optional[dict] = None,
 ):
     exception_mapping_worked = False
+    _is_function_call = False
+    json_schemas: dict = {}
     try:
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
@@ -740,11 +755,13 @@ def completion(
                         system_messages.append(message["content"])
                         system_prompt_idx.append(idx)
                 if len(system_prompt_idx) > 0:
-                    inference_params["system"] = '\n'.join(system_messages)
-                    messages = [i for j, i in enumerate(messages) if j not in system_prompt_idx]
+                    inference_params["system"] = "\n".join(system_messages)
+                    messages = [
+                        i for j, i in enumerate(messages) if j not in system_prompt_idx
+                    ]
                 # Format rest of message according to anthropic guidelines
                 messages = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="anthropic"
+                    model=model, messages=messages, custom_llm_provider="anthropic_xml"
                 )
                 ## LOAD CONFIG
                 config = litellm.AmazonAnthropicClaude3Config.get_config()
@@ -755,6 +772,11 @@ def completion(
                         inference_params[k] = v
                 ## Handle Tool Calling
                 if "tools" in inference_params:
+                    _is_function_call = True
+                    for tool in inference_params["tools"]:
+                        json_schemas[tool["function"]["name"]] = tool["function"].get(
+                            "parameters", None
+                        )
                     tool_calling_system_prompt = construct_tool_use_system_prompt(
                         tools=inference_params["tools"]
                     )
@@ -836,7 +858,7 @@ def completion(
         ## COMPLETION CALL
         accept = "application/json"
         contentType = "application/json"
-        if stream == True:
+        if stream == True and _is_function_call == False:
             if provider == "ai21":
                 ## LOGGING
                 request_str = f"""
@@ -931,7 +953,9 @@ def completion(
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
                 outputText = response_body.get("content")[0].get("text", None)
-                if "<invoke>" in outputText:  # OUTPUT PARSE FUNCTION CALL
+                if outputText is not None and contains_tag(
+                    "invoke", outputText
+                ):  # OUTPUT PARSE FUNCTION CALL
                     function_name = extract_between_tags("tool_name", outputText)[0]
                     function_arguments_str = extract_between_tags("invoke", outputText)[
                         0
@@ -939,7 +963,12 @@ def completion(
                     function_arguments_str = (
                         f"<invoke>{function_arguments_str}</invoke>"
                     )
-                    function_arguments = parse_xml_params(function_arguments_str)
+                    function_arguments = parse_xml_params(
+                        function_arguments_str,
+                        json_schema=json_schemas.get(
+                            function_name, None
+                        ),  # check if we have a json schema for this function name)
+                    )
                     _message = litellm.Message(
                         tool_calls=[
                             {
@@ -954,6 +983,59 @@ def completion(
                         content=None,
                     )
                     model_response.choices[0].message = _message  # type: ignore
+                    model_response._hidden_params["original_response"] = (
+                        outputText  # allow user to access raw anthropic tool calling response
+                    )
+                if _is_function_call == True and stream is not None and stream == True:
+                    print_verbose(
+                        f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
+                    )
+                    # return an iterator
+                    streaming_model_response = ModelResponse(stream=True)
+                    streaming_model_response.choices[0].finish_reason = (
+                        model_response.choices[0].finish_reason
+                    )
+                    # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
+                    streaming_choice = litellm.utils.StreamingChoices()
+                    streaming_choice.index = model_response.choices[0].index
+                    _tool_calls = []
+                    print_verbose(
+                        f"type of model_response.choices[0]: {type(model_response.choices[0])}"
+                    )
+                    print_verbose(f"type of streaming_choice: {type(streaming_choice)}")
+                    if isinstance(model_response.choices[0], litellm.Choices):
+                        if getattr(
+                            model_response.choices[0].message, "tool_calls", None
+                        ) is not None and isinstance(
+                            model_response.choices[0].message.tool_calls, list
+                        ):
+                            for tool_call in model_response.choices[
+                                0
+                            ].message.tool_calls:
+                                _tool_call = {**tool_call.dict(), "index": 0}
+                                _tool_calls.append(_tool_call)
+                        delta_obj = litellm.utils.Delta(
+                            content=getattr(
+                                model_response.choices[0].message, "content", None
+                            ),
+                            role=model_response.choices[0].message.role,
+                            tool_calls=_tool_calls,
+                        )
+                        streaming_choice.delta = delta_obj
+                        streaming_model_response.choices = [streaming_choice]
+                        completion_stream = ModelResponseIterator(
+                            model_response=streaming_model_response
+                        )
+                        print_verbose(
+                            f"Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
+                        )
+                        return litellm.CustomStreamWrapper(
+                            completion_stream=completion_stream,
+                            model=model,
+                            custom_llm_provider="cached_response",
+                            logging_obj=logging_obj,
+                        )
+
                 model_response["finish_reason"] = response_body["stop_reason"]
                 _usage = litellm.Usage(
                     prompt_tokens=response_body["usage"]["input_tokens"],
@@ -961,7 +1043,7 @@ def completion(
                     total_tokens=response_body["usage"]["input_tokens"]
                     + response_body["usage"]["output_tokens"],
                 )
-                model_response.usage = _usage
+                setattr(model_response, "usage", _usage)
             else:
                 outputText = response_body["completion"]
                 model_response["finish_reason"] = response_body["stop_reason"]
@@ -1004,8 +1086,10 @@ def completion(
                     status_code=response_metadata.get("HTTPStatusCode", 500),
                 )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        if getattr(model_response.usage, "total_tokens", None) is None:
+        ## CALCULATING USAGE - bedrock charges on time, not tokens - have some mapping of cost here.
+        if not hasattr(model_response, "usage"):
+            setattr(model_response, "usage", Usage())
+        if getattr(model_response.usage, "total_tokens", None) is None:  # type: ignore
             prompt_tokens = response_metadata.get(
                 "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
             )
@@ -1022,7 +1106,7 @@ def completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-            model_response.usage = usage
+            setattr(model_response, "usage", usage)
 
         model_response["created"] = int(time.time())
         model_response["model"] = model
@@ -1040,6 +1124,32 @@ def completion(
             import traceback
 
             raise BedrockError(status_code=500, message=traceback.format_exc())
+
+
+class ModelResponseIterator:
+    def __init__(self, model_response):
+        self.model_response = model_response
+        self.is_done = False
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.is_done:
+            raise StopIteration
+        self.is_done = True
+        return self.model_response
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.is_done:
+            raise StopAsyncIteration
+        self.is_done = True
+        return self.model_response
 
 
 def _embedding_func_single(

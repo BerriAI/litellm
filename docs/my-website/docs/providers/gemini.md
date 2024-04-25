@@ -2,6 +2,7 @@
 
 ## Pre-requisites
 * `pip install -q google-generativeai`
+* Get API Key - https://aistudio.google.com/
 
 # Gemini-Pro
 ## Sample Usage
@@ -22,7 +23,7 @@ In certain use-cases you may need to make calls to the models and pass [safety s
 ```python
 response = completion(
     model="gemini/gemini-pro", 
-    messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
+    messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}],
     safety_settings=[
         {
             "category": "HARM_CATEGORY_HARASSMENT",
@@ -94,9 +95,8 @@ print(content)
 ```
 
 ## Chat Models
-| Model Name       | Function Call                        | Required OS Variables    |
-|------------------|--------------------------------------|-------------------------|
-| gemini-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-1.5-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-1.5-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |
+| Model Name            | Function Call                                          | Required OS Variables          |
+|-----------------------|--------------------------------------------------------|--------------------------------|
+| gemini-pro            | `completion('gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
+| gemini-1.5-pro-latest | `completion('gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
+| gemini-pro-vision     | `completion('gemini/gemini-pro-vision', messages)`     | `os.environ['GEMINI_API_KEY']` |

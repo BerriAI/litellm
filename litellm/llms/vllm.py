@@ -104,7 +104,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
 
 
@@ -186,7 +186,7 @@ def batch_completions(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         final_outputs.append(model_response)
     return final_outputs
 

@@ -19,8 +19,10 @@ telemetry = None
 
 
 def append_query_params(url, params):
-    print(f"url: {url}")
-    print(f"params: {params}")
+    from litellm._logging import verbose_proxy_logger
+
+    verbose_proxy_logger.debug(f"url: {url}")
+    verbose_proxy_logger.debug(f"params: {params}")
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
     parsed_query.update(params)
@@ -222,16 +224,14 @@ def run_server(
     ssl_keyfile_path,
     ssl_certfile_path,
 ):
-    global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry, ProxyConfig
+        from proxy_server import app, save_worker_config, ProxyConfig
     else:
         try:
             from .proxy_server import (
                 app,
                 save_worker_config,
-                usage_telemetry,
                 ProxyConfig,
             )
         except ImportError as e:
@@ -243,10 +243,8 @@ def run_server(
                 from proxy_server import (
                     app,
                     save_worker_config,
-                    usage_telemetry,
                     ProxyConfig,
                 )
-    feature_telemetry = usage_telemetry
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
@@ -427,9 +425,10 @@ def run_server(
                 )
 
             proxy_config = ProxyConfig()
-            _, _, general_settings = asyncio.run(
-                proxy_config.load_config(router=None, config_file_path=config)
-            )
+            _config = asyncio.run(proxy_config.get_config(config_file_path=config))
+            general_settings = _config.get("general_settings", {})
+            if general_settings is None:
+                general_settings = {}
             database_url = general_settings.get("database_url", None)
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit", 100

@@ -99,6 +99,8 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
     async def async_moderation_hook(
         self,
         data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         """
         - Calls the Llama Guard Endpoint
