@@ -20,14 +20,54 @@ import {
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 import AddFallbacks from "./add_fallbacks"
+import openai from "openai";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
   modelData: any
+}
+
+async function testFallbackModelResponse(
+  selectedModel: string,
+  accessToken: string
+) {
+  // base url should be the current base_url
+  const isLocal = process.env.NODE_ENV === "development";
+  console.log("isLocal:", isLocal);
+  const proxyBaseUrl = isLocal
+    ? "http://localhost:4000"
+    : window.location.origin;
+  const client = new openai.OpenAI({
+    apiKey: accessToken, // Replace with your OpenAI API key
+    baseURL: proxyBaseUrl, // Replace with your OpenAI API base URL
+    dangerouslyAllowBrowser: true, // using a temporary litellm proxy key
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: selectedModel,
+      messages: [
+        {
+          role: "user",
+          content: "Hi, this is a test message",
+        },
+      ],
+    });
+
+    message.success(
+      <span>
+        Test model=<strong>{selectedModel}</strong>, received model=<strong>{responseModel}</strong>. 
+        See <a href="#" onClick={() => window.open('https://docs.litellm.ai/docs/proxy/reliability', '_blank')} style={{ textDecoration: 'underline', color: 'blue' }}>curl</a>
+      </span>
+    );
+  } catch (error) {
+    message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
+  }
 }
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
@@ -73,6 +113,38 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     setSelectedCallback(null);
   };
 
+  const deleteFallbacks = async (key: string) => {
+    /**
+     * pop the key from the Object, if it exists
+     */
+    if (!accessToken) {
+      return;
+    }
+
+    console.log(`received key: ${key}`)
+    console.log(`routerSettings['fallbacks']: ${routerSettings['fallbacks']}`)
+
+    routerSettings["fallbacks"].map((dict: { [key: string]: any }) => {
+      // Check if the dictionary has the specified key and delete it if present
+      if (key in dict) {
+        delete dict[key];
+      }
+      return dict; // Return the updated dictionary
+    });
+
+    const payload = {
+      router_settings: routerSettings
+    };
+
+    try {
+      await setCallbacksCall(accessToken, payload);
+      setRouterSettings({ ...routerSettings });
+      message.success("Router settings updated successfully");
+    } catch (error) {
+      message.error("Failed to update router settings: " + error, 20);
+    }
+  }
+
   const handleSaveChanges = (router_settings: any) => {
     if (!accessToken) {
       return;
@@ -81,7 +153,13 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     console.log("router_settings", router_settings);
 
     const updatedVariables = Object.fromEntries(
-      Object.entries(router_settings).map(([key, value]) => [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value])
+      Object.entries(router_settings).map(([key, value]) => {
+        if (key === 'routing_strategy_args' && typeof value === 'string') {
+          return [key, JSON.parse(value as string)];
+        } else {
+          return [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value];
+        }
+      })
     );
 
     console.log("updatedVariables", updatedVariables);
@@ -168,6 +246,18 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                 <TableRow key={index.toString() + key}>
                   <TableCell>{key}</TableCell>
                   <TableCell>{Array.isArray(value) ? value.join(', ') : value}</TableCell>
+                  <TableCell>
+                    <Button onClick={() => testFallbackModelResponse(key, accessToken)}>
+                      Test Fallback
+                    </Button>
+                  </TableCell>
+                  <TableCell>
+                    <Icon
+                        icon={TrashIcon}
+                        size="sm"
+                        onClick={() => deleteFallbacks(key)}
+                      />
+                  </TableCell>
                 </TableRow>
               ))
             )
