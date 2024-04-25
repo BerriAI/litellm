@@ -1346,9 +1346,9 @@ def prompt_factory(
                 return anthropic_pt(messages=messages)
         elif "mistral." in model:
             return mistral_instruct_pt(messages=messages)
-        elif "llama2" in model:
+        elif "llama2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
-        elif "llama3" in model:
+        elif "llama3" in model and "instruct" in model:
             return hf_chat_template(
                 model=model,
                 messages=messages,
