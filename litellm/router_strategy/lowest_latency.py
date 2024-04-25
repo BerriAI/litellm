@@ -339,12 +339,19 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
+            # _latency_per_deployment is used for debuggig
+            _deployment_api_base = _deployment.get("litellm_params", {}).get(
+                "api_base", ""
+            )
+
             # get average latency
             total: float = 0.0
             for _call_latency in item_latency:
                 if isinstance(_call_latency, float):
                     total += _call_latency
             item_latency = total / len(item_latency)
+            print("item_latency=", item_latency, "deployment=", deployment)  # noqa
+            _latency_per_deployment[_deployment_api_base] = item_latency
             if item_latency == 0:
                 deployment = _deployment
                 break
@@ -356,12 +363,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
             elif item_latency < lowest_latency:
                 lowest_latency = item_latency
                 deployment = _deployment
-
-            # _latency_per_deployment is used for debuggig
-            _deployment_api_base = _deployment.get("litellm_params", {}).get(
-                "api_base", ""
-            )
-            _latency_per_deployment[_deployment_api_base] = item_latency
         if request_kwargs is not None and "metadata" in request_kwargs:
             request_kwargs["metadata"][
                 "_latency_per_deployment"
