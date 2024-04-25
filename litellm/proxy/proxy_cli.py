@@ -191,7 +191,6 @@ def is_port_in_use(port):
     help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
     envvar="SSL_CERTFILE_PATH",
 )
-@click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(
     host,
     port,
@@ -213,7 +212,6 @@ def run_server(
     max_budget,
     telemetry,
     test,
-    local,
     num_workers,
     test_async,
     num_requests,
@@ -225,26 +223,11 @@ def run_server(
     ssl_certfile_path,
 ):
     args = locals()
-    if local:
-        from proxy_server import app, save_worker_config, ProxyConfig
-    else:
-        try:
-            from .proxy_server import (
-                app,
-                save_worker_config,
-                ProxyConfig,
-            )
-        except ImportError as e:
-            if "litellm[proxy]" in str(e):
-                # user is missing a proxy dependency, ask them to pip install litellm[proxy]
-                raise e
-            else:
-                # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import (
-                    app,
-                    save_worker_config,
-                    ProxyConfig,
-                )
+    from .proxy_server import (
+        save_worker_config,
+        ProxyConfig,
+    )
+
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
