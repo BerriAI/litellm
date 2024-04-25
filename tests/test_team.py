@@ -267,7 +267,7 @@ async def test_team_new() -> None:
     """
     user_id = f"{uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:
-        new_user(session=session, i=0, user_id=user_id)
+        await new_user(session=session, i=0, user_id=user_id)
         tasks = [new_team(session, i, user_id=user_id) for i in range(1, 11)]
         await asyncio.gather(*tasks)
 
