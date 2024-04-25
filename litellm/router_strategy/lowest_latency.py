@@ -272,12 +272,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
+        request_kwargs: Optional[Dict] = None,
     ):
         """
         Returns a deployment with the lowest latency
         """
         # get list of potential deployments
         latency_key = f"{model_group}_map"
+        _latency_per_deployment = {}
 
         request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
 
@@ -354,4 +356,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
             elif item_latency < lowest_latency:
                 lowest_latency = item_latency
                 deployment = _deployment
+
+            # _latency_per_deployment is used for debuggig
+            _deployment_api_base = _deployment.get("litellm_params", {}).get(
+                "api_base", ""
+            )
+            _latency_per_deployment[_deployment_api_base] = item_latency
+        if request_kwargs is not None and "metadata" in request_kwargs:
+            request_kwargs["metadata"][
+                "_latency_per_deployment"
+            ] = _latency_per_deployment
         return deployment
