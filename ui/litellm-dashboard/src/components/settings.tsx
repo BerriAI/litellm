@@ -17,6 +17,11 @@ import {
   TextInput,
   Switch,
   Col,
+  TabPanel, 
+  TabPanels, 
+  TabGroup, 
+  TabList, 
+  Tab
 } from "@tremor/react";
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
@@ -261,73 +266,62 @@ const Settings: React.FC<SettingsPageProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-      <Title>Logging Callbacks</Title>
-        <Card >
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Callback</TableHeaderCell>
-                <TableHeaderCell>Callback Env Vars</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-  {callbacks.map((callback, index) => (
-    <TableRow key={index}>
-      <TableCell>
-        <Badge color="emerald">{callback.name}</Badge>
-      </TableCell>
-      <TableCell>
-        <ul>
-        {Object.entries(callback.variables ?? {}).filter(([key, value]) => value !== null).map(([key, value]) => (
-  <li key={key}>
-    <Text className="mt-2">{key}</Text>
-    {key === "LANGFUSE_HOST" ? (
-      <p>default value=https://cloud.langfuse.com</p>
-    ) : (
-      <div></div>
-    )}
-    <TextInput name={key} defaultValue={value as string} type="password" />
-  </li>
-))}
-        </ul>
-        {/* {callback.all_alert_types && (
-          <div>
-            <Text className="mt-2">Alerting Types</Text>
-            <Select
-              mode="multiple"
-              style={{ width: '100%' }}
-              placeholder="Select Alerting Types"
-              optionLabelProp="label"
-              onChange={handleChange}
-              defaultValue={callback.alerting_types}
-            >
-              {callback.all_alert_types.map((type: string) => (
-                <Select.Option key={type} value={type} label={type}>
-                  {type}
-                </Select.Option>
-              ))}
-            </Select>
-          </div>
-        )} */}
-        <Button className="mt-2" onClick={() => handleSaveChanges(callback)}>
-          Save Changes
-        </Button>
-        <Button onClick={() => serviceHealthCheck(accessToken, callback.name)} className="mx-2">
-          Test Callback
-        </Button>
-      </TableCell>
-    </TableRow>
+        <TabGroup>
+        <TabList variant="line" defaultValue="1">
+          <Tab value="1">Logging Callbacks</Tab>
+          <Tab value="2">Alerting</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+          <Card >
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Callback</TableHeaderCell>
+                  <TableHeaderCell>Callback Env Vars</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+    {callbacks.map((callback, index) => (
+      <TableRow key={index}>
+        <TableCell>
+          <Badge color="emerald">{callback.name}</Badge>
+        </TableCell>
+        <TableCell>
+          <ul>
+          {Object.entries(callback.variables ?? {}).filter(([key, value]) => value !== null).map(([key, value]) => (
+    <li key={key}>
+      <Text className="mt-2">{key}</Text>
+      {key === "LANGFUSE_HOST" ? (
+        <p>default value=https://cloud.langfuse.com</p>
+      ) : (
+        <div></div>
+      )}
+      <TextInput name={key} defaultValue={value as string} type="password" />
+    </li>
   ))}
-</TableBody>
-          </Table>
-            <Button size="xs" className="mt-2" onClick={handleAddCallback}>
-              Add Callback
-            </Button>
-            
-        </Card>
+          </ul>
+          <Button className="mt-2" onClick={() => handleSaveChanges(callback)}>
+            Save Changes
+          </Button>
+          <Button onClick={() => serviceHealthCheck(accessToken, callback.name)} className="mx-2">
+            Test Callback
+          </Button>
+        </TableCell>
+      </TableRow>
+    ))}
+  </TableBody>
+            </Table>
+              <Button size="xs" className="mt-2" onClick={handleAddCallback}>
+                Add Callback
+              </Button>
+              
+          </Card>
+          </TabPanel>
 
-        <Title>Alerting</Title>
-        <Card>
+          <TabPanel>
+
+          <Card>
         <Table>
           
         <TableBody>
@@ -360,6 +354,15 @@ const Settings: React.FC<SettingsPageProps> = ({
 
 
         </Card>
+            
+          </TabPanel>
+          </TabPanels>
+          </TabGroup>
+
+        
+
+
+        
         
       </Grid>
 
@@ -379,7 +382,6 @@ const Settings: React.FC<SettingsPageProps> = ({
           >
             <Select onChange={handleCallbackChange}>
               <Select.Option value="langfuse">langfuse</Select.Option>
-              <Select.Option value="slack">slack alerting</Select.Option>
             </Select>
           </Form.Item>
 
@@ -405,18 +407,6 @@ const Settings: React.FC<SettingsPageProps> = ({
                 <TextInput type="password"/>
               </Form.Item>
             </>
-          )}
-
-          {selectedCallback === 'slack' && (
-            <Form.Item
-              label="SLACK_WEBHOOK_URL"
-              name="slackWebhookUrl"
-              rules={[
-                { required: true, message: "Please enter the Slack webhook URL" },
-              ]}
-            >
-              <TextInput/>
-            </Form.Item>
           )}
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
