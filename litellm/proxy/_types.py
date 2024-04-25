@@ -720,6 +720,10 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="List of alerting types. By default it is all alerts",
     )
+    alert_to_webhook_url: Optional[Dict] = Field(
+        None,
+        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
+    )
 
     alerting_threshold: Optional[int] = Field(
         None,
