@@ -233,8 +233,6 @@ class Router:
         if self.num_retries is None:
             if litellm.num_retries is not None:
                 self.num_retries = litellm.num_retries
-            else:
-                self.num_retries = openai.DEFAULT_MAX_RETRIES
         self.timeout = timeout or litellm.request_timeout
 
         self.retry_after = retry_after
