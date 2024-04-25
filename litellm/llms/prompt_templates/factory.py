@@ -1346,6 +1346,16 @@ def prompt_factory(
                 return anthropic_pt(messages=messages)
         elif "mistral." in model:
             return mistral_instruct_pt(messages=messages)
+        elif "llama2" in model:
+            return llama_2_chat_pt(messages=messages)
+        elif "llama3" in model:
+            return hf_chat_template(
+                model=model,
+                messages=messages,
+                chat_template=known_tokenizer_config[  # type: ignore
+                    "meta-llama/Meta-Llama-3-8B-Instruct"
+                ]["tokenizer"]["chat_template"],
+            )
     elif custom_llm_provider == "perplexity":
         for message in messages:
             message.pop("name", None)
