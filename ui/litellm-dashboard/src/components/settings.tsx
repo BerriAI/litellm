@@ -57,7 +57,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [selectedAlertValues, setSelectedAlertValues] = useState([]);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
-  const [alertToWebhooks, setAlertToWebhooks] = useState<any[]>([]);
+  const [alertToWebhooks, setAlertToWebhooks] = useState<Record<string, string>>({});
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
 
 
@@ -132,7 +132,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       return;
     }
   
-    const updatedAlertToWebhooks = {};
+    const updatedAlertToWebhooks: Record<string, string> = {};
     Object.entries(alerts_to_UI_NAME).forEach(([key, value]) => {
       const webhookInput = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
       console.log("key", key);
