@@ -136,6 +136,21 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
+### Test it!
+
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+     --header 'Content-Type: application/json' \
+     --data-raw '{
+        "model": "zephyr-beta", # 👈 MODEL NAME to fallback from
+        "messages": [
+            {"role": "user", "content": "what color is red"}
+        ],
+        "mock_testing_fallbacks": true
+     }'
+```
+
 ## Advanced - Context Window Fallbacks 
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
