@@ -1274,7 +1274,7 @@ export const serviceHealthCheck= async (accessToken: String, service: String) =>
     }
     
     const data = await response.json();
-    message.success(`Test request to ${service} made - check logs on ${service} dashboard!`);
+    message.success(`Test request to ${service} made - check logs/alerts on ${service} to verify`);
     // You can add additional logic here based on the response if needed
     return data;
   } catch (error) {
