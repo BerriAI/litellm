@@ -5265,6 +5265,8 @@ def get_optional_params(
             optional_params["tools"] = tools
         if tool_choice is not None:
             optional_params["tool_choice"] = tool_choice
+        if response_format is not None:
+            optional_params["response_format"] = response_format
 
         # check safe_mode, random_seed: https://docs.mistral.ai/api/#operation/createChatCompletion
         safe_mode = passed_params.pop("safe_mode", None)
