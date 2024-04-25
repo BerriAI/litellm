@@ -84,32 +84,35 @@ class SlackAlerting:
     ):
         import uuid
 
-        if request_data is not None:
-            trace_id = request_data.get("metadata", {}).get(
-                "trace_id", None
-            )  # get langfuse trace id
-            if trace_id is None:
-                trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
-                request_data["metadata"]["trace_id"] = trace_id
-        elif kwargs is not None:
-            _litellm_params = kwargs.get("litellm_params", {})
-            trace_id = _litellm_params.get("metadata", {}).get(
-                "trace_id", None
-            )  # get langfuse trace id
-            if trace_id is None:
-                trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
-                _litellm_params["metadata"]["trace_id"] = trace_id
-
-        _langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
-        _langfuse_project_id = os.environ.get("LANGFUSE_PROJECT_ID")
-
-        # langfuse urls look like: https://us.cloud.langfuse.com/project/************/traces/litellm-alert-trace-ididi9dk-09292-************
-
-        _langfuse_url = (
-            f"{_langfuse_host}/project/{_langfuse_project_id}/traces/{trace_id}"
-        )
-        request_info += f"\n🪢 Langfuse Trace: {_langfuse_url}"
+        # For now: do nothing as we're debugging why this is not working as expected
         return request_info
+
+        # if request_data is not None:
+        #     trace_id = request_data.get("metadata", {}).get(
+        #         "trace_id", None
+        #     )  # get langfuse trace id
+        #     if trace_id is None:
+        #         trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
+        #         request_data["metadata"]["trace_id"] = trace_id
+        # elif kwargs is not None:
+        #     _litellm_params = kwargs.get("litellm_params", {})
+        #     trace_id = _litellm_params.get("metadata", {}).get(
+        #         "trace_id", None
+        #     )  # get langfuse trace id
+        #     if trace_id is None:
+        #         trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
+        #         _litellm_params["metadata"]["trace_id"] = trace_id
+
+        # _langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        # _langfuse_project_id = os.environ.get("LANGFUSE_PROJECT_ID")
+
+        # # langfuse urls look like: https://us.cloud.langfuse.com/project/************/traces/litellm-alert-trace-ididi9dk-09292-************
+
+        # _langfuse_url = (
+        #     f"{_langfuse_host}/project/{_langfuse_project_id}/traces/{trace_id}"
+        # )
+        # request_info += f"\n🪢 Langfuse Trace: {_langfuse_url}"
+        # return request_info
 
     def _response_taking_too_long_callback(
         self,
