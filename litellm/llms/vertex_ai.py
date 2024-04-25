@@ -131,6 +131,7 @@ class VertexAIConfig:
             "max_tokens",
             "stream",
             "tools",
+            "grounding",
             "tool_choice",
             "response_format",
             "n",
@@ -160,6 +161,8 @@ class VertexAIConfig:
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
                 optional_params["presence_penalty"] = value
+            if param == "grounding":
+                optional_params["tools"].append({"googleSearchRetrieval": {"disableAttribution": False}})
             if param == "tools" and isinstance(value, list):
                 from vertexai.preview import generative_models
 
