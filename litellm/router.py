@@ -454,6 +454,7 @@ class Router:
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
 
             # debug how often this deployment picked
@@ -2818,6 +2819,7 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
     ):
         """
         Async implementation of 'get_available_deployments'.
@@ -2833,6 +2835,7 @@ class Router:
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
+                request_kwargs=request_kwargs,
             )
 
         model, healthy_deployments = self._common_checks_available_deployment(
@@ -2936,6 +2939,7 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
     ):
         """
         Returns the deployment based on routing strategy
@@ -3022,7 +3026,9 @@ class Router:
             and self.lowestlatency_logger is not None
         ):
             deployment = self.lowestlatency_logger.get_available_deployments(
-                model_group=model, healthy_deployments=healthy_deployments
+                model_group=model,
+                healthy_deployments=healthy_deployments,
+                request_kwargs=request_kwargs,
             )
         elif (
             self.routing_strategy == "usage-based-routing"
