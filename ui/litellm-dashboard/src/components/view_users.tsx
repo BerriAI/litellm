@@ -155,7 +155,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <div style={{ width: "100%" }}>
       <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
         <CreateUser userID={userID} accessToken={accessToken} teams={teams}/>
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
+        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[70vh] mb-4">
           <TabGroup>
             <TabList variant="line" defaultValue="1">
               <Tab value="1">Key Owners</Tab>
@@ -220,8 +220,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       {keys?.map((key: any, index: number) => {
                         if (
                           key &&
-                          key["key_name"] !== null &&
-                          key["key_name"].length > 0
+                          key["key_alias"] !== null &&
+                          key["key_alias"].length > 0
                         ) {
                           return (
                             <SelectItem
@@ -229,7 +229,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                               value={String(index)}
                               onClick={() => onKeyClick(key["token"])}
                             >
-                              {key["key_name"]}
+                              {key["key_alias"]}
                             </SelectItem>
                           );
                         }
@@ -237,7 +237,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     </Select>
                   </div>
                 </div>
-                <Table>
+                <Table className="max-h-[70vh] min-h-[500px]">
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>End User</TableHeaderCell>
