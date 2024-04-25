@@ -15,6 +15,7 @@ import {
   Grid,
   Button,
   TextInput,
+  Switch,
   Col,
 } from "@tremor/react";
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
@@ -45,10 +46,21 @@ const Settings: React.FC<SettingsPageProps> = ({
   userID,
 }) => {
   const [callbacks, setCallbacks] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [selectedAlertValues, setSelectedAlertValues] = useState([]);
+  const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
+  const [alertToWebhooks, setAlertToWebhooks] = useState<any[]>([]);
+
+  const [isAlertOn, setIsAlertOn] = useState<Record<string, boolean>>({}); // alert_name: boolean
+
+  
+
+  const handleSwitchChange = (value: boolean) => {
+    //setIsAlertOn(value);
+  };
   const alerts_to_UI_NAME: Record<string, string> = {
     "llm_exceptions": "LLM Exceptions",
     "llm_too_slow": "LLM Responses Too Slow",
@@ -62,8 +74,23 @@ const Settings: React.FC<SettingsPageProps> = ({
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
       console.log("callbacks", data);
-      let callbacks_data = data.data;
+      let callbacks_data = data.callbacks;
       setCallbacks(callbacks_data);
+
+      let alerts_data = data.alerts;
+      console.log("alerts_data", alerts_data);
+      if (alerts_data) {
+        if (alerts_data.length > 0) {
+          let _alert_info = alerts_data[0];
+          console.log("_alert_info", _alert_info);
+          let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
+          console.log("catch_all_webhook", catch_all_webhook);
+          setCatchAllWebhookURL(catch_all_webhook);
+          setAlertToWebhooks(_alert_info.alerts_to_webhook);
+        }
+      }
+
+      setAlerts(alerts_data);
     });
   }, [accessToken, userRole, userID]);
 
@@ -84,6 +111,37 @@ const Settings: React.FC<SettingsPageProps> = ({
     console.log('Selected values:', values);
   };
 
+  const handleSaveAlerts = () => {
+    if (!accessToken) {
+      return;
+    }
+  
+    const updatedAlertToWebhooks = {};
+    Object.entries(alerts_to_UI_NAME).forEach(([key, value]) => {
+      const webhookInput = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
+      console.log("key", key);
+      console.log("webhookInput", webhookInput);
+      const newWebhookValue = webhookInput?.value || '';
+      console.log("newWebhookValue", newWebhookValue);
+      updatedAlertToWebhooks[key] = newWebhookValue;
+    });
+
+    console.log("updatedAlertToWebhooks", updatedAlertToWebhooks);
+  
+    const payload = {
+      general_settings: {
+        alert_to_webhook_url: updatedAlertToWebhooks,
+      },
+    };
+  
+    try {
+      setCallbacksCall(accessToken, payload);
+    } catch (error) {
+      message.error('Failed to update alerts: ' + error, 20);
+    }
+  
+    message.success('Alerts updated successfully');
+  };
   const handleSaveChanges = (callback: any) => {
     if (!accessToken) {
       return;
@@ -98,9 +156,6 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     const payload = {
       environment_variables: updatedVariables,
-      general_settings: {
-        alert_types: selectedAlertValues
-      }
     };
 
     try {
@@ -221,7 +276,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   </li>
 ))}
         </ul>
-        {callback.all_alert_types && (
+        {/* {callback.all_alert_types && (
           <div>
             <Text className="mt-2">Alerting Types</Text>
             <Select
@@ -239,7 +294,7 @@ const Settings: React.FC<SettingsPageProps> = ({
               ))}
             </Select>
           </div>
-        )}
+        )} */}
         <Button className="mt-2" onClick={() => handleSaveChanges(callback)}>
           Save Changes
         </Button>
@@ -265,12 +320,28 @@ const Settings: React.FC<SettingsPageProps> = ({
           {Object.entries(alerts_to_UI_NAME).map(([key, value], index) => (
             <TableRow key={index}>
               <TableCell>
+              <Switch
+                    id="switch"
+                    name="switch"
+                    // checked={isSwitchOn}
+                    onChange={handleSwitchChange}
+                  />
+              </TableCell>
+              <TableCell>
               <Text>{value}</Text>
+              </TableCell>
+              <TableCell>
+              <TextInput name={key} type="password" defaultValue={alertToWebhooks && alertToWebhooks[key] ? alertToWebhooks[key] : catchAllWebhookURL as string}>
+                
+              </TextInput>
               </TableCell>
             </TableRow>
           ))}
         </TableBody>
         </Table>
+        <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
+          Save Changes
+        </Button>
 
 
 
