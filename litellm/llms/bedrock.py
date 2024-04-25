@@ -653,6 +653,10 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
         prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="bedrock"
         )
+    elif provider == "meta":
+        prompt = prompt_factory(
+            model=model, messages=messages, custom_llm_provider="bedrock"
+        )
     else:
         prompt = ""
         for message in messages:
