@@ -425,7 +425,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   return (
     <div>
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
-      <Table className="mt-5">
+      <Table className="mt-5 max-h-[300px] min-h-[300px]">
         <TableHead>
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
