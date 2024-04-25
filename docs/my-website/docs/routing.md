@@ -95,7 +95,7 @@ print(response)
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
 - `router.aimage_generation()` - async image generation calls
 
-### Advanced - Routing Strategies
+## Advanced - Routing Strategies
 #### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
