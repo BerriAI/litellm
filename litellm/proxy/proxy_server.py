@@ -2632,9 +2632,17 @@ class ProxyConfig:
         if "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
             proxy_logging_obj.alert_types = general_settings["alert_types"]
-            proxy_logging_obj.slack_alerting_instance.alert_types = general_settings[
-                "alert_types"
+            proxy_logging_obj.slack_alerting_instance.update_values(
+                alert_types=general_settings["alert_types"]
+            )
+
+        if "alert_to_webhook_url" in _general_settings:
+            general_settings["alert_to_webhook_url"] = _general_settings[
+                "alert_to_webhook_url"
             ]
+            proxy_logging_obj.slack_alerting_instance.update_values(
+                alert_to_webhook_url=general_settings["alert_to_webhook_url"]
+            )
 
         # router settings
         if llm_router is not None and prisma_client is not None:
