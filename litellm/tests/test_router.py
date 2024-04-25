@@ -18,6 +18,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def test_router_num_retries_init():
+    router = Router(num_retries=0)
+
+    assert router.num_retries == 0
+
+
 def test_exception_raising():
     # this tests if the router raises an exception when invalid params are set
     # in this test both deployments have bad keys - Keep this test. It validates if the router raises the most recent exception
