@@ -232,7 +232,15 @@ known_tokenizer_config = {
             "eos_token": "</s>",
         },
         "status": "success",
-    }
+    },
+    "meta-llama/Meta-Llama-3-8B-Instruct": {
+        "tokenizer": {
+            "chat_template": "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}",
+            "bos_token": "<|begin_of_text|>",
+            "eos_token": "",
+        },
+        "status": "success",
+    },
 }
 
 
@@ -640,7 +648,7 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         if get_attribute_or_key(tool, "type") != "function":
             continue
 
-        tool_function =  get_attribute_or_key(tool,"function")
+        tool_function = get_attribute_or_key(tool, "function")
         tool_name = get_attribute_or_key(tool_function, "name")
         tool_arguments = get_attribute_or_key(tool_function, "arguments")
         parameters = "".join(
@@ -833,8 +841,14 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
         {
             "type": "tool_use",
             "id": get_attribute_or_key(tool, "id"),
-            "name": get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
-            "input": json.loads(get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments")),
+            "name": get_attribute_or_key(
+                get_attribute_or_key(tool, "function"), "name"
+            ),
+            "input": json.loads(
+                get_attribute_or_key(
+                    get_attribute_or_key(tool, "function"), "arguments"
+                )
+            ),
         }
         for tool in tool_calls
         if get_attribute_or_key(tool, "type") == "function"
@@ -1341,6 +1355,14 @@ def prompt_factory(
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
+        elif "meta-llama/llama-3" in model and "instruct" in model:
+            return hf_chat_template(
+                model=model,
+                messages=messages,
+                chat_template=known_tokenizer_config[  # type: ignore
+                    "meta-llama/Meta-Llama-3-8B-Instruct"
+                ]["tokenizer"]["chat_template"],
+            )
         elif (
             "tiiuae/falcon" in model
         ):  # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
@@ -1381,6 +1403,7 @@ def prompt_factory(
         return default_pt(
             messages=messages
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
+
 
 def get_attribute_or_key(tool_or_function, attribute, default=None):
     if hasattr(tool_or_function, attribute):
