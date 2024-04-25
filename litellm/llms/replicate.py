@@ -307,9 +307,7 @@ def completion(
         result, logs = handle_prediction_response(
             prediction_url, api_key, print_verbose
         )
-        model_response["ended"] = (
-            time.time()
-        )  # for pricing this must remain right after calling api
+
         ## LOGGING
         logging_obj.post_call(
             input=prompt,
@@ -332,9 +330,12 @@ def completion(
             model_response["choices"][0]["message"]["content"] = result
 
         # Calculate usage
-        prompt_tokens = len(encoding.encode(prompt))
+        prompt_tokens = len(encoding.encode(prompt, disallowed_special=()))
         completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+            encoding.encode(
+                model_response["choices"][0]["message"].get("content", ""),
+                disallowed_special=(),
+            )
         )
         model_response["model"] = "replicate/" + model
         usage = Usage(
@@ -342,7 +343,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
 
 

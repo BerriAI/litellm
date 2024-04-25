@@ -62,7 +62,6 @@ model_list:
 
 litellm_settings: # module level litellm settings - https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py
   drop_params: True
-  set_verbose: True
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
@@ -558,6 +557,16 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+## Disable Swagger UI 
+
+To disable the Swagger docs from the base url, set 
+
+```env
+NO_DOCS="True"
+```
+
+in your environment, and restart the proxy. 
+
 
 ## Configure DB Pool Limits + Connection Timeouts 
 
@@ -591,8 +600,11 @@ general_settings:
   "general_settings": {
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
+    "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
     "disable_reset_budget": "boolean", # turn off reset budget scheduled task
-    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims 
+    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
+    "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
+    "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
     "key_management_system": "google_kms", # either google_kms or azure_kms
     "master_key": "string",
     "database_url": "string",

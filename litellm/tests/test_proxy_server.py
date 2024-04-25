@@ -194,7 +194,7 @@ def test_img_gen(client_no_auth):
 
 
 #### ADDITIONAL
-# @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
+@pytest.mark.skip(reason="test via docker tests. Requires prisma client.")
 def test_add_new_model(client_no_auth):
     global headers
     try:
@@ -362,7 +362,9 @@ def test_load_router_config():
         ]  # init with all call types
 
     except Exception as e:
-        pytest.fail("Proxy: Got exception reading config", e)
+        pytest.fail(
+            f"Proxy: Got exception reading config: {str(e)}\n{traceback.format_exc()}"
+        )
 
 
 # test_load_router_config()

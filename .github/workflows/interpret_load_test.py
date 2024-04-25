@@ -77,6 +77,9 @@ if __name__ == "__main__":
     new_release_body = (
         existing_release_body
         + "\n\n"
+        + "### Don't want to maintain your internal proxy? get in touch 🎉"
+        + "\nHosted Proxy Alpha: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+        + "\n\n"
         + "## Load Test LiteLLM Proxy Results"
         + "\n\n"
         + markdown_table
