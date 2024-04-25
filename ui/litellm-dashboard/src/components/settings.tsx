@@ -53,13 +53,15 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [selectedAlertValues, setSelectedAlertValues] = useState([]);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
   const [alertToWebhooks, setAlertToWebhooks] = useState<any[]>([]);
+  const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
 
-  const [isAlertOn, setIsAlertOn] = useState<Record<string, boolean>>({}); // alert_name: boolean
 
-  
-
-  const handleSwitchChange = (value: boolean) => {
-    //setIsAlertOn(value);
+  const handleSwitchChange = (alertName: string) => {
+    if (activeAlerts.includes(alertName)) {
+      setActiveAlerts(activeAlerts.filter((alert) => alert !== alertName));
+    } else {
+      setActiveAlerts([...activeAlerts, alertName]);
+    }
   };
   const alerts_to_UI_NAME: Record<string, string> = {
     "llm_exceptions": "LLM Exceptions",
@@ -85,14 +87,23 @@ const Settings: React.FC<SettingsPageProps> = ({
           console.log("_alert_info", _alert_info);
           let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
           console.log("catch_all_webhook", catch_all_webhook);
+
+          let active_alerts = _alert_info.active_alerts;
+          setActiveAlerts(active_alerts);
           setCatchAllWebhookURL(catch_all_webhook);
           setAlertToWebhooks(_alert_info.alerts_to_webhook);
+
         }
       }
 
       setAlerts(alerts_data);
     });
   }, [accessToken, userRole, userID]);
+
+
+  const isAlertOn = (alertName: string) => {
+    return activeAlerts && activeAlerts.includes(alertName);
+  }
 
   const handleAddCallback = () => {
     console.log("Add callback clicked");
@@ -127,12 +138,15 @@ const Settings: React.FC<SettingsPageProps> = ({
     });
 
     console.log("updatedAlertToWebhooks", updatedAlertToWebhooks);
-  
+
     const payload = {
       general_settings: {
         alert_to_webhook_url: updatedAlertToWebhooks,
+        alert_types: activeAlerts
       },
     };
+
+    console.log("payload", payload);
   
     try {
       setCallbacksCall(accessToken, payload);
@@ -323,8 +337,8 @@ const Settings: React.FC<SettingsPageProps> = ({
               <Switch
                     id="switch"
                     name="switch"
-                    // checked={isSwitchOn}
-                    onChange={handleSwitchChange}
+                    checked={isAlertOn(key)}
+                    onChange={() => handleSwitchChange(key)}
                   />
               </TableCell>
               <TableCell>
