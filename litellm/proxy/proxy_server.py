@@ -8414,6 +8414,7 @@ async def update_config(config_info: ConfigYAML):
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
+        import base64
 
         """
         - Update the ConfigTable DB
@@ -8425,13 +8426,94 @@ async def update_config(config_info: ConfigYAML):
         updated_settings = config_info.json(exclude_none=True)
         updated_settings = prisma_client.jsonify_object(updated_settings)
         for k, v in updated_settings.items():
-            await prisma_client.db.litellm_config.upsert(
-                where={"param_name": k},
-                data={
-                    "create": {"param_name": k, "param_value": v},
-                    "update": {"param_value": v},
-                },
+            if k == "router_settings":
+                await prisma_client.db.litellm_config.upsert(
+                    where={"param_name": k},
+                    data={
+                        "create": {"param_name": k, "param_value": v},
+                        "update": {"param_value": v},
+                    },
+                )
+
+        ### OLD LOGIC [TODO] MOVE TO DB ###
+
+        import base64
+
+        # Load existing config
+        config = await proxy_config.get_config()
+        verbose_proxy_logger.debug("Loaded config: %s", config)
+
+        # update the general settings
+        if config_info.general_settings is not None:
+            config.setdefault("general_settings", {})
+            updated_general_settings = config_info.general_settings.dict(
+                exclude_none=True
             )
+
+            _existing_settings = config["general_settings"]
+            for k, v in updated_general_settings.items():
+                # overwrite existing settings with updated values
+                _existing_settings[k] = v
+            config["general_settings"] = _existing_settings
+
+        if config_info.environment_variables is not None:
+            config.setdefault("environment_variables", {})
+            _updated_environment_variables = config_info.environment_variables
+
+            # encrypt updated_environment_variables #
+            for k, v in _updated_environment_variables.items():
+                if isinstance(v, str):
+                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
+                    _updated_environment_variables[k] = base64.b64encode(
+                        encrypted_value
+                    ).decode("utf-8")
+
+            _existing_env_variables = config["environment_variables"]
+
+            for k, v in _updated_environment_variables.items():
+                # overwrite existing env variables with updated values
+                _existing_env_variables[k] = _updated_environment_variables[k]
+
+        # update the litellm settings
+        if config_info.litellm_settings is not None:
+            config.setdefault("litellm_settings", {})
+            updated_litellm_settings = config_info.litellm_settings
+            config["litellm_settings"] = {
+                **updated_litellm_settings,
+                **config["litellm_settings"],
+            }
+
+            # if litellm.success_callback in updated_litellm_settings and config["litellm_settings"]
+            if (
+                "success_callback" in updated_litellm_settings
+                and "success_callback" in config["litellm_settings"]
+            ):
+
+                # check both success callback are lists
+                if isinstance(
+                    config["litellm_settings"]["success_callback"], list
+                ) and isinstance(updated_litellm_settings["success_callback"], list):
+                    combined_success_callback = (
+                        config["litellm_settings"]["success_callback"]
+                        + updated_litellm_settings["success_callback"]
+                    )
+                    combined_success_callback = list(set(combined_success_callback))
+                    config["litellm_settings"][
+                        "success_callback"
+                    ] = combined_success_callback
+
+        # router settings
+        if config_info.router_settings is not None:
+            config.setdefault("router_settings", {})
+            _updated_router_settings = config_info.router_settings
+
+            config["router_settings"] = {
+                **config["router_settings"],
+                **_updated_router_settings,
+            }
+
+        # Save the updated config
+        await proxy_config.save_config(new_config=config)
 
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
