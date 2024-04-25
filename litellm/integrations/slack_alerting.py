@@ -136,6 +136,28 @@ class SlackAlerting:
         except Exception as e:
             raise e
 
+    def _get_deployment_latencies_to_alert(self, metadata=None):
+
+        if metadata is None:
+            return None
+
+        if "_latency_per_deployment" in metadata:
+            # Translate model_id to -> api_base
+            # _latency_per_deployment is a dictionary that looks like this:
+            """
+            _latency_per_deployment: {
+                api_base: 0.01336697916666667
+            }
+            """
+            _message_to_send = ""
+            _deployment_latencies = metadata["_latency_per_deployment"]
+            if len(_deployment_latencies) == 0:
+                return None
+            for api_base, latency in _deployment_latencies.items():
+                _message_to_send += f"\n{api_base}: {round(latency,2)}s"
+            _message_to_send = "```" + _message_to_send + "```"
+            return _message_to_send
+
     async def response_taking_too_long_callback(
         self,
         kwargs,  # kwargs to completion
@@ -162,6 +184,21 @@ class SlackAlerting:
                 request_info = self._add_langfuse_trace_id_to_alert(
                     request_info=request_info, kwargs=kwargs
                 )
+            # add deployment latencies to alert
+            if (
+                kwargs is not None
+                and "litellm_params" in kwargs
+                and "metadata" in kwargs["litellm_params"]
+            ):
+                _metadata = kwargs["litellm_params"]["metadata"]
+
+                _deployment_latency_map = self._get_deployment_latencies_to_alert(
+                    metadata=_metadata
+                )
+                if _deployment_latency_map is not None:
+                    request_info += (
+                        f"\nAvailable Deployment Latencies\n{_deployment_latency_map}"
+                    )
             await self.send_alert(
                 message=slow_message + request_info,
                 level="Low",
@@ -240,6 +277,14 @@ class SlackAlerting:
                 alerting_message = (
                     f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
                 )
+
+                # add deployment latencies to alert
+                _deployment_latency_map = self._get_deployment_latencies_to_alert(
+                    metadata=request_data.get("metadata", {})
+                )
+                if _deployment_latency_map is not None:
+                    request_info += f"\nDeployment Latencies\n{_deployment_latency_map}"
+
                 await self.send_alert(
                     message=alerting_message + request_info,
                     level="Medium",
