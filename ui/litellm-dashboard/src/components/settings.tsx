@@ -359,6 +359,12 @@ const Settings: React.FC<SettingsPageProps> = ({
           Save Changes
         </Button>
 
+        <Button onClick={() => serviceHealthCheck(accessToken, "slack")} className="mx-2">
+            Test Alerts
+          </Button>
+
+      
+
 
 
         </Card>
