@@ -351,7 +351,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     total += _call_latency
             item_latency = total / len(item_latency)
             print("item_latency=", item_latency, "deployment=", deployment)  # noqa
-            _latency_per_deployment[_deployment_api_base] = item_latency
+            if _deployment_api_base is not None:
+                _latency_per_deployment[_deployment_api_base] = item_latency
             if item_latency == 0:
                 deployment = _deployment
                 break
