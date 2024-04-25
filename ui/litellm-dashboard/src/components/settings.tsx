@@ -49,6 +49,12 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [selectedAlertValues, setSelectedAlertValues] = useState([]);
+  const alerts_to_UI_NAME: Record<string, string> = {
+    "llm_exceptions": "LLM Exceptions",
+    "llm_too_slow": "LLM Responses Too Slow",
+    "llm_requests_hanging": "LLM Requests Hanging",
+    "budget_alerts": "Budget Alerts (API Keys, Users)"
+  }
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -249,6 +255,25 @@ const Settings: React.FC<SettingsPageProps> = ({
               Add Callback
             </Button>
             
+        </Card>
+
+        <Title>Alerting</Title>
+        <Card>
+        <Table>
+          
+        <TableBody>
+          {Object.entries(alerts_to_UI_NAME).map(([key, value], index) => (
+            <TableRow key={index}>
+              <TableCell>
+              <Text>{value}</Text>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+        </Table>
+
+
+
         </Card>
         
       </Grid>
