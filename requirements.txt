@@ -5,7 +5,7 @@ fastapi==0.100.0 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.0 # server dep
 uvicorn==0.29.0 # server dep
-gunicorn==21.2.0 # server dep
+gunicorn==22.0.0 # server dep
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
 numpy==1.24.3 # semantic caching
