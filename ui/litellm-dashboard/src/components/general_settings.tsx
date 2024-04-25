@@ -57,7 +57,8 @@ async function testFallbackModelResponse(
           content: "Hi, this is a test message",
         },
       ],
-      // mock_testing_fallbacks: true
+      // @ts-ignore
+      mock_testing_fallbacks: true
     });
 
     message.success(
