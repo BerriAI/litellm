@@ -106,6 +106,9 @@ const handleSubmit = async (formValues: Record<string, any>, accessToken: string
       litellmParamsObj["model"] = litellm_model
       let modelName: string  = "";
       for (const [key, value] of Object.entries(formValues)) {
+        if (value === '') {
+          continue;
+        }
         if (key == "model_name") {
           modelName = modelName + value
         }

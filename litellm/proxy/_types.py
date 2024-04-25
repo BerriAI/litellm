@@ -4,6 +4,7 @@ import enum
 from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
 import uuid, json, sys, os
+from litellm.types.router import UpdateRouterConfig
 
 
 def hash_token(token: str):
@@ -750,7 +751,7 @@ class ConfigYAML(LiteLLMBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: Optional[ConfigGeneralSettings] = None
-    router_settings: Optional[dict] = Field(
+    router_settings: Optional[UpdateRouterConfig] = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
     )

@@ -2521,9 +2521,10 @@ class ProxyConfig:
                         # decode base64
                         decoded_b64 = base64.b64decode(v)
                         # decrypt value
-                        _litellm_params[k] = decrypt_value(
-                            value=decoded_b64, master_key=master_key
-                        )
+                        _value = decrypt_value(value=decoded_b64, master_key=master_key)
+                        # sanity check if string > size 0
+                        if len(_value) > 0:
+                            _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
@@ -2636,9 +2637,16 @@ class ProxyConfig:
             ]
 
         # router settings
-        if llm_router is not None:
-            _router_settings = config_data.get("router_settings", {})
-            llm_router.update_settings(**_router_settings)
+        if llm_router is not None and prisma_client is not None:
+            db_router_settings = await prisma_client.db.litellm_config.find_first(
+                where={"param_name": "router_settings"}
+            )
+            if (
+                db_router_settings is not None
+                and db_router_settings.param_value is not None
+            ):
+                _router_settings = db_router_settings.param_value
+                llm_router.update_settings(**_router_settings)
 
     async def add_deployment(
         self,
@@ -8408,6 +8416,29 @@ async def update_config(config_info: ConfigYAML):
     try:
         import base64
 
+        """
+        - Update the ConfigTable DB
+        - Run 'add_deployment'
+        """
+        if prisma_client is None:
+            raise Exception("No DB Connected")
+
+        updated_settings = config_info.json(exclude_none=True)
+        updated_settings = prisma_client.jsonify_object(updated_settings)
+        for k, v in updated_settings.items():
+            if k == "router_settings":
+                await prisma_client.db.litellm_config.upsert(
+                    where={"param_name": k},
+                    data={
+                        "create": {"param_name": k, "param_value": v},
+                        "update": {"param_value": v},
+                    },
+                )
+
+        ### OLD LOGIC [TODO] MOVE TO DB ###
+
+        import base64
+
         # Load existing config
         config = await proxy_config.get_config()
         verbose_proxy_logger.debug("Loaded config: %s", config)
@@ -8471,31 +8502,13 @@ async def update_config(config_info: ConfigYAML):
                         "success_callback"
                     ] = combined_success_callback
 
-        # router settings
-        if config_info.router_settings is not None:
-            config.setdefault("router_settings", {})
-            _updated_router_settings = config_info.router_settings
-
-            config["router_settings"] = {
-                **config["router_settings"],
-                **_updated_router_settings,
-            }
-
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
-        # make sure the change is instantly rolled out for langfuse
-        if prisma_client is not None:
-            await proxy_config.add_deployment(
-                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-            )
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+        )
 
-        # Test new connections
-        ## Slack
-        if "slack" in config.get("general_settings", {}).get("alerting", []):
-            await proxy_logging_obj.alerting_handler(
-                message="This is a test", level="Low"
-            )
         return {"message": "Config updated successfully"}
     except Exception as e:
         traceback.print_exc()

@@ -454,6 +454,7 @@ class Router:
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
 
             # debug how often this deployment picked
@@ -1309,12 +1310,18 @@ class Router:
         Try calling the function_with_retries
         If it fails after num_retries, fall back to another model group
         """
+        mock_testing_fallbacks = kwargs.pop("mock_testing_fallbacks", None)
         model_group = kwargs.get("model")
         fallbacks = kwargs.get("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.get(
             "context_window_fallbacks", self.context_window_fallbacks
         )
         try:
+            if mock_testing_fallbacks is not None and mock_testing_fallbacks == True:
+                raise Exception(
+                    f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}"
+                )
+
             response = await self.async_function_with_retries(*args, **kwargs)
             verbose_router_logger.debug(f"Async Response: {response}")
             return response
@@ -1363,7 +1370,10 @@ class Router:
                 elif fallbacks is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     for item in fallbacks:
-                        if list(item.keys())[0] == model_group:
+                        key_list = list(item.keys())
+                        if len(key_list) == 0:
+                            continue
+                        if key_list[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
                     if fallback_model_group is None:
@@ -2553,6 +2563,8 @@ class Router:
             "timeout",
             "max_retries",
             "retry_after",
+            "fallbacks",
+            "context_window_fallbacks",
         ]
 
         _int_settings = [
@@ -2820,6 +2832,7 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
     ):
         """
         Async implementation of 'get_available_deployments'.
@@ -2835,6 +2848,7 @@ class Router:
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
+                request_kwargs=request_kwargs,
             )
 
         model, healthy_deployments = self._common_checks_available_deployment(
@@ -2938,6 +2952,7 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
     ):
         """
         Returns the deployment based on routing strategy
@@ -3024,7 +3039,9 @@ class Router:
             and self.lowestlatency_logger is not None
         ):
             deployment = self.lowestlatency_logger.get_available_deployments(
-                model_group=model, healthy_deployments=healthy_deployments
+                model_group=model,
+                healthy_deployments=healthy_deployments,
+                request_kwargs=request_kwargs,
             )
         elif (
             self.routing_strategy == "usage-based-routing"
