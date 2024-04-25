@@ -322,7 +322,15 @@ const Settings: React.FC<SettingsPageProps> = ({
           <TabPanel>
 
           <Card>
+            <Text className="my-2">Alerts are only supported for Slack Webhook URLs. Get your webhook urls from <a href="https://api.slack.com/messaging/webhooks" target="_blank" style={{color: 'blue'}}>here</a></Text>
         <Table>
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell>Slack Webhook URL</TableHeaderCell>
+          </TableRow>
+        </TableHead>
           
         <TableBody>
           {Object.entries(alerts_to_UI_NAME).map(([key, value], index) => (
@@ -359,11 +367,7 @@ const Settings: React.FC<SettingsPageProps> = ({
           </TabPanels>
           </TabGroup>
 
-        
-
-
-        
-        
+      
       </Grid>
 
       <Modal
