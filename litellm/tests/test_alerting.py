@@ -68,6 +68,7 @@ async def test_get_api_base():
     await _pl.alerting_handler(
         message=slow_message + request_info,
         level="Low",
+        alert_type="llm_too_slow",
     )
     print("passed test_get_api_base")
 
