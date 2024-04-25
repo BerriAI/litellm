@@ -6914,6 +6914,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
+        setattr(model_response_object, "usage", Usage())
         model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
         model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
         model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
