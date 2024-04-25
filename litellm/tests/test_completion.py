@@ -1781,7 +1781,6 @@ def test_completion_replicate_llama3():
         print("RESPONSE STRING\n", response_str)
         if type(response_str) != str:
             pytest.fail(f"Error occurred: {e}")
-        raise Exception("it worked!")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
