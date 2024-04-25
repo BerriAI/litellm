@@ -4,9 +4,10 @@
 import pytest
 import asyncio, time
 import aiohttp
+from aiohttp import ClientSession
 from openai import AsyncOpenAI
 import sys, os
-from typing import Optional
+from typing import Optional, Any, Awaitable, Callable
 
 sys.path.insert(
     0, os.path.abspath("../")
@@ -14,7 +15,7 @@ sys.path.insert(
 import litellm
 
 
-async def generate_team(session):
+async def generate_team(session: ClientSession) -> Any:
     url = "http://0.0.0.0:4000/team/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -33,9 +34,9 @@ async def generate_team(session):
 
 
 async def generate_user(
-    session,
-    user_role="app_owner",
-):
+    session: ClientSession,
+    user_role: str = "app_owner",
+) -> Any:
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -55,15 +56,15 @@ async def generate_user(
 
 
 async def generate_key(
-    session,
-    i,
-    budget=None,
-    budget_duration=None,
-    models=["azure-models", "gpt-4", "dall-e-3"],
+    session: ClientSession,
+    i: int,
+    budget: Optional[float] = None,
+    budget_duration: Optional[str] = None,
+    models: list[str] = ["azure-models", "gpt-4", "dall-e-3"],
     max_parallel_requests: Optional[int] = None,
     user_id: Optional[str] = None,
-    calling_key="sk-1234",
-):
+    calling_key: str = "sk-1234",
+) -> Any:
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
         "Authorization": f"Bearer {calling_key}",
@@ -96,14 +97,14 @@ async def generate_key(
 
 
 @pytest.mark.asyncio
-async def test_key_gen():
+async def test_key_gen() -> None:
     async with aiohttp.ClientSession() as session:
         tasks = [generate_key(session, i) for i in range(1, 11)]
         await asyncio.gather(*tasks)
 
 
 @pytest.mark.asyncio
-async def test_key_gen_bad_key():
+async def test_key_gen_bad_key() -> None:
     """
     Test if you can create a key with a non-admin key, even with UI setup
     """
@@ -131,7 +132,7 @@ async def test_key_gen_bad_key():
             pass
 
 
-async def update_key(session, get_key):
+async def update_key(session: ClientSession, get_key: str) -> Any:
     """
     Make sure only models user has access to are returned
     """
@@ -153,7 +154,7 @@ async def update_key(session, get_key):
         return await response.json()
 
 
-async def update_proxy_budget(session):
+async def update_proxy_budget(session: ClientSession) -> Any:
     """
     Make sure only models user has access to are returned
     """
@@ -175,7 +176,9 @@ async def update_proxy_budget(session):
         return await response.json()
 
 
-async def chat_completion(session, key, model="gpt-4"):
+async def chat_completion(
+    session: ClientSession, key: str, model: str = "gpt-4"
+) -> Any:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -211,7 +214,9 @@ async def chat_completion(session, key, model="gpt-4"):
                 pass
 
 
-async def image_generation(session, key, model="dall-e-3"):
+async def image_generation(
+    session: ClientSession, key: str, model: str = "dall-e-3"
+) -> Any:
     url = "http://0.0.0.0:4000/v1/images/generations"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -244,14 +249,16 @@ async def image_generation(session, key, model="dall-e-3"):
                 pass
 
 
-async def chat_completion_streaming(session, key, model="gpt-4"):
+async def chat_completion_streaming(
+    session: ClientSession, key: str, model: str = "gpt-4"
+) -> Any:
     client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
     messages = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": f"Hello! {time.time()}"},
     ]
     prompt_tokens = litellm.token_counter(model="gpt-35-turbo", messages=messages)
-    data = {
+    data: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": True,
@@ -272,7 +279,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
 
 
 @pytest.mark.asyncio
-async def test_key_update():
+async def test_key_update() -> None:
     """
     Create key
     Update key with new model
@@ -289,7 +296,9 @@ async def test_key_update():
         await chat_completion(session=session, key=key)
 
 
-async def delete_key(session, get_key, auth_key="sk-1234"):
+async def delete_key(
+    session: ClientSession, get_key: str, auth_key: str = "sk-1234"
+) -> Any:
     """
     Delete key
     """
@@ -312,7 +321,7 @@ async def delete_key(session, get_key, auth_key="sk-1234"):
 
 
 @pytest.mark.asyncio
-async def test_key_delete():
+async def test_key_delete() -> None:
     """
     Delete key
     """
@@ -325,7 +334,9 @@ async def test_key_delete():
         )
 
 
-async def get_key_info(session, call_key, get_key=None):
+async def get_key_info(
+    session: ClientSession, call_key: str, get_key: Optional[str] = None
+) -> Any:
     """
     Make sure only models user has access to are returned
     """
@@ -355,7 +366,7 @@ async def get_key_info(session, call_key, get_key=None):
         return await response.json()
 
 
-async def get_model_info(session, call_key):
+async def get_model_info(session: ClientSession, call_key: str) -> Any:
     """
     Make sure only models user has access to are returned
     """
@@ -379,7 +390,7 @@ async def get_model_info(session, call_key):
 
 
 @pytest.mark.asyncio
-async def test_key_info():
+async def test_key_info() -> None:
     """
     Get key info
     - as admin -> 200
@@ -404,7 +415,7 @@ async def test_key_info():
 
 
 @pytest.mark.asyncio
-async def test_model_info():
+async def test_model_info() -> None:
     """
     Get model info for models key has access to
     """
@@ -422,7 +433,7 @@ async def test_model_info():
         assert len(user_models) > 0
 
 
-async def get_spend_logs(session, request_id):
+async def get_spend_logs(session: ClientSession, request_id: str) -> Any:
     url = f"http://0.0.0.0:4000/spend/logs?request_id={request_id}"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
 
@@ -439,7 +450,7 @@ async def get_spend_logs(session, request_id):
 
 
 @pytest.mark.asyncio
-async def test_key_info_spend_values():
+async def test_key_info_spend_values() -> None:
     """
     Test to ensure spend is correctly calculated
     - create key
@@ -447,14 +458,19 @@ async def test_key_info_spend_values():
     - assert cost is expected value
     """
 
-    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+    async def retry_request(
+        func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        _max_attempts: int = 5,
+        **kwargs: Any,
+    ) -> Any:
         for attempt in range(_max_attempts):
             try:
                 return await func(*args, **kwargs)
             except aiohttp.client_exceptions.ClientOSError as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
     async with aiohttp.ClientSession() as session:
         ## Test Spend Update ##
@@ -492,7 +508,7 @@ async def test_key_info_spend_values():
 
 
 @pytest.mark.asyncio
-async def test_key_info_spend_values_streaming():
+async def test_key_info_spend_values_streaming() -> None:
     """
     Test to ensure spend is correctly calculated.
     - create key
@@ -527,7 +543,7 @@ async def test_key_info_spend_values_streaming():
 
 
 @pytest.mark.asyncio
-async def test_key_info_spend_values_image_generation():
+async def test_key_info_spend_values_image_generation() -> None:
     """
     Test to ensure spend is correctly calculated
     - create key
@@ -535,14 +551,19 @@ async def test_key_info_spend_values_image_generation():
     - assert cost is expected value
     """
 
-    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+    async def retry_request(
+        func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        _max_attempts: int = 5,
+        **kwargs: Any,
+    ) -> Any:
         for attempt in range(_max_attempts):
             try:
                 return await func(*args, **kwargs)
             except aiohttp.client_exceptions.ClientOSError as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
     async with aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=600)
@@ -562,7 +583,7 @@ async def test_key_info_spend_values_image_generation():
 
 @pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
-async def test_key_with_budgets():
+async def test_key_with_budgets() -> None:
     """
     - Create key with budget and 5min duration
     - Get 'reset_at' value
@@ -571,14 +592,19 @@ async def test_key_with_budgets():
     """
     from litellm.proxy.utils import hash_token
 
-    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+    async def retry_request(
+        func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        _max_attempts: int = 5,
+        **kwargs: Any,
+    ) -> Any:
         for attempt in range(_max_attempts):
             try:
                 return await func(*args, **kwargs)
             except aiohttp.client_exceptions.ClientOSError as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(
@@ -607,7 +633,7 @@ async def test_key_with_budgets():
 
 
 @pytest.mark.asyncio
-async def test_key_crossing_budget():
+async def test_key_crossing_budget() -> None:
     """
     - Create key with budget with budget=0.00000001
     - make a /chat/completions call
@@ -636,7 +662,7 @@ async def test_key_crossing_budget():
 
 @pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.asyncio
-async def test_key_info_spend_values_sagemaker():
+async def test_key_info_spend_values_sagemaker() -> None:
     """
     Tests the sync streaming loop to ensure spend is correctly calculated.
     - create key
@@ -660,7 +686,7 @@ async def test_key_info_spend_values_sagemaker():
 
 
 @pytest.mark.asyncio
-async def test_key_rate_limit():
+async def test_key_rate_limit() -> None:
     """
     Tests backoff/retry logic on parallel request error.
     - Create key with max parallel requests 0
@@ -686,7 +712,7 @@ async def test_key_rate_limit():
 
 
 @pytest.mark.asyncio
-async def test_key_delete_ui():
+async def test_key_delete_ui() -> None:
     """
     Admin UI flow - DO NOT DELETE
     -> Create a key with user_id = "ishaan"

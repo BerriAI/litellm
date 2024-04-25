@@ -1,12 +1,14 @@
 # What this tests?
 ## Tests /spend endpoints.
+from typing import Any, Optional, Callable, Awaitable
 
 import pytest, time, uuid
 import asyncio
 import aiohttp
+from aiohttp import ClientSession
 
 
-async def generate_key(session, models=[]):
+async def generate_key(session: ClientSession, models: list[str] = []) -> Any:
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -26,7 +28,9 @@ async def generate_key(session, models=[]):
         return await response.json()
 
 
-async def chat_completion(session, key, model="gpt-3.5-turbo"):
+async def chat_completion(
+    session: ClientSession, key: str, model: str = "gpt-3.5-turbo"
+) -> Any:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -53,7 +57,9 @@ async def chat_completion(session, key, model="gpt-3.5-turbo"):
         return await response.json()
 
 
-async def chat_completion_high_traffic(session, key, model="gpt-3.5-turbo"):
+async def chat_completion_high_traffic(
+    session: ClientSession, key: str, model: str = "gpt-3.5-turbo"
+) -> Any:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -79,7 +85,11 @@ async def chat_completion_high_traffic(session, key, model="gpt-3.5-turbo"):
         return None
 
 
-async def get_spend_logs(session, request_id=None, api_key=None):
+async def get_spend_logs(
+    session: ClientSession,
+    request_id: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> Any:
     if api_key is not None:
         url = f"http://0.0.0.0:4000/spend/logs?api_key={api_key}"
     else:
@@ -99,7 +109,7 @@ async def get_spend_logs(session, request_id=None, api_key=None):
 
 
 @pytest.mark.asyncio
-async def test_spend_logs():
+async def test_spend_logs() -> None:
     """
     - Create key
     - Make call (makes sure it's in spend logs)
@@ -113,7 +123,7 @@ async def test_spend_logs():
         await get_spend_logs(session=session, request_id=response["id"])
 
 
-async def get_predict_spend_logs(session):
+async def get_predict_spend_logs(session: ClientSession) -> Any:
     url = f"http://0.0.0.0:4000/global/predict/spend/logs"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -139,7 +149,7 @@ async def get_predict_spend_logs(session):
 
 
 @pytest.mark.asyncio
-async def test_get_predicted_spend_logs():
+async def test_get_predicted_spend_logs() -> None:
     """
     - Create key
     - Make call (makes sure it's in spend logs)
@@ -155,7 +165,7 @@ async def test_get_predicted_spend_logs():
 
 @pytest.mark.skip(reason="High traffic load test, meant to be run locally")
 @pytest.mark.asyncio
-async def test_spend_logs_high_traffic():
+async def test_spend_logs_high_traffic() -> None:
     """
     - Create key
     - Make 30 concurrent calls
@@ -164,7 +174,12 @@ async def test_spend_logs_high_traffic():
     - Assert it's 30
     """
 
-    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+    async def retry_request(
+        func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        _max_attempts: int = 5,
+        **kwargs: Any,
+    ) -> Any:
         for attempt in range(_max_attempts):
             try:
                 return await func(*args, **kwargs)
@@ -174,7 +189,7 @@ async def test_spend_logs_high_traffic():
             ) as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
     async with aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=600)

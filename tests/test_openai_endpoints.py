@@ -1,12 +1,15 @@
 # What this tests ?
 ## Tests /chat/completions by generating a key and then making a chat completions request
+from typing import Any
+
 import pytest
 import asyncio
 import aiohttp, openai
+from aiohttp import ClientSession, ClientResponse
 from openai import OpenAI, AsyncOpenAI
 
 
-def response_header_check(response):
+def response_header_check(response: ClientResponse) -> None:
     """
     - assert if response headers < 4kb (nginx limit).
     """
@@ -15,14 +18,14 @@ def response_header_check(response):
 
 
 async def generate_key(
-    session,
-    models=[
+    session: ClientSession,
+    models: list[str] = [
         "gpt-4",
         "text-embedding-ada-002",
         "dall-e-2",
         "fake-openai-endpoint-2",
     ],
-):
+) -> Any:
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -47,7 +50,7 @@ async def generate_key(
         return await response.json()
 
 
-async def new_user(session):
+async def new_user(session: ClientSession) -> Any:
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -71,7 +74,9 @@ async def new_user(session):
         return await response.json()
 
 
-async def chat_completion(session, key, model="gpt-4"):
+async def chat_completion(
+    session: ClientSession, key: str, model: str = "gpt-4"
+) -> Any:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -102,7 +107,9 @@ async def chat_completion(session, key, model="gpt-4"):
         return await response.json()
 
 
-async def chat_completion_with_headers(session, key, model="gpt-4"):
+async def chat_completion_with_headers(
+    session: ClientSession, key: str, model: str = "gpt-4"
+) -> dict[str, str]:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -131,7 +138,7 @@ async def chat_completion_with_headers(session, key, model="gpt-4"):
         )  # calling the function to check response headers
 
         raw_headers = response.raw_headers
-        raw_headers_json = {}
+        raw_headers_json: dict[str, str] = {}
 
         for (
             item
@@ -143,7 +150,7 @@ async def chat_completion_with_headers(session, key, model="gpt-4"):
         return raw_headers_json
 
 
-async def completion(session, key):
+async def completion(session: ClientSession, key: str) -> Any:
     url = "http://0.0.0.0:4000/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -166,7 +173,7 @@ async def completion(session, key):
         return response
 
 
-async def embeddings(session, key):
+async def embeddings(session: ClientSession, key: str) -> None:
     url = "http://0.0.0.0:4000/embeddings"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -191,7 +198,7 @@ async def embeddings(session, key):
         )  # calling the function to check response headers
 
 
-async def image_generation(session, key):
+async def image_generation(session: ClientSession, key: str) -> None:
     url = "http://0.0.0.0:4000/images/generations"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -222,7 +229,7 @@ async def image_generation(session, key):
 
 
 @pytest.mark.asyncio
-async def test_chat_completion():
+async def test_chat_completion() -> None:
     """
     - Create key
     Make chat completion call
@@ -240,7 +247,7 @@ async def test_chat_completion():
 
 # @pytest.mark.skip(reason="Local test. Proxy not concurrency safe yet. WIP.")
 @pytest.mark.asyncio
-async def test_chat_completion_ratelimit():
+async def test_chat_completion_ratelimit() -> None:
     """
     - call model with rpm 1
     - make 2 parallel calls
@@ -267,7 +274,7 @@ async def test_chat_completion_ratelimit():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_different_deployments():
+async def test_chat_completion_different_deployments() -> None:
     """
     - call model group with 2 deployments
     - make 5 calls
@@ -297,7 +304,7 @@ async def test_chat_completion_different_deployments():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_streaming():
+async def test_chat_completion_streaming() -> None:
     """
     [PROD Test] Ensures logprobs are returned correctly
     """
@@ -320,7 +327,7 @@ async def test_chat_completion_streaming():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_old_key():
+async def test_chat_completion_old_key() -> None:
     """
     Production test for backwards compatibility. Test db against a pre-generated (old key)
     - Create key
@@ -336,7 +343,7 @@ async def test_chat_completion_old_key():
 
 
 @pytest.mark.asyncio
-async def test_completion():
+async def test_completion() -> None:
     """
     - Create key
     Make chat completion call
@@ -363,7 +370,7 @@ async def test_completion():
 
 
 @pytest.mark.asyncio
-async def test_embeddings():
+async def test_embeddings() -> None:
     """
     - Create key
     Make embeddings call
@@ -380,7 +387,7 @@ async def test_embeddings():
 
 
 @pytest.mark.asyncio
-async def test_image_generation():
+async def test_image_generation() -> None:
     """
     - Create key
     Make embeddings call
@@ -397,7 +404,7 @@ async def test_image_generation():
 
 
 @pytest.mark.asyncio
-async def test_openai_wildcard_chat_completion():
+async def test_openai_wildcard_chat_completion() -> None:
     """
     - Create key for model = "*" -> this has access to all models
     - proxy_server_config.yaml has model = *

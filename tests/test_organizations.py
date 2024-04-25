@@ -1,13 +1,22 @@
 # What this tests ?
 ## Tests /organization endpoints.
+from typing import Optional, Any
+
 import pytest
 import asyncio
 import aiohttp
 import time, uuid
+
+from aiohttp import ClientSession
 from openai import AsyncOpenAI
 
 
-async def new_organization(session, i, organization_alias, max_budget=None):
+async def new_organization(
+    session: ClientSession,
+    i: int,
+    organization_alias: str,
+    max_budget: Optional[float] = None,
+) -> Any:
     url = "http://0.0.0.0:4000/organization/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -31,7 +40,7 @@ async def new_organization(session, i, organization_alias, max_budget=None):
 
 
 @pytest.mark.asyncio
-async def test_organization_new():
+async def test_organization_new() -> None:
     """
     Make 20 parallel calls to /user/new. Assert all worked.
     """

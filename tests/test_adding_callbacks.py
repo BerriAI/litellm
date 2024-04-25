@@ -1,18 +1,20 @@
 # What this tests ?
 ## Tests /config/update + Test /chat/completions -> assert logs are sent to Langfuse
+from typing import Any
 
 import pytest
 import asyncio
 import aiohttp
 import os
 import dotenv
+from aiohttp import ClientSession
 from dotenv import load_dotenv
 import pytest
 
 load_dotenv()
 
 
-async def config_update(session):
+async def config_update(session: ClientSession) -> Any:
     url = "http://0.0.0.0:4000/config/update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -37,7 +39,12 @@ async def config_update(session):
         return await response.json()
 
 
-async def chat_completion(session, key, model="azure-gpt-3.5", request_metadata=None):
+async def chat_completion(
+    session: ClientSession,
+    key: str,
+    model: str = "azure-gpt-3.5",
+    request_metadata: Any = None,
+) -> None:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -66,7 +73,7 @@ async def chat_completion(session, key, model="azure-gpt-3.5", request_metadata=
 
 
 @pytest.mark.asyncio
-async def test_team_logging():
+async def test_team_logging() -> None:
     """
     1. Add Langfuse as a callback with /config/update
     2. Call /chat/completions
@@ -74,7 +81,6 @@ async def test_team_logging():
     """
     try:
         async with aiohttp.ClientSession() as session:
-
             # Add Langfuse as a callback with /config/update
             await config_update(session)
 

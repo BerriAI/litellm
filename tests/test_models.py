@@ -1,17 +1,19 @@
 # What this tests ?
 ## Tests /models and /model/* endpoints
+from typing import Any
 
 import pytest
 import asyncio
 import aiohttp
 import os
 import dotenv
+from aiohttp import ClientSession
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-async def generate_key(session, models=[]):
+async def generate_key(session: ClientSession, models: list[str] = []) -> Any:
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -31,7 +33,7 @@ async def generate_key(session, models=[]):
         return await response.json()
 
 
-async def get_models(session, key):
+async def get_models(session: ClientSession, key: str) -> None:
     url = "http://0.0.0.0:4000/models"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -50,14 +52,16 @@ async def get_models(session, key):
 
 
 @pytest.mark.asyncio
-async def test_get_models():
+async def test_get_models() -> None:
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
         await get_models(session=session, key=key)
 
 
-async def add_models(session, model_id="123", model_name="azure-gpt-3.5"):
+async def add_models(
+    session: ClientSession, model_id: str = "123", model_name: str = "azure-gpt-3.5"
+) -> Any:
     url = "http://0.0.0.0:4000/model/new"
     headers = {
         "Authorization": f"Bearer sk-1234",
@@ -88,7 +92,7 @@ async def add_models(session, model_id="123", model_name="azure-gpt-3.5"):
         return response_json
 
 
-async def get_model_info(session, key):
+async def get_model_info(session: ClientSession, key: str) -> Any:
     """
     Make sure only models user has access to are returned
     """
@@ -109,7 +113,9 @@ async def get_model_info(session, key):
         return await response.json()
 
 
-async def chat_completion(session, key, model="azure-gpt-3.5"):
+async def chat_completion(
+    session: ClientSession, key: str, model: str = "azure-gpt-3.5"
+) -> None:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -135,7 +141,7 @@ async def chat_completion(session, key, model="azure-gpt-3.5"):
 
 
 @pytest.mark.asyncio
-async def test_get_models():
+async def test_get_models_gpt_4() -> None:
     """
     Get models user has access to
     """
@@ -148,7 +154,7 @@ async def test_get_models():
             assert m == "gpt-4"
 
 
-async def delete_model(session, model_id="123"):
+async def delete_model(session: ClientSession, model_id: str = "123") -> Any:
     """
     Make sure only models user has access to are returned
     """
@@ -171,7 +177,7 @@ async def delete_model(session, model_id="123"):
 
 
 @pytest.mark.asyncio
-async def test_add_and_delete_models():
+async def test_add_and_delete_models() -> None:
     """
     - Add model
     - Call new model -> expect to pass
@@ -199,7 +205,9 @@ async def test_add_and_delete_models():
             pass
 
 
-async def add_model_for_health_checking(session, model_id="123"):
+async def add_model_for_health_checking(
+    session: ClientSession, model_id: str = "123"
+) -> None:
     url = "http://0.0.0.0:4000/model/new"
     headers = {
         "Authorization": f"Bearer sk-1234",
@@ -228,7 +236,7 @@ async def add_model_for_health_checking(session, model_id="123"):
             raise Exception(f"Request did not return a 200 status code: {status}")
 
 
-async def get_model_info_v2(session, key):
+async def get_model_info_v2(session: ClientSession, key: str) -> None:
     url = "http://0.0.0.0:4000/v2/model/info"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -246,7 +254,7 @@ async def get_model_info_v2(session, key):
             raise Exception(f"Request did not return a 200 status code: {status}")
 
 
-async def get_model_health(session, key, model_name):
+async def get_model_health(session: ClientSession, key: str, model_name: str) -> Any:
     url = "http://0.0.0.0:4000/health?model=" + model_name
     headers = {
         "Authorization": f"Bearer {key}",
@@ -266,7 +274,7 @@ async def get_model_health(session, key, model_name):
 
 
 @pytest.mark.asyncio
-async def test_add_model_run_health():
+async def test_add_model_run_health() -> None:
     """
     Add model
     Call /model/info and v2/model/info

@@ -3,7 +3,7 @@ import asyncio
 import os
 import pytest
 import random
-from typing import Any
+from typing import Any, Callable, Literal, Union
 import sys
 from dotenv import load_dotenv
 
@@ -14,10 +14,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from pydantic import BaseModel
-from litellm import utils, Router
+from litellm import utils, Router, ModelResponse, CustomStreamWrapper
 
-COMPLETION_TOKENS = 5
-base_model_list = [
+COMPLETION_TOKENS: int = 5
+base_model_list: list[dict[str, Any]] = [
     {
         "model_name": "gpt-3.5-turbo",
         "litellm_params": {
@@ -35,14 +35,14 @@ class RouterConfig(BaseModel):
 
 
 @pytest.fixture(scope="function")
-def router_factory():
-    def create_router(rpm, tpm, routing_strategy):
+def router_factory() -> Callable[[int, int, str], Router]:
+    def create_router(rpm: int, tpm: int, routing_strategy: str) -> Router:
         model_list = base_model_list.copy()
         model_list[0]["rpm"] = rpm
         model_list[0]["tpm"] = tpm
         return Router(
             model_list=model_list,
-            routing_strategy=routing_strategy,
+            routing_strategy=routing_strategy,  # type: ignore
             enable_pre_call_checks=True,
             debug_level="DEBUG",
         )
@@ -50,7 +50,7 @@ def router_factory():
     return create_router
 
 
-def generate_list_of_messages(num_messages):
+def generate_list_of_messages(num_messages: int) -> list[list[dict[str, Any]]]:
     """
     create num_messages new chat conversations
     """
@@ -60,7 +60,7 @@ def generate_list_of_messages(num_messages):
     ]
 
 
-def calculate_limits(list_of_messages):
+def calculate_limits(list_of_messages: list[list[dict[str, Any]]]) -> tuple[int, int]:
     """
     Return the min rpm and tpm level that would let all messages in list_of_messages be sent this minute
     """
@@ -71,14 +71,18 @@ def calculate_limits(list_of_messages):
     return rpm, tpm
 
 
-async def async_call(router: Router, list_of_messages) -> Any:
+async def async_call(
+    router: Router, list_of_messages: list[list[dict[str, Any]]]
+) -> Any:
     tasks = [
         router.acompletion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
     ]
     return await asyncio.gather(*tasks)
 
 
-def sync_call(router: Router, list_of_messages) -> Any:
+def sync_call(
+    router: Router, list_of_messages: list[list[dict[str, Any]]]
+) -> list[Union[ModelResponse, CustomStreamWrapper]]:
     return [
         router.completion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
     ]
@@ -110,8 +114,12 @@ class ExpectNoException(Exception):
     ],
 )
 def test_rate_limit(
-    router_factory, num_try_send, num_allowed_send, sync_mode, routing_strategy
-):
+    router_factory: Callable[[int, int, str], Router],
+    num_try_send: int,
+    num_allowed_send: int,
+    sync_mode: bool,
+    routing_strategy: str,
+) -> None:
     """
     Check if router.completion and router.acompletion can send more messages than they've been limited to.
     Args:

@@ -1,15 +1,24 @@
 # What this tests ?
 ## Tests /team endpoints.
+from typing import Any, Optional
+
 import pytest
 import asyncio
 import aiohttp
 import time, uuid
+
+from aiohttp import ClientSession
 from openai import AsyncOpenAI
 
 
 async def new_user(
-    session, i, user_id=None, budget=None, budget_duration=None, models=["azure-models"]
-):
+    session: ClientSession,
+    i: int,
+    user_id: Optional[str] = None,
+    budget: Optional[float] = None,
+    budget_duration: Optional[str] = None,
+    models: list[str] = ["azure-models"],
+) -> Any:
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -37,10 +46,16 @@ async def new_user(
         return await response.json()
 
 
-async def add_member(session, i, team_id, user_id=None, user_email=None):
+async def add_member(
+    session: ClientSession,
+    i: int,
+    team_id: str,
+    user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
+) -> Any:
     url = "http://0.0.0.0:4000/team/member_add"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {"team_id": team_id, "member": {"role": "user"}}
+    data: dict[str, Any] = {"team_id": team_id, "member": {"role": "user"}}
     if user_email is not None:
         data["member"]["user_email"] = user_email
     elif user_id is not None:
@@ -60,7 +75,9 @@ async def add_member(session, i, team_id, user_id=None, user_email=None):
         return await response.json()
 
 
-async def delete_member(session, i, team_id, user_id):
+async def delete_member(
+    session: ClientSession, i: int, team_id: str, user_id: str
+) -> Any:
     url = "http://0.0.0.0:4000/team/member_delete"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id, "user_id": user_id}
@@ -80,13 +97,13 @@ async def delete_member(session, i, team_id, user_id):
 
 
 async def generate_key(
-    session,
-    i,
-    budget=None,
-    budget_duration=None,
-    models=["azure-models", "gpt-4", "dall-e-3"],
-    team_id=None,
-):
+    session: ClientSession,
+    i: int,
+    budget: Optional[float] = None,
+    budget_duration: Optional[str] = None,
+    models: list[str] = ["azure-models", "gpt-4", "dall-e-3"],
+    team_id: Optional[str] = None,
+) -> Any:
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -114,7 +131,9 @@ async def generate_key(
         return await response.json()
 
 
-async def chat_completion(session, key, model="gpt-4"):
+async def chat_completion(
+    session: ClientSession, key: str, model: str = "gpt-4"
+) -> Any:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -150,12 +169,18 @@ async def chat_completion(session, key, model="gpt-4"):
                 pass
 
 
-async def new_team(session, i, user_id=None, member_list=None, model_aliases=None):
+async def new_team(
+    session: ClientSession,
+    i: int,
+    user_id: Optional[str] = None,
+    member_list: Optional[list[dict[str, str]]] = None,
+    model_aliases: Optional[dict[str, str]] = None,
+) -> Any:
     import json
 
     url = "http://0.0.0.0:4000/team/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {"team_alias": "my-new-team"}
+    data: dict[str, Any] = {"team_alias": "my-new-team"}
     if user_id is not None:
         data["members_with_roles"] = [{"role": "user", "user_id": user_id}]
     elif member_list is not None:
@@ -180,7 +205,14 @@ async def new_team(session, i, user_id=None, member_list=None, model_aliases=Non
         return await response.json()
 
 
-async def update_team(session, i, team_id, user_id=None, member_list=None, **kwargs):
+async def update_team(
+    session: ClientSession,
+    i: int,
+    team_id: str,
+    user_id: Optional[str] = None,
+    member_list: Optional[list[dict[str, str]]] = None,
+    **kwargs: Any,
+) -> Any:
     url = "http://0.0.0.0:4000/team/update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id, **kwargs}
@@ -204,10 +236,10 @@ async def update_team(session, i, team_id, user_id=None, member_list=None, **kwa
 
 
 async def delete_team(
-    session,
-    i,
-    team_id,
-):
+    session: ClientSession,
+    i: int,
+    team_id: str,
+) -> Any:
     url = "http://0.0.0.0:4000/team/delete"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -229,7 +261,7 @@ async def delete_team(
 
 
 @pytest.mark.asyncio
-async def test_team_new():
+async def test_team_new() -> None:
     """
     Make 20 parallel calls to /user/new. Assert all worked.
     """
@@ -240,7 +272,7 @@ async def test_team_new():
         await asyncio.gather(*tasks)
 
 
-async def get_team_info(session, get_team, call_key):
+async def get_team_info(session: ClientSession, get_team: str, call_key: str) -> Any:
     url = f"http://0.0.0.0:4000/team/info?team_id={get_team}"
     headers = {
         "Authorization": f"Bearer {call_key}",
@@ -259,7 +291,7 @@ async def get_team_info(session, get_team, call_key):
 
 
 @pytest.mark.asyncio
-async def test_team_info():
+async def test_team_info() -> None:
     """
     Scenario 1:
     - test with admin key -> expect to work
@@ -316,7 +348,7 @@ async def test_team_info():
 
 
 @pytest.mark.asyncio
-async def test_team_update_sc_2():
+async def test_team_update_sc_2() -> None:
     """
     - Create team
     - Add 1 user (doesn't exist in db)
@@ -372,7 +404,7 @@ async def test_team_update_sc_2():
 
 
 @pytest.mark.asyncio
-async def test_team_delete():
+async def test_team_delete() -> None:
     """
     - Create team
     - Create key for team
@@ -402,7 +434,7 @@ async def test_team_delete():
 
 
 @pytest.mark.asyncio
-async def test_member_delete():
+async def test_member_delete() -> None:
     """
     - Create team
     - Add member
@@ -444,7 +476,7 @@ async def test_member_delete():
 
 
 @pytest.mark.asyncio
-async def test_team_alias():
+async def test_team_alias() -> None:
     """
     - Create team w/ model alias
     - Create key for team

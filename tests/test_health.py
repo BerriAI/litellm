@@ -1,12 +1,14 @@
 # What this tests?
 ## Tests /health + /routes endpoints.
+from typing import Any
 
 import pytest
 import asyncio
 import aiohttp
+from aiohttp import ClientSession
 
 
-async def health(session, call_key):
+async def health(session: ClientSession, call_key: str) -> Any:
     url = "http://0.0.0.0:4000/health"
     headers = {
         "Authorization": f"Bearer {call_key}",
@@ -27,7 +29,7 @@ async def health(session, call_key):
         return await response.json()
 
 
-async def generate_key(session):
+async def generate_key(session: ClientSession) -> Any:
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -48,7 +50,7 @@ async def generate_key(session):
 
 
 @pytest.mark.asyncio
-async def test_health():
+async def test_health() -> None:
     """
     - Call /health
     """
@@ -62,7 +64,7 @@ async def test_health():
 
 
 @pytest.mark.asyncio
-async def test_health_readiness():
+async def test_health_readiness() -> None:
     """
     Check if 200
     """
@@ -81,7 +83,7 @@ async def test_health_readiness():
 
 
 @pytest.mark.asyncio
-async def test_health_liveliness():
+async def test_health_liveliness() -> None:
     """
     Check if 200
     """
@@ -99,7 +101,7 @@ async def test_health_liveliness():
 
 
 @pytest.mark.asyncio
-async def test_routes():
+async def test_routes() -> None:
     """
     Check if 200
     """

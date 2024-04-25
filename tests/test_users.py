@@ -1,13 +1,23 @@
 # What this tests ?
 ## Tests /user endpoints.
+from typing import Any, Optional
+
 import pytest
 import asyncio
 import aiohttp
 import time
+
+from aiohttp import ClientSession
 from openai import AsyncOpenAI
 
 
-async def new_user(session, i, user_id=None, budget=None, budget_duration=None):
+async def new_user(
+    session: ClientSession,
+    i: int,
+    user_id: Optional[str] = None,
+    budget: Optional[float] = None,
+    budget_duration: Optional[str] = None,
+) -> Any:
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -36,7 +46,7 @@ async def new_user(session, i, user_id=None, budget=None, budget_duration=None):
 
 
 @pytest.mark.asyncio
-async def test_user_new():
+async def test_user_new() -> None:
     """
     Make 20 parallel calls to /user/new. Assert all worked.
     """
@@ -45,7 +55,7 @@ async def test_user_new():
         await asyncio.gather(*tasks)
 
 
-async def get_user_info(session, get_user, call_user):
+async def get_user_info(session: ClientSession, get_user: str, call_user: str) -> Any:
     """
     Make sure only models user has access to are returned
     """
@@ -71,7 +81,7 @@ async def get_user_info(session, get_user, call_user):
 
 
 @pytest.mark.asyncio
-async def test_user_info():
+async def test_user_info() -> None:
     """
     Get user info
     - as admin
@@ -96,7 +106,7 @@ async def test_user_info():
 
 
 @pytest.mark.asyncio
-async def test_user_update():
+async def test_user_update() -> None:
     """
     Create user
     Update user access to new model
@@ -107,7 +117,7 @@ async def test_user_update():
 
 @pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
-async def test_users_budgets_reset():
+async def test_users_budgets_reset() -> None:
     """
     - Create key with budget and 5s duration
     - Get 'reset_at' value
@@ -140,28 +150,32 @@ async def test_users_budgets_reset():
         assert reset_at_init_value != reset_at_new_value
 
 
-async def chat_completion(session, key, model="gpt-4"):
+async def chat_completion(
+    session: ClientSession, key: str, model: str = "gpt-4"
+) -> None:
     client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
-    messages = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": f"Hello! {time.time()}"},
     ]
 
-    data = {
+    data: dict[str, Any] = {
         "model": model,
         "messages": messages,
     }
     response = await client.chat.completions.create(**data)
 
 
-async def chat_completion_streaming(session, key, model="gpt-4"):
+async def chat_completion_streaming(
+    session: ClientSession, key: str, model: str = "gpt-4"
+) -> None:
     client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
     messages = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": f"Hello! {time.time()}"},
     ]
 
-    data = {"model": model, "messages": messages, "stream": True}
+    data: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
     response = await client.chat.completions.create(**data)
     async for chunk in response:
         continue
@@ -169,7 +183,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
 
 @pytest.mark.skip(reason="Global proxy now tracked via `/global/spend/logs`")
 @pytest.mark.asyncio
-async def test_global_proxy_budget_update():
+async def test_global_proxy_budget_update() -> None:
     """
     - Get proxy current spend
     - Make chat completion call (normal)

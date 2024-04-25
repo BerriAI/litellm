@@ -1,18 +1,22 @@
 # What this tests ?
 ## Tests /models and /model/* endpoints
+from typing import Optional, Any
 
 import pytest
 import asyncio
 import aiohttp
 import os
 import dotenv
+from aiohttp import ClientSession
 from dotenv import load_dotenv
 import pytest
 
 load_dotenv()
 
 
-async def generate_key(session, models=[], team_id=None):
+async def generate_key(
+    session: ClientSession, models: list[str] = [], team_id: Optional[str] = None
+) -> Any:
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -33,7 +37,12 @@ async def generate_key(session, models=[], team_id=None):
         return await response.json()
 
 
-async def chat_completion(session, key, model="azure-gpt-3.5", request_metadata=None):
+async def chat_completion(
+    session: ClientSession,
+    key: str,
+    model: str = "azure-gpt-3.5",
+    request_metadata: Any = None,
+) -> None:
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -62,7 +71,7 @@ async def chat_completion(session, key, model="azure-gpt-3.5", request_metadata=
 
 
 @pytest.mark.asyncio
-async def test_team_logging():
+async def test_team_logging() -> None:
     """
     -> Team 1 logs to project 1
     -> Create Key
@@ -71,7 +80,6 @@ async def test_team_logging():
     """
     try:
         async with aiohttp.ClientSession() as session:
-
             key = await generate_key(
                 session, models=["fake-openai-endpoint"], team_id="team-1"
             )  # team-1 logs to project 1
@@ -110,7 +118,7 @@ async def test_team_logging():
 
 
 @pytest.mark.asyncio
-async def test_team_2logging():
+async def test_team_2logging() -> None:
     """
     -> Team 1 logs to project 2
     -> Create Key
@@ -119,7 +127,6 @@ async def test_team_2logging():
     """
     try:
         async with aiohttp.ClientSession() as session:
-
             key = await generate_key(
                 session, models=["fake-openai-endpoint"], team_id="team-2"
             )  # team-1 logs to project 1

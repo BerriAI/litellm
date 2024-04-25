@@ -26,7 +26,7 @@ import litellm
 from litellm import Router
 
 
-def test_transcription():
+def test_transcription() -> None:
     transcript = litellm.transcription(
         model="whisper-1",
         file=audio_file,
@@ -38,7 +38,7 @@ def test_transcription():
 # test_transcription()
 
 
-def test_transcription_azure():
+def test_transcription_azure() -> None:
     litellm.set_verbose = True
     transcript = litellm.transcription(
         model="azure/azure-whisper",
@@ -57,7 +57,7 @@ def test_transcription_azure():
 
 
 @pytest.mark.asyncio
-async def test_transcription_async_azure():
+async def test_transcription_async_azure() -> None:
     transcript = await litellm.atranscription(
         model="azure/azure-whisper",
         file=audio_file,
@@ -74,7 +74,7 @@ async def test_transcription_async_azure():
 
 
 @pytest.mark.asyncio
-async def test_transcription_async_openai():
+async def test_transcription_async_openai() -> None:
     transcript = await litellm.atranscription(
         model="whisper-1",
         file=audio_file,
@@ -85,7 +85,7 @@ async def test_transcription_async_openai():
 
 
 @pytest.mark.asyncio
-async def test_transcription_on_router():
+async def test_transcription_on_router() -> None:
     litellm.set_verbose = True
     print("\n Testing async transcription on router\n")
     try:
