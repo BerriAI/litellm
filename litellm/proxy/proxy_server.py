@@ -8600,6 +8600,7 @@ async def get_config():
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
+        alerting_data = []
         if "slack" in _alerting:
             _slack_vars = [
                 "SLACK_WEBHOOK_URL",
@@ -8608,7 +8609,8 @@ async def get_config():
             for _var in _slack_vars:
                 env_variable = environment_variables.get(_var, None)
                 if env_variable is None:
-                    _slack_env_vars[_var] = None
+                    _value = os.getenv("SLACK_WEBHOOK_URL", None)
+                    _slack_env_vars[_var] = _value
                 else:
                     # decode + decrypt the value
                     decoded_b64 = base64.b64decode(env_variable)
@@ -8621,19 +8623,23 @@ async def get_config():
             _all_alert_types = (
                 proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
             )
-            _data_to_return.append(
+            _alerts_to_webhook = (
+                proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+            )
+            alerting_data.append(
                 {
                     "name": "slack",
                     "variables": _slack_env_vars,
-                    "alerting_types": _alerting_types,
-                    "all_alert_types": _all_alert_types,
+                    "active_alerts": _alerting_types,
+                    "alerts_to_webhook": _alerts_to_webhook,
                 }
             )
 
         _router_settings = llm_router.get_settings()
         return {
             "status": "success",
-            "data": _data_to_return,
+            "callbacks": _data_to_return,
+            "alerts": alerting_data,
             "router_settings": _router_settings,
         }
     except Exception as e:
@@ -8750,10 +8756,51 @@ async def health_services_endpoint(
             }
 
         if "slack" in general_settings.get("alerting", []):
-            test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
-            await proxy_logging_obj.alerting_handler(
-                message=test_message, level="Low", alert_type="budget_alerts"
-            )
+            # test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
+            # check if user has opted into unique_alert_webhooks
+            if (
+                proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+                is not None
+            ):
+                for (
+                    alert_type
+                ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
+                    """
+                    "llm_exceptions",
+                    "llm_too_slow",
+                    "llm_requests_hanging",
+                    "budget_alerts",
+                    "db_exceptions",
+                    """
+                    # only test alert if it's in active alert types
+                    if (
+                        proxy_logging_obj.slack_alerting_instance.alert_types
+                        is not None
+                        and alert_type
+                        not in proxy_logging_obj.slack_alerting_instance.alert_types
+                    ):
+                        continue
+                    test_message = "default test message"
+                    if alert_type == "llm_exceptions":
+                        test_message = f"LLM Exception test alert"
+                    elif alert_type == "llm_too_slow":
+                        test_message = f"LLM Too Slow test alert"
+                    elif alert_type == "llm_requests_hanging":
+                        test_message = f"LLM Requests Hanging test alert"
+                    elif alert_type == "budget_alerts":
+                        test_message = f"Budget Alert test alert"
+                    elif alert_type == "db_exceptions":
+                        test_message = f"DB Exception test alert"
+
+                    await proxy_logging_obj.alerting_handler(
+                        message=test_message, level="Low", alert_type=alert_type
+                    )
+            else:
+                await proxy_logging_obj.alerting_handler(
+                    message="This is a test slack alert message",
+                    level="Low",
+                    alert_type="budget_alerts",
+                )
             return {
                 "status": "success",
                 "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
@@ -8771,7 +8818,7 @@ async def health_services_endpoint(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
                 type="auth_error",
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
             raise e
@@ -8779,7 +8826,7 @@ async def health_services_endpoint(
             message="Authentication Error, " + str(e),
             type="auth_error",
             param=getattr(e, "param", "None"),
-            code=status.HTTP_401_UNAUTHORIZED,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
