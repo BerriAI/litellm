@@ -48,6 +48,23 @@ class RouterConfig(BaseModel):
         protected_namespaces = ()
 
 
+class UpdateRouterConfig(BaseModel):
+    """
+    Set of params that you can modify via `router.update_settings()`.
+    """
+
+    routing_strategy_args: Optional[dict] = None
+    routing_strategy: Optional[str] = None
+    allowed_fails: Optional[int] = None
+    cooldown_time: Optional[float] = None
+    num_retries: Optional[int] = None
+    timeout: Optional[float] = None
+    max_retries: Optional[int] = None
+    retry_after: Optional[float] = None
+    fallbacks: Optional[List[dict]] = None
+    context_window_fallbacks: Optional[List[dict]] = None
+
+
 class ModelInfo(BaseModel):
     id: Optional[
         str
