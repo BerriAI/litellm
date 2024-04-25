@@ -5413,7 +5413,8 @@ def get_optional_params(
         for k in passed_params.keys():
             if k not in default_params.keys():
                 extra_body[k] = passed_params[k]
-        optional_params["extra_body"] = extra_body
+        existing_extra_body = optional_params.get("extra_body", {})
+        optional_params["extra_body"] = {**existing_extra_body,**extra_body}
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
