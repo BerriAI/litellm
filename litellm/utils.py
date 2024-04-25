@@ -9758,6 +9758,7 @@ class CustomStreamWrapper:
                     if response_obj is None:
                         return
                     completion_obj["content"] = response_obj["text"]
+                    setattr(model_response, "usage", Usage())
                     if response_obj.get("prompt_tokens", None) is not None:
                         model_response.usage.prompt_tokens = response_obj[
                             "prompt_tokens"
