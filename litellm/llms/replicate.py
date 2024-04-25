@@ -307,9 +307,7 @@ def completion(
         result, logs = handle_prediction_response(
             prediction_url, api_key, print_verbose
         )
-        model_response["ended"] = (
-            time.time()
-        )  # for pricing this must remain right after calling api
+
         ## LOGGING
         logging_obj.post_call(
             input=prompt,

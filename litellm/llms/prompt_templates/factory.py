@@ -1355,7 +1355,9 @@ def prompt_factory(
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
-        elif "meta-llama/llama-3" in model and "instruct" in model:
+        elif (
+            "meta-llama/llama-3" in model or "meta-llama-3" in model
+        ) and "instruct" in model:
             return hf_chat_template(
                 model=model,
                 messages=messages,
