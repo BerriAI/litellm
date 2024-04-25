@@ -57,11 +57,12 @@ async function testFallbackModelResponse(
           content: "Hi, this is a test message",
         },
       ],
+      mock_testing_fallbacks: true
     });
 
     message.success(
       <span>
-        Test model=<strong>{selectedModel}</strong>, received model=<strong>{responseModel}</strong>. 
+        Test model=<strong>{selectedModel}</strong>, received model=<strong>{response.model}</strong>. 
         See <a href="#" onClick={() => window.open('https://docs.litellm.ai/docs/proxy/reliability', '_blank')} style={{ textDecoration: 'underline', color: 'blue' }}>curl</a>
       </span>
     );
@@ -154,14 +155,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
 
     const updatedVariables = Object.fromEntries(
       Object.entries(router_settings).map(([key, value]) => {
-        if (key === 'routing_strategy_args' && typeof value === 'string') {
-          return [key, JSON.parse(value as string)];
-        } else {
+        if (key !== 'routing_strategy_args') {
           return [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value];
         }
-      })
+        return null;
+      }).filter(entry => entry !== null) as Iterable<[string, unknown]>
     );
-
     console.log("updatedVariables", updatedVariables);
 
     const payload = {

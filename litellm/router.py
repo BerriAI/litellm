@@ -1309,7 +1309,7 @@ class Router:
         Try calling the function_with_retries
         If it fails after num_retries, fall back to another model group
         """
-        mock_testing_fallbacks = kwargs.get("mock_testing_fallbacks", None)
+        mock_testing_fallbacks = kwargs.pop("mock_testing_fallbacks", None)
         model_group = kwargs.get("model")
         fallbacks = kwargs.get("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.get(
@@ -1369,7 +1369,10 @@ class Router:
                 elif fallbacks is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     for item in fallbacks:
-                        if list(item.keys())[0] == model_group:
+                        key_list = list(item.keys())
+                        if len(key_list) == 0:
+                            continue
+                        if key_list[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
                     if fallback_model_group is None:

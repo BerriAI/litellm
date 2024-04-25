@@ -2521,9 +2521,10 @@ class ProxyConfig:
                         # decode base64
                         decoded_b64 = base64.b64decode(v)
                         # decrypt value
-                        _litellm_params[k] = decrypt_value(
-                            value=decoded_b64, master_key=master_key
-                        )
+                        _value = decrypt_value(value=decoded_b64, master_key=master_key)
+                        # sanity check if string > size 0
+                        if len(_value) > 0:
+                            _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
