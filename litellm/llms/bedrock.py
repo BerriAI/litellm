@@ -1028,7 +1028,7 @@ def completion(
                     total_tokens=response_body["usage"]["input_tokens"]
                     + response_body["usage"]["output_tokens"],
                 )
-                model_response.usage = _usage
+                setattr(model_response, "usage", _usage)
             else:
                 outputText = response_body["completion"]
                 model_response["finish_reason"] = response_body["stop_reason"]
@@ -1071,8 +1071,10 @@ def completion(
                     status_code=response_metadata.get("HTTPStatusCode", 500),
                 )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        if getattr(model_response.usage, "total_tokens", None) is None:
+        ## CALCULATING USAGE - bedrock charges on time, not tokens - have some mapping of cost here.
+        if not hasattr(model_response, "usage"):
+            setattr(model_response, "usage", Usage())
+        if getattr(model_response.usage, "total_tokens", None) is None:  # type: ignore
             prompt_tokens = response_metadata.get(
                 "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
             )
@@ -1089,7 +1091,7 @@ def completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-            model_response.usage = usage
+            setattr(model_response, "usage", usage)
 
         model_response["created"] = int(time.time())
         model_response["model"] = model
