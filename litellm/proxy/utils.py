@@ -256,7 +256,16 @@ class ProxyLogging:
         )
 
     async def alerting_handler(
-        self, message: str, level: Literal["Low", "Medium", "High"]
+        self,
+        message: str,
+        level: Literal["Low", "Medium", "High"],
+        alert_type: Literal[
+            "llm_exceptions",
+            "llm_too_slow",
+            "llm_requests_hanging",
+            "budget_alerts",
+            "db_exceptions",
+        ],
     ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
@@ -289,7 +298,7 @@ class ProxyLogging:
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
-                    message=message, level=level
+                    message=message, level=level, alert_type=alert_type
                 )
             elif client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:
@@ -323,6 +332,7 @@ class ProxyLogging:
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
                 level="High",
+                alert_type="db_exceptions",
             )
         )
 
@@ -354,7 +364,9 @@ class ProxyLogging:
             return
         asyncio.create_task(
             self.alerting_handler(
-                message=f"LLM API call failed: {str(original_exception)}", level="High"
+                message=f"LLM API call failed: {str(original_exception)}",
+                level="High",
+                alert_type="llm_exceptions",
             )
         )
 
