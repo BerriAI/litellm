@@ -169,7 +169,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         request_count_dict[id] = {}
 
                     ## Latency
-                    request_count_dict[id].setdefault("latency", []).append(100.0)
+                    request_count_dict[id].setdefault("latency", []).append(1000.0)
                     self.router_cache.set_cache(
                         key=latency_key,
                         value=request_count_dict,
