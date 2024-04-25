@@ -1,11 +1,12 @@
 from typing import List, Optional, Union
 
 from pydantic import BaseModel, validator
+from .message_dict import MessageDict
 
 
 class CompletionRequest(BaseModel):
     model: str
-    messages: List[str] = []
+    messages: List[MessageDict] = []
     timeout: Optional[Union[float, int]] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -33,4 +34,4 @@ class CompletionRequest(BaseModel):
 
     class Config:
         extra = "allow"
-        protected_namespaces = ()      
+        protected_namespaces = ()

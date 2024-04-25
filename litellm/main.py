@@ -37,6 +37,7 @@ from litellm.utils import (
     get_optional_params_embeddings,
     get_optional_params_image_gen,
 )
+from .types.message_dict import MessageDict
 from .llms import (
     anthropic_text,
     together_ai,
@@ -174,7 +175,7 @@ class AsyncCompletions:
 async def acompletion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
+    messages: List[MessageDict] = [],
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
     timeout: Optional[Union[float, int]] = None,
@@ -357,7 +358,7 @@ async def _async_streaming(response, model, custom_llm_provider, args):
 
 def mock_completion(
     model: str,
-    messages: List,
+    messages: List[MessageDict],
     stream: Optional[bool] = False,
     mock_response: str = "This is a mock request",
     logging=None,
@@ -429,7 +430,7 @@ def mock_completion(
 def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
+    messages: List[MessageDict] = [],
     timeout: Optional[Union[float, int]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
@@ -2208,7 +2209,7 @@ async def acompletion_with_retries(*args, **kwargs):
 def batch_completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
+    messages: List[MessageDict] = [],
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
     temperature: Optional[float] = None,
