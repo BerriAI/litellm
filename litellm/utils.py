@@ -10198,9 +10198,11 @@ class CustomStreamWrapper:
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
+                                        print_verbose(f"choice_json: {choice_json}")
                                         choices.append(StreamingChoices(**choice_json))
                                 except Exception as e:
                                     choices.append(StreamingChoices())
+                            print_verbose(f"choices in streaming: {choices}")
                             model_response.choices = choices
                         else:
                             return
