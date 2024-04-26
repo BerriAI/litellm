@@ -1,5 +1,5 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
-
+import httpx
 from pydantic import BaseModel, validator
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -104,7 +104,9 @@ class LiteLLM_Params(BaseModel):
     api_key: Optional[str] = None
     api_base: Optional[str] = None
     api_version: Optional[str] = None
-    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
+    timeout: Optional[Union[float, str, httpx.Timeout]] = (
+        None  # if str, pass in as os.environ/
+    )
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
@@ -154,6 +156,7 @@ class LiteLLM_Params(BaseModel):
 
     class Config:
         extra = "allow"
+        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
