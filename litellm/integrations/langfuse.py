@@ -84,6 +84,7 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
+
             litellm_params = kwargs.get("litellm_params", {})
             metadata = (
                 litellm_params.get("metadata", {}) or {}
@@ -373,7 +374,11 @@ class LangFuseLogger:
                 # just log `litellm-{call_type}` as the generation name
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
-            system_fingerprint = response_obj.get("system_fingerprint", None)
+            if response_obj is not None and "system_fingerprint" in response_obj:
+                system_fingerprint = response_obj.get("system_fingerprint", None)
+            else:
+                system_fingerprint = None
+
             if system_fingerprint is not None:
                 optional_params["system_fingerprint"] = system_fingerprint
 
