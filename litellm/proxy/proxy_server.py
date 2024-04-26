@@ -3668,7 +3668,7 @@ async def chat_completion(
         logging_obj, data = litellm.utils.function_setup(
             original_function="acompletion",
             rules_obj=litellm.utils.Rules(),
-            start_time=litellm.utils.get_utc_datetime(),
+            start_time=datetime.now(),
             **data,
         )
 
