@@ -1350,11 +1350,8 @@ def prompt_factory(
             return llama_2_chat_pt(messages=messages)
         elif "llama3" in model and "instruct" in model:
             return hf_chat_template(
-                model=model,
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
                 messages=messages,
-                chat_template=known_tokenizer_config[  # type: ignore
-                    "meta-llama/Meta-Llama-3-8B-Instruct"
-                ]["tokenizer"]["chat_template"],
             )
     elif custom_llm_provider == "perplexity":
         for message in messages:
@@ -1369,11 +1366,8 @@ def prompt_factory(
             "meta-llama/llama-3" in model or "meta-llama-3" in model
         ) and "instruct" in model:
             return hf_chat_template(
-                model=model,
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
                 messages=messages,
-                chat_template=known_tokenizer_config[  # type: ignore
-                    "meta-llama/Meta-Llama-3-8B-Instruct"
-                ]["tokenizer"]["chat_template"],
             )
         elif (
             "tiiuae/falcon" in model
