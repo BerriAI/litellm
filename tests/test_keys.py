@@ -523,7 +523,9 @@ async def test_key_info_spend_values_streaming():
         )
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert rounded_response_cost == rounded_key_info_spend
+        assert (
+            rounded_response_cost == rounded_key_info_spend
+        ), f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
 
 
 @pytest.mark.asyncio
