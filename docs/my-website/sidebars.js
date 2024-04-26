@@ -173,6 +173,7 @@ const sidebars = {
         "observability/langsmith_integration",
         "observability/slack_integration",
         "observability/traceloop_integration",
+        "observability/athina_integration",
         "observability/lunary_integration",
         "observability/athina_integration",
         "observability/helicone_integration",

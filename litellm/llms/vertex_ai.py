@@ -143,7 +143,9 @@ class VertexAIConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "stream":
+            if (
+                param == "stream" and value == True
+            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
             if param == "n":
                 optional_params["candidate_count"] = value
@@ -225,8 +227,7 @@ def _get_image_bytes_from_url(image_url: str) -> bytes:
         image_bytes = response.content
         return image_bytes
     except requests.exceptions.RequestException as e:
-        # Handle any request exceptions (e.g., connection error, timeout)
-        return b""  # Return an empty bytes object or handle the error as needed
+        raise Exception(f"An exception occurs with this image - {str(e)}")
 
 
 def _load_image_from_url(image_url: str):
@@ -247,7 +248,8 @@ def _load_image_from_url(image_url: str):
     )
 
     image_bytes = _get_image_bytes_from_url(image_url)
-    return Image.from_bytes(image_bytes)
+
+    return Image.from_bytes(data=image_bytes)
 
 
 def _gemini_vision_convert_messages(messages: list):
@@ -541,8 +543,9 @@ def completion(
             tools = optional_params.pop("tools", None)
             prompt, images = _gemini_vision_convert_messages(messages=messages)
             content = [prompt] + images
-            if "stream" in optional_params and optional_params["stream"] == True:
-                stream = optional_params.pop("stream")
+            stream = optional_params.pop("stream", False)
+            if stream == True:
+
                 request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), safety_settings={safety_settings}, stream={stream})\n"
                 logging_obj.pre_call(
                     input=prompt,
@@ -789,7 +792,7 @@ def completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
@@ -817,9 +820,10 @@ async def async_completion(
     """
     try:
         if mode == "vision":
-            print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
+            print_verbose("\nMaking VertexAI Gemini Pro/Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
             tools = optional_params.pop("tools", None)
+            stream = optional_params.pop("stream", False)
 
             prompt, images = _gemini_vision_convert_messages(messages=messages)
             content = [prompt] + images
@@ -836,6 +840,7 @@ async def async_completion(
             )
 
             ## LLM Call
+            # print(f"final content: {content}")
             response = await llm_model._generate_content_async(
                 contents=content,
                 generation_config=optional_params,
@@ -996,7 +1001,7 @@ async def async_completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
