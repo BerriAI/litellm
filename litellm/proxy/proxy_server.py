@@ -3663,6 +3663,17 @@ async def chat_completion(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
+        data["litellm_call_id"] = str(uuid.uuid4())
+        logging_obj, data = litellm.utils.function_setup(
+            original_function="acompletion",
+            rules_obj=litellm.utils.Rules(),
+            start_time=litellm.utils.get_utc_datetime(),
+            **data,
+        )
+
+        data["litellm_logging_obj"] = logging_obj
+
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
