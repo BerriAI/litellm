@@ -345,16 +345,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if isinstance(_call_latency, float):
                     total += _call_latency
             item_latency = total / len(item_latency)
-            print("item_latency=", item_latency, "deployment=", _deployment)  # noqa
 
-            # Debugging Logic #
+            # -------------- #
+            # Debugging Logic
+            # -------------- #
+            # We use _latency_per_deployment to log to langfuse, slack - this is not used to make a decision on routing
+            # this helps a user to debug why the router picked a specfic deployment      #
             _deployment_api_base = _deployment.get("litellm_params", {}).get(
                 "api_base", ""
             )
-            # End of Debugging Logic #
-
             if _deployment_api_base is not None:
                 _latency_per_deployment[_deployment_api_base] = item_latency
+            # -------------- #
+            # End of Debugging Logic
+            # -------------- #
+
             if item_latency == 0:
                 deployment = _deployment
                 break
