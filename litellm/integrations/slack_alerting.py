@@ -7,7 +7,7 @@ import copy
 import traceback
 from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm
-from typing import List, Literal, Any, Union, Optional
+from typing import List, Literal, Any, Union, Optional, Dict
 from litellm.caching import DualCache
 import asyncio
 import aiohttp
@@ -37,12 +37,16 @@ class SlackAlerting:
             "budget_alerts",
             "db_exceptions",
         ],
+        alert_to_webhook_url: Optional[
+            Dict
+        ] = None,  # if user wants to separate alerts to diff channels
     ):
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
         self.alert_types = alert_types
         self.internal_usage_cache = DualCache()
         self.async_http_handler = AsyncHTTPHandler()
+        self.alert_to_webhook_url = alert_to_webhook_url
 
         pass
 
@@ -51,6 +55,7 @@ class SlackAlerting:
         alerting: Optional[List] = None,
         alerting_threshold: Optional[float] = None,
         alert_types: Optional[List] = None,
+        alert_to_webhook_url: Optional[Dict] = None,
     ):
         if alerting is not None:
             self.alerting = alerting
@@ -58,6 +63,13 @@ class SlackAlerting:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
+
+        if alert_to_webhook_url is not None:
+            # update the dict
+            if self.alert_to_webhook_url is None:
+                self.alert_to_webhook_url = alert_to_webhook_url
+            else:
+                self.alert_to_webhook_url.update(alert_to_webhook_url)
 
     async def deployment_in_cooldown(self):
         pass
@@ -140,7 +152,6 @@ class SlackAlerting:
             raise e
 
     def _get_deployment_latencies_to_alert(self, metadata=None):
-
         if metadata is None:
             return None
 
@@ -171,8 +182,6 @@ class SlackAlerting:
         if self.alerting is None or self.alert_types is None:
             return
 
-        if "llm_too_slow" not in self.alert_types:
-            return
         time_difference_float, model, api_base, messages = (
             self._response_taking_too_long_callback(
                 kwargs=kwargs,
@@ -205,6 +214,7 @@ class SlackAlerting:
             await self.send_alert(
                 message=slow_message + request_info,
                 level="Low",
+                alert_type="llm_too_slow",
             )
 
     async def log_failure_event(self, original_exception: Exception):
@@ -241,9 +251,6 @@ class SlackAlerting:
             request_info = ""
 
         if type == "hanging_request":
-            # Simulate a long-running operation that could take more than 5 minutes
-            if "llm_requests_hanging" not in self.alert_types:
-                return
             await asyncio.sleep(
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
@@ -291,6 +298,7 @@ class SlackAlerting:
                 await self.send_alert(
                     message=alerting_message + request_info,
                     level="Medium",
+                    alert_type="llm_requests_hanging",
                 )
 
     async def budget_alerts(
@@ -336,8 +344,7 @@ class SlackAlerting:
             user_info = f"\nUser ID: {user_id}\n Error {error_message}"
             message = "Failed Tracking Cost for" + user_info
             await self.send_alert(
-                message=message,
-                level="High",
+                message=message, level="High", alert_type="budget_alerts"
             )
             return
         elif type == "projected_limit_exceeded" and user_info is not None:
@@ -353,8 +360,7 @@ class SlackAlerting:
             """
             message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` {user_info["key_alias"]} \n`Expected Day of Error`: {user_info["projected_exceeded_date"]} \n`Current Spend`: {user_current_spend} \n`Projected Spend at end of month`: {user_info["projected_spend"]} \n`Soft Limit`: {user_max_budget}"""
             await self.send_alert(
-                message=message,
-                level="High",
+                message=message, level="High", alert_type="budget_alerts"
             )
             return
         else:
@@ -382,8 +388,7 @@ class SlackAlerting:
             result = await _cache.async_get_cache(key=message)
             if result is None:
                 await self.send_alert(
-                    message=message,
-                    level="High",
+                    message=message, level="High", alert_type="budget_alerts"
                 )
                 await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
             return
@@ -395,8 +400,7 @@ class SlackAlerting:
             result = await _cache.async_get_cache(key=cache_key)
             if result is None:
                 await self.send_alert(
-                    message=message,
-                    level="Medium",
+                    message=message, level="Medium", alert_type="budget_alerts"
                 )
 
                 await _cache.async_set_cache(key=cache_key, value="SENT", ttl=2419200)
@@ -409,15 +413,25 @@ class SlackAlerting:
             result = await _cache.async_get_cache(key=message)
             if result is None:
                 await self.send_alert(
-                    message=message,
-                    level="Low",
+                    message=message, level="Low", alert_type="budget_alerts"
                 )
                 await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
             return
 
         return
 
-    async def send_alert(self, message: str, level: Literal["Low", "Medium", "High"]):
+    async def send_alert(
+        self,
+        message: str,
+        level: Literal["Low", "Medium", "High"],
+        alert_type: Literal[
+            "llm_exceptions",
+            "llm_too_slow",
+            "llm_requests_hanging",
+            "budget_alerts",
+            "db_exceptions",
+        ],
+    ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
 
@@ -432,12 +446,6 @@ class SlackAlerting:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
         """
-        print(
-            "inside send alert for slack, message: ",
-            message,
-            "self.alerting: ",
-            self.alerting,
-        )
         if self.alerting is None:
             return
 
@@ -453,7 +461,15 @@ class SlackAlerting:
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
-        slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+        # check if we find the slack webhook url in self.alert_to_webhook_url
+        if (
+            self.alert_to_webhook_url is not None
+            and alert_type in self.alert_to_webhook_url
+        ):
+            slack_webhook_url = self.alert_to_webhook_url[alert_type]
+        else:
+            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+
         if slack_webhook_url is None:
             raise Exception("Missing SLACK_WEBHOOK_URL from environment")
         payload = {"text": formatted_message}
