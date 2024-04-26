@@ -10194,7 +10194,10 @@ class CustomStreamWrapper:
                             for idx, choice in enumerate(original_chunk.choices):
                                 try:
                                     if isinstance(choice, BaseModel):
-                                        choice_json = choice.model_dump()
+                                        try:
+                                            choice_json = choice.model_dump()
+                                        except Exception as e:
+                                            choice_json = choice.dict()
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
