@@ -71,7 +71,7 @@ class PrometheusLogger:
             litellm_params = kwargs.get("litellm_params", {}) or {}
             proxy_server_request = litellm_params.get("proxy_server_request") or {}
             end_user_id = proxy_server_request.get("body", {}).get("user", None)
-            user_id = proxy_server_request.get("metadata", {}).get(
+            user_id = litellm_params.get("metadata", {}).get(
                 "user_api_key_user_id", None
             )
             user_api_key = litellm_params.get("metadata", {}).get("user_api_key", None)
