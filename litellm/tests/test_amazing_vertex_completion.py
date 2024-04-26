@@ -636,7 +636,10 @@ def test_gemini_pro_function_calling():
 # gemini_pro_function_calling()
 
 
-def test_gemini_pro_function_calling_streaming():
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_gemini_pro_function_calling_streaming(stream, sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     tools = [
@@ -665,19 +668,41 @@ def test_gemini_pro_function_calling_streaming():
             "content": "What's the weather like in Boston today in fahrenheit?",
         }
     ]
+    optional_params = {
+        "tools": tools,
+        "tool_choice": "auto",
+        "n": 1,
+        "stream": stream,
+        "temperature": 0.1,
+    }
     try:
-        completion = litellm.completion(
-            model="gemini-pro",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            stream=True,
-        )
-        print(f"completion: {completion}")
-        # assert completion.choices[0].message.content is None
-        # assert len(completion.choices[0].message.tool_calls) == 1
-        for chunk in completion:
-            print(f"chunk: {chunk}")
+        if sync_mode == True:
+            response = litellm.completion(
+                model="gemini-pro", messages=messages, **optional_params
+            )
+            print(f"completion: {response}")
+
+            if stream == True:
+                # assert completion.choices[0].message.content is None
+                # assert len(completion.choices[0].message.tool_calls) == 1
+                for chunk in response:
+                    assert isinstance(chunk, litellm.ModelResponse)
+            else:
+                assert isinstance(response, litellm.ModelResponse)
+        else:
+            response = await litellm.acompletion(
+                model="gemini-pro", messages=messages, **optional_params
+            )
+            print(f"completion: {response}")
+
+            if stream == True:
+                # assert completion.choices[0].message.content is None
+                # assert len(completion.choices[0].message.tool_calls) == 1
+                async for chunk in response:
+                    print(f"chunk: {chunk}")
+                    assert isinstance(chunk, litellm.ModelResponse)
+            else:
+                assert isinstance(response, litellm.ModelResponse)
     except litellm.APIError as e:
         pass
     except litellm.RateLimitError as e:

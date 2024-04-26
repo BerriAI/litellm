@@ -19,6 +19,7 @@ from functools import wraps
 import datetime, time
 import tiktoken
 import uuid
+from pydantic import BaseModel
 import aiohttp
 import textwrap
 import logging
@@ -219,6 +220,61 @@ def map_finish_reason(
     return finish_reason
 
 
+class TopLogprob(OpenAIObject):
+    token: str
+    """The token."""
+
+    bytes: Optional[List[int]] = None
+    """A list of integers representing the UTF-8 bytes representation of the token.
+
+    Useful in instances where characters are represented by multiple tokens and
+    their byte representations must be combined to generate the correct text
+    representation. Can be `null` if there is no bytes representation for the token.
+    """
+
+    logprob: float
+    """The log probability of this token, if it is within the top 20 most likely
+    tokens.
+
+    Otherwise, the value `-9999.0` is used to signify that the token is very
+    unlikely.
+    """
+
+
+class ChatCompletionTokenLogprob(OpenAIObject):
+    token: str
+    """The token."""
+
+    bytes: Optional[List[int]] = None
+    """A list of integers representing the UTF-8 bytes representation of the token.
+
+    Useful in instances where characters are represented by multiple tokens and
+    their byte representations must be combined to generate the correct text
+    representation. Can be `null` if there is no bytes representation for the token.
+    """
+
+    logprob: float
+    """The log probability of this token, if it is within the top 20 most likely
+    tokens.
+
+    Otherwise, the value `-9999.0` is used to signify that the token is very
+    unlikely.
+    """
+
+    top_logprobs: List[TopLogprob]
+    """List of the most likely tokens and their log probability, at this token
+    position.
+
+    In rare cases, there may be fewer than the number of requested `top_logprobs`
+    returned.
+    """
+
+
+class ChoiceLogprobs(OpenAIObject):
+    content: Optional[List[ChatCompletionTokenLogprob]] = None
+    """A list of message content tokens with log probability information."""
+
+
 class FunctionCall(OpenAIObject):
     arguments: str
     name: Optional[str] = None
@@ -329,7 +385,7 @@ class Message(OpenAIObject):
                 self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
 
         if logprobs is not None:
-            self._logprobs = logprobs
+            self._logprobs = ChoiceLogprobs(**logprobs)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -353,11 +409,17 @@ class Message(OpenAIObject):
 
 class Delta(OpenAIObject):
     def __init__(
-        self, content=None, role=None, function_call=None, tool_calls=None, **params
+        self,
+        content=None,
+        role=None,
+        function_call=None,
+        tool_calls=None,
+        **params,
     ):
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
+
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
         else:
@@ -489,7 +551,11 @@ class StreamingChoices(OpenAIObject):
             self.delta = Delta()
         if enhancements is not None:
             self.enhancements = enhancements
-        self.logprobs = logprobs
+
+        if logprobs is not None and isinstance(logprobs, dict):
+            self.logprobs = ChoiceLogprobs(**logprobs)
+        else:
+            self.logprobs = logprobs  # type: ignore
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2433,7 +2499,7 @@ class Rules:
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def function_setup(
-    original_function, rules_obj, start_time, *args, **kwargs
+    original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
@@ -2457,10 +2523,12 @@ def function_setup(
             len(litellm.input_callback) > 0
             or len(litellm.success_callback) > 0
             or len(litellm.failure_callback) > 0
-        ) and len(callback_list) == 0:
+        ) and len(
+            callback_list  # type: ignore
+        ) == 0:  # type: ignore
             callback_list = list(
                 set(
-                    litellm.input_callback
+                    litellm.input_callback  # type: ignore
                     + litellm.success_callback
                     + litellm.failure_callback
                 )
@@ -2469,7 +2537,7 @@ def function_setup(
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.input_callback):
+            for index, callback in enumerate(litellm.input_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
@@ -2480,7 +2548,7 @@ def function_setup(
 
         if len(litellm.success_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.success_callback):
+            for index, callback in enumerate(litellm.success_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
@@ -2496,7 +2564,7 @@ def function_setup(
 
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.failure_callback):
+            for index, callback in enumerate(litellm.failure_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_failure_callback.append(callback)
                     removed_async_items.append(index)
@@ -2539,7 +2607,7 @@ def function_setup(
             user_logger_fn = kwargs["logger_fn"]
         # INIT LOGGER - for user-specified integrations
         model = args[0] if len(args) > 0 else kwargs.get("model", None)
-        call_type = original_function.__name__
+        call_type = original_function
         if (
             call_type == CallTypes.completion.value
             or call_type == CallTypes.acompletion.value
@@ -2721,7 +2789,7 @@ def client(original_function):
         try:
             if logging_obj is None:
                 logging_obj, kwargs = function_setup(
-                    original_function, rules_obj, start_time, *args, **kwargs
+                    original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
 
@@ -3030,7 +3098,7 @@ def client(original_function):
         try:
             if logging_obj is None:
                 logging_obj, kwargs = function_setup(
-                    original_function, rules_obj, start_time, *args, **kwargs
+                    original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
 
@@ -5265,7 +5333,8 @@ def get_optional_params(
             optional_params["tools"] = tools
         if tool_choice is not None:
             optional_params["tool_choice"] = tool_choice
-
+        if response_format is not None:
+            optional_params["response_format"] = response_format
         # check safe_mode, random_seed: https://docs.mistral.ai/api/#operation/createChatCompletion
         safe_mode = passed_params.pop("safe_mode", None)
         random_seed = passed_params.pop("random_seed", None)
@@ -5277,6 +5346,7 @@ def get_optional_params(
         optional_params["extra_body"] = (
             extra_body  # openai client supports `extra_body` param
         )
+
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -7033,9 +7103,10 @@ def convert_to_model_response_object(
                 model_response_object.model = response_object["model"]
 
             if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (  # type: ignore
-                    end_time - start_time
-                ).total_seconds() * 1000
+                if isinstance(start_time, type(end_time)):
+                    model_response_object._response_ms = (  # type: ignore
+                        end_time - start_time
+                    ).total_seconds() * 1000
 
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
@@ -10120,12 +10191,23 @@ class CustomStreamWrapper:
                         model_response.id = original_chunk.id
                         self.response_id = original_chunk.id
                         if len(original_chunk.choices) > 0:
-                            try:
-                                delta = dict(original_chunk.choices[0].delta)
-                                print_verbose(f"original delta: {delta}")
-                                model_response.choices[0].delta = Delta(**delta)
-                            except Exception as e:
-                                model_response.choices[0].delta = Delta()
+                            choices = []
+                            for idx, choice in enumerate(original_chunk.choices):
+                                try:
+                                    if isinstance(choice, BaseModel):
+                                        try:
+                                            choice_json = choice.model_dump()
+                                        except Exception as e:
+                                            choice_json = choice.dict()
+                                        choice_json.pop(
+                                            "finish_reason", None
+                                        )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
+                                        print_verbose(f"choice_json: {choice_json}")
+                                        choices.append(StreamingChoices(**choice_json))
+                                except Exception as e:
+                                    choices.append(StreamingChoices())
+                            print_verbose(f"choices in streaming: {choices}")
+                            model_response.choices = choices
                         else:
                             return
                         model_response.system_fingerprint = (
@@ -10170,11 +10252,11 @@ class CustomStreamWrapper:
                         )
                     self.holding_chunk = ""
                 # if delta is None
-                is_delta_empty = self.is_delta_empty(
+                _is_delta_empty = self.is_delta_empty(
                     delta=model_response.choices[0].delta
                 )
 
-                if is_delta_empty:
+                if _is_delta_empty:
                     # get any function call arguments
                     model_response.choices[0].finish_reason = map_finish_reason(
                         finish_reason=self.received_finish_reason

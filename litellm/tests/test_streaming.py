@@ -2446,6 +2446,34 @@ class ModelResponseIterator:
         return self.model_response
 
 
+class ModelResponseListIterator:
+    def __init__(self, model_responses):
+        self.model_responses = model_responses
+        self.index = 0
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.index >= len(self.model_responses):
+            raise StopIteration
+        model_response = self.model_responses[self.index]
+        self.index += 1
+        return model_response
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.index >= len(self.model_responses):
+            raise StopAsyncIteration
+        model_response = self.model_responses[self.index]
+        self.index += 1
+        return model_response
+
+
 def test_unit_test_custom_stream_wrapper():
     """
     Test if last streaming chunk ends with '?', if the message repeats itself.
@@ -2486,3 +2514,268 @@ def test_unit_test_custom_stream_wrapper():
             if "How are you?" in chunk.choices[0].delta.content:
                 freq += 1
     assert freq == 1
+
+
+def test_aamazing_unit_test_custom_stream_wrapper_n():
+    """
+    Test if the translated output maps exactly to the received openai input
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/3276
+    """
+    chunks = [
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "It"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "It",
+                                "logprob": -1.5952516,
+                                "bytes": [73, 116],
+                                "top_logprobs": [
+                                    {
+                                        "token": "Brown",
+                                        "logprob": -0.7358765,
+                                        "bytes": [66, 114, 111, 119, 110],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 1,
+                    "delta": {"content": "Brown"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "Brown",
+                                "logprob": -0.7358765,
+                                "bytes": [66, 114, 111, 119, 110],
+                                "top_logprobs": [
+                                    {
+                                        "token": "Brown",
+                                        "logprob": -0.7358765,
+                                        "bytes": [66, 114, 111, 119, 110],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "'s"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "'s",
+                                "logprob": -0.006786893,
+                                "bytes": [39, 115],
+                                "top_logprobs": [
+                                    {
+                                        "token": "'s",
+                                        "logprob": -0.006786893,
+                                        "bytes": [39, 115],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": " impossible"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": " impossible",
+                                "logprob": -0.06528423,
+                                "bytes": [
+                                    32,
+                                    105,
+                                    109,
+                                    112,
+                                    111,
+                                    115,
+                                    115,
+                                    105,
+                                    98,
+                                    108,
+                                    101,
+                                ],
+                                "top_logprobs": [
+                                    {
+                                        "token": " impossible",
+                                        "logprob": -0.06528423,
+                                        "bytes": [
+                                            32,
+                                            105,
+                                            109,
+                                            112,
+                                            111,
+                                            115,
+                                            115,
+                                            105,
+                                            98,
+                                            108,
+                                            101,
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "—even"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "—even",
+                                "logprob": -9999.0,
+                                "bytes": [226, 128, 148, 101, 118, 101, 110],
+                                "top_logprobs": [
+                                    {
+                                        "token": " to",
+                                        "logprob": -0.12302828,
+                                        "bytes": [32, 116, 111],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {"index": 0, "delta": {}, "logprobs": None, "finish_reason": "length"}
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {"index": 1, "delta": {}, "logprobs": None, "finish_reason": "stop"}
+            ],
+        },
+    ]
+
+    litellm.set_verbose = True
+
+    chunk_list = []
+    for chunk in chunks:
+        new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+        if "choices" in chunk and isinstance(chunk["choices"], list):
+            print("INSIDE CHUNK CHOICES!")
+            new_choices = []
+            for choice in chunk["choices"]:
+                if isinstance(choice, litellm.utils.StreamingChoices):
+                    _new_choice = choice
+                elif isinstance(choice, dict):
+                    _new_choice = litellm.utils.StreamingChoices(**choice)
+                new_choices.append(_new_choice)
+            new_chunk.choices = new_choices
+        chunk_list.append(new_chunk)
+
+    completion_stream = ModelResponseListIterator(model_responses=chunk_list)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-4-0613",
+        custom_llm_provider="cached_response",
+        logging_obj=litellm.Logging(
+            model="gpt-4-0613",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    for idx, chunk in enumerate(response):
+        chunk_dict = {}
+        try:
+            chunk_dict = chunk.model_dump(exclude_none=True)
+        except:
+            chunk_dict = chunk.dict(exclude_none=True)
+
+        chunk_dict.pop("created")
+        chunks[idx].pop("created")
+        if chunks[idx]["system_fingerprint"] is None:
+            chunks[idx].pop("system_fingerprint", None)
+        if idx == 0:
+            for choice in chunk_dict["choices"]:
+                if "role" in choice["delta"]:
+                    choice["delta"].pop("role")
+
+        for choice in chunks[idx]["choices"]:
+            # ignore finish reason None - since our pydantic object is set to exclude_none = true
+            if "finish_reason" in choice and choice["finish_reason"] is None:
+                choice.pop("finish_reason")
+            if "logprobs" in choice and choice["logprobs"] is None:
+                choice.pop("logprobs")
+
+        assert (
+            chunk_dict == chunks[idx]
+        ), f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"
