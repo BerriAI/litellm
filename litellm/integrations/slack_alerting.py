@@ -152,7 +152,6 @@ class SlackAlerting:
             raise e
 
     def _get_deployment_latencies_to_alert(self, metadata=None):
-
         if metadata is None:
             return None
 
@@ -447,12 +446,6 @@ class SlackAlerting:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
         """
-        print(
-            "inside send alert for slack, message: ",
-            message,
-            "self.alerting: ",
-            self.alerting,
-        )
         if self.alerting is None:
             return
 
