@@ -407,8 +407,10 @@ def mock_completion(
         model_response["created"] = int(time.time())
         model_response["model"] = model
 
-        model_response.usage = Usage(
-            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        setattr(
+            model_response,
+            "usage",
+            Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
         )
 
         try:
@@ -652,6 +654,7 @@ def completion(
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
+        setattr(model_response, "usage", litellm.Usage())
         if (
             kwargs.get("azure", False) == True
         ):  # don't remove flag check, to remain backwards compatible for repos like Codium
@@ -1683,13 +1686,14 @@ def completion(
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
+            new_params = deepcopy(optional_params)
             if "claude-3" in model:
                 model_response = vertex_ai_anthropic.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
-                    optional_params=optional_params,
+                    optional_params=new_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     encoding=encoding,
@@ -1705,7 +1709,7 @@ def completion(
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
-                    optional_params=optional_params,
+                    optional_params=new_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     encoding=encoding,

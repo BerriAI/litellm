@@ -34,6 +34,14 @@ class LangFuseLogger:
             flush_interval=1,  # flush interval in seconds
         )
 
+        # set the current langfuse project id in the environ
+        # this is used by Alerting to link to the correct project
+        try:
+            project_id = self.Langfuse.client.projects.get().data[0].id
+            os.environ["LANGFUSE_PROJECT_ID"] = project_id
+        except:
+            project_id = None
+
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
             self.upstream_langfuse_secret_key = os.getenv(
                 "UPSTREAM_LANGFUSE_SECRET_KEY"
@@ -76,6 +84,7 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
+
             litellm_params = kwargs.get("litellm_params", {})
             metadata = (
                 litellm_params.get("metadata", {}) or {}
@@ -388,7 +397,25 @@ class LangFuseLogger:
 
             trace = self.Langfuse.trace(**trace_params)
 
-            system_fingerprint = response_obj.get("system_fingerprint", None)
+            generation_id = None
+            usage = None
+            if response_obj is not None and response_obj.get("id", None) is not None:
+                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+                usage = {
+                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
+                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                    "total_cost": cost if supports_costs else None,
+                }
+            generation_name = metadata.get("generation_name", None)
+            if generation_name is None:
+                # just log `litellm-{call_type}` as the generation name
+                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+
+            if response_obj is not None and "system_fingerprint" in response_obj:
+                system_fingerprint = response_obj.get("system_fingerprint", None)
+            else:
+                system_fingerprint = None
+
             if system_fingerprint is not None:
                 optional_params["system_fingerprint"] = system_fingerprint
 
