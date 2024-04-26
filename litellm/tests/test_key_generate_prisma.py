@@ -48,7 +48,6 @@ from litellm.proxy.proxy_server import (
     generate_key_fn,
     generate_key_helper_fn,
     spend_user_fn,
-    spend_per_user_fn,
     spend_key_fn,
     view_spend_logs,
     user_info,
@@ -1544,9 +1543,8 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
 
-
 @pytest.mark.asyncio()
-async def test_view_spend_user_per_model(prisma_client):
+async def test_view_spend_per_user(prisma_client):
     from litellm.proxy.proxy_server import (
         _PROXY_track_cost_callback as track_cost_callback,
     )
@@ -1563,7 +1561,8 @@ async def test_view_spend_user_per_model(prisma_client):
 
         litellm.proxy.proxy_server.prisma_client.spend_log_transactions = []
 
-        request = GenerateKeyRequest(user_id="user-1")
+        user = await new_user(NewUserRequest())
+        request = GenerateKeyRequest(user_id=user.user_id)
         key = await generate_key_fn(request)
 
         request_id_1 = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
@@ -1675,87 +1674,70 @@ async def test_view_spend_user_per_model(prisma_client):
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        user_by_spend = await spend_per_user_fn(
-            user_id=key.user_id, start_date=None, end_date=None
+        user_spend = await spend_user_fn(
+            user_id=key.user_id, include_token_usage=True, start_date=None, end_date=None
         )
 
-        assert len(user_by_spend) == 2
+        assert len(user_spend[0].token_usage) == 2
 
-        gpt_turbo_stats = user_by_spend[0]
+        gpt_turbo_stats = user_spend[0].token_usage[0]
         assert gpt_turbo_stats["model"] == "chatgpt-v-2"
         assert gpt_turbo_stats["spend"] == 2.5
         assert gpt_turbo_stats["prompt_tokens"] == 310
         assert gpt_turbo_stats["completion_tokens"] == 300
 
-        chatgpt_stats = user_by_spend[1]
+        chatgpt_stats = user_spend[0].token_usage[1]
         assert chatgpt_stats["model"] == "gpt-3.5-turbo"
         assert chatgpt_stats["spend"] == 3.5
         assert chatgpt_stats["prompt_tokens"] == 620
         assert chatgpt_stats["completion_tokens"] == 600
 
-        user_by_spend_with_start_date = await spend_per_user_fn(
+        user_by_spend_with_start_date = await spend_user_fn(
             user_id=key.user_id,
             start_date="2024-01-14",
             end_date=None,
         )
-        assert len(user_by_spend_with_start_date) == 2
+        assert len(user_by_spend_with_start_date[0].token_usage) == 2
 
-        chatgpt_stats = user_by_spend_with_start_date[0]
+        chatgpt_stats = user_by_spend_with_start_date[0].token_usage[0]
         assert chatgpt_stats["model"] == "chatgpt-v-2"
         assert chatgpt_stats["spend"] == 2.5
         assert chatgpt_stats["prompt_tokens"] == 310
         assert chatgpt_stats["completion_tokens"] == 300
 
-        gpt_turbo_stats = user_by_spend_with_start_date[1]
+        gpt_turbo_stats = user_by_spend_with_start_date[0].token_usage[1]
         assert gpt_turbo_stats["model"] == "gpt-3.5-turbo"
         assert gpt_turbo_stats["spend"] == 1.0
         assert gpt_turbo_stats["prompt_tokens"] == 210
         assert gpt_turbo_stats["completion_tokens"] == 200
 
-        user_by_spend_with_end_date = await spend_per_user_fn(
+        user_by_spend_with_end_date = await spend_user_fn(
             user_id=key.user_id,
             start_date=None,
             end_date="2024-01-14",
         )
-        assert len(user_by_spend_with_end_date) == 1
-        assert user_by_spend_with_end_date[0]["model"] == "gpt-3.5-turbo"
-        assert user_by_spend_with_end_date[0]["spend"] == 2.5
-        assert user_by_spend_with_end_date[0]["prompt_tokens"] == 410
-        assert user_by_spend_with_end_date[0]["completion_tokens"] == 400
+        assert len(user_by_spend_with_end_date[0].token_usage) == 1
+        token_usage_with_end_date_stats = user_by_spend_with_end_date[0].token_usage[0]
+        assert token_usage_with_end_date_stats["model"] == "gpt-3.5-turbo"
+        assert token_usage_with_end_date_stats["spend"] == 2.5
+        assert token_usage_with_end_date_stats["prompt_tokens"] == 410
+        assert token_usage_with_end_date_stats["completion_tokens"] == 400
 
-        user_by_spend_with_start_and_end_date = await spend_per_user_fn(
+        user_by_spend_with_start_and_end_date = await spend_user_fn(
             user_id=key.user_id,
             start_date="2024-01-14",
             end_date="2024-01-16",
         )
-        assert len(user_by_spend_with_start_and_end_date) == 1
-        assert user_by_spend_with_start_and_end_date[0]["model"] == "gpt-3.5-turbo"
-        assert user_by_spend_with_start_and_end_date[0]["spend"] == 1.0
-        assert user_by_spend_with_start_and_end_date[0]["prompt_tokens"] == 210
-        assert user_by_spend_with_start_and_end_date[0]["completion_tokens"] == 200
+        assert len(user_by_spend_with_start_and_end_date[0].token_usage) == 1
+        token_usage_with_start_and_end_date_stats = user_by_spend_with_start_and_end_date[0].token_usage[0]
+        assert token_usage_with_start_and_end_date_stats["model"] == "gpt-3.5-turbo"
+        assert token_usage_with_start_and_end_date_stats["spend"] == 1.0
+        assert token_usage_with_start_and_end_date_stats["prompt_tokens"] == 210
+        assert token_usage_with_start_and_end_date_stats["completion_tokens"] == 200
 
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
-
-
-@pytest.mark.asyncio()
-async def test_view_spend_per_user(prisma_client):
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
-    try:
-        user_by_spend = await spend_user_fn(user_id=None)
-        assert type(user_by_spend) == list
-        assert len(user_by_spend) > 0
-        first_user = user_by_spend[0]
-
-        print("\nfirst_user=", first_user)
-        assert first_user.spend > 0
-    except Exception as e:
-        print("Got Exception", e)
-        pytest.fail(f"Got exception {e}")
-
 
 @pytest.mark.asyncio()
 async def test_view_spend_per_key(prisma_client):

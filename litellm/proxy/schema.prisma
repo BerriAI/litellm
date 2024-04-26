@@ -116,6 +116,7 @@ model LiteLLM_UserTable {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    token_usage Json @default("[]")
 }
 
 // Generate Tokens for Proxy

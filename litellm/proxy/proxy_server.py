@@ -4865,19 +4865,22 @@ async def spend_key_fn():
             detail={"error": str(e)},
         )
 
-
 @router.get(
-    "/spend/user",
+    "/spend/users",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_UserSpend]},
-    },
-
+        200: { "model": List[LiteLLM_UserSpend]},
+    }
 )
-async def spend_per_user_fn(
-    user_id: str = fastapi.Query(
-        description="User ID to view spend for",
+async def spend_user_fn(
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get User Table row for user_id",
+    ),
+    include_token_usage: Optional[bool] = fastapi.Query(
+        default=False,
+        description="Include token usage in the response",
     ),
     start_date: Optional[str] = fastapi.Query(
         default=None,
@@ -4889,101 +4892,10 @@ async def spend_per_user_fn(
     ),
 ):
     """
-    View spend for a specific user grouped by model
-
-    Example Request: 
-    ```
-    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234" \
--H "Authorization: Bearer sk-1234"
-    ```
-
-    With Date Range:
-    ```
-    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234&start_date=2022-01-01&end_date=2022-01-31" \
--H "Authorization: Bearer sk-1234"
-    ```
-
-    With Start Date:
-    ```
-    curl -X GET "http://0.0.0.0:8000/spend/user?user_id=user_1234&start_date=2022-01-01" \
--H "Authorization" Bearer sk-1234"
-    ```
-    """
-    global prisma_client
-    try:
-        verbose_proxy_logger.debug("inside view_spend_logs")
-        if prisma_client is None:
-            raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
-        filter_query = {"user": user_id, "startTime": {}}
-        print('filter_query', filter_query)
-
-        if start_date is not None:
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            filter_query["startTime"]["gte"] = start_date_obj 
-
-        if end_date is not None:
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
-            filter_query["startTime"]["lte"] = end_date_obj
-
-        # SQL query
-        response = await prisma_client.db.litellm_spendlogs.group_by(
-            by=["model"],
-            where=filter_query,  # type: ignore
-            sum={
-                "spend": True,
-                "prompt_tokens": True,
-                "completion_tokens": True,
-            },
-        )
-
-        result = list(
-            map(
-                lambda x: {
-                    "model": x["model"],
-                    "spend": x["_sum"]["spend"],
-                    "prompt_tokens": x["_sum"]["prompt_tokens"],
-                    "completion_tokens": x["_sum"]["completion_tokens"],
-                },
-                response,
-            )
-        )
-
-        return result
-
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"/spend/user Error({str(e)})"),
-                type="internal_error",
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="/spend/user Error" + str(e),
-            type="internal_error",
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-
-@router.get(
-    "/spend/users",
-    tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def spend_user_fn(
-    user_id: Optional[str] = fastapi.Query(
-        default=None,
-        description="Get User Table row for user_id",
-    ),
-):
-    """
-    View all users created, ordered by spend
+    View all users created, ordered by spend. If include_token_usage is set to
+    true, start_date and end_date will take effect for token_usage. When
+    including token_usage and not passing in a user_id, use with care as it might
+    take long time.
 
     Example Request:
     ```
@@ -4996,6 +4908,19 @@ async def spend_user_fn(
     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" \
 -H "Authorization: Bearer sk-1234"
     ```
+
+        With Date Range:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/users?user_id=user_1234&include_token_usage=true&start_date=2022-01-01&end_date=2022-01-31" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    With Start Date:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/users?user_id=user_1234&include_token_usage=True&start_date=2022-01-01" \
+-H "Authorization" Bearer sk-1234"
+    ```
+
     """
     global prisma_client
     try:
@@ -5004,17 +4929,54 @@ async def spend_user_fn(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if user_id is not None:
-            user_info = await prisma_client.get_data(
-                table_name="user", query_type="find_unique", user_id=user_id
-            )
-            return [user_info]
-        else:
-            user_info = await prisma_client.get_data(
-                table_name="user", query_type="find_all"
-            )
+        users_spend = []
 
-        return user_info
+        if user_id is not None:
+            users_spend = await prisma_client.db.litellm_usertable.find_many(
+                where={"user_id": user_id},
+            )
+        else:
+            users_spend = await prisma_client.db.litellm_usertable.find_many()
+
+        if include_token_usage:
+            filter_query = {"user": None, "startTime": {}}
+
+            if start_date is not None:
+                start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+                filter_query["startTime"]["gte"] = start_date_obj 
+
+            if end_date is not None:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+                filter_query["startTime"]["lte"] = end_date_obj
+
+            for user_spend in users_spend:
+                filter_query["user"] = user_spend.user_id
+
+                db_spend_logs = await prisma_client.db.litellm_spendlogs.group_by(
+                    by=["model"],
+                    where=filter_query,
+                    sum={
+                        "spend": True,
+                        "prompt_tokens": True,
+                        "completion_tokens": True,
+                    },
+                )
+
+                token_usage = list(
+                    map(
+                        lambda x: {
+                            "model": x["model"],
+                            "spend": x["_sum"]["spend"],
+                            "prompt_tokens": x["_sum"]["prompt_tokens"],
+                            "completion_tokens": x["_sum"]["completion_tokens"],
+                        },
+                        db_spend_logs,
+                    )
+                )
+
+                user_spend.token_usage = token_usage
+
+        return users_spend
 
     except Exception as e:
         raise HTTPException(
