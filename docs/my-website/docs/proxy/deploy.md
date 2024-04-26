@@ -231,13 +231,16 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 | Docs | When to Use |
 | --- | --- |
 | [Quick Start](#quick-start) | call 100+ LLMs + Load Balancing |
-| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend |
+| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend (Note: When deploying with a database providing a `DATABASE_URL` and `LITELLM_MASTER_KEY` are required in your env ) |
 | [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
 | [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
 
 ## Deploy with Database
 ### Docker, Kubernetes, Helm Chart
 
+Requirements:
+- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
+- Set a `LITELLM_MASTER_KEY`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`)
 
 <Tabs>
 
@@ -252,6 +255,8 @@ docker pull ghcr.io/berriai/litellm-database:main-latest
 ```shell
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e LITELLM_MASTER_KEY=sk-1234 \
+    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \

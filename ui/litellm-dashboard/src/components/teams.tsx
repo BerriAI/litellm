@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall } from "./networking";
+import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
 import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Button as Button2,
@@ -20,6 +20,7 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
+  TextInput,
   Card,
   Icon,
   Button,
@@ -71,6 +72,9 @@ const Team: React.FC<TeamProps> = ({
   const [userModels, setUserModels] = useState([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
+
+  // store team info as {"team_id": team_info_object}
+  const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
 
 
   const EditTeamModal: React.FC<EditTeamModalProps> = ({ visible, onCancel, team, onSubmit }) => {
@@ -270,9 +274,39 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         console.error("Error fetching user models:", error);
       }
     };
+
+
+    const fetchTeamInfo = async () => {
+      try {
+        if (userID === null || userRole === null || accessToken === null) {
+          return;
+        }
+
+        if (teams === null) {
+          return;
+        }
+
+        console.log("fetching team info:");
+
+
+        let _team_id_to_info: Record<string, any> = {};
+        for (let i = 0; i < teams?.length; i++) {
+          let _team_id = teams[i].team_id;
+          const teamInfo = await teamInfoCall(accessToken, _team_id);
+          console.log("teamInfo response:", teamInfo);
+          if (teamInfo !== null) {
+            _team_id_to_info = {..._team_id_to_info, [_team_id]: teamInfo};
+          }
+        }
+        setPerTeamInfo(_team_id_to_info);
+    } catch (error) {
+      console.error("Error fetching team info:", error);
+    }
+  };
   
     fetchUserModels();
-  }, [accessToken, userID, userRole]);
+    fetchTeamInfo();
+  }, [accessToken, userID, userRole, teams]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
@@ -345,6 +379,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
                   <TableHeaderCell>Models</TableHeaderCell>
                   <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
+                  <TableHeaderCell>Info</TableHeaderCell>
                 </TableRow>
               </TableHead>
 
@@ -380,6 +415,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                             </div>
                           ) : null}
                         </TableCell>
+                        
 
                         <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
                           <Text>
@@ -388,6 +424,10 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                             <br></br>RPM:{" "}
                             {team.rpm_limit ? team.rpm_limit : "Unlimited"}
                           </Text>
+                        </TableCell>
+                        <TableCell>
+                          <Text>{perTeamInfo && team.team_id && perTeamInfo[team.team_id] && perTeamInfo[team.team_id].keys && perTeamInfo[team.team_id].keys.length} Keys</Text>
+                          <Text>{perTeamInfo && team.team_id && perTeamInfo[team.team_id] && perTeamInfo[team.team_id].team_info && perTeamInfo[team.team_id].team_info.members_with_roles && perTeamInfo[team.team_id].team_info.members_with_roles.length} Members</Text>
                         </TableCell>
                         <TableCell>
                         <Icon
@@ -480,7 +520,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   name="team_alias"
                   rules={[{ required: true, message: 'Please input a team name' }]}
                 >
-                  <Input />
+                  <TextInput placeholder="" />
                 </Form.Item>
                 <Form.Item label="Models" name="models">
                   <Select2

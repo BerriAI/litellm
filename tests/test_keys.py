@@ -14,6 +14,24 @@ sys.path.insert(
 import litellm
 
 
+async def generate_team(session):
+    url = "http://0.0.0.0:4000/team/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "team_id": "litellm-dashboard",
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response (Status code: {status}):")
+        print(response_text)
+        print()
+        _json_response = await response.json()
+        return _json_response
+
+
 async def generate_user(
     session,
     user_role="app_owner",
@@ -505,7 +523,9 @@ async def test_key_info_spend_values_streaming():
         )
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert rounded_response_cost == rounded_key_info_spend
+        assert (
+            rounded_response_cost == rounded_key_info_spend
+        ), f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
 
 
 @pytest.mark.asyncio
@@ -668,7 +688,7 @@ async def test_key_rate_limit():
 
 
 @pytest.mark.asyncio
-async def test_key_delete():
+async def test_key_delete_ui():
     """
     Admin UI flow - DO NOT DELETE
     -> Create a key with user_id = "ishaan"
@@ -680,6 +700,8 @@ async def test_key_delete():
         key = key_gen["key"]
 
         # generate a admin UI key
+        team = await generate_team(session=session)
+        print("generated team: ", team)
         admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
         print(
             "trying to delete key=",

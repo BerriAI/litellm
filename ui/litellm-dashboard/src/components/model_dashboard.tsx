@@ -12,10 +12,13 @@ import {
   Metric,
   Text,
   Grid,
+  Accordion,
+  AccordionHeader,
+  AccordionBody,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall } from "./networking";
 import { BarChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -34,7 +37,7 @@ import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from '@ant-design/icons';
@@ -46,6 +49,15 @@ interface ModelDashboardProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  modelData: any, 
+  setModelData: any
+}
+
+interface EditModelModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  model: any; // Assuming TeamType is a type representing your team object
+  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
@@ -71,16 +83,111 @@ const provider_map: Record <string, string> = {
 };
 
 
+const handleSubmit = async (formValues: Record<string, any>, accessToken: string, form: any) => {
+  try {
+    /**
+     * For multiple litellm model names - create a separate deployment for each 
+     * - get the list
+     * - iterate through it 
+     * - create a new deployment for each
+     * 
+     * For single model name -> make it a 1 item list
+     */
+
+    // get the list of deployments
+    let deployments: Array<string> = Array.isArray(formValues["model"]) ? formValues["model"] : [formValues["model"]];
+    console.log(`received deployments: ${deployments}`)
+    console.log(`received type of deployments: ${typeof deployments}`)
+    deployments.forEach(async (litellm_model) => { 
+      console.log(`litellm_model: ${litellm_model}`)
+      const litellmParamsObj: Record<string, any>  = {};
+      const modelInfoObj: Record<string, any>  = {};
+      // Iterate through the key-value pairs in formValues
+      litellmParamsObj["model"] = litellm_model
+      let modelName: string  = "";
+      for (const [key, value] of Object.entries(formValues)) {
+        if (value === '') {
+          continue;
+        }
+        if (key == "model_name") {
+          modelName = modelName + value
+        }
+        else if (key == "custom_llm_provider") {
+          // const providerEnumValue = Providers[value as keyof typeof Providers];
+          // const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
+          // modelName = mappingResult + "/" + modelName
+          continue
+        }
+        else if (key == "model") {
+          continue
+        }
+
+        // Check if key is "base_model"
+        else if (key === "base_model") {
+          // Add key-value pair to model_info dictionary
+          modelInfoObj[key] = value;
+        }
+
+        else if (key == "litellm_extra_params") {
+          console.log("litellm_extra_params:", value);
+          let litellmExtraParams = {};
+          if (value && value != undefined) {
+            try {
+              litellmExtraParams = JSON.parse(value);
+            }
+            catch (error) {
+              message.error("Failed to parse LiteLLM Extra Params: " + error, 20);
+              throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            for (const [key, value] of Object.entries(litellmExtraParams)) {
+              litellmParamsObj[key] = value;
+            }
+          }
+        }
+
+        // Check if key is any of the specified API related keys
+        else {
+          // Add key-value pair to litellm_params dictionary
+          litellmParamsObj[key] = value;
+        }
+      }
+
+      const new_model: Model = {  
+        "model_name": modelName,
+        "litellm_params": litellmParamsObj,
+        "model_info": modelInfoObj
+      }
+
+      
+
+      const response: any = await modelCreateCall(
+        accessToken,
+        new_model
+      );
+
+      console.log(`response for model create call: ${response["data"]}`);
+    }); 
+    
+    form.resetFields();
+
+    
+    } catch (error) {
+      message.error("Failed to create model: " + error, 20);
+    }
+}
+
 const ModelDashboard: React.FC<ModelDashboardProps> = ({
   accessToken,
   token,
   userRole,
   userID,
+  modelData = { data: [] },
+  setModelData
 }) => {
-  const [modelData, setModelData] = useState<any>({ data: [] });
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
+  const [lastRefreshed, setLastRefreshed] = useState('');
 
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
@@ -89,6 +196,191 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>('');
+  const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
+  const [selectedModel, setSelectedModel] = useState<any>(null);
+  const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
+  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
+
+  const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
+    const [form] = Form.useForm();
+    let litellm_params_to_edit: Record<string, any> = {}
+    let model_name = "";
+    let model_id = "";
+    if (model) {
+      litellm_params_to_edit = model.litellm_params
+      model_name = model.model_name;
+      let model_info = model.model_info;
+      if (model_info ) {
+        model_id = model_info.id;
+        console.log(`model_id: ${model_id}`)
+        litellm_params_to_edit.model_id = model_id;
+      }
+    }
+   
+  
+    const handleOk = () => {
+      form
+        .validateFields()
+        .then((values) => {
+          onSubmit(values);
+          form.resetFields();
+        })
+        .catch((error) => {
+          console.error("Validation failed:", error);
+        });
+  };
+  
+    return (
+        <Modal
+              title={"Edit Model " + model_name}
+              visible={visible}
+              width={800}
+              footer={null}
+              onOk={handleOk}
+              onCancel={onCancel}
+            >
+        <Form
+          form={form}
+          onFinish={handleEditSubmit}
+          initialValues={litellm_params_to_edit} // Pass initial values here
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+                <>
+
+                <Form.Item className="mt-8"
+                    label="api_base" 
+                    name="api_base"
+                    
+                  >
+                  <TextInput/>
+
+                  </Form.Item>
+                  
+                  <Form.Item 
+                    label="tpm" 
+                    name="tpm"
+                    tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="rpm" 
+                    name="rpm"
+                    tooltip="int (optional) - Rate limit for this deployment: in requests per minute (rpm). Find this information on your model/providers website"
+                  >
+                  <InputNumber min={0} step={1} />
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="max_retries" 
+                    name="max_retries"
+                  >
+
+                    
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="timeout" 
+                    name="timeout"
+                    tooltip="int (optional) - Timeout in seconds for LLM requests (Defaults to 600 seconds)"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="stream_timeout" 
+                    name="stream_timeout"
+                    tooltip="int (optional) - Timeout for stream requests (seconds)"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  
+
+                  <Form.Item 
+                    label="model_id" 
+                    name="model_id"
+                    hidden={true}
+                  >
+                  </Form.Item>
+
+                  
+
+                  
+                </>
+                <div style={{ textAlign: "right", marginTop: "10px" }}>
+                  <Button2 htmlType="submit">Save</Button2>
+                </div>
+              </Form>
+      </Modal>
+    );
+  };
+  
+
+  const handleEditClick = (model: any) => {
+    setSelectedModel(model);
+    setEditModalVisible(true);
+  };
+
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  };
+
+
+const handleEditSubmit = async (formValues: Record<string, any>) => {
+  // Call API to update team with teamId and values
+  
+  console.log("handleEditSubmit:", formValues);
+  if (accessToken == null) {
+    return;
+  }
+
+  let newLiteLLMParams: Record<string, any> = {}
+  let model_info_model_id = null;
+
+  for (const [key, value] of Object.entries(formValues)) {
+    if (key !== "model_id") {
+      newLiteLLMParams[key] = value;
+    } else {
+      model_info_model_id = value;
+    }
+  }
+
+  let payload = {
+    litellm_params: newLiteLLMParams, 
+    model_info: {
+      "id": model_info_model_id
+    }
+  }
+
+  console.log("handleEditSubmit payload:", payload);
+
+  let newModelValue = await modelUpdateCall(accessToken, payload);
+
+  // Update the teams state with the updated team data
+  // if (teams) {
+  //   const updatedTeams = teams.map((team) =>
+  //     team.team_id === teamId ? newTeamValues.data : team
+  //   );
+  //   setTeams(updatedTeams);
+  // }
+  message.success("Model updated successfully, restart server to see updates");
+
+  setEditModalVisible(false);
+  setSelectedModel(null);
+};
+
+
+  
 
 
   const props: UploadProps = {
@@ -120,6 +412,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     },
   };
 
+  const handleRefreshClick = () => {
+    // Update the 'lastRefreshed' state to the current date and time
+    const currentDate = new Date();
+    setLastRefreshed(currentDate.toLocaleString());
+  };
+
+
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
@@ -135,7 +434,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
 
-       
+        // loop through modelDataResponse and get all`model_name` values 
+
+        let all_model_groups: Set<string> = new Set();
+        for (let i = 0; i < modelDataResponse.data.length; i++) {
+          const model = modelDataResponse.data[i];
+          all_model_groups.add(model.model_name)
+        }
+        console.log("all_model_groups:", all_model_groups)
+        let _array_model_groups = Array.from(all_model_groups)
+        setAvailableModelGroups(_array_model_groups);
 
         // if userRole is Admin, show the pending requests
         if (userRole === "Admin" && accessToken) {
@@ -160,7 +468,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (modelMap == null) {
       fetchModelMap()
     }
-  }, [accessToken, token, userRole, userID, modelMap]);
+
+    handleRefreshClick()
+  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed]);
 
   if (!modelData) {
     return <div>Loading...</div>;
@@ -220,7 +530,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       max_tokens = model_info?.max_tokens;
     }
 
-    // let cleanedLitellmParams == litellm_params without model, api_base
     if (curr_model?.litellm_params) {
       cleanedLitellmParams = Object.fromEntries(
         Object.entries(curr_model?.litellm_params).filter(
@@ -293,93 +602,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
-  const handleSubmit = async (formValues: Record<string, any>) => {
-    try {
-      /**
-       * For multiple litellm model names - create a separate deployment for each 
-       * - get the list
-       * - iterate through it 
-       * - create a new deployment for each
-       */
 
-      // get the list of deployments
-      let deployments: Array<string> = Object.values(formValues["model"])
-      console.log(`received deployments: ${deployments}`)
-      console.log(`received type of deployments: ${typeof deployments}`)
-      deployments.forEach(async (litellm_model) => { 
-        console.log(`litellm_model: ${litellm_model}`)
-        const litellmParamsObj: Record<string, any>  = {};
-        const modelInfoObj: Record<string, any>  = {};
-        // Iterate through the key-value pairs in formValues
-        litellmParamsObj["model"] = litellm_model
-        let modelName: string  = "";
-        for (const [key, value] of Object.entries(formValues)) {
-          if (key == "model_name") {
-            modelName = modelName + value
-          }
-          else if (key == "custom_llm_provider") {
-            // const providerEnumValue = Providers[value as keyof typeof Providers];
-            // const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
-            // modelName = mappingResult + "/" + modelName
-            continue
-          }
-          else if (key == "model") {
-            continue
-          }
-
-          // Check if key is "base_model"
-          else if (key === "base_model") {
-            // Add key-value pair to model_info dictionary
-            modelInfoObj[key] = value;
-          }
-
-          else if (key == "litellm_extra_params") {
-            console.log("litellm_extra_params:", value);
-            let litellmExtraParams = {};
-            if (value && value != undefined) {
-              try {
-                litellmExtraParams = JSON.parse(value);
-              }
-              catch (error) {
-                message.error("Failed to parse LiteLLM Extra Params: " + error, 20);
-                throw new Error("Failed to parse litellm_extra_params: " + error);
-              }
-              for (const [key, value] of Object.entries(litellmExtraParams)) {
-                litellmParamsObj[key] = value;
-              }
-            }
-          }
-
-          // Check if key is any of the specified API related keys
-          else {
-            // Add key-value pair to litellm_params dictionary
-            litellmParamsObj[key] = value;
-          }
-        }
-
-        const new_model: Model = {  
-          "model_name": modelName,
-          "litellm_params": litellmParamsObj,
-          "model_info": modelInfoObj
-        }
-  
-        
-  
-        const response: any = await modelCreateCall(
-          accessToken,
-          new_model
-        );
-
-        console.log(`response for model create call: ${response["data"]}`);
-      }); 
-      
-      form.resetFields();
-
-      
-      } catch (error) {
-        message.error("Failed to create model: " + error, 20);
-      }
-  }
 
   const getPlaceholder = (selectedProvider: string): string => {
     if (selectedProvider === Providers.Vertex_AI) {
@@ -399,7 +622,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     form
         .validateFields()
         .then((values) => {
-          handleSubmit(values);
+          handleSubmit(values, accessToken, form);
           // form.resetFields();
         })
         .catch((error) => {
@@ -412,21 +635,60 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   return (
     <div style={{ width: "100%", height: "100%"}}>
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <TabList className="mt-2">
+      <TabList className="flex justify-between mt-2 w-full items-center">
+        <div className="flex">
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
           <Tab><pre>/health Models</pre></Tab>
-        </TabList>
-      
+        </div>
+
+        <div className="flex items-center space-x-2">
+          {lastRefreshed && (
+            <Text>
+              Last Refreshed: {lastRefreshed}
+            </Text>
+          )}
+          <Icon
+            icon={RefreshIcon} // Modify as necessary for correct icon name
+            variant="shadow"
+            size="xs"
+            className="self-center"
+            onClick={handleRefreshClick}
+          />
+        </div>
+      </TabList>
       <TabPanels>
           <TabPanel>
       <Grid>
+      <div className="flex items-center">
+        <Text>Filter by Public Model Name</Text>
+      <Select
+              className="mb-4 mt-2 ml-2 w-50"
+              defaultValue="all"
+              onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+            >
+              <SelectItem 
+                  value={"all"}
+                >
+                  All Models
+                </SelectItem>
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => setSelectedModelGroup(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+          </div>
         <Card>
           <Table className="mt-5">
             <TableHead>
               <TableRow>
 
-                  <TableHeaderCell>Model Name </TableHeaderCell>
+                  <TableHeaderCell>Public Model Name </TableHeaderCell>
 
                 <TableHeaderCell>
                   Provider
@@ -447,7 +709,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </TableRow>
             </TableHead>
             <TableBody>
-              {modelData.data.map((model: any, index: number) => (
+              { modelData.data
+                  .filter((model: any) =>
+                    selectedModelGroup === "all" || model.model_name === selectedModelGroup || selectedModelGroup === null || selectedModelGroup === undefined || selectedModelGroup === ""
+                  )
+                  .map((model: any, index: number) => (
                 <TableRow key={index}>
                   <TableCell>
                     <Text>{model.model_name}</Text>
@@ -460,24 +726,45 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }
 
                   <TableCell>
-                    <pre>
+
+                <Accordion>
+                  <AccordionHeader>
+                    <Text>Litellm params</Text>
+                  </AccordionHeader>
+                  <AccordionBody>
+                  <pre>
                     {JSON.stringify(model.cleanedLitellmParams, null, 2)}
                     </pre>
+                  </AccordionBody>
+                </Accordion>
+                   
                   </TableCell>
 
                   <TableCell>{model.input_cost}</TableCell>
                   <TableCell>{model.output_cost}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
                   <TableCell>
+                        <Icon
+                            icon={PencilAltIcon}
+                            size="sm"
+                            onClick={() => handleEditClick(model)}
+                          />
                           <DeleteModelButton modelID={model.model_info.id} accessToken={accessToken} />
                         </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+
         </Card>
 
       </Grid>
+      <EditModelModal
+          visible={editModalVisible}
+          onCancel={handleEditCancel}
+          model={selectedModel}
+          onSubmit={handleEditSubmit}
+        />
       </TabPanel>
       <TabPanel className="h-full">
       <Title2 level={2}>Add new model</Title2>

@@ -48,6 +48,23 @@ class RouterConfig(BaseModel):
         protected_namespaces = ()
 
 
+class UpdateRouterConfig(BaseModel):
+    """
+    Set of params that you can modify via `router.update_settings()`.
+    """
+
+    routing_strategy_args: Optional[dict] = None
+    routing_strategy: Optional[str] = None
+    allowed_fails: Optional[int] = None
+    cooldown_time: Optional[float] = None
+    num_retries: Optional[int] = None
+    timeout: Optional[float] = None
+    max_retries: Optional[int] = None
+    retry_after: Optional[float] = None
+    fallbacks: Optional[List[dict]] = None
+    context_window_fallbacks: Optional[List[dict]] = None
+
+
 class ModelInfo(BaseModel):
     id: Optional[
         str
@@ -153,6 +170,36 @@ class LiteLLM_Params(BaseModel):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class updateLiteLLMParams(BaseModel):
+    # This class is used to update the LiteLLM_Params
+    # only differece is model is optional
+    model: Optional[str] = None
+    tpm: Optional[int] = None
+    rpm: Optional[int] = None
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+    api_version: Optional[str] = None
+    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
+    stream_timeout: Optional[Union[float, str]] = (
+        None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    )
+    max_retries: int = 2  # follows openai default of 2
+    organization: Optional[str] = None  # for openai orgs
+    ## VERTEX AI ##
+    vertex_project: Optional[str] = None
+    vertex_location: Optional[str] = None
+    ## AWS BEDROCK / SAGEMAKER ##
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region_name: Optional[str] = None
+
+
+class updateDeployment(BaseModel):
+    model_name: Optional[str] = None
+    litellm_params: Optional[updateLiteLLMParams] = None
+    model_info: Optional[ModelInfo] = None
 
 
 class Deployment(BaseModel):

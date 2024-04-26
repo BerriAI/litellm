@@ -9,6 +9,7 @@ import Teams from "@/components/teams";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
+import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
@@ -23,7 +24,7 @@ const CreateKeyPage = () => {
   const [keys, setKeys] = useState<null | any[]>(null);
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams();
-
+  const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
   const token = searchParams.get("token");
 
@@ -131,6 +132,8 @@ const CreateKeyPage = () => {
               userRole={userRole}
               token={token}
               accessToken={accessToken}
+              modelData={modelData}
+              setModelData={setModelData}
             />
           ) : page == "llm-playground" ? (
             <ChatUI
@@ -145,6 +148,7 @@ const CreateKeyPage = () => {
               userRole={userRole}
               token={token}
               keys={keys}
+              teams={teams}
               accessToken={accessToken}
               setKeys={setKeys}
             />
@@ -164,6 +168,8 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
               showSSOBanner={showSSOBanner}
             />
+          ) : page == "api_ref" ? (
+              <APIRef/>
           ) : page == "settings" ? (
             <Settings
               userID={userID}
@@ -175,6 +181,7 @@ const CreateKeyPage = () => {
                 userID={userID}
                 userRole={userRole}
                 accessToken={accessToken}
+                modelData={modelData}
               />
           ) : (
             <Usage
