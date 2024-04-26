@@ -1359,11 +1359,8 @@ def prompt_factory(
             "meta-llama/llama-3" in model or "meta-llama-3" in model
         ) and "instruct" in model:
             return hf_chat_template(
-                model=model,
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
                 messages=messages,
-                chat_template=known_tokenizer_config[  # type: ignore
-                    "meta-llama/Meta-Llama-3-8B-Instruct"
-                ]["tokenizer"]["chat_template"],
             )
         elif (
             "tiiuae/falcon" in model
