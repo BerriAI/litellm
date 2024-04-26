@@ -1,6 +1,6 @@
 from typing import Optional, List, Any, Literal, Union
 import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx, time
-import litellm, backoff
+import litellm, backoff, traceback
 from litellm.proxy._types import (
     UserAPIKeyAuth,
     DynamoDBArgs,
@@ -199,6 +199,33 @@ class ProxyLogging:
             print_verbose(f"final data being sent to {call_type} call: {data}")
             return data
         except Exception as e:
+            if "litellm_logging_obj" in data:
+                logging_obj: litellm.utils.Logging = data["litellm_logging_obj"]
+
+                ## ASYNC FAILURE HANDLER ##
+                error_message = ""
+                if isinstance(e, HTTPException):
+                    if isinstance(e.detail, str):
+                        error_message = e.detail
+                    elif isinstance(e.detail, dict):
+                        error_message = json.dumps(e.detail)
+                    else:
+                        error_message = str(e)
+                else:
+                    error_message = str(e)
+                error_raised = Exception(f"{error_message}")
+                await logging_obj.async_failure_handler(
+                    exception=error_raised,
+                    traceback_exception=traceback.format_exc(),
+                )
+
+                ## SYNC FAILURE HANDLER ##
+                try:
+                    logging_obj.failure_handler(
+                        error_raised, traceback.format_exc()
+                    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
+                except Exception as error_val:
+                    pass
             raise e
 
     async def during_call_hook(
