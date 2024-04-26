@@ -78,7 +78,8 @@ def test_hanging_request_azure():
                     "model_name": "openai-gpt",
                     "litellm_params": {"model": "gpt-3.5-turbo"},
                 },
-            ]
+            ],
+            num_retries=0,
         )
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
