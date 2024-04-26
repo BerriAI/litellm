@@ -14,8 +14,39 @@ from litellm.router import Deployment, LiteLLM_Params, ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
+import os, httpx
 
 load_dotenv()
+
+
+@pytest.mark.parametrize(
+    "timeout", [10, 1.0, httpx.Timeout(timeout=300.0, connect=20.0)]
+)
+def test_router_timeout_init(timeout):
+    """
+    Allow user to pass httpx.Timeout
+
+    related issue - https://github.com/BerriAI/litellm/issues/3162
+    """
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "timeout": timeout,
+                },
+            }
+        ]
+    )
+
+    router.completion(
+        model="test-model", messages=[{"role": "user", "content": "Hey!"}]
+    )
 
 
 def test_exception_raising():
