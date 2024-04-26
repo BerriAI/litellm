@@ -10191,6 +10191,9 @@ class CustomStreamWrapper:
                                 try:
                                     if isinstance(choice, BaseModel):
                                         choice_json = choice.model_dump()
+                                        choice_json.pop(
+                                            "finish_reason", None
+                                        )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
                                         choices.append(StreamingChoices(**choice_json))
                                 except Exception as e:
                                     choices.append(StreamingChoices())
@@ -10239,11 +10242,11 @@ class CustomStreamWrapper:
                         )
                     self.holding_chunk = ""
                 # if delta is None
-                is_delta_empty = self.is_delta_empty(
+                _is_delta_empty = self.is_delta_empty(
                     delta=model_response.choices[0].delta
                 )
 
-                if is_delta_empty:
+                if _is_delta_empty:
                     # get any function call arguments
                     model_response.choices[0].finish_reason = map_finish_reason(
                         finish_reason=self.received_finish_reason
