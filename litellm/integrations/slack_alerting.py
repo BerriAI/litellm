@@ -140,8 +140,6 @@ class SlackAlerting:
             raise e
 
     def _get_deployment_latencies_to_alert(self, metadata=None):
-        print("inside get deployment latencies metadata", metadata)  # noqa
-
         if metadata is None:
             return None
 
@@ -189,7 +187,6 @@ class SlackAlerting:
                     request_info=request_info, kwargs=kwargs
                 )
             # add deployment latencies to alert
-            print("in response taking too long callback, kwargs: ", kwargs)  # noqa
             if (
                 kwargs is not None
                 and "litellm_params" in kwargs
@@ -282,10 +279,6 @@ class SlackAlerting:
                 alerting_message = (
                     f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
                 )
-
-                print(
-                    "inside hanging request callback, request_data: ", request_data
-                )  # noqa
 
                 # add deployment latencies to alert
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
@@ -438,12 +431,6 @@ class SlackAlerting:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
         """
-        print(
-            "inside send alert for slack, message: ",
-            message,
-            "self.alerting: ",
-            self.alerting,
-        )
         if self.alerting is None:
             return
 
