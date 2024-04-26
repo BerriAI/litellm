@@ -220,6 +220,61 @@ def map_finish_reason(
     return finish_reason
 
 
+class TopLogprob(OpenAIObject):
+    token: str
+    """The token."""
+
+    bytes: Optional[List[int]] = None
+    """A list of integers representing the UTF-8 bytes representation of the token.
+
+    Useful in instances where characters are represented by multiple tokens and
+    their byte representations must be combined to generate the correct text
+    representation. Can be `null` if there is no bytes representation for the token.
+    """
+
+    logprob: float
+    """The log probability of this token, if it is within the top 20 most likely
+    tokens.
+
+    Otherwise, the value `-9999.0` is used to signify that the token is very
+    unlikely.
+    """
+
+
+class ChatCompletionTokenLogprob(OpenAIObject):
+    token: str
+    """The token."""
+
+    bytes: Optional[List[int]] = None
+    """A list of integers representing the UTF-8 bytes representation of the token.
+
+    Useful in instances where characters are represented by multiple tokens and
+    their byte representations must be combined to generate the correct text
+    representation. Can be `null` if there is no bytes representation for the token.
+    """
+
+    logprob: float
+    """The log probability of this token, if it is within the top 20 most likely
+    tokens.
+
+    Otherwise, the value `-9999.0` is used to signify that the token is very
+    unlikely.
+    """
+
+    top_logprobs: List[TopLogprob]
+    """List of the most likely tokens and their log probability, at this token
+    position.
+
+    In rare cases, there may be fewer than the number of requested `top_logprobs`
+    returned.
+    """
+
+
+class ChoiceLogprobs(OpenAIObject):
+    content: Optional[List[ChatCompletionTokenLogprob]] = None
+    """A list of message content tokens with log probability information."""
+
+
 class FunctionCall(OpenAIObject):
     arguments: str
     name: Optional[str] = None
@@ -330,7 +385,7 @@ class Message(OpenAIObject):
                 self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
 
         if logprobs is not None:
-            self._logprobs = logprobs
+            self._logprobs = ChoiceLogprobs(**logprobs)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -354,11 +409,17 @@ class Message(OpenAIObject):
 
 class Delta(OpenAIObject):
     def __init__(
-        self, content=None, role=None, function_call=None, tool_calls=None, **params
+        self,
+        content=None,
+        role=None,
+        function_call=None,
+        tool_calls=None,
+        **params,
     ):
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
+
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
         else:
@@ -490,7 +551,11 @@ class StreamingChoices(OpenAIObject):
             self.delta = Delta()
         if enhancements is not None:
             self.enhancements = enhancements
-        self.logprobs = logprobs
+
+        if logprobs is not None and isinstance(logprobs, dict):
+            self.logprobs = ChoiceLogprobs(**logprobs)
+        else:
+            self.logprobs = logprobs  # type: ignore
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
