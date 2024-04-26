@@ -123,7 +123,6 @@ class LiteLLMRoutes(enum.Enum):
     spend_tracking_routes: List = [
         # spend
         "/spend/keys",
-        "/spend/user",
         "/spend/users",
         "/spend/tags",
         "/spend/calculate",
