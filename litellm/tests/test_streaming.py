@@ -2516,7 +2516,7 @@ def test_unit_test_custom_stream_wrapper():
     assert freq == 1
 
 
-def test_amazing_unit_test_custom_stream_wrapper_n():
+def test_aamazing_unit_test_custom_stream_wrapper_n():
     """
     Test if the translated output maps exactly to the received openai input
 
@@ -2719,7 +2719,7 @@ def test_amazing_unit_test_custom_stream_wrapper_n():
         },
     ]
 
-    litellm.set_verbose = False
+    litellm.set_verbose = True
 
     chunk_list = []
     for chunk in chunks:
