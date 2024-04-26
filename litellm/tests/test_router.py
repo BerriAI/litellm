@@ -22,12 +22,14 @@ load_dotenv()
 @pytest.mark.parametrize(
     "timeout", [10, 1.0, httpx.Timeout(timeout=300.0, connect=20.0)]
 )
-def test_router_timeout_init(timeout):
+@pytest.mark.parametrize("ssl_verify", [True, False])
+def test_router_timeout_init(timeout, ssl_verify):
     """
     Allow user to pass httpx.Timeout
 
     related issue - https://github.com/BerriAI/litellm/issues/3162
     """
+    litellm.ssl_verify = ssl_verify
 
     router = Router(
         model_list=[
@@ -40,13 +42,27 @@ def test_router_timeout_init(timeout):
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "timeout": timeout,
                 },
+                "model_info": {"id": 1234},
             }
         ]
     )
 
-    router.completion(
-        model="test-model", messages=[{"role": "user", "content": "Hey!"}]
+    model_client = router._get_client(
+        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
     )
+
+    assert getattr(model_client, "timeout") == timeout
+
+    print(f"vars model_client: {vars(model_client)}")
+    http_client = getattr(model_client, "_client")
+    print(f"http client: {vars(http_client)}, ssl_Verify={ssl_verify}")
+    if ssl_verify == False:
+        assert http_client._transport._pool._ssl_context.verify_mode.name == "CERT_NONE"
+    else:
+        assert (
+            http_client._transport._pool._ssl_context.verify_mode.name
+            == "CERT_REQUIRED"
+        )
 
 
 def test_exception_raising():
