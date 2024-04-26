@@ -4986,7 +4986,7 @@ async def spend_key_fn():
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: { "model": List[LiteLLM_UserSpend]},
+        200: { "model": List[LiteLLM_UserTable]},
     }
 )
 async def spend_user_fn(

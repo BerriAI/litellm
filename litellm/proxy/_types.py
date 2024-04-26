@@ -857,7 +857,7 @@ class LiteLLM_UserTable(LiteLLMBase):
     models: list = []
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
-    token_usage: Optional[LiteLLM_UserSpend] = None
+    token_usage: Optional[list[LiteLLM_UserSpend]] = None
 
     @root_validator(pre=True)
     def set_model_info(cls, values):
