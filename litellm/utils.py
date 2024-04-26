@@ -2433,7 +2433,7 @@ class Rules:
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def function_setup(
-    original_function, rules_obj, start_time, *args, **kwargs
+    original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
@@ -2457,10 +2457,12 @@ def function_setup(
             len(litellm.input_callback) > 0
             or len(litellm.success_callback) > 0
             or len(litellm.failure_callback) > 0
-        ) and len(callback_list) == 0:
+        ) and len(
+            callback_list  # type: ignore
+        ) == 0:  # type: ignore
             callback_list = list(
                 set(
-                    litellm.input_callback
+                    litellm.input_callback  # type: ignore
                     + litellm.success_callback
                     + litellm.failure_callback
                 )
@@ -2469,7 +2471,7 @@ def function_setup(
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.input_callback):
+            for index, callback in enumerate(litellm.input_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
@@ -2480,7 +2482,7 @@ def function_setup(
 
         if len(litellm.success_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.success_callback):
+            for index, callback in enumerate(litellm.success_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
@@ -2496,7 +2498,7 @@ def function_setup(
 
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.failure_callback):
+            for index, callback in enumerate(litellm.failure_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_failure_callback.append(callback)
                     removed_async_items.append(index)
@@ -2539,7 +2541,7 @@ def function_setup(
             user_logger_fn = kwargs["logger_fn"]
         # INIT LOGGER - for user-specified integrations
         model = args[0] if len(args) > 0 else kwargs.get("model", None)
-        call_type = original_function.__name__
+        call_type = original_function
         if (
             call_type == CallTypes.completion.value
             or call_type == CallTypes.acompletion.value
@@ -2721,7 +2723,7 @@ def client(original_function):
         try:
             if logging_obj is None:
                 logging_obj, kwargs = function_setup(
-                    original_function, rules_obj, start_time, *args, **kwargs
+                    original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
 
@@ -3030,7 +3032,7 @@ def client(original_function):
         try:
             if logging_obj is None:
                 logging_obj, kwargs = function_setup(
-                    original_function, rules_obj, start_time, *args, **kwargs
+                    original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
 
