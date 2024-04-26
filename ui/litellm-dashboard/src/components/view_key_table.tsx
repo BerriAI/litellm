@@ -183,11 +183,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     const errorModels = value.filter((model: string) => (
                       !keyTeam.models.includes(model) && 
                       model !== "all-team-models" && 
-                      model !== "all-proxy-models"
+                      model !== "all-proxy-models" && 
+                      !keyTeam.models.includes("all-proxy-models")
                     ));
                     console.log(`errorModels: ${errorModels}`)
                     if (errorModels.length > 0) {
-                      return Promise.reject(`Some models are not part of the new team\'s models - ${errorModels}`);
+                      return Promise.reject(`Some models are not part of the new team\'s models - ${errorModels}Team models: ${keyTeam.models}`);
                     } else {
                       return Promise.resolve();
                     }
