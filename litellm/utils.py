@@ -7103,9 +7103,10 @@ def convert_to_model_response_object(
                 model_response_object.model = response_object["model"]
 
             if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (  # type: ignore
-                    end_time - start_time
-                ).total_seconds() * 1000
+                if isinstance(start_time, type(end_time)):
+                    model_response_object._response_ms = (  # type: ignore
+                        end_time - start_time
+                    ).total_seconds() * 1000
 
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params

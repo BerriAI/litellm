@@ -2723,8 +2723,18 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
 
     chunk_list = []
     for chunk in chunks:
-        _chunk = litellm.ModelResponse(**chunk, stream=True)
-        chunk_list.append(_chunk)
+        new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+        if "choices" in chunk and isinstance(chunk["choices"], list):
+            print("INSIDE CHUNK CHOICES!")
+            new_choices = []
+            for choice in chunk["choices"]:
+                if isinstance(choice, litellm.utils.StreamingChoices):
+                    _new_choice = choice
+                elif isinstance(choice, dict):
+                    _new_choice = litellm.utils.StreamingChoices(**choice)
+                new_choices.append(_new_choice)
+            new_chunk.choices = new_choices
+        chunk_list.append(new_chunk)
 
     completion_stream = ModelResponseListIterator(model_responses=chunk_list)
 
