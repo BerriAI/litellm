@@ -167,6 +167,9 @@ messages = [
 chat(messages)
 ```
 
+## Redacting Messages, Response Content from Langfuse Logging 
+
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
 
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 

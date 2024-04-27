@@ -1212,7 +1212,6 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
             for callback in callbacks:
@@ -1229,29 +1228,17 @@ class Logging:
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
-
-                    elif callback == "lite_debugger":
-                        print_verbose(
-                            f"reaches litedebugger for logging! - model_call_details {self.model_call_details}"
-                        )
-                        model = self.model_call_details["model"]
-                        messages = self.model_call_details["input"]
-                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                        liteDebuggerClient.input_log_event(
-                            model=model,
-                            messages=messages,
-                            end_user=self.model_call_details.get("user", "default"),
-                            litellm_call_id=self.litellm_params["litellm_call_id"],
-                            litellm_params=self.model_call_details["litellm_params"],
-                            optional_params=self.model_call_details["optional_params"],
-                            print_verbose=print_verbose,
-                            call_type=self.call_type,
-                        )
                     elif callback == "sentry" and add_breadcrumb:
-                        print_verbose("reaches sentry breadcrumbing")
+                        details_to_log = copy.deepcopy(self.model_call_details)
+                        if litellm.turn_off_message_logging:
+                            # make a copy of the _model_Call_details and log it
+                            details_to_log.pop("messages", None)
+                            details_to_log.pop("input", None)
+                            details_to_log.pop("prompt", None)
+
                         add_breadcrumb(
                             category="litellm.llm_call",
-                            message=f"Model Call Details pre-call: {self.model_call_details}",
+                            message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -1315,7 +1302,7 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-
+            self.redact_message_input_output_from_logging(result=original_response)
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
@@ -1333,9 +1320,17 @@ class Logging:
                         )
                     elif callback == "sentry" and add_breadcrumb:
                         print_verbose("reaches sentry breadcrumbing")
+
+                        details_to_log = copy.deepcopy(self.model_call_details)
+                        if litellm.turn_off_message_logging:
+                            # make a copy of the _model_Call_details and log it
+                            details_to_log.pop("messages", None)
+                            details_to_log.pop("input", None)
+                            details_to_log.pop("prompt", None)
+
                         add_breadcrumb(
                             category="litellm.llm_call",
-                            message=f"Model Call Details post-call: {self.model_call_details}",
+                            message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -1526,6 +1521,8 @@ class Logging:
                         callbacks.append(callback)
             else:
                 callbacks = litellm.success_callback
+
+            self.redact_message_input_output_from_logging(result=result)
 
             for callback in callbacks:
                 try:
@@ -2071,6 +2068,9 @@ class Logging:
                     callbacks.append(callback)
         else:
             callbacks = litellm._async_success_callback
+
+        self.redact_message_input_output_from_logging(result=result)
+
         print_verbose(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             # check if callback can run for this request
@@ -2232,7 +2232,10 @@ class Logging:
                 start_time=start_time,
                 end_time=end_time,
             )
+
             result = None  # result sent to all loggers, init this to None incase it's not created
+
+            self.redact_message_input_output_from_logging(result=result)
             for callback in litellm.failure_callback:
                 try:
                     if callback == "lite_debugger":
@@ -2417,6 +2420,33 @@ class Logging:
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
 
+    def redact_message_input_output_from_logging(self, result):
+        """
+        Removes messages, prompts, input, response from logging. This modifies the data in-place
+        only redacts when litellm.turn_off_message_logging == True
+        """
+        # check if user opted out of logging message/response to callbacks
+        if litellm.turn_off_message_logging == True:
+            # remove messages, prompts, input, response from logging
+            self.model_call_details["messages"] = "redacted-by-litellm"
+            self.model_call_details["prompt"] = ""
+            self.model_call_details["input"] = ""
+
+            # response cleaning
+            # ChatCompletion Responses
+            if self.stream and "complete_streaming_response" in self.model_call_details:
+                _streaming_response = self.model_call_details[
+                    "complete_streaming_response"
+                ]
+                for choice in _streaming_response.choices:
+                    choice.message.content = "redacted-by-litellm"
+            else:
+                if result is not None:
+                    if isinstance(result, litellm.ModelResponse):
+                        if hasattr(result, "choices"):
+                            for choice in result.choices:
+                                choice.message.content = "redacted-by-litellm"
+
 
 def exception_logging(
     additional_args={},
@@ -2598,9 +2628,15 @@ def function_setup(
             dynamic_success_callbacks = kwargs.pop("success_callback")
 
         if add_breadcrumb:
+            details_to_log = copy.deepcopy(kwargs)
+            if litellm.turn_off_message_logging:
+                # make a copy of the _model_Call_details and log it
+                details_to_log.pop("messages", None)
+                details_to_log.pop("input", None)
+                details_to_log.pop("prompt", None)
             add_breadcrumb(
                 category="litellm.llm_call",
-                message=f"Positional Args: {args}, Keyword Args: {kwargs}",
+                message=f"Positional Args: {args}, Keyword Args: {details_to_log}",
                 level="info",
             )
         if "logger_fn" in kwargs:
