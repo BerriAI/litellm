@@ -5,7 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
+<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a> | <a href="https://docs.litellm.ai/docs/hosted" target="_blank"> Hosted Proxy (Preview)</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -32,9 +32,9 @@ LiteLLM manages:
 - Set Budgets & Rate limits per project, api key, model [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
-[**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
+[**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
 
-🚨 **Stable Release:** v1.34.1 
+🚨 **Stable Release:** Use docker images with: `main-stable` tag. These run through 12 hr load tests (1k req./min). 
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
@@ -128,7 +128,9 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 
 # OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 
-Set Budgets & Rate limits across multiple projects
+Track spend + Load Balance across multiple projects
+
+[Hosted Proxy (Preview)](https://docs.litellm.ai/docs/hosted)
 
 The proxy provides:
 
@@ -205,7 +207,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [aws - bedrock](https://docs.litellm.ai/docs/providers/bedrock)                     | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            |
 | [google - vertex_ai [Gemini]](https://docs.litellm.ai/docs/providers/vertex)        | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [google - palm](https://docs.litellm.ai/docs/providers/palm)                        | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
-| [google AI Studio - gemini](https://docs.litellm.ai/docs/providers/gemini)          | ✅                                                      |                                                                                 | ✅                                                                                  |                                                                                   |                                                                               |
+| [google AI Studio - gemini](https://docs.litellm.ai/docs/providers/gemini)          | ✅                                                      |       ✅                                                                          | ✅                                                                                  |     ✅                                                                              |                                                                               |
 | [mistral ai api](https://docs.litellm.ai/docs/providers/mistral)                    | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            |
 | [cloudflare AI Workers](https://docs.litellm.ai/docs/providers/cloudflare_workers)  | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [cohere](https://docs.litellm.ai/docs/providers/cohere)                             | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            |
@@ -220,7 +222,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [nlp_cloud](https://docs.litellm.ai/docs/providers/nlp_cloud)                       | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [aleph alpha](https://docs.litellm.ai/docs/providers/aleph_alpha)                   | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [petals](https://docs.litellm.ai/docs/providers/petals)                             | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
-| [ollama](https://docs.litellm.ai/docs/providers/ollama)                             | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
+| [ollama](https://docs.litellm.ai/docs/providers/ollama)                             | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            |
 | [deepinfra](https://docs.litellm.ai/docs/providers/deepinfra)                       | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [perplexity-ai](https://docs.litellm.ai/docs/providers/perplexity)                  | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [Groq AI](https://docs.litellm.ai/docs/providers/groq)                              | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |

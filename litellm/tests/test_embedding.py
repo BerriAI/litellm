@@ -487,6 +487,9 @@ def test_mistral_embeddings():
 # test_mistral_embeddings()
 
 
+@pytest.mark.skip(
+    reason="Community maintained embedding provider - they are quite unstable"
+)
 def test_voyage_embeddings():
     try:
         litellm.set_verbose = True

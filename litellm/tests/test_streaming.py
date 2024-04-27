@@ -61,6 +61,7 @@ def validate_first_format(chunk):
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
+    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -90,6 +91,7 @@ def validate_second_format(chunk):
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
+    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -127,6 +129,7 @@ def validate_last_format(chunk):
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
+    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -218,6 +221,17 @@ tools_schema = [
 #         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_cohere_stream()
+
+
+def test_completion_azure_stream_special_char():
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
+    response = completion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+    response_str = ""
+    for part in response:
+        response_str += part.choices[0].delta.content or ""
+    print(f"response_str: {response_str}")
+    assert len(response_str) > 0
 
 
 def test_completion_cohere_stream_bad_key():
@@ -380,6 +394,51 @@ def test_completion_claude_stream():
 
 
 # test_completion_claude_stream()
+def test_completion_claude_2_stream():
+    litellm.set_verbose = True
+    response = completion(
+        model="claude-2",
+        messages=[{"role": "user", "content": "hello from litellm"}],
+        stream=True,
+    )
+    complete_response = ""
+    # Add any assertions here to check the response
+    idx = 0
+    for chunk in response:
+        print(chunk)
+        # print(chunk.choices[0].delta)
+        chunk, finished = streaming_format_tests(idx, chunk)
+        if finished:
+            break
+        complete_response += chunk
+        idx += 1
+    if complete_response.strip() == "":
+        raise Exception("Empty response received")
+    print(f"completion_response: {complete_response}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_claude_2_stream():
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="claude-2",
+        messages=[{"role": "user", "content": "hello from litellm"}],
+        stream=True,
+    )
+    complete_response = ""
+    # Add any assertions here to check the response
+    idx = 0
+    async for chunk in response:
+        print(chunk)
+        # print(chunk.choices[0].delta)
+        chunk, finished = streaming_format_tests(idx, chunk)
+        if finished:
+            break
+        complete_response += chunk
+        idx += 1
+    if complete_response.strip() == "":
+        raise Exception("Empty response received")
+    print(f"completion_response: {complete_response}")
 
 
 def test_completion_palm_stream():
@@ -448,6 +507,8 @@ def test_completion_gemini_stream():
     except litellm.APIError as e:
         pass
     except Exception as e:
+        if "429 Resource has been exhausted":
+            return
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -470,7 +531,7 @@ async def test_acompletion_gemini_stream():
         print(f"type of response at the top: {response}")
         complete_response = ""
         idx = 0
-        # Add any assertions here to check the response
+        # Add any assertions here to check, the response
         async for chunk in response:
             print(f"chunk in acompletion gemini: {chunk}")
             print(chunk.choices[0].delta)
@@ -485,8 +546,13 @@ async def test_acompletion_gemini_stream():
             raise Exception("Empty response received")
     except litellm.APIError as e:
         pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        if "429 Resource has been exhausted" in str(e):
+            pass
+        else:
+            pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_acompletion_gemini_stream())
@@ -522,6 +588,64 @@ def test_completion_mistral_api_stream():
         print(f"completion_response: {complete_response}")
     except litellm.APIError as e:
         pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_mistral_api_mistral_large_function_call_with_streaming():
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
+    try:
+        # test without max tokens
+        response = completion(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+        )
+        idx = 0
+        for chunk in response:
+            print(f"chunk in response: {chunk}")
+            if idx == 0:
+                assert (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                )
+                assert isinstance(
+                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
+                )
+                validate_first_streaming_function_calling_chunk(chunk=chunk)
+            elif idx == 1 and chunk.choices[0].finish_reason is None:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+            elif chunk.choices[0].finish_reason is not None:  # last chunk
+                validate_final_streaming_function_calling_chunk(chunk=chunk)
+            idx += 1
+        # raise Exception("it worked!")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -657,7 +781,7 @@ def test_vertex_ai_stream():
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "reliablekeys"
+    litellm.vertex_project = "adroit-crow-413218"
     import random
 
     test_models = ["gemini-1.0-pro"]
@@ -798,10 +922,10 @@ def test_vertex_ai_stream():
 def test_bedrock_claude_3_streaming():
     try:
         litellm.set_verbose = True
-        response: ModelResponse = completion(
+        response: ModelResponse = completion(  # type: ignore
             model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             messages=messages,
-            max_tokens=10,
+            max_tokens=10,  # type: ignore
             stream=True,
         )
         complete_response = ""
@@ -824,22 +948,25 @@ def test_bedrock_claude_3_streaming():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_claude_3_streaming_finish_reason():
+@pytest.mark.asyncio
+async def test_claude_3_streaming_finish_reason():
     try:
         litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "Be helpful"},
             {"role": "user", "content": "What do you know?"},
         ]
-        response: ModelResponse = completion(
+        response: ModelResponse = await litellm.acompletion(  # type: ignore
             model="claude-3-opus-20240229",
             messages=messages,
             stream=True,
+            max_tokens=10,
         )
         complete_response = ""
-        # Add any assertions here to check the response
+        # Add any assertions here to-check the response
         num_finish_reason = 0
-        for idx, chunk in enumerate(response):
+        async for chunk in response:
+            print(f"chunk: {chunk}")
             if isinstance(chunk, ModelResponse):
                 if chunk.choices[0].finish_reason is not None:
                     num_finish_reason += 1
@@ -2197,7 +2324,12 @@ def test_completion_claude_3_function_call_with_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -2251,7 +2383,12 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = await acompletion(
@@ -2278,7 +2415,7 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
-        # raise Exception("it worked!")
+        # raise Exception("it worked! ")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -2307,6 +2444,34 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         self.is_done = True
         return self.model_response
+
+
+class ModelResponseListIterator:
+    def __init__(self, model_responses):
+        self.model_responses = model_responses
+        self.index = 0
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.index >= len(self.model_responses):
+            raise StopIteration
+        model_response = self.model_responses[self.index]
+        self.index += 1
+        return model_response
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.index >= len(self.model_responses):
+            raise StopAsyncIteration
+        model_response = self.model_responses[self.index]
+        self.index += 1
+        return model_response
 
 
 def test_unit_test_custom_stream_wrapper():
@@ -2349,3 +2514,268 @@ def test_unit_test_custom_stream_wrapper():
             if "How are you?" in chunk.choices[0].delta.content:
                 freq += 1
     assert freq == 1
+
+
+def test_aamazing_unit_test_custom_stream_wrapper_n():
+    """
+    Test if the translated output maps exactly to the received openai input
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/3276
+    """
+    chunks = [
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "It"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "It",
+                                "logprob": -1.5952516,
+                                "bytes": [73, 116],
+                                "top_logprobs": [
+                                    {
+                                        "token": "Brown",
+                                        "logprob": -0.7358765,
+                                        "bytes": [66, 114, 111, 119, 110],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 1,
+                    "delta": {"content": "Brown"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "Brown",
+                                "logprob": -0.7358765,
+                                "bytes": [66, 114, 111, 119, 110],
+                                "top_logprobs": [
+                                    {
+                                        "token": "Brown",
+                                        "logprob": -0.7358765,
+                                        "bytes": [66, 114, 111, 119, 110],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "'s"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "'s",
+                                "logprob": -0.006786893,
+                                "bytes": [39, 115],
+                                "top_logprobs": [
+                                    {
+                                        "token": "'s",
+                                        "logprob": -0.006786893,
+                                        "bytes": [39, 115],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": " impossible"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": " impossible",
+                                "logprob": -0.06528423,
+                                "bytes": [
+                                    32,
+                                    105,
+                                    109,
+                                    112,
+                                    111,
+                                    115,
+                                    115,
+                                    105,
+                                    98,
+                                    108,
+                                    101,
+                                ],
+                                "top_logprobs": [
+                                    {
+                                        "token": " impossible",
+                                        "logprob": -0.06528423,
+                                        "bytes": [
+                                            32,
+                                            105,
+                                            109,
+                                            112,
+                                            111,
+                                            115,
+                                            115,
+                                            105,
+                                            98,
+                                            108,
+                                            101,
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "—even"},
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "—even",
+                                "logprob": -9999.0,
+                                "bytes": [226, 128, 148, 101, 118, 101, 110],
+                                "top_logprobs": [
+                                    {
+                                        "token": " to",
+                                        "logprob": -0.12302828,
+                                        "bytes": [32, 116, 111],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {"index": 0, "delta": {}, "logprobs": None, "finish_reason": "length"}
+            ],
+        },
+        {
+            "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
+            "object": "chat.completion.chunk",
+            "created": 1714075272,
+            "model": "gpt-4-0613",
+            "system_fingerprint": None,
+            "choices": [
+                {"index": 1, "delta": {}, "logprobs": None, "finish_reason": "stop"}
+            ],
+        },
+    ]
+
+    litellm.set_verbose = True
+
+    chunk_list = []
+    for chunk in chunks:
+        new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+        if "choices" in chunk and isinstance(chunk["choices"], list):
+            print("INSIDE CHUNK CHOICES!")
+            new_choices = []
+            for choice in chunk["choices"]:
+                if isinstance(choice, litellm.utils.StreamingChoices):
+                    _new_choice = choice
+                elif isinstance(choice, dict):
+                    _new_choice = litellm.utils.StreamingChoices(**choice)
+                new_choices.append(_new_choice)
+            new_chunk.choices = new_choices
+        chunk_list.append(new_chunk)
+
+    completion_stream = ModelResponseListIterator(model_responses=chunk_list)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-4-0613",
+        custom_llm_provider="cached_response",
+        logging_obj=litellm.Logging(
+            model="gpt-4-0613",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    for idx, chunk in enumerate(response):
+        chunk_dict = {}
+        try:
+            chunk_dict = chunk.model_dump(exclude_none=True)
+        except:
+            chunk_dict = chunk.dict(exclude_none=True)
+
+        chunk_dict.pop("created")
+        chunks[idx].pop("created")
+        if chunks[idx]["system_fingerprint"] is None:
+            chunks[idx].pop("system_fingerprint", None)
+        if idx == 0:
+            for choice in chunk_dict["choices"]:
+                if "role" in choice["delta"]:
+                    choice["delta"].pop("role")
+
+        for choice in chunks[idx]["choices"]:
+            # ignore finish reason None - since our pydantic object is set to exclude_none = true
+            if "finish_reason" in choice and choice["finish_reason"] is None:
+                choice.pop("finish_reason")
+            if "logprobs" in choice and choice["logprobs"] is None:
+                choice.pop("logprobs")
+
+        assert (
+            chunk_dict == chunks[idx]
+        ), f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"

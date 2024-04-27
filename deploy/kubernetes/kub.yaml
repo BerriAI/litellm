@@ -15,15 +15,16 @@ spec:
       containers:
         - name: litellm-container
           image: ghcr.io/berriai/litellm:main-latest
+          imagePullPolicy: Always
           env:
             - name: AZURE_API_KEY
               value: "d6f****"
             - name: AZURE_API_BASE
-              value: "https://openai
+              value: "https://openai"
             - name: LITELLM_MASTER_KEY
               value: "sk-1234"
             - name: DATABASE_URL
-              value: "postgresql://ishaan:*********""
+              value: "postgresql://ishaan*********"
           args:
             - "--config"
             - "/app/proxy_config.yaml"  # Update the path to mount the config file

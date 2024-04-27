@@ -56,6 +56,9 @@ On accessing the LiteLLM UI, you will be prompted to enter your username, passwo
 
 ## ✨ Enterprise Features
 
+Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
+
+
 ### Setup SSO/Auth for UI
 
 #### Step 1: Set upperbounds for keys

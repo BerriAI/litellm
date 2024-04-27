@@ -365,7 +365,10 @@ def completion(
     ## RESPONSE OBJECT
     completion_response = json.loads(response)
     try:
-        completion_response_choices = completion_response[0]
+        if isinstance(completion_response, list):
+            completion_response_choices = completion_response[0]
+        else:
+            completion_response_choices = completion_response
         completion_output = ""
         if "generation" in completion_response_choices:
             completion_output += completion_response_choices["generation"]
@@ -396,7 +399,7 @@ def completion(
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 
@@ -580,7 +583,10 @@ async def async_completion(
         ## RESPONSE OBJECT
         completion_response = json.loads(response)
         try:
-            completion_response_choices = completion_response[0]
+            if isinstance(completion_response, list):
+                completion_response_choices = completion_response[0]
+            else:
+                completion_response_choices = completion_response
             completion_output = ""
             if "generation" in completion_response_choices:
                 completion_output += completion_response_choices["generation"]
@@ -611,7 +617,7 @@ async def async_completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
 
 

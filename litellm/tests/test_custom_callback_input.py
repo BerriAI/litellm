@@ -75,7 +75,6 @@ class CompletionCustomHandler(
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
         try:
-            print(f"kwargs: {kwargs}")
             self.states.append("post_api_call")
             ## START TIME
             assert isinstance(start_time, datetime)
@@ -167,6 +166,8 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["api_base"], str)
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
@@ -265,8 +266,10 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["messages"], list)
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["api_base"], str)
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
             assert isinstance(kwargs["input"], (list, dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
@@ -651,6 +654,7 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
+@pytest.mark.skip(reason="Vertex AI Hanging")
 @pytest.mark.asyncio
 async def test_async_chat_vertex_ai_stream():
     try:
@@ -684,6 +688,44 @@ async def test_async_chat_vertex_ai_stream():
 
 
 # Text Completion
+
+
+@pytest.mark.asyncio
+async def test_async_text_completion_bedrock():
+    try:
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        response = await litellm.atext_completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            prompt=["Hi 👋 - i'm async text completion bedrock"],
+        )
+        # test streaming
+        response = await litellm.atext_completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            prompt=["Hi 👋 - i'm async text completion bedrock"],
+            stream=True,
+        )
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+            continue
+        ## test failure callback
+        try:
+            response = await litellm.atext_completion(
+                model="bedrock/",
+                prompt=["Hi 👋 - i'm async text completion bedrock"],
+                stream=True,
+                api_key="my-bad-key",
+            )
+            async for chunk in response:
+                continue
+        except:
+            pass
+        time.sleep(1)
+        print(f"customHandler.errors: {customHandler.errors}")
+        assert len(customHandler.errors) == 0
+        litellm.callbacks = []
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
 
 
 ## Test OpenAI text completion + Async

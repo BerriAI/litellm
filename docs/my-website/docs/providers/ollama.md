@@ -1,5 +1,5 @@
 # Ollama 
-LiteLLM supports all models from [Ollama](https://github.com/jmorganca/ollama)
+LiteLLM supports all models from [Ollama](https://github.com/ollama/ollama)
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Ollama.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -97,7 +97,7 @@ response = completion(
 print(response)
 ```
 ## Ollama Models
-Ollama supported models: https://github.com/jmorganca/ollama
+Ollama supported models: https://github.com/ollama/ollama
 
 | Model Name           | Function Call                                                                     |
 |----------------------|-----------------------------------------------------------------------------------

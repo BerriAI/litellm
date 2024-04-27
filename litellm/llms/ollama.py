@@ -20,7 +20,7 @@ class OllamaError(Exception):
 
 class OllamaConfig:
     """
-    Reference: https://github.com/jmorganca/ollama/blob/main/docs/api.md#parameters
+    Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 
     The class `OllamaConfig` provides the configuration for the Ollama's API interface. Below are the parameters:
 
@@ -69,7 +69,7 @@ class OllamaConfig:
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
@@ -228,8 +228,8 @@ def get_ollama_response(
         model_response["choices"][0]["message"]["content"] = response_json["response"]
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
-    prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-    completion_tokens = response_json["eval_count"]
+    prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt, disallowed_special=())))  # type: ignore
+    completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -330,8 +330,8 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 ]
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data["model"]
-            prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(data["prompt"])))  # type: ignore
-            completion_tokens = response_json["eval_count"]
+            prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(data["prompt"], disallowed_special=())))  # type: ignore
+            completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
