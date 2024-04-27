@@ -230,6 +230,48 @@ def test_completion_claude_3_function_call():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_claude_3_with_text_content_dictionaries():
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello! How can I assist you today?"
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello again!"
+                }
+            ]
+        }
+    ]
+
+    try:
+        # test without max tokens
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+        )
+        # Add any assertions, here to check response args
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_parse_xml_params():
     from litellm.llms.prompt_templates.factory import parse_xml_params
