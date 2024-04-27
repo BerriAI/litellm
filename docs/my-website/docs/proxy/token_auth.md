@@ -9,6 +9,7 @@ Use JWT's to auth admins / projects into the proxy.
 
 This is a new feature, and subject to changes based on feedback.
 
+*UPDATE*: This will be moving to the [enterprise tier](./enterprise.md), once it's out of beta (~by end of April).
 :::
 
 ## Usage
@@ -107,6 +108,34 @@ general_settings:
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
+
+## Advanced - Spend Tracking (User / Team / Org)
+
+Set the field in the jwt token, which corresponds to a litellm user / team / org.
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    admin_jwt_scope: "litellm-proxy-admin"
+    team_id_jwt_field: "client_id" # 👈 CAN BE ANY FIELD
+    user_id_jwt_field: "sub" # 👈 CAN BE ANY FIELD
+    org_id_jwt_field: "org_id" # 👈 CAN BE ANY FIELD
+```
+
+Expected JWT: 
+
+```
+{
+  "client_id": "my-unique-team",
+  "sub": "my-unique-user",
+  "org_id": "my-unique-org"
+}
+```
+
+Now litellm will automatically update the spend for the user/team/org in the db for each call. 
+
 ### JWT Scopes
 
 Here's what scopes on JWT-Auth tokens look like
@@ -149,7 +178,7 @@ general_settings:
   enable_jwt_auth: True
   litellm_jwtauth:
     ...
-    team_jwt_scope: "litellm-team" # 👈 Set JWT Scope string
+    team_id_jwt_field: "litellm-team" # 👈 Set field in the JWT token that stores the team ID
     team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
 ```
 

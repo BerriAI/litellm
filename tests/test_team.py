@@ -37,6 +37,29 @@ async def new_user(
         return await response.json()
 
 
+async def add_member(session, i, team_id, user_id=None, user_email=None):
+    url = "http://0.0.0.0:4000/team/member_add"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {"team_id": team_id, "member": {"role": "user"}}
+    if user_email is not None:
+        data["member"]["user_email"] = user_email
+    elif user_id is not None:
+        data["member"]["user_id"] = user_id
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"ADD MEMBER Response {i} (Status code: {status}):")
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request {i} did not return a 200 status code: {status}")
+
+        return await response.json()
+
+
 async def delete_member(session, i, team_id, user_id):
     url = "http://0.0.0.0:4000/team/member_delete"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -237,7 +260,18 @@ async def get_team_info(session, get_team, call_key):
 
 @pytest.mark.asyncio
 async def test_team_info():
+    """
+    Scenario 1:
+    - test with admin key -> expect to work
+    Scenario 2:
+    - test with team key -> expect to work
+    Scenario 3:
+    - test with non-team key -> expect to fail
+    """
     async with aiohttp.ClientSession() as session:
+        """
+        Scenario 1 - as admin
+        """
         new_team_data = await new_team(
             session,
             0,
@@ -245,45 +279,96 @@ async def test_team_info():
         team_id = new_team_data["team_id"]
         ## as admin ##
         await get_team_info(session=session, get_team=team_id, call_key="sk-1234")
+        """
+        Scenario 2 - as team key
+        """
+        key_gen = await generate_key(session=session, i=0, team_id=team_id)
+        key = key_gen["key"]
+
+        await get_team_info(session=session, get_team=team_id, call_key=key)
+
+        """
+        Scenario 3 - as non-team key
+        """
+        key_gen = await generate_key(session=session, i=0)
+        key = key_gen["key"]
+
+        try:
+            await get_team_info(session=session, get_team=team_id, call_key=key)
+            pytest.fail(f"Expected call to fail")
+        except Exception as e:
+            pass
+
+
+"""
+- Create team 
+- Add user (user exists in db)
+- Update team 
+- Check if it works
+"""
+
+"""
+- Create team
+- Add user (user doesn't exist in db)
+- Update team 
+- Check if it works
+"""
 
 
 @pytest.mark.asyncio
-async def test_team_update():
+async def test_team_update_sc_2():
     """
-    - Create team with 1 admin, 1 user
-    - Create new user
-    - Replace existing user with new user in team
+    - Create team
+    - Add 1 user (doesn't exist in db)
+    - Change team alias
+    - Check if it works
+    - Assert team object unchanged besides team alias
     """
     async with aiohttp.ClientSession() as session:
         ## Create admin
         admin_user = f"{uuid.uuid4()}"
         await new_user(session=session, i=0, user_id=admin_user)
-        ## Create normal user
-        normal_user = f"{uuid.uuid4()}"
-        await new_user(session=session, i=0, user_id=normal_user)
         ## Create team with 1 admin and 1 user
         member_list = [
             {"role": "admin", "user_id": admin_user},
-            {"role": "user", "user_id": normal_user},
         ]
         team_data = await new_team(session=session, i=0, member_list=member_list)
         ## Create new normal user
-        new_normal_user = f"{uuid.uuid4()}"
-        await new_user(session=session, i=0, user_id=new_normal_user)
-        ## Update member list
-        member_list = [
-            {"role": "admin", "user_id": admin_user},
-            {"role": "user", "user_id": new_normal_user},
-        ]
-        team_data = await update_team(
+        new_normal_user = f"krrish_{uuid.uuid4()}@berri.ai"
+        await add_member(
             session=session,
             i=0,
-            member_list=member_list,
             team_id=team_data["team_id"],
-            tpm_limit=100,
+            user_id=None,
+            user_email=new_normal_user,
         )
 
-        assert team_data["data"]["tpm_limit"] == 100
+        ## CHANGE TEAM ALIAS
+
+        new_team_data = await update_team(
+            session=session, i=0, team_id=team_data["team_id"], team_alias="my-new-team"
+        )
+
+        assert new_team_data["data"]["team_alias"] == "my-new-team"
+        print(f"team_data: {team_data}")
+        ## assert rest of object is the same
+        for k, v in new_team_data["data"].items():
+            if (
+                k == "members_with_roles"
+            ):  # assert 1 more member (role: "user", user_email: $user_email)
+                len(new_team_data["data"][k]) == len(team_data[k]) + 1
+            elif (
+                k == "created_at"
+                or k == "updated_at"
+                or k == "model_spend"
+                or k == "model_max_budget"
+                or k == "model_id"
+                or k == "litellm_organization_table"
+                or k == "litellm_model_table"
+            ):
+                pass
+            else:
+                assert new_team_data["data"][k] == team_data[k]
 
 
 @pytest.mark.asyncio

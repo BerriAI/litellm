@@ -9,6 +9,11 @@ jobs:
       - checkout
 
       - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+
+      - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
           command: |
             if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
@@ -31,16 +36,17 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3>=1.28.57"
-            pip install "aioboto3>=12.3.0"
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
-            pip install "langfuse>=2.0.0"
+            pip install "langfuse==2.7.3"
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
             pip install openai
             pip install prisma            
             pip install "httpx==0.24.1"
+            pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
             pip install "aiodynamo==23.10.1"
@@ -51,6 +57,7 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
             pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
       - save_cache:
           paths:
             - ./venv
@@ -73,7 +80,7 @@ jobs:
           name: Linting Testing
           command: |
             cd litellm
-            python -m pip install types-requests types-setuptools types-redis
+            python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . --ignore-missing-imports; then
               echo "mypy detected errors"
               exit 1
@@ -123,6 +130,7 @@ jobs:
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
@@ -182,12 +190,19 @@ jobs:
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DOCKER_DB_URL \
               -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
+              -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
+              -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
+              -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
               my-app:latest \
@@ -292,7 +307,7 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\"}}"
+              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
 
 workflows:
   version: 2
