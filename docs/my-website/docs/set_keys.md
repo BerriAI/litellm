@@ -5,6 +5,9 @@ LiteLLM allows you to specify the following:
 * API Base
 * API Version
 * API Type
+* Project
+* Location
+* Token
 
 Useful Helper functions: 
 * [`check_valid_key()`](#check_valid_key)
@@ -42,6 +45,24 @@ os.environ['AZURE_API_TYPE'] = "azure" # [OPTIONAL]
 # for openai
 os.environ['OPENAI_API_BASE'] = "https://openai-gpt-4-test2-v-12.openai.azure.com/"
 ```
+
+### Setting Project, Location, Token
+
+For cloud providers:
+- Azure
+- Bedrock
+- GCP
+- Watson AI 
+
+you might need to set additional parameters. LiteLLM provides a common set of params, that we map across all providers. 
+
+|      | LiteLLM param | Watson       | Vertex AI    | Azure        | Bedrock      |
+|------|--------------|--------------|--------------|--------------|--------------|
+| Project | project | watsonx_project | vertex_project | n/a | n/a |
+| Region | region_name | watsonx_region_name | vertex_location | n/a | aws_region_name |
+| Token | token | watsonx_token or token | n/a | azure_ad_token | n/a |
+
+If you want, you can call them by their provider-specific params as well. 
 
 ## litellm variables
 
