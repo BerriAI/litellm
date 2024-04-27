@@ -1320,9 +1320,17 @@ class Logging:
                         )
                     elif callback == "sentry" and add_breadcrumb:
                         print_verbose("reaches sentry breadcrumbing")
+
+                        details_to_log = copy.deepcopy(self.model_call_details)
+                        if litellm.turn_off_message_logging:
+                            # make a copy of the _model_Call_details and log it
+                            details_to_log.pop("messages", None)
+                            details_to_log.pop("input", None)
+                            details_to_log.pop("prompt", None)
+
                         add_breadcrumb(
                             category="litellm.llm_call",
-                            message=f"Model Call Details post-call: {self.model_call_details}",
+                            message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -2620,9 +2628,15 @@ def function_setup(
             dynamic_success_callbacks = kwargs.pop("success_callback")
 
         if add_breadcrumb:
+            details_to_log = copy.deepcopy(kwargs)
+            if litellm.turn_off_message_logging:
+                # make a copy of the _model_Call_details and log it
+                details_to_log.pop("messages", None)
+                details_to_log.pop("input", None)
+                details_to_log.pop("prompt", None)
             add_breadcrumb(
                 category="litellm.llm_call",
-                message=f"Positional Args: {args}, Keyword Args: {kwargs}",
+                message=f"Positional Args: {args}, Keyword Args: {details_to_log}",
                 level="info",
             )
         if "logger_fn" in kwargs:
