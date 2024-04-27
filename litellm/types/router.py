@@ -202,11 +202,17 @@ class updateDeployment(BaseModel):
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
 
+    class Config:
+        protected_namespaces = ()
+
 
 class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+
+    class Config:
+        protected_namespaces = ()
 
     def __init__(
         self,
