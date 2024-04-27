@@ -5427,6 +5427,45 @@ def get_optional_params(
         optional_params["extra_body"] = (
             extra_body  # openai client supports `extra_body` param
         )
+    elif custom_llm_provider == "watsonx":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        if max_tokens is not None:
+            optional_params["max_new_tokens"] = max_tokens
+        if stream:
+            optional_params["stream"] = stream
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if frequency_penalty is not None:
+            optional_params["repetition_penalty"] = frequency_penalty
+        if seed is not None:
+            optional_params["random_seed"] = seed
+        if stop is not None:
+            optional_params["stop_sequences"] = stop
+        
+        # WatsonX-only parameters
+        extra_body = {}
+        if "decoding_method" in passed_params:
+            extra_body["decoding_method"] = passed_params.pop("decoding_method")
+        if "min_tokens" in passed_params or  "min_new_tokens" in passed_params:
+            extra_body["min_new_tokens"] = passed_params.pop("min_tokens", passed_params.pop("min_new_tokens"))
+        if "top_k" in passed_params:
+            extra_body["top_k"] = passed_params.pop("top_k")
+        if "truncate_input_tokens" in passed_params:
+            extra_body["truncate_input_tokens"] = passed_params.pop("truncate_input_tokens")
+        if "length_penalty" in passed_params:
+            extra_body["length_penalty"] = passed_params.pop("length_penalty")
+        if "time_limit" in passed_params:
+            extra_body["time_limit"] = passed_params.pop("time_limit")
+        if "return_options" in passed_params:
+            extra_body["return_options"] = passed_params.pop("return_options")
+        optional_params["extra_body"] = (
+            extra_body # openai client supports `extra_body` param
+        )
     else:  # assume passing in params for openai/azure openai
         print_verbose(
             f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZURE - model={model}, custom_llm_provider={custom_llm_provider}"
@@ -5829,6 +5868,8 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "frequency_penalty",
             "presence_penalty",
         ]
+    elif custom_llm_provider == "watsonx":
+        return litellm.IBMWatsonXAIConfig().get_supported_openai_params()
 
 
 def get_formatted_prompt(
@@ -6056,6 +6097,8 @@ def get_llm_provider(
             model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
         ):
             custom_llm_provider = "bedrock"
+        elif model in litellm.watsonx_models:
+            custom_llm_provider = "watsonx"
         # openai embeddings
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
@@ -9750,6 +9793,37 @@ class CustomStreamWrapper:
                 "is_finished": chunk["is_finished"],
                 "finish_reason": finish_reason,
             }
+        
+    def handle_watsonx_stream(self, chunk):
+        try:
+            if isinstance(chunk, dict):
+                parsed_response = chunk
+            elif isinstance(chunk, (str, bytes)):
+                if isinstance(chunk, bytes):
+                    chunk = chunk.decode("utf-8")
+                if 'generated_text' in chunk:
+                    response = chunk.replace('data: ', '').strip()
+                    parsed_response = json.loads(response)
+                else:
+                    return {"text": "", "is_finished": False}
+            else:
+                print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
+                raise ValueError(f"Unable to parse response. Original response: {chunk}")
+            results = parsed_response.get("results", [])
+            if len(results) > 0:
+                text = results[0].get("generated_text", "")
+                finish_reason = results[0].get("stop_reason")
+                is_finished = finish_reason != 'not_finished'
+                return {
+                    "text": text,
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                    "prompt_tokens": results[0].get("input_token_count", None),
+                    "completion_tokens": results[0].get("generated_token_count", None),
+                }
+            return {"text": "", "is_finished": False}
+        except Exception as e:
+            raise e
 
     def model_response_creator(self):
         model_response = ModelResponse(stream=True, model=self.model)
@@ -10004,6 +10078,21 @@ class CustomStreamWrapper:
                 response_obj = self.handle_cloudlfare_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+            elif self.custom_llm_provider == "watsonx":
+                response_obj = self.handle_watsonx_stream(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj.get("prompt_tokens") is not None:
+                    prompt_token_count = getattr(model_response.usage, "prompt_tokens", 0)
+                    model_response.usage.prompt_tokens = (prompt_token_count+response_obj["prompt_tokens"])
+                if response_obj.get("completion_tokens") is not None:
+                    model_response.usage.completion_tokens = response_obj["completion_tokens"]
+                model_response.usage.total_tokens = (
+                    getattr(model_response.usage, "prompt_tokens", 0)
+                    + getattr(model_response.usage, "completion_tokens", 0)
+                )
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
