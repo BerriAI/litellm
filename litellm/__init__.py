@@ -77,6 +77,7 @@ baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
+ssl_verify: bool = True
 disable_streaming_logging: bool = False
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
@@ -298,6 +299,7 @@ aleph_alpha_models: List = []
 bedrock_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
+watsonx_models: List = []
 for key, value in model_cost.items():
     if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
@@ -342,6 +344,8 @@ for key, value in model_cost.items():
         deepinfra_models.append(key)
     elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
+    elif value.get("litellm_provider") == "watsonx":
+        watsonx_models.append(key)
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
@@ -478,6 +482,7 @@ model_list = (
     + perplexity_models
     + maritalk_models
     + vertex_language_models
+    + watsonx_models
 )
 
 provider_list: List = [
@@ -516,6 +521,7 @@ provider_list: List = [
     "cloudflare",
     "xinference",
     "fireworks_ai",
+    "watsonx",
     "custom",  # custom apis
 ]
 
@@ -537,6 +543,7 @@ models_by_provider: dict = {
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
+    "watsonx": watsonx_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -650,6 +657,7 @@ from .llms.bedrock import (
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
+from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
