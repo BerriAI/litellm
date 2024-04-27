@@ -1,9 +1,10 @@
 import sys
 import filecmp
 import shutil
+from typing import Any
 
 
-def main(argv=None):
+def main(argv: Any = None) -> int:
     print(
         "Comparing model_prices_and_context_window and litellm/model_prices_and_context_window_backup.json files... checking if they match."
     )
@@ -24,7 +25,7 @@ def main(argv=None):
         return 1
 
 
-def copy_content(source, destination):
+def copy_content(source: str, destination: str) -> None:
     shutil.copy2(source, destination)
 
 

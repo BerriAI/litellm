@@ -3,7 +3,7 @@ import os
 from github import Github
 
 
-def interpret_results(csv_file):
+def interpret_results(csv_file: str) -> str:
     with open(csv_file, newline="") as csvfile:
         csvreader = csv.DictReader(csvfile)
         rows = list(csvreader)

@@ -7,7 +7,7 @@ class MyUser(HttpUser):
     wait_time = between(1, 5)
 
     @task
-    def chat_completion(self):
+    def chat_completion(self) -> None:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer sk-S2-EZTUUDY0EmM6-Fy0Fyw",
@@ -30,13 +30,13 @@ class MyUser(HttpUser):
         # Print or log the response if needed
 
     @task(10)
-    def health_readiness(self):
+    def health_readiness(self) -> None:
         start_time = time.time()
         response = self.client.get("health/readiness")
         response_time = time.time() - start_time
 
     @task(10)
-    def health_liveliness(self):
+    def health_liveliness(self) -> None:
         start_time = time.time()
         response = self.client.get("health/liveliness")
         response_time = time.time() - start_time
