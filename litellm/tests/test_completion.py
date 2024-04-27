@@ -230,6 +230,48 @@ def test_completion_claude_3_function_call():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_claude_3_with_text_content_dictionaries():
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello! How can I assist you today?"
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello again!"
+                }
+            ]
+        }
+    ]
+
+    try:
+        # test without max tokens
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+        )
+        # Add any assertions, here to check response args
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_parse_xml_params():
     from litellm.llms.prompt_templates.factory import parse_xml_params
@@ -2651,6 +2693,41 @@ def test_completion_palm_stream():
             print(chunk)
     except litellm.APIError as e:
         pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_completion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+@pytest.mark.asyncio
+async def test_acompletion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/deployment/"+os.getenv("WATSONX_DEPLOYMENT_ID")
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            space_id=os.getenv("WATSONX_SPACE_ID_TEST"),
+        )
+        # Add any assertions here to check the response
+        print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

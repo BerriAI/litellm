@@ -529,6 +529,7 @@ def completion(
                 "instances": instances,
                 "vertex_location": vertex_location,
                 "vertex_project": vertex_project,
+                "safety_settings":safety_settings,
                 **optional_params,
             }
             if optional_params.get("stream", False) is True:
@@ -813,6 +814,7 @@ async def async_completion(
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    safety_settings=None,
     **optional_params,
 ):
     """
@@ -844,6 +846,7 @@ async def async_completion(
             response = await llm_model._generate_content_async(
                 contents=content,
                 generation_config=optional_params,
+                safety_settings=safety_settings,
                 tools=tools,
             )
 
