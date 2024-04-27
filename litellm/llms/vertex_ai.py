@@ -184,6 +184,20 @@ class VertexAIConfig:
                 pass
         return optional_params
 
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Common auth params across bedrock/vertex_ai/azure/watsonx
+        """
+        return {"project": "vertex_project", "region_name": "vertex_location"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
 
 import asyncio
 
@@ -529,7 +543,7 @@ def completion(
                 "instances": instances,
                 "vertex_location": vertex_location,
                 "vertex_project": vertex_project,
-                "safety_settings":safety_settings,
+                "safety_settings": safety_settings,
                 **optional_params,
             }
             if optional_params.get("stream", False) is True:

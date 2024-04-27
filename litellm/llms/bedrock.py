@@ -29,6 +29,24 @@ class BedrockError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
+class AmazonBedrockGlobalConfig:
+    def __init__(self):
+        pass
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Mapping of common auth params across bedrock/vertex/azure/watsonx
+        """
+        return {"region_name": "aws_region_name"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
+
 class AmazonTitanConfig:
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-text-express-v1
