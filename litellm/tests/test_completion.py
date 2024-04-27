@@ -2654,6 +2654,7 @@ def test_completion_palm_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -2671,10 +2672,11 @@ def test_completion_watsonx():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.mark.asyncio
 async def test_acompletion_watsonx():
     litellm.set_verbose = True
-    model_name = "watsonx/deployment/"+os.getenv("WATSONX_DEPLOYMENT_ID")
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
     print("testing watsonx")
     try:
         response = await litellm.acompletion(
@@ -2682,7 +2684,6 @@ async def test_acompletion_watsonx():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            space_id=os.getenv("WATSONX_SPACE_ID_TEST"),
         )
         # Add any assertions here to check the response
         print(response)
