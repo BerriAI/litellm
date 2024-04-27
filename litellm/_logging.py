@@ -43,7 +43,7 @@ def _enable_debugging():
     verbose_proxy_logger.disabled = False
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: str) -> None:
     try:
         if set_verbose:
             print(print_statement)  # noqa

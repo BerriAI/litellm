@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
+from typing import Any, Callable
 
 import dotenv, os
 import requests
@@ -15,8 +16,8 @@ class DataDogLogger:
     # Class variables or attributes
     def __init__(
         self,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         from datadog_api_client import ApiClient, Configuration
 
         # check if the correct env variables are set
@@ -35,13 +36,27 @@ class DataDogLogger:
             raise e
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, user_id
-    ):
-        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+        user_id: str,
+    ) -> None:
+        self.log_event(
+            kwargs, response_obj, start_time, end_time, user_id, print_verbose
+        )
 
     def log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
-    ):
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        user_id: str,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         try:
             # Define DataDog client
             from datadog_api_client.v2.api.logs_api import LogsApi

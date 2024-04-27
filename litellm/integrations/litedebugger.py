@@ -1,3 +1,6 @@
+import datetime
+from typing import Optional, Any, Callable
+
 import requests, traceback, json, os
 import types
 
@@ -6,12 +9,12 @@ class LiteDebugger:
     user_email = None
     dashboard_url = None
 
-    def __init__(self, email=None):
+    def __init__(self, email: Optional[str] = None) -> None:
         self.api_url = "https://api.litellm.ai/debugger"
         self.validate_environment(email)
         pass
 
-    def validate_environment(self, email):
+    def validate_environment(self, email: Optional[str]) -> None:
         try:
             self.user_email = (
                 email or os.getenv("LITELLM_TOKEN") or os.getenv("LITELLM_EMAIL")
@@ -40,15 +43,15 @@ class LiteDebugger:
 
     def input_log_event(
         self,
-        model,
-        messages,
-        end_user,
-        litellm_call_id,
-        call_type,
-        print_verbose,
-        litellm_params,
-        optional_params,
-    ):
+        model: str,
+        messages: list[dict[str, Any]],
+        end_user: str,
+        litellm_call_id: str,
+        call_type: str,
+        print_verbose: Callable[[str, *Any], None],
+        litellm_params: dict[str, Any],
+        optional_params: dict[str, Any],
+    ) -> None:
         print_verbose(
             f"LiteDebugger: Pre-API Call Logging for call id {litellm_call_id}"
         )
@@ -57,7 +60,9 @@ class LiteDebugger:
                 f"LiteLLMDebugger: Logging - Enters input logging function for model {model}"
             )
 
-            def remove_key_value(dictionary, key):
+            def remove_key_value(
+                dictionary: dict[Any, Any], key: Any
+            ) -> dict[Any, Any]:
                 new_dict = dictionary.copy()  # Create a copy of the original dictionary
                 new_dict.pop(key)  # Remove the specified key-value pair from the copy
                 return new_dict
@@ -92,9 +97,11 @@ class LiteDebugger:
             elif call_type == "completion":
                 litellm_data_obj = {
                     "model": model,
-                    "messages": messages
-                    if isinstance(messages, list)
-                    else [{"role": "user", "content": messages}],
+                    "messages": (
+                        messages
+                        if isinstance(messages, list)
+                        else [{"role": "user", "content": messages}]
+                    ),
                     "end_user": end_user,
                     "status": "initiated",
                     "litellm_call_id": litellm_call_id,
@@ -120,8 +127,13 @@ class LiteDebugger:
             pass
 
     def post_call_log_event(
-        self, original_response, litellm_call_id, print_verbose, call_type, stream
-    ):
+        self,
+        original_response: dict[str, Any],
+        litellm_call_id: str,
+        print_verbose: Callable[[str, *Any], None],
+        call_type: str,
+        stream: bool,
+    ) -> None:
         print_verbose(
             f"LiteDebugger: Post-API Call Logging for call id {litellm_call_id}"
         )
@@ -148,9 +160,11 @@ class LiteDebugger:
                 litellm_data_obj = {
                     "status": "received",
                     "additional_details": {
-                        "original_response": "Streamed response"
-                        if isinstance(original_response, types.GeneratorType)
-                        else original_response
+                        "original_response": (
+                            "Streamed response"
+                            if isinstance(original_response, types.GeneratorType)
+                            else original_response
+                        )
                     },
                     "litellm_call_id": litellm_call_id,
                     "user_email": self.user_email,
@@ -169,15 +183,15 @@ class LiteDebugger:
 
     def log_event(
         self,
-        end_user,
-        response_obj,
-        start_time,
-        end_time,
-        litellm_call_id,
-        print_verbose,
-        call_type,
-        stream=False,
-    ):
+        end_user: str,
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        litellm_call_id: str,
+        print_verbose: Callable[[str, *Any], None],
+        call_type: str,
+        stream: bool = False,
+    ) -> None:
         print_verbose(
             f"LiteDebugger: Success/Failure Call Logging for call id {litellm_call_id}"
         )

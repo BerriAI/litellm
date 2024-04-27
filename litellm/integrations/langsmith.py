@@ -1,5 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langsmith
+from typing import Any, Callable
+
 import dotenv, os
 import requests
 import requests
@@ -12,7 +14,7 @@ import types
 from pydantic import BaseModel
 
 
-def is_serializable(value):
+def is_serializable(value: Any) -> bool:
     non_serializable_types = (
         types.CoroutineType,
         types.FunctionType,
@@ -24,14 +26,21 @@ def is_serializable(value):
 
 class LangsmithLogger:
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         self.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
         self.langsmith_project = os.getenv("LANGSMITH_PROJECT", "litellm-completion")
         self.langsmith_default_run_name = os.getenv(
             "LANGSMITH_DEFAULT_RUN_NAME", "LLMRun"
         )
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         # Method definition
         # inspired by Langsmith http api here: https://github.com/langchain-ai/langsmith-cookbook/blob/main/tracing-examples/rest/rest.ipynb
         metadata = (
@@ -56,11 +65,13 @@ class LangsmithLogger:
             from datetime import timezone
 
             try:
-                start_time = kwargs["start_time"].astimezone(timezone.utc).isoformat()
-                end_time = kwargs["end_time"].astimezone(timezone.utc).isoformat()
+                start_time: str = (
+                    kwargs["start_time"].astimezone(timezone.utc).isoformat()
+                )
+                end_time: str = kwargs["end_time"].astimezone(timezone.utc).isoformat()
             except:
-                start_time = datetime.datetime.utcnow().isoformat()
-                end_time = datetime.datetime.utcnow().isoformat()
+                start_time: str = datetime.datetime.utcnow().isoformat()
+                end_time: str = datetime.datetime.utcnow().isoformat()
 
             # filter out kwargs to not include any dicts, langsmith throws an erros when trying to log kwargs
             new_kwargs = {}
@@ -81,7 +92,7 @@ class LangsmithLogger:
                 try:
                     response_obj = response_obj.model_dump()
                 except:
-                    response_obj = response_obj.dict()  # type: ignore
+                    response_obj = response_obj.dict()
 
             print(f"response_obj: {response_obj}")
 

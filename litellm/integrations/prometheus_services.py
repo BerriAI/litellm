@@ -1,10 +1,14 @@
 # used for monitoring litellm services health on `/metrics` endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
-
+from __future__ import annotations
+from typing import Any, Optional, TYPE_CHECKING, Union
 
 import dotenv, os
 import requests
+
+if TYPE_CHECKING:
+    from prometheus_client import Metric, Histogram, Counter
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -21,8 +25,8 @@ class PrometheusServicesLogger:
     def __init__(
         self,
         mock_testing: bool = False,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         try:
             try:
                 from prometheus_client import Counter, Histogram, REGISTRY
@@ -70,20 +74,22 @@ class PrometheusServicesLogger:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
 
-    def is_metric_registered(self, metric_name) -> bool:
+    def is_metric_registered(self, metric_name: str) -> bool:
         for metric in self.REGISTRY.collect():
             if metric_name == metric.name:
                 return True
         return False
 
-    def get_metric(self, metric_name):
+    def get_metric(self, metric_name: str) -> Optional["Metric"]:
         for metric in self.REGISTRY.collect():
             for sample in metric.samples:
                 if metric_name == sample.name:
                     return metric
         return None
 
-    def create_histogram(self, service: str, type_of_request: str):
+    def create_histogram(
+        self, service: str, type_of_request: str
+    ) -> Union[Histogram, Metric, None]:
         metric_name = "litellm_{}_{}".format(service, type_of_request)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
@@ -94,7 +100,9 @@ class PrometheusServicesLogger:
             labelnames=[service],
         )
 
-    def create_counter(self, service: str, type_of_request: str):
+    def create_counter(
+        self, service: str, type_of_request: str
+    ) -> Union[Counter, Metric, None]:
         metric_name = "litellm_{}_{}".format(service, type_of_request)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
@@ -107,25 +115,25 @@ class PrometheusServicesLogger:
 
     def observe_histogram(
         self,
-        histogram,
+        histogram: Histogram,
         labels: str,
         amount: float,
-    ):
+    ) -> None:
         assert isinstance(histogram, self.Histogram)
 
         histogram.labels(labels).observe(amount)
 
     def increment_counter(
         self,
-        counter,
+        counter: Counter,
         labels: str,
         amount: float,
-    ):
+    ) -> None:
         assert isinstance(counter, self.Counter)
 
         counter.labels(labels).inc(amount)
 
-    def service_success_hook(self, payload: ServiceLoggerPayload):
+    def service_success_hook(self, payload: ServiceLoggerPayload) -> None:
         if self.mock_testing:
             self.mock_testing_success_calls += 1
 
@@ -145,7 +153,7 @@ class PrometheusServicesLogger:
                         amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
                     )
 
-    def service_failure_hook(self, payload: ServiceLoggerPayload):
+    def service_failure_hook(self, payload: ServiceLoggerPayload) -> None:
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
 
@@ -159,7 +167,7 @@ class PrometheusServicesLogger:
                         amount=1,  # LOG ERROR COUNT / TOTAL REQUESTS TO PROMETHEUS
                     )
 
-    async def async_service_success_hook(self, payload: ServiceLoggerPayload):
+    async def async_service_success_hook(self, payload: ServiceLoggerPayload) -> None:
         """
         Log successful call to prometheus
         """
@@ -182,7 +190,7 @@ class PrometheusServicesLogger:
                         amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
                     )
 
-    async def async_service_failure_hook(self, payload: ServiceLoggerPayload):
+    async def async_service_failure_hook(self, payload: ServiceLoggerPayload) -> None:
         print(f"received error payload: {payload.error}")
         if self.mock_testing:
             self.mock_testing_failure_calls += 1

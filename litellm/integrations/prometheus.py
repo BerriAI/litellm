@@ -1,6 +1,7 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
+from typing import Any, Callable
 
 import dotenv, os
 import requests
@@ -16,8 +17,8 @@ class PrometheusLogger:
     # Class variables or attributes
     def __init__(
         self,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         try:
             print(f"in init prometheus metrics")
             from prometheus_client import Counter
@@ -52,13 +53,27 @@ class PrometheusLogger:
             raise e
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, user_id
-    ):
-        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+        user_id: str,
+    ) -> None:
+        self.log_event(
+            kwargs, response_obj, start_time, end_time, user_id, print_verbose
+        )
 
     def log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
-    ):
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        user_id: str,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         try:
             # Define prometheus client
             verbose_logger.debug(

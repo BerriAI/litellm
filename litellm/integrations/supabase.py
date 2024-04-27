@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
+from typing import Any, Callable
 
 import dotenv, os
 import requests
@@ -14,7 +15,7 @@ class Supabase:
     # Class variables or attributes
     supabase_table_name = "request_logs"
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance variables
         self.supabase_url = os.getenv("SUPABASE_URL")
         self.supabase_key = os.getenv("SUPABASE_KEY")
@@ -28,8 +29,13 @@ class Supabase:
         )
 
     def input_log_event(
-        self, model, messages, end_user, litellm_call_id, print_verbose
-    ):
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        end_user: str,
+        litellm_call_id: str,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         try:
             print_verbose(
                 f"Supabase Logging - Enters input logging function for model {model}"
@@ -53,15 +59,15 @@ class Supabase:
 
     def log_event(
         self,
-        model,
-        messages,
-        end_user,
-        response_obj,
-        start_time,
-        end_time,
-        litellm_call_id,
-        print_verbose,
-    ):
+        model: str,
+        messages: list[dict[str, Any]],
+        end_user: str,
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        litellm_call_id: str,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         try:
             print_verbose(
                 f"Supabase Logging - Enters logging function for model {model}, response_obj: {response_obj}"

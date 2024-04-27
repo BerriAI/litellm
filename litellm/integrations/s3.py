@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
+from typing import Optional, Any, Union, Callable
 
 import dotenv, os
 import requests
@@ -15,19 +16,19 @@ class S3Logger:
     # Class variables or attributes
     def __init__(
         self,
-        s3_bucket_name=None,
-        s3_path=None,
-        s3_region_name=None,
-        s3_api_version=None,
-        s3_use_ssl=True,
-        s3_verify=None,
-        s3_endpoint_url=None,
-        s3_aws_access_key_id=None,
-        s3_aws_secret_access_key=None,
-        s3_aws_session_token=None,
-        s3_config=None,
-        **kwargs,
-    ):
+        s3_bucket_name: Optional[str] = None,
+        s3_path: Optional[str] = None,
+        s3_region_name: Optional[str] = None,
+        s3_api_version: Optional[str] = None,
+        s3_use_ssl: bool = True,
+        s3_verify: Union[bool, str, None] = None,
+        s3_endpoint_url: Optional[str] = None,
+        s3_aws_access_key_id: Optional[str] = None,
+        s3_aws_secret_access_key: Optional[str] = None,
+        s3_aws_session_token: Optional[str] = None,
+        s3_config: Optional[str] = None,
+        **kwargs: Any,
+    ) -> None:
         import boto3
 
         try:
@@ -81,11 +82,23 @@ class S3Logger:
             raise e
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose
-    ):
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> Union[dict[Any, Any], None]:
         try:
             verbose_logger.debug(
                 f"s3 Logging - Enters logging function for model {kwargs}"
@@ -164,11 +177,11 @@ class S3Logger:
 
             import json
 
-            payload = json.dumps(payload)
+            payload: str = json.dumps(payload)  # type: ignore
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload}")
 
-            response = self.s3_client.put_object(
+            response: dict[Any, Any] = self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_object_key,
                 Body=payload,

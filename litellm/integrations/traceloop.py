@@ -1,12 +1,23 @@
+import datetime
+from typing import Any, Callable
+
+
 class TraceloopLogger:
-    def __init__(self):
+    def __init__(self) -> None:
         from traceloop.sdk.tracing.tracing import TracerWrapper
         from traceloop.sdk import Traceloop
 
         Traceloop.init(app_name="Litellm-Server", disable_batch=True)
         self.tracer_wrapper = TracerWrapper()
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         from opentelemetry.trace import SpanKind
         from opentelemetry.semconv.ai import SpanAttributes
 

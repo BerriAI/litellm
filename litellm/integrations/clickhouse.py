@@ -2,13 +2,17 @@
 
 #### What this does ####
 #    On success, logs events to Promptlayer
+from __future__ import annotations
+from typing import Any, Optional, Callable, TYPE_CHECKING
 import dotenv, os
 import requests
+
+if TYPE_CHECKING:
+    from clickhouse_connect.driver.client import Client
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
-from typing import Literal, Union
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -27,7 +31,7 @@ import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
-def create_client():
+def create_client() -> Client:
     try:
         import clickhouse_connect
 
@@ -51,7 +55,7 @@ def create_client():
         raise ValueError(f"Clickhouse: {e}")
 
 
-def build_daily_metrics():
+def build_daily_metrics() -> dict[str, Any]:
     click_house_client = create_client()
 
     # get daily spend
@@ -126,8 +130,8 @@ def build_daily_metrics():
     total_spend = daily_spend["daily_spend"].sum()
 
     # Identify top models and top API keys with the highest spend across all days
-    top_models = {}
-    top_api_keys = {}
+    top_models: dict[str, Any] = {}
+    top_api_keys: dict[str, Any] = {}
 
     for day, spend_per_model in result_dict.items():
         for model, model_spend in spend_per_model.items():
@@ -160,7 +164,7 @@ def build_daily_metrics():
 
         result.append(data_day)
 
-    data_to_return = {}
+    data_to_return: dict[str, Any] = {}
     data_to_return["daily_spend"] = result
 
     data_to_return["total_spend"] = total_spend
@@ -172,7 +176,7 @@ def build_daily_metrics():
 # build_daily_metrics()
 
 
-def _start_clickhouse():
+def _start_clickhouse() -> None:
     import clickhouse_connect
 
     port = os.getenv("CLICKHOUSE_PORT")
@@ -242,7 +246,9 @@ def _start_clickhouse():
 
 class ClickhouseLogger:
     # Class variables or attributes
-    def __init__(self, endpoint=None, headers=None):
+    def __init__(
+        self, endpoint: Optional[str] = None, headers: Optional[dict[str, Any]] = None
+    ) -> None:
         import clickhouse_connect
 
         _start_clickhouse()
@@ -266,8 +272,18 @@ class ClickhouseLogger:
     # This is sync, because we run this in a separate thread. Running in a sepearate thread ensures it will never block an LLM API call
     # Experience with s3, Langfuse shows that async logging events are complicated and can block LLM calls
     def log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
-    ):
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        user_id: Optional[str],
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
+        """
+        @type response_obj: Union[None, ModelResponse, EmbeddingResponse, ImageResponse, TranscriptionResponse, TextCompletionResponse]
+
+        """
         try:
             verbose_logger.debug(
                 f"ClickhouseLogger Logging - Enters logging function for model {kwargs}"

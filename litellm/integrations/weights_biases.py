@@ -1,9 +1,10 @@
+from typing import Any, Dict, List, Optional, TypeVar, Callable
+
 imported_openAIResponse = True
 try:
     import io
     import logging
     import sys
-    from typing import Any, Dict, List, Optional, TypeVar
 
     from wandb.sdk.data_types import trace_tree
 
@@ -21,11 +22,11 @@ try:
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
-        def __getitem__(self, key: K) -> V:
-            ...  # pragma: no cover
+        def __getitem__(self, key: K) -> V: ...  # pragma: no cover
 
-        def get(self, key: K, default: Optional[V] = None) -> Optional[V]:
-            ...  # pragma: no cover
+        def get(
+            self, key: K, default: Optional[V] = None
+        ) -> Optional[V]: ...  # pragma: no cover
 
     class OpenAIRequestResponseResolver:
         def __call__(
@@ -184,7 +185,7 @@ import traceback
 
 class WeightsBiasesLogger:
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         try:
             import wandb
         except:
@@ -197,7 +198,14 @@ class WeightsBiasesLogger:
             )
         self.resolver = OpenAIRequestResponseResolver()
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: OpenAIResponse,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         # Method definition
         import wandb
 

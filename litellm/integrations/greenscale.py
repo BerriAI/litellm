@@ -1,51 +1,79 @@
+from typing import Any, Callable
+
 import requests
 import json
 import traceback
 from datetime import datetime, timezone
 
+from pydantic import BaseModel
+
+
 class GreenscaleLogger:
-    def __init__(self):
+    def __init__(self) -> None:
         import os
+
         self.greenscale_api_key = os.getenv("GREENSCALE_API_KEY")
         self.headers = {
             "api-key": self.greenscale_api_key,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        self.greenscale_logging_url = os.getenv("GREENSCALE_ENDPOINT")
+        self.greenscale_logging_url: str = os.getenv("GREENSCALE_ENDPOINT")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: BaseModel,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         try:
             response_json = response_obj.model_dump() if response_obj else {}
             data = {
                 "modelId": kwargs.get("model"),
                 "inputTokenCount": response_json.get("usage", {}).get("prompt_tokens"),
-                "outputTokenCount": response_json.get("usage", {}).get("completion_tokens"),
+                "outputTokenCount": response_json.get("usage", {}).get(
+                    "completion_tokens"
+                ),
             }
-            data["timestamp"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            
-            if type(end_time) == datetime and type(start_time) == datetime:
-                data["invocationLatency"] = int((end_time - start_time).total_seconds() * 1000)
+            data["timestamp"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
 
+            if type(end_time) == datetime and type(start_time) == datetime:
+                data["invocationLatency"] = int(
+                    (end_time - start_time).total_seconds() * 1000
+                )
 
             # Add additional metadata keys to tags
             tags = []
             metadata = kwargs.get("litellm_params", {}).get("metadata", {})
             for key, value in metadata.items():
-                if key.startswith("greenscale"): 
+                if key.startswith("greenscale"):
                     if key == "greenscale_project":
                         data["project"] = value
                     elif key == "greenscale_application":
                         data["application"] = value
                     else:
-                        tags.append({"key": key.replace("greenscale_", ""), "value": str(value)})
-            
+                        tags.append(
+                            {"key": key.replace("greenscale_", ""), "value": str(value)}
+                        )
+
             data["tags"] = tags
 
-            response = requests.post(self.greenscale_logging_url, headers=self.headers, data=json.dumps(data, default=str))
+            response = requests.post(
+                self.greenscale_logging_url,
+                headers=self.headers,
+                data=json.dumps(data, default=str),
+            )
             if response.status_code != 200:
-                print_verbose(f"Greenscale Logger Error - {response.text}, {response.status_code}")
+                print_verbose(
+                    f"Greenscale Logger Error - {response.text}, {response.status_code}"
+                )
             else:
                 print_verbose(f"Greenscale Logger Succeeded - {response.text}")
         except Exception as e:
-            print_verbose(f"Greenscale Logger Error - {e}, Stack trace: {traceback.format_exc()}")
+            print_verbose(
+                f"Greenscale Logger Error - {e}, Stack trace: {traceback.format_exc()}"
+            )
             pass

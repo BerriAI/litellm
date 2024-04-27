@@ -241,8 +241,8 @@ class ProxyLogging:
         ],
         user_max_budget: float,
         user_current_spend: float,
-        user_info=None,
-        error_message="",
+        user_info: Optional[dict[str, Any]] = None,
+        error_message: str = "",
     ):
         if self.alerting is None:
             # do nothing if alerting is not switched on
@@ -1717,7 +1717,9 @@ def hash_token(token: str):
     return hashed_token
 
 
-def get_logging_payload(kwargs, response_obj, start_time, end_time):
+def get_logging_payload(
+    kwargs: Union[dict[str, Any], None], response_obj, start_time, end_time
+) -> dict[str, Any]:
     from litellm.proxy._types import LiteLLM_SpendLogs
     from pydantic import Json
     import uuid
@@ -1726,7 +1728,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         f"SpendTable: get_logging_payload - kwargs: {kwargs}\n\n"
     )
 
-    if kwargs == None:
+    if kwargs is None:
         kwargs = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})

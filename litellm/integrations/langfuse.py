@@ -1,5 +1,8 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import datetime
+from typing import Optional, Any, Callable
+
 import dotenv, os
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
@@ -12,7 +15,11 @@ import litellm
 
 class LangFuseLogger:
     # Class variables or attributes
-    def __init__(self, langfuse_public_key=None, langfuse_secret=None):
+    def __init__(
+        self,
+        langfuse_public_key: Optional[str] = None,
+        langfuse_secret: Optional[str] = None,
+    ) -> None:
         try:
             from langfuse import Langfuse
         except Exception as e:
@@ -69,15 +76,15 @@ class LangFuseLogger:
     #     )
     def log_event(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
-        user_id,
-        print_verbose,
-        level="DEFAULT",
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        user_id: Optional[str],
+        print_verbose: Callable[[str, *Any], None],
+        level: str = "DEFAULT",
         status_message=None,
-    ):
+    ) -> None:
         # Method definition
 
         try:
@@ -174,28 +181,34 @@ class LangFuseLogger:
             pass
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
-    ):
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        user_id: str,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         """
         TODO: support async calls when langfuse is truly async
         """
 
-    def _is_langfuse_v2(self):
+    def _is_langfuse_v2(self) -> bool:
         import langfuse
 
         return Version(langfuse.version.__version__) >= Version("2.0.0")
 
     def _log_langfuse_v1(
         self,
-        user_id,
-        metadata,
+        user_id: Optional[str],
+        metadata: dict[str, Any],
         output,
-        start_time,
-        end_time,
-        kwargs,
-        optional_params,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        kwargs: dict[str, Any],
+        optional_params: dict[str, Any],
         input,
-        response_obj,
+        response_obj: dict[str, Any],
     ):
         from langfuse.model import CreateTrace, CreateGeneration
 
@@ -231,19 +244,19 @@ class LangFuseLogger:
 
     def _log_langfuse_v2(
         self,
-        user_id,
-        metadata,
-        litellm_params,
+        user_id: Optional[str],
+        metadata: dict[str, Any],
+        litellm_params: dict[str, Any],
         output,
-        start_time,
-        end_time,
-        kwargs,
-        optional_params,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        kwargs: dict[str, Any],
+        optional_params: dict[str, Any],
         input,
-        response_obj,
-        level,
-        print_verbose,
-    ):
+        response_obj: dict[str, Any],
+        level: str,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         import langfuse
 
         try:

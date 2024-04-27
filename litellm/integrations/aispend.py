@@ -1,5 +1,7 @@
 #### What this does ####
 #    On success + failure, log events to aispend.io
+from typing import Union, Callable, Any
+
 import dotenv, os
 import requests
 
@@ -7,7 +9,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import datetime
 
-model_cost = {
+model_cost: dict[str, dict[str, Union[int, float]]] = {
     "gpt-3.5-turbo": {
         "max_tokens": 4000,
         "input_cost_per_token": 0.0000015,
@@ -88,16 +90,18 @@ model_cost = {
 
 class AISpendLogger:
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance variables
         self.account_id = os.getenv("AISPEND_ACCOUNT_ID")
         self.api_key = os.getenv("AISPEND_API_KEY")
 
-    def price_calculator(self, model, response_obj, start_time, end_time):
+    def price_calculator(
+        self, model: str, response_obj: dict[str, Any], start_time: int, end_time: int
+    ) -> tuple[float, float]:
         # try and find if the model is in the model_cost map
         # else default to the average of the costs
-        prompt_tokens_cost_usd_dollar = 0
-        completion_tokens_cost_usd_dollar = 0
+        prompt_tokens_cost_usd_dollar = 0.0
+        completion_tokens_cost_usd_dollar = 0.0
         if model in model_cost:
             prompt_tokens_cost_usd_dollar = (
                 model_cost[model]["input_cost_per_token"]
@@ -111,13 +115,13 @@ class AISpendLogger:
             # replicate models are charged based on time
             # llama 2 runs on an nvidia a100 which costs $0.0032 per second - https://replicate.com/replicate/llama-2-70b-chat
             model_run_time = end_time - start_time  # assuming time in seconds
-            cost_usd_dollar = model_run_time * 0.0032
+            cost_usd_dollar: float = model_run_time * 0.0032
             prompt_tokens_cost_usd_dollar = cost_usd_dollar / 2
             completion_tokens_cost_usd_dollar = cost_usd_dollar / 2
         else:
             # calculate average input cost
-            input_cost_sum = 0
-            output_cost_sum = 0
+            input_cost_sum = 0.0
+            output_cost_sum = 0.0
             for model in model_cost:
                 input_cost_sum += model_cost[model]["input_cost_per_token"]
                 output_cost_sum += model_cost[model]["output_cost_per_token"]
@@ -133,7 +137,14 @@ class AISpendLogger:
             )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
 
-    def log_event(self, model, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        model: str,
+        response_obj: dict[str, Any],
+        start_time: int,
+        end_time: int,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         # Method definition
         try:
             print_verbose(

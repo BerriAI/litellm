@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
+from typing import Callable, Any
 
 import dotenv, os
 import requests
@@ -14,7 +15,7 @@ from litellm._logging import print_verbose
 class DyanmoDBLogger:
     # Class variables or attributes
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance variables
         import boto3
 
@@ -28,11 +29,23 @@ class DyanmoDBLogger:
         self.table_name = litellm.dynamodb_table_name
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose
-    ):
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> Any:
         try:
             print_verbose(
                 f"DynamoDB Logging - Enters logging function for model {kwargs}"

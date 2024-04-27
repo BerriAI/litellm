@@ -1,5 +1,8 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
+import datetime
+from typing import Any, Callable
+
 import dotenv, os
 import requests
 from pydantic import BaseModel
@@ -7,13 +10,21 @@ from pydantic import BaseModel
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
+
 class PromptLayerLogger:
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance variables
         self.key = os.getenv("PROMPTLAYER_API_KEY")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: dict[str, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         # Method definition
         try:
             new_kwargs = {}
@@ -32,7 +43,11 @@ class PromptLayerLogger:
                     tags = kwargs["litellm_params"]["metadata"]["pl_tags"]
 
                 # Remove "pl_tags" from metadata
-                metadata = {k:v for k, v in kwargs["litellm_params"]["metadata"].items() if k != "pl_tags"}
+                metadata = {
+                    k: v
+                    for k, v in kwargs["litellm_params"]["metadata"].items()
+                    if k != "pl_tags"
+                }
 
             print_verbose(
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"

@@ -2,6 +2,8 @@
 #    On success + failure, log events to lunary.ai
 from datetime import datetime, timezone
 import traceback
+from typing import Any, Union, Optional, Callable
+
 import dotenv
 import importlib
 import sys
@@ -12,18 +14,22 @@ dotenv.load_dotenv()
 
 
 # convert to {completion: xx, tokens: xx}
-def parse_usage(usage):
+def parse_usage(usage: dict[str, Any]) -> dict[str, Any]:
     return {
         "completion": usage["completion_tokens"] if "completion_tokens" in usage else 0,
         "prompt": usage["prompt_tokens"] if "prompt_tokens" in usage else 0,
     }
 
 
-def parse_messages(input):
+def parse_messages(
+    input: Optional[Union[str, dict[str, Any], list[Union[str, dict[str, Any]]]]]
+) -> Optional[Union[str, dict[str, Any], list[Union[str, dict[str, Any]]]]]:
     if input is None:
         return None
 
-    def clean_message(message):
+    def clean_message(
+        message: Union[str, dict[str, Any]]
+    ) -> Union[str, dict[str, Any]]:
         # if is strin, return as is
         if isinstance(message, str):
             return message
@@ -55,7 +61,7 @@ def parse_messages(input):
 
 class LunaryLogger:
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         try:
             import lunary
 
@@ -74,20 +80,20 @@ class LunaryLogger:
 
     def log_event(
         self,
-        kwargs,
-        type,
-        event,
-        run_id,
-        model,
-        print_verbose,
-        extra=None,
-        input=None,
-        user_id=None,
+        kwargs: dict[str, Any],
+        type: str,
+        event: str,
+        run_id: str,
+        model: str,
+        print_verbose: Callable[[str, *Any], None],
+        extra: Optional[dict[str, Any]] = None,
+        input: Any = None,
+        user_id: Optional[str] = None,
         response_obj=None,
-        start_time=datetime.now(timezone.utc),
-        end_time=datetime.now(timezone.utc),
-        error=None,
-    ):
+        start_time: datetime = datetime.now(timezone.utc),
+        end_time: datetime = datetime.now(timezone.utc),
+        error: Optional[str] = None,
+    ) -> None:
         # Method definition
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")

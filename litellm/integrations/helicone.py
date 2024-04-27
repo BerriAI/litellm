@@ -1,5 +1,8 @@
 #### What this does ####
 #    On success, logs events to Helicone
+import datetime
+from typing import Any, Callable
+
 import dotenv, os
 import requests
 import litellm
@@ -12,12 +15,14 @@ class HeliconeLogger:
     # Class variables or attributes
     helicone_model_list = ["gpt", "claude"]
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance variables
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
 
-    def claude_mapping(self, model, messages, response_obj):
+    def claude_mapping(
+        self, model: str, messages: list[dict[str, Any]], response_obj: Any
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         from anthropic import HUMAN_PROMPT, AI_PROMPT
 
         prompt = f"{HUMAN_PROMPT}"
@@ -41,8 +46,14 @@ class HeliconeLogger:
         return claude_provider_request, claude_response_obj
 
     def log_success(
-        self, model, messages, response_obj, start_time, end_time, print_verbose
-    ):
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        response_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[str, *Any], None],
+    ) -> None:
         # Method definition
         try:
             print_verbose(
