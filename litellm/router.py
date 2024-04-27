@@ -1625,12 +1625,10 @@ class Router:
                 min_timeout=self.retry_after,
             )
             time.sleep(timeout)
-        elif (
-            hasattr(e, "status_code")
-            and hasattr(e, "response")
-            and litellm._should_retry(status_code=e.status_code)
+        elif hasattr(e, "status_code") and litellm._should_retry(
+            status_code=e.status_code
         ):
-            if hasattr(e.response, "headers"):
+            if hasattr(e, "response") and hasattr(e.response, "headers"):
                 timeout = litellm._calculate_retry_after(
                     remaining_retries=remaining_retries,
                     max_retries=num_retries,
