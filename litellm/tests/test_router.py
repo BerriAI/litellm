@@ -65,6 +65,42 @@ def test_router_timeout_init(timeout, ssl_verify):
         )
 
 
+@pytest.mark.parametrize(
+    "mistral_api_base",
+    [
+        "os.environ/AZURE_MISTRAL_API_BASE",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1/",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com",
+    ],
+)
+def test_router_azure_ai_studio_init(mistral_api_base):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "azure/mistral-large-latest",
+                    "api_key": "os.environ/AZURE_MISTRAL_API_KEY",
+                    "api_base": mistral_api_base,
+                },
+                "model_info": {"id": 1234},
+            }
+        ]
+    )
+
+    model_client = router._get_client(
+        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    )
+    url = getattr(model_client, "_base_url")
+    uri_reference = str(getattr(url, "_uri_reference"))
+
+    print(f"uri_reference: {uri_reference}")
+
+    assert "/v1/" in uri_reference
+
+
 def test_exception_raising():
     # this tests if the router raises an exception when invalid params are set
     # in this test both deployments have bad keys - Keep this test. It validates if the router raises the most recent exception
