@@ -350,6 +350,29 @@ print(f"TITAN EMBEDDINGS")
 print(query_result[:5])
 ```
 </TabItem>
+<TabItem value="litellm" label="LiteLLM SDK">
+
+This is **not recommended**. There is duplicate logic as the proxy also uses the sdk, which might lead to unexpected errors. 
+
+```python
+from litellm import completion 
+
+response = completion(
+    model="openai/gpt-3.5-turbo", 
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ], 
+    api_key="anything", 
+    base_url="http://0.0.0.0:4000"
+    )
+
+print(response)
+
+```
+</TabItem>
 </Tabs>
 
 [**More Info**](./configs.md)
@@ -438,7 +461,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
   ),
 ```
 
-Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
 </TabItem>
 
 <TabItem value="aider" label="Aider">
@@ -551,4 +574,3 @@ No Logs
 ```shell
 export LITELLM_LOG=None
 ```
-

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Card, Metric, Text, Title, Subtitle } from "@tremor/react";
+import { Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody, } from "@tremor/react";
 import { CopyToClipboard } from 'react-copy-to-clipboard';
 import {
   Button as Button2,
@@ -91,19 +91,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     }
   };
 
-
-  const handleModelSelection = (selectedModels: string[]) => {
-    if (selectedModels.includes("all_models")) {
-      // Select all models except "All Models"
-      const allModelsExceptAll = team ? team.models : userModels;
-      form.setFieldsValue({
-        models: allModelsExceptAll
-      });
-    }
-  };
-  
-
-
   const handleCopy = () => {
     message.success('API Key copied to clipboard');
 };
@@ -129,7 +116,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          {userRole === "App Owner" || userRole === "Admin" ? (
             <>
               <Form.Item 
                 label="Key Name" 
@@ -137,11 +123,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 rules={[{ required: true, message: 'Please input a key name' }]}
                 help="required"
               >
-                <Input />
+                <TextInput placeholder="" />
               </Form.Item>
               <Form.Item
                 label="Team ID"
                 name="team_id"
+                hidden={true}
                 initialValue={team ? team["team_id"] : null}
                 valuePropName="team_id"
                 className="mt-8"
@@ -149,34 +136,63 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <Input value={team ? team["team_alias"] : ""} disabled />
               </Form.Item>
 
-              <Form.Item label="Models" name="models">
+              <Form.Item 
+                label="Models" 
+                name="models"
+                rules={[{ required: true, message: 'Please select a model' }]}
+                help="required"
+              >
                 <Select
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
-                  onChange={(selectedModels) => handleModelSelection(selectedModels)}
+                  onChange={(values) => {
+                    // Check if "All Team Models" is selected
+                    const isAllTeamModelsSelected = values.includes("all-team-models");
+              
+                    // If "All Team Models" is selected, deselect all other models
+                    if (isAllTeamModelsSelected) {
+                      const newValues = ["all-team-models"];
+                      // You can call the form's setFieldsValue method to update the value
+                      form.setFieldsValue({ models: newValues });
+                    }
+                  }}
                 >
-                  <Option key="all_models" value="all_models">
-                    All Models
-                  </Option>
-                  {team && team.models ? (
-                    team.models.map((model: string) => (
-                      <Option key={model} value={model}>
-                        {model}
-                      </Option>
-                    ))
-                  ) : (
-                    userModels.map((model: string) => (
-                      <Option key={model} value={model}>
-                        {model}
-                      </Option>
-                    ))
-                  )}
-
+                    <Option key="all-team-models" value="all-team-models">
+                      All Team Models
+                    </Option>
+                    {team && team.models ? (
+                      team.models.includes("all-proxy-models") ? (
+                        userModels.map((model: string) => (
+                          (
+                            <Option key={model} value={model}>
+                              {model}
+                            </Option>
+                          )
+                        ))
+                      ) : (
+                        team.models.map((model: string) => (
+                          <Option key={model} value={model}>
+                            {model}
+                          </Option>
+                        ))
+                      )
+                    ) : (
+                      userModels.map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    )}
 
                 </Select>
               </Form.Item>
-              <Form.Item 
+              <Accordion className="mt-20 mb-8" >
+                <AccordionHeader>
+                  <b>Optional Settings</b>
+                </AccordionHeader>
+                <AccordionBody>
+                <Form.Item 
                 className="mt-8"
                 label="Max Budget (USD)" 
                 name="max_budget" 
@@ -239,26 +255,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <InputNumber step={1} width={400} />
               </Form.Item>
               <Form.Item label="Expire Key (eg: 30s, 30h, 30d)" name="duration" className="mt-8">
-                <Input />
+                <TextInput placeholder="" />
               </Form.Item>
               <Form.Item label="Metadata" name="metadata">
                 <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
               </Form.Item>
-            </>
-          ) : (
-            <>
-              <Form.Item label="Key Name" name="key_alias">
-                <Input />
-              </Form.Item>
-              <Form.Item label="Team ID (Contact Group)" name="team_id">
-                <Input placeholder="default team (create a new team)" />
-              </Form.Item>
 
-              <Form.Item label="Description" name="description">
-                <Input.TextArea placeholder="Enter description" rows={4} />
-              </Form.Item>
+                </AccordionBody>
+              </Accordion>
             </>
-          )}
+          
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Create Key</Button2>
           </div>

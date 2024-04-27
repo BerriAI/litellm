@@ -653,6 +653,10 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
         prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="bedrock"
         )
+    elif provider == "meta":
+        prompt = prompt_factory(
+            model=model, messages=messages, custom_llm_provider="bedrock"
+        )
     else:
         prompt = ""
         for message in messages:
@@ -746,7 +750,7 @@ def completion(
                     ]
                 # Format rest of message according to anthropic guidelines
                 messages = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="anthropic"
+                    model=model, messages=messages, custom_llm_provider="anthropic_xml"
                 )
                 ## LOAD CONFIG
                 config = litellm.AmazonAnthropicClaude3Config.get_config()
@@ -1008,7 +1012,7 @@ def completion(
                         )
                         streaming_choice.delta = delta_obj
                         streaming_model_response.choices = [streaming_choice]
-                        completion_stream = model_response_iterator(
+                        completion_stream = ModelResponseIterator(
                             model_response=streaming_model_response
                         )
                         print_verbose(
@@ -1028,7 +1032,7 @@ def completion(
                     total_tokens=response_body["usage"]["input_tokens"]
                     + response_body["usage"]["output_tokens"],
                 )
-                model_response.usage = _usage
+                setattr(model_response, "usage", _usage)
             else:
                 outputText = response_body["completion"]
                 model_response["finish_reason"] = response_body["stop_reason"]
@@ -1071,8 +1075,10 @@ def completion(
                     status_code=response_metadata.get("HTTPStatusCode", 500),
                 )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        if getattr(model_response.usage, "total_tokens", None) is None:
+        ## CALCULATING USAGE - bedrock charges on time, not tokens - have some mapping of cost here.
+        if not hasattr(model_response, "usage"):
+            setattr(model_response, "usage", Usage())
+        if getattr(model_response.usage, "total_tokens", None) is None:  # type: ignore
             prompt_tokens = response_metadata.get(
                 "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
             )
@@ -1089,7 +1095,7 @@ def completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-            model_response.usage = usage
+            setattr(model_response, "usage", usage)
 
         model_response["created"] = int(time.time())
         model_response["model"] = model
@@ -1109,8 +1115,30 @@ def completion(
             raise BedrockError(status_code=500, message=traceback.format_exc())
 
 
-async def model_response_iterator(model_response):
-    yield model_response
+class ModelResponseIterator:
+    def __init__(self, model_response):
+        self.model_response = model_response
+        self.is_done = False
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.is_done:
+            raise StopIteration
+        self.is_done = True
+        return self.model_response
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.is_done:
+            raise StopAsyncIteration
+        self.is_done = True
+        return self.model_response
 
 
 def _embedding_func_single(

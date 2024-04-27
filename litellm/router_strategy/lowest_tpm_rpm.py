@@ -39,6 +39,8 @@ class LowestTPMLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                elif isinstance(id, int):
+                    id = str(id)
 
                 total_tokens = response_obj["usage"]["total_tokens"]
 
@@ -87,6 +89,8 @@ class LowestTPMLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                elif isinstance(id, int):
+                    id = str(id)
 
                 total_tokens = response_obj["usage"]["total_tokens"]
 

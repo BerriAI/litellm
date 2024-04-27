@@ -1,5 +1,5 @@
-/docs
-/cookbook
-/.circleci
-/.github
-/tests
+docs
+cookbook
+.circleci
+.github
+tests

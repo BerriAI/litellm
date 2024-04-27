@@ -1,8 +1,8 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall } from "./networking";
-import { InformationCircleIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
-import { keySpendLogsCall, PredictedSpendLogsCall } from "./networking";
+import { keyDeleteCall, modelAvailableCall } from "./networking";
+import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon } from "@heroicons/react/outline";
+import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall } from "./networking";
 import {
   Badge,
   Card,
@@ -20,18 +20,39 @@ import {
   Icon,
   BarChart,
 } from "@tremor/react";
-
-import { Modal } from "antd";
+import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
+import {
+  Button as Button2,
+  Modal,
+  Form,
+  Input,
+  Select as Select2,
+  InputNumber,
+  message,
+  Select,
+} from "antd";
 
 import ViewKeySpendReport from "./view_key_spend_report";
+
+const { Option } = Select;
+
+
+interface EditKeyModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  token: any; // Assuming TeamType is a type representing your team object
+  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
+}
 
 // Define the props type
 interface ViewKeyTableProps {
   userID: string;
+  userRole: string | null;
   accessToken: string;
   selectedTeam: any | null;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: any[] | null;
 }
 
 interface ItemData {
@@ -43,6 +64,7 @@ interface ItemData {
   tpm_limit: string | null;
   rpm_limit: string | null;
   token: string;
+  token_id: string | null;
   id: number;
   team_id: string;
   metadata: any;
@@ -52,10 +74,12 @@ interface ItemData {
 
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
+  userRole,
   accessToken,
   selectedTeam,
   data,
   setData,
+  teams
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -67,7 +91,241 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   );
   const [predictedSpendString, setPredictedSpendString] = useState("");
 
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
+  const [userModels, setUserModels] = useState([]);
+  const initialKnownTeamIDs: Set<string> = new Set();
+
+  const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
+
+  useEffect(() => {
+    const fetchUserModels = async () => {
+      try {
+        if (userID === null) {
+          return;
+        }
+
+        if (accessToken !== null && userRole !== null) {
+          const model_available = await modelAvailableCall(accessToken, userID, userRole);
+          let available_model_names = model_available["data"].map(
+            (element: { id: string }) => element.id
+          );
+          console.log("available_model_names:", available_model_names);
+          setUserModels(available_model_names);
+        }
+      } catch (error) {
+        console.error("Error fetching user models:", error);
+      }
+    };
   
+    fetchUserModels();
+  }, [accessToken, userID, userRole]);
+
+  useEffect(() => {
+    if (teams) {
+      const teamIDSet: Set<string> = new Set();
+      teams.forEach((team: any, index: number) => {
+        const team_obj: string = team.team_id
+        teamIDSet.add(team_obj);
+      });
+      setKnownTeamIDs(teamIDSet)
+    }
+  }, [teams])
+  const EditKeyModal: React.FC<EditKeyModalProps> = ({ visible, onCancel, token, onSubmit }) => {
+    const [form] = Form.useForm();
+    const [keyTeam, setKeyTeam] = useState(selectedTeam);
+    const [errorModels, setErrorModels] = useState<string[]>([]);
+    const [errorBudget, setErrorBudget] = useState<boolean>(false);
+
+    const handleOk = () => {
+      form
+        .validateFields()
+        .then((values) => {
+          // const updatedValues = {...values, team_id: team.team_id};
+          // onSubmit(updatedValues);
+          form.resetFields();
+        })
+        .catch((error) => {
+          console.error("Validation failed:", error);
+        });
+      };
+
+    return (
+        <Modal
+              title="Edit Key"
+              visible={visible}
+              width={800}
+              footer={null}
+              onOk={handleOk}
+              onCancel={onCancel}
+            >
+        <Form
+          form={form}
+          onFinish={handleEditSubmit}
+          initialValues={token} // Pass initial values here
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+                <>
+                <Form.Item 
+                label="Key Name" 
+                name="key_alias"
+                rules={[{ required: true, message: 'Please input a key name' }]}
+                help="required"
+              >
+                <Input />
+              </Form.Item>
+
+              <Form.Item label="Models" name="models" rules={[
+                {
+                  validator: (rule, value) => {
+                    const errorModels = value.filter((model: string) => (
+                      !keyTeam.models.includes(model) && 
+                      model !== "all-team-models" && 
+                      model !== "all-proxy-models" && 
+                      !keyTeam.models.includes("all-proxy-models")
+                    ));
+                    console.log(`errorModels: ${errorModels}`)
+                    if (errorModels.length > 0) {
+                      return Promise.reject(`Some models are not part of the new team\'s models - ${errorModels}Team models: ${keyTeam.models}`);
+                    } else {
+                      return Promise.resolve();
+                    }
+                  }
+                }
+              ]}>
+                <Select
+                  mode="multiple"
+                  placeholder="Select models"
+                  style={{ width: "100%" }}
+                >
+                  <Option key="all-team-models" value="all-team-models">
+                    All Team Models
+                  </Option>                
+                  {keyTeam && keyTeam.models ? (
+                    keyTeam.models.includes("all-proxy-models") ? (
+                      userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    ) : (
+                      keyTeam.models.map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    )
+                  ) : (
+                    userModels.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                  )}
+                </Select>
+              </Form.Item>
+              <Form.Item 
+                className="mt-8"
+                label="Max Budget (USD)" 
+                name="max_budget" 
+                help={`Budget cannot exceed team max budget: ${keyTeam?.max_budget !== null && keyTeam?.max_budget !== undefined ? keyTeam?.max_budget : 'unlimited'}`}
+                rules={[
+                  {
+                      validator: async (_, value) => {
+                          if (value && keyTeam && keyTeam.max_budget !== null && value > keyTeam.max_budget) {
+                              console.log(`keyTeam.max_budget: ${keyTeam.max_budget}`)
+                              throw new Error(`Budget cannot exceed team max budget: $${keyTeam.max_budget}`);
+                          }
+                      },
+                  },
+              ]}
+              >
+                <InputNumber step={0.01} precision={2} width={200} />
+              </Form.Item>
+              <Form.Item
+                  label="token"
+                  name="token"
+                  hidden={true}
+                ></Form.Item>
+              <Form.Item 
+                label="Team" 
+                name="team_id"
+                help="the team this key belongs to"
+              >
+                <Select3 value={token.team_alias}>
+                {teams?.map((team_obj, index) => (
+                    <SelectItem
+                      key={index}
+                      value={team_obj.team_id}
+                      onClick={() => setKeyTeam(team_obj)}
+                    >
+                      {team_obj.team_alias}
+                    </SelectItem>
+                  ))}
+              </Select3>
+              </Form.Item>
+            </>
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button2 htmlType="submit">Edit Key</Button2>
+          </div>
+        </Form>
+      </Modal>
+    );
+  };
+  
+
+  
+  const handleEditClick = (token: any) => {
+    console.log("handleEditClick:", token);
+
+    // set token.token to token.token_id if token_id is not null
+    if (token.token == null) {
+      if (token.token_id !== null) {
+        token.token = token.token_id;
+      }
+    }
+
+    setSelectedToken(token);
+    setEditModalVisible(true);
+  };
+
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedToken(null);
+  };
+
+  const handleEditSubmit = async (formValues: Record<string, any>) => {
+  /**
+   * Call API to update team with teamId and values
+   * 
+   * Client-side validation: For selected team, ensure models in team + max budget < team max budget
+   */
+  if (accessToken == null) {
+    return;
+  }
+
+  const currentKey = formValues.token; 
+  formValues.key = currentKey;
+
+  console.log("handleEditSubmit:", formValues);
+
+  let newKeyValues = await keyUpdateCall(accessToken, formValues);
+  console.log("handleEditSubmit: newKeyValues", newKeyValues);
+
+  // Update the keys with the update key
+  if (data) {
+    const updatedData = data.map((key) =>
+      key.token === currentKey ? newKeyValues : key
+    );
+    setData(updatedData);
+  }
+  message.success("Key updated successfully");
+
+  setEditModalVisible(false);
+  setSelectedToken(null);
+  };
 
 
 
@@ -111,13 +369,19 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   
 
-  const handleDelete = async (token: string) => {
+  const handleDelete = async (token: any) => {
+    console.log("handleDelete:", token);
+    if (token.token == null) {
+      if (token.token_id !== null) {
+        token.token = token.token_id;
+      }
+    }
     if (data == null) {
       return;
     }
 
     // Set the key to delete and open the confirmation modal
-    setKeyToDelete(token);
+    setKeyToDelete(token.token);
     localStorage.removeItem("userData" + userID);
     setIsDeleteModalOpen(true);
   };
@@ -162,19 +426,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   return (
     <div>
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
-      <Table className="mt-5">
+      <Table className="mt-5 max-h-[300px] min-h-[300px]">
         <TableHead>
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
-            {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
-            {/* <TableHeaderCell>Team</TableHeaderCell> */}
-            {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-            {/* <TableHeaderCell>Expires</TableHeaderCell> */}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -185,9 +445,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               return null;
             }
             if (selectedTeam) {
-              if (item.team_id != selectedTeam.team_id) {
+              /**
+               * if selected team id is null -> show the keys with no team id or team id's that don't exist in db
+               */
+              console.log(`item team id: ${item.team_id}, knownTeamIDs.has(item.team_id): ${knownTeamIDs.has(item.team_id)}, selectedTeam id: ${selectedTeam.team_id}`)
+              if (selectedTeam.team_id == null && item.team_id !== null && !knownTeamIDs.has(item.team_id)) {
+                // do nothing -> returns a row with this key
+              }
+              else if (item.team_id != selectedTeam.team_id) {
                 return null;
               }
+              console.log(`item team id: ${item.team_id}, is returned`)
             }
             return (
               <TableRow key={item.token}>
@@ -237,34 +505,54 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   
                 </TableCell> */}
 
-                <TableCell>
-                  {Array.isArray(item.models) ? (
-                    <div style={{ display: "flex", flexDirection: "column" }}>
-                      {item.models.length === 0 ? (
-                        <>
-                          {selectedTeam && selectedTeam.models && selectedTeam.models.length > 0 ? (
-                            selectedTeam.models.map((model: string, index: number) => (
-                              <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                                <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
-                              </Badge>
-                            ))
-                          ) : (
-                            // If selected team is None or selected team's models are empty, show all models
-                            <Badge size={"xs"} className="mb-1" color="purple">
-                              <Text>All Models</Text>
-                            </Badge>
-                          )}
-                        </>
-                      ) : (
-                        item.models.map((model: string, index: number) => (
-                          <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                            <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
-                          </Badge>
-                        ))
-                      )}
-                    </div>
-                  ) : null}
-                </TableCell>
+<TableCell>
+  {Array.isArray(item.models) ? (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      {item.models.length === 0 ? (
+        <>
+          {selectedTeam && selectedTeam.models && selectedTeam.models.length > 0 ? (
+            selectedTeam.models.map((model: string, index: number) => (
+              model === "all-proxy-models" ? (
+                <Badge key={index} size={"xs"} className="mb-1" color="red">
+                  <Text>All Proxy Models</Text>
+                </Badge>
+              ) : model === "all-team-models" ? (
+                <Badge key={index} size={"xs"} className="mb-1" color="red">
+                  <Text>All Team Models</Text>
+                </Badge>
+              ) : (
+                <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                  <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                </Badge>
+              )
+            ))
+          ) : (
+            // If selected team is None or selected team's models are empty, show all models
+            <Badge size={"xs"} className="mb-1" color="blue">
+              <Text>all-proxy-models</Text>
+            </Badge>
+          )}
+        </>
+      ) : (
+        item.models.map((model: string, index: number) => (
+          model === "all-proxy-models" ? (
+            <Badge key={index} size={"xs"} className="mb-1" color="red">
+              <Text>All Proxy Models</Text>
+            </Badge>
+          ) : model === "all-team-models" ? (
+            <Badge key={index} size={"xs"} className="mb-1" color="red">
+              <Text>All Team Models</Text>
+            </Badge>
+          ) : (
+            <Badge key={index} size={"xs"} className="mb-1" color="blue">
+              <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+            </Badge>
+          )
+        ))
+      )}
+    </div>
+  ) : null}
+</TableCell>
 
                 <TableCell>
                   <Text>
@@ -383,9 +671,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     )}
 </DialogPanel>
 </Dialog>
-
                   <Icon
-                    onClick={() => handleDelete(item.token)}
+                    icon={PencilAltIcon}
+                    size="sm"
+                    onClick={() => handleEditClick(item)}
+                  />
+                  <Icon
+                    onClick={() => handleDelete(item)}
                     icon={TrashIcon}
                     size="sm"
                   />
@@ -440,6 +732,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         </div>
       )}
     </Card>
+
+    {selectedToken && (
+        <EditKeyModal
+          visible={editModalVisible}
+          onCancel={handleEditCancel}
+          token={selectedToken}
+          onSubmit={handleEditSubmit}
+        />
+      )}
     </div>
   );
 };

@@ -18,7 +18,7 @@ import pytest
 import litellm
 from litellm.proxy.enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMGuard
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
@@ -40,6 +40,7 @@ async def test_llm_guard_valid_response():
     )
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -76,6 +77,7 @@ async def test_llm_guard_error_raising():
     )
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -111,7 +113,10 @@ def test_llm_guard_key_specific_mode():
         api_key=_api_key,
     )
 
-    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict)
+    request_data = {}
+    should_proceed = llm_guard.should_proceed(
+        user_api_key_dict=user_api_key_dict, data=request_data
+    )
 
     assert should_proceed == False
 
@@ -120,6 +125,46 @@ def test_llm_guard_key_specific_mode():
         api_key=_api_key, permissions={"enable_llm_guard_check": True}
     )
 
-    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict)
+    request_data = {}
+
+    should_proceed = llm_guard.should_proceed(
+        user_api_key_dict=user_api_key_dict, data=request_data
+    )
+
+    assert should_proceed == True
+
+
+def test_llm_guard_request_specific_mode():
+    """
+    Tests to see if llm guard 'request-specific' permissions work
+    """
+    litellm.llm_guard_mode = "request-specific"
+
+    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
+
+    _api_key = "sk-12345"
+    # NOT ENABLED
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+    )
+
+    request_data = {}
+
+    should_proceed = llm_guard.should_proceed(
+        user_api_key_dict=user_api_key_dict, data=request_data
+    )
+
+    assert should_proceed == False
+
+    # ENABLED
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key, permissions={"enable_llm_guard_check": True}
+    )
+
+    request_data = {"metadata": {"permissions": {"enable_llm_guard_check": True}}}
+
+    should_proceed = llm_guard.should_proceed(
+        user_api_key_dict=user_api_key_dict, data=request_data
+    )
 
     assert should_proceed == True
