@@ -1929,6 +1929,7 @@ class Router:
             )
             default_api_base = api_base
             default_api_key = api_key
+
         if (
             model_name in litellm.open_ai_chat_completion_models
             or custom_llm_provider in litellm.openai_compatible_providers
@@ -1963,6 +1964,23 @@ class Router:
                 api_base_env_name = api_base.replace("os.environ/", "")
                 api_base = litellm.get_secret(api_base_env_name)
                 litellm_params["api_base"] = api_base
+
+            ## AZURE AI STUDIO MISTRAL CHECK ##
+            """
+            Make sure api base ends in /v1/
+
+            if not, add it - https://github.com/BerriAI/litellm/issues/2279
+            """
+            if (
+                custom_llm_provider == "openai"
+                and api_base is not None
+                and not api_base.endswith("/v1/")
+            ):
+                # check if it ends with a trailing slash
+                if api_base.endswith("/"):
+                    api_base += "v1/"
+                else:
+                    api_base += "/v1/"
 
             api_version = litellm_params.get("api_version")
             if api_version and api_version.startswith("os.environ/"):
