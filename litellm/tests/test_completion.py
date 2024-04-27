@@ -2655,6 +2655,42 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_palm_stream()
 
 # test_completion_deep_infra()
