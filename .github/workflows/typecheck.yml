@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.12'
-      - run: poetry install
+      - run: poetry install --no-root --with dev
       - name: Run mypy
         # for some strange reason, the config specified in pyproject.toml is not respected
         run: poetry run mypy . --ignore-missing-imports

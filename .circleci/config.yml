@@ -29,10 +29,11 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            python -m pip install poetry
+            poetry install --no-root --with dev
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -73,14 +74,12 @@ jobs:
           name: Black Formatting
           command: |
             cd litellm
-            python -m pip install black
             python -m black .
             cd ..
       - run:
           name: Linting Testing
           command: |
             cd litellm
-            python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . --ignore-missing-imports; then
               echo "mypy detected errors"
               exit 1
