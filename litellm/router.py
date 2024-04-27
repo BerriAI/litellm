@@ -1618,32 +1618,24 @@ class Router:
     def _router_should_retry(
         self, e: Exception, remaining_retries: int, num_retries: int
     ):
-        if "No models available" in str(e):
+        """
+        Calculate back-off, then retry
+        """
+        if hasattr(e, "response") and hasattr(e.response, "headers"):
+            timeout = litellm._calculate_retry_after(
+                remaining_retries=remaining_retries,
+                max_retries=num_retries,
+                response_headers=e.response.headers,
+                min_timeout=self.retry_after,
+            )
+            time.sleep(timeout)
+        else:
             timeout = litellm._calculate_retry_after(
                 remaining_retries=remaining_retries,
                 max_retries=num_retries,
                 min_timeout=self.retry_after,
             )
             time.sleep(timeout)
-        elif hasattr(e, "status_code") and litellm._should_retry(
-            status_code=e.status_code
-        ):
-            if hasattr(e, "response") and hasattr(e.response, "headers"):
-                timeout = litellm._calculate_retry_after(
-                    remaining_retries=remaining_retries,
-                    max_retries=num_retries,
-                    response_headers=e.response.headers,
-                    min_timeout=self.retry_after,
-                )
-            else:
-                timeout = litellm._calculate_retry_after(
-                    remaining_retries=remaining_retries,
-                    max_retries=num_retries,
-                    min_timeout=self.retry_after,
-                )
-            time.sleep(timeout)
-        else:
-            raise e
 
     def function_with_retries(self, *args, **kwargs):
         """
@@ -1664,9 +1656,6 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-            verbose_router_logger.debug(
-                f"num retries in function with retries: {num_retries}"
-            )
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
