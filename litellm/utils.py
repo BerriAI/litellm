@@ -1527,6 +1527,32 @@ class Logging:
             else:
                 callbacks = litellm.success_callback
 
+            # check if user opted out of logging message/response to callbacks
+            if litellm.turn_off_message_logging == True:
+                # remove messages, prompts, input, response from logging
+                self.model_call_details["messages"] = "redacted-by-litellm"
+                self.model_call_details["prompt"] = ""
+                self.model_call_details["input"] = ""
+
+                # response cleaning
+                # ChatCompletion Responses
+                if (
+                    self.stream
+                    and "complete_streaming_response" in self.model_call_details
+                ):
+                    _streaming_response = self.model_call_details[
+                        "complete_streaming_response"
+                    ]
+                    for choice in _streaming_response.choices:
+                        choice.message.content = "redacted-by-litellm"
+                else:
+                    for choice in result.choices:
+                        choice.message.content = "redacted-by-litellm"
+
+                # Embedding Responses
+
+                # Text Completion Responses
+
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
