@@ -1212,7 +1212,6 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
             for callback in callbacks:
@@ -1229,29 +1228,17 @@ class Logging:
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
-
-                    elif callback == "lite_debugger":
-                        print_verbose(
-                            f"reaches litedebugger for logging! - model_call_details {self.model_call_details}"
-                        )
-                        model = self.model_call_details["model"]
-                        messages = self.model_call_details["input"]
-                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                        liteDebuggerClient.input_log_event(
-                            model=model,
-                            messages=messages,
-                            end_user=self.model_call_details.get("user", "default"),
-                            litellm_call_id=self.litellm_params["litellm_call_id"],
-                            litellm_params=self.model_call_details["litellm_params"],
-                            optional_params=self.model_call_details["optional_params"],
-                            print_verbose=print_verbose,
-                            call_type=self.call_type,
-                        )
                     elif callback == "sentry" and add_breadcrumb:
-                        print_verbose("reaches sentry breadcrumbing")
+                        details_to_log = copy.deepcopy(self.model_call_details)
+                        if litellm.turn_off_message_logging:
+                            # make a copy of the _model_Call_details and log it
+                            details_to_log.pop("messages", None)
+                            details_to_log.pop("input", None)
+                            details_to_log.pop("prompt", None)
+
                         add_breadcrumb(
                             category="litellm.llm_call",
-                            message=f"Model Call Details pre-call: {self.model_call_details}",
+                            message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -1315,7 +1302,7 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-
+            self.redact_message_input_output_from_logging(result=original_response)
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
@@ -1333,9 +1320,17 @@ class Logging:
                         )
                     elif callback == "sentry" and add_breadcrumb:
                         print_verbose("reaches sentry breadcrumbing")
+
+                        details_to_log = copy.deepcopy(self.model_call_details)
+                        if litellm.turn_off_message_logging:
+                            # make a copy of the _model_Call_details and log it
+                            details_to_log.pop("messages", None)
+                            details_to_log.pop("input", None)
+                            details_to_log.pop("prompt", None)
+
                         add_breadcrumb(
                             category="litellm.llm_call",
-                            message=f"Model Call Details post-call: {self.model_call_details}",
+                            message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -1526,6 +1521,8 @@ class Logging:
                         callbacks.append(callback)
             else:
                 callbacks = litellm.success_callback
+
+            self.redact_message_input_output_from_logging(result=result)
 
             for callback in callbacks:
                 try:
@@ -2071,6 +2068,9 @@ class Logging:
                     callbacks.append(callback)
         else:
             callbacks = litellm._async_success_callback
+
+        self.redact_message_input_output_from_logging(result=result)
+
         print_verbose(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             # check if callback can run for this request
@@ -2232,7 +2232,10 @@ class Logging:
                 start_time=start_time,
                 end_time=end_time,
             )
+
             result = None  # result sent to all loggers, init this to None incase it's not created
+
+            self.redact_message_input_output_from_logging(result=result)
             for callback in litellm.failure_callback:
                 try:
                     if callback == "lite_debugger":
@@ -2417,6 +2420,33 @@ class Logging:
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
 
+    def redact_message_input_output_from_logging(self, result):
+        """
+        Removes messages, prompts, input, response from logging. This modifies the data in-place
+        only redacts when litellm.turn_off_message_logging == True
+        """
+        # check if user opted out of logging message/response to callbacks
+        if litellm.turn_off_message_logging == True:
+            # remove messages, prompts, input, response from logging
+            self.model_call_details["messages"] = "redacted-by-litellm"
+            self.model_call_details["prompt"] = ""
+            self.model_call_details["input"] = ""
+
+            # response cleaning
+            # ChatCompletion Responses
+            if self.stream and "complete_streaming_response" in self.model_call_details:
+                _streaming_response = self.model_call_details[
+                    "complete_streaming_response"
+                ]
+                for choice in _streaming_response.choices:
+                    choice.message.content = "redacted-by-litellm"
+            else:
+                if result is not None:
+                    if isinstance(result, litellm.ModelResponse):
+                        if hasattr(result, "choices"):
+                            for choice in result.choices:
+                                choice.message.content = "redacted-by-litellm"
+
 
 def exception_logging(
     additional_args={},
@@ -2598,9 +2628,15 @@ def function_setup(
             dynamic_success_callbacks = kwargs.pop("success_callback")
 
         if add_breadcrumb:
+            details_to_log = copy.deepcopy(kwargs)
+            if litellm.turn_off_message_logging:
+                # make a copy of the _model_Call_details and log it
+                details_to_log.pop("messages", None)
+                details_to_log.pop("input", None)
+                details_to_log.pop("prompt", None)
             add_breadcrumb(
                 category="litellm.llm_call",
-                message=f"Positional Args: {args}, Keyword Args: {kwargs}",
+                message=f"Positional Args: {args}, Keyword Args: {details_to_log}",
                 level="info",
             )
         if "logger_fn" in kwargs:
@@ -4619,7 +4655,36 @@ def get_optional_params(
             k.startswith("vertex_") and custom_llm_provider != "vertex_ai"
         ):  # allow dynamically setting vertex ai init logic
             continue
+
         passed_params[k] = v
+
+    optional_params = {}
+
+    common_auth_dict = litellm.common_cloud_provider_auth_params
+    if custom_llm_provider in common_auth_dict["providers"]:
+        """
+        Check if params = ["project", "region_name", "token"]
+        and correctly translate for = ["azure", "vertex_ai", "watsonx", "aws"]
+        """
+        if custom_llm_provider == "azure":
+            optional_params = litellm.AzureOpenAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "bedrock":
+            optional_params = (
+                litellm.AmazonBedrockGlobalConfig().map_special_auth_params(
+                    non_default_params=passed_params, optional_params=optional_params
+                )
+            )
+        elif custom_llm_provider == "vertex_ai":
+            optional_params = litellm.VertexAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "watsonx":
+            optional_params = litellm.IBMWatsonXAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+
     default_params = {
         "functions": None,
         "function_call": None,
@@ -4655,7 +4720,7 @@ def get_optional_params(
             and v != default_params[k]
         )
     }
-    optional_params = {}
+
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
         "functions" in non_default_params
@@ -5427,6 +5492,49 @@ def get_optional_params(
         optional_params["extra_body"] = (
             extra_body  # openai client supports `extra_body` param
         )
+    elif custom_llm_provider == "watsonx":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        if max_tokens is not None:
+            optional_params["max_new_tokens"] = max_tokens
+        if stream:
+            optional_params["stream"] = stream
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if frequency_penalty is not None:
+            optional_params["repetition_penalty"] = frequency_penalty
+        if seed is not None:
+            optional_params["random_seed"] = seed
+        if stop is not None:
+            optional_params["stop_sequences"] = stop
+
+        # WatsonX-only parameters
+        extra_body = {}
+        if "decoding_method" in passed_params:
+            extra_body["decoding_method"] = passed_params.pop("decoding_method")
+        if "min_tokens" in passed_params or "min_new_tokens" in passed_params:
+            extra_body["min_new_tokens"] = passed_params.pop(
+                "min_tokens", passed_params.pop("min_new_tokens")
+            )
+        if "top_k" in passed_params:
+            extra_body["top_k"] = passed_params.pop("top_k")
+        if "truncate_input_tokens" in passed_params:
+            extra_body["truncate_input_tokens"] = passed_params.pop(
+                "truncate_input_tokens"
+            )
+        if "length_penalty" in passed_params:
+            extra_body["length_penalty"] = passed_params.pop("length_penalty")
+        if "time_limit" in passed_params:
+            extra_body["time_limit"] = passed_params.pop("time_limit")
+        if "return_options" in passed_params:
+            extra_body["return_options"] = passed_params.pop("return_options")
+        optional_params["extra_body"] = (
+            extra_body  # openai client supports `extra_body` param
+        )
     else:  # assume passing in params for openai/azure openai
         print_verbose(
             f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZURE - model={model}, custom_llm_provider={custom_llm_provider}"
@@ -5829,6 +5937,8 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "frequency_penalty",
             "presence_penalty",
         ]
+    elif custom_llm_provider == "watsonx":
+        return litellm.IBMWatsonXAIConfig().get_supported_openai_params()
 
 
 def get_formatted_prompt(
@@ -6056,6 +6166,8 @@ def get_llm_provider(
             model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
         ):
             custom_llm_provider = "bedrock"
+        elif model in litellm.watsonx_models:
+            custom_llm_provider = "watsonx"
         # openai embeddings
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
@@ -6520,7 +6632,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_PROJECT"])
+                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"])
         elif custom_llm_provider == "huggingface":
             if "HUGGINGFACE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -9751,6 +9863,39 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
 
+    def handle_watsonx_stream(self, chunk):
+        try:
+            if isinstance(chunk, dict):
+                parsed_response = chunk
+            elif isinstance(chunk, (str, bytes)):
+                if isinstance(chunk, bytes):
+                    chunk = chunk.decode("utf-8")
+                if "generated_text" in chunk:
+                    response = chunk.replace("data: ", "").strip()
+                    parsed_response = json.loads(response)
+                else:
+                    return {"text": "", "is_finished": False}
+            else:
+                print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
+                raise ValueError(
+                    f"Unable to parse response. Original response: {chunk}"
+                )
+            results = parsed_response.get("results", [])
+            if len(results) > 0:
+                text = results[0].get("generated_text", "")
+                finish_reason = results[0].get("stop_reason")
+                is_finished = finish_reason != "not_finished"
+                return {
+                    "text": text,
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                    "prompt_tokens": results[0].get("input_token_count", None),
+                    "completion_tokens": results[0].get("generated_token_count", None),
+                }
+            return {"text": "", "is_finished": False}
+        except Exception as e:
+            raise e
+
     def model_response_creator(self):
         model_response = ModelResponse(stream=True, model=self.model)
         if self.response_id is not None:
@@ -10004,6 +10149,26 @@ class CustomStreamWrapper:
                 response_obj = self.handle_cloudlfare_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+            elif self.custom_llm_provider == "watsonx":
+                response_obj = self.handle_watsonx_stream(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj.get("prompt_tokens") is not None:
+                    prompt_token_count = getattr(
+                        model_response.usage, "prompt_tokens", 0
+                    )
+                    model_response.usage.prompt_tokens = (
+                        prompt_token_count + response_obj["prompt_tokens"]
+                    )
+                if response_obj.get("completion_tokens") is not None:
+                    model_response.usage.completion_tokens = response_obj[
+                        "completion_tokens"
+                    ]
+                model_response.usage.total_tokens = getattr(
+                    model_response.usage, "prompt_tokens", 0
+                ) + getattr(model_response.usage, "completion_tokens", 0)
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
