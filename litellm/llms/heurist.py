@@ -20,7 +20,7 @@ default_deadline = 60
 def normalize_model_id(model_id):
     if model_id == "mistralai/mixtral-8x7b-instruct-v0.1":
         return "mistralai/mixtral-8x7b-instruct"
-    if model_id = "mistralai/mistral-7b-instruct-v0.2":
+    if model_id == "mistralai/mistral-7b-instruct-v0.2":
         return "mistralai/mistral-7b-instruct"
     return model_id
 
