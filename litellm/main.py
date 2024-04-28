@@ -775,6 +775,12 @@ def completion(
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
+        if api_key is None:
+            # Priority order
+            #   1. dynamic_api_key of get_llm_provider()
+            #   2. api_key of Parameters
+            #   3. model_api_key of get_api_key()
+            api_key = model_api_key
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
