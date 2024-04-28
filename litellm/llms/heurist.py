@@ -17,6 +17,13 @@ end_of_stream = "[DONE]"
 default_priority = 1
 default_deadline = 60
 
+def normalize_model_id(model_id):
+    if model_id == "mistralai/mixtral-8x7b-instruct-v0.1":
+        return "mistralai/mixtral-8x7b-instruct"
+    if model_id = "mistralai/mistral-7b-instruct-v0.2":
+        return "mistralai/mistral-7b-instruct"
+    return model_id
+
 def get_random_job_id():
     # get 10 random letters and numbers
     return APP_ID + "".join([chr(random.randint(97, 122)) for _ in range(10)])
@@ -34,7 +41,7 @@ def submit_job(api_base, job_id, model_input, model_id, api_key, temperature, ma
             },
         },
         "model_type": "LLM",
-        "model_id": model_id,
+        "model_id": normalize_model_id(model_id),
         "deadline": default_deadline,
         "priority": default_priority,
     }

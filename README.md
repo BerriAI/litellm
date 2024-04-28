@@ -38,7 +38,7 @@ LiteLLM manages:
 `pip3 install litellm[proxy]`
 
 ## Example Proxy Server
-`python3 ./litellm/proxy/proxy_cli.py --api_base http://localhost:80 --port 5000 --num_workers 7` 
+`python3 ./litellm/proxy/proxy_cli.py --api_base http://localhost:5000 --port 4999 --num_workers 33` 
 
 Recommended number of num_workers is CPU threads + 1
 
