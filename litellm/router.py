@@ -50,7 +50,6 @@ class Router:
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
-    num_retries: int = openai.DEFAULT_MAX_RETRIES
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
@@ -237,6 +236,8 @@ class Router:
             self.num_retries = num_retries
         elif litellm.num_retries is not None:
             self.num_retries = litellm.num_retries
+        else:
+            self.num_retries = openai.DEFAULT_MAX_RETRIES
 
         self.timeout = timeout or litellm.request_timeout
 

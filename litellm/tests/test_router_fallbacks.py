@@ -831,6 +831,7 @@ def test_usage_based_routing_fallbacks():
             routing_strategy="usage-based-routing",
             redis_host=os.environ["REDIS_HOST"],
             redis_port=os.environ["REDIS_PORT"],
+            num_retries=0,
         )
 
         messages = [
