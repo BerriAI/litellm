@@ -483,6 +483,8 @@ def test_mistral_embeddings():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+@pytest.mark.skip(reason="local test")
 def test_watsonx_embeddings():
     try:
         litellm.set_verbose = True
