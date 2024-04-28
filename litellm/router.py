@@ -72,7 +72,9 @@ class Router:
         ## RELIABILITY ##
         num_retries: Optional[int] = None,
         timeout: Optional[float] = None,
-        default_litellm_params={},  # default params for Router.chat.completion.create
+        default_litellm_params: Optional[
+            dict
+        ] = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: Optional[int] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
@@ -158,6 +160,7 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+
         if semaphore:
             self.semaphore = semaphore
         self.set_verbose = set_verbose
@@ -260,6 +263,7 @@ class Router:
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
+        default_litellm_params = default_litellm_params or {}
         self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
         # default litellm args
@@ -475,6 +479,7 @@ class Router:
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
+
             model_name = data["model"]
             for k, v in self.default_litellm_params.items():
                 if (
@@ -1453,6 +1458,7 @@ class Router:
                 await asyncio.sleep(timeout)
             elif RouterErrors.user_defined_ratelimit_error.value in str(e):
                 raise e  # don't wait to retry if deployment hits user-defined rate-limit
+
             elif hasattr(original_exception, "status_code") and litellm._should_retry(
                 status_code=original_exception.status_code
             ):
@@ -1614,6 +1620,28 @@ class Router:
                 raise e
             raise original_exception
 
+    def _router_should_retry(
+        self, e: Exception, remaining_retries: int, num_retries: int
+    ):
+        """
+        Calculate back-off, then retry
+        """
+        if hasattr(e, "response") and hasattr(e.response, "headers"):
+            timeout = litellm._calculate_retry_after(
+                remaining_retries=remaining_retries,
+                max_retries=num_retries,
+                response_headers=e.response.headers,
+                min_timeout=self.retry_after,
+            )
+            time.sleep(timeout)
+        else:
+            timeout = litellm._calculate_retry_after(
+                remaining_retries=remaining_retries,
+                max_retries=num_retries,
+                min_timeout=self.retry_after,
+            )
+            time.sleep(timeout)
+
     def function_with_retries(self, *args, **kwargs):
         """
         Try calling the model 3 times. Shuffle between available deployments.
@@ -1633,9 +1661,6 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-            verbose_router_logger.debug(
-                f"num retries in function with retries: {num_retries}"
-            )
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
@@ -1649,6 +1674,11 @@ class Router:
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             ### RETRY
+            self._router_should_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+            )
             for current_attempt in range(num_retries):
                 verbose_router_logger.debug(
                     f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}"
@@ -1662,34 +1692,11 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    if "No models available" in str(e):
-                        timeout = litellm._calculate_retry_after(
-                            remaining_retries=remaining_retries,
-                            max_retries=num_retries,
-                            min_timeout=self.retry_after,
-                        )
-                        time.sleep(timeout)
-                    elif (
-                        hasattr(e, "status_code")
-                        and hasattr(e, "response")
-                        and litellm._should_retry(status_code=e.status_code)
-                    ):
-                        if hasattr(e.response, "headers"):
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                response_headers=e.response.headers,
-                                min_timeout=self.retry_after,
-                            )
-                        else:
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                min_timeout=self.retry_after,
-                            )
-                        time.sleep(timeout)
-                    else:
-                        raise e
+                    self._router_should_retry(
+                        e=e,
+                        remaining_retries=remaining_retries,
+                        num_retries=num_retries,
+                    )
             raise original_exception
 
     ### HELPER FUNCTIONS
@@ -1987,6 +1994,8 @@ class Router:
                 # check if it ends with a trailing slash
                 if api_base.endswith("/"):
                     api_base += "v1/"
+                elif api_base.endswith("/v1"):
+                    api_base += "/"
                 else:
                     api_base += "/v1/"
 
