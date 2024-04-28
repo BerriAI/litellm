@@ -57,6 +57,7 @@ def test_router_timeouts():
         redis_password=os.getenv("REDIS_PASSWORD"),
         redis_port=int(os.getenv("REDIS_PORT")),
         timeout=10,
+        num_retries=0,
     )
 
     print("***** TPM SETTINGS *****")
