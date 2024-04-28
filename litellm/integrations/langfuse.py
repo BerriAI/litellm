@@ -12,7 +12,9 @@ import litellm
 
 class LangFuseLogger:
     # Class variables or attributes
-    def __init__(self, langfuse_public_key=None, langfuse_secret=None):
+    def __init__(
+        self, langfuse_public_key=None, langfuse_secret=None, flush_interval=1
+    ):
         try:
             from langfuse import Langfuse
         except Exception as e:
@@ -31,7 +33,7 @@ class LangFuseLogger:
             host=self.langfuse_host,
             release=self.langfuse_release,
             debug=self.langfuse_debug,
-            flush_interval=1,  # flush interval in seconds
+            flush_interval=flush_interval,  # flush interval in seconds
         )
 
         # set the current langfuse project id in the environ
