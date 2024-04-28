@@ -569,6 +569,22 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 All requests made with these keys will log data to their team-specific logging.
 
+### Redacting Messages, Response Content from Langfuse Logging 
+
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+  turn_off_message_logging: True
+```
+
+
+
 ## Logging Proxy Input/Output - DataDog
 We will use the `--config` to set `litellm.success_callback = ["datadog"]` this will log all successfull LLM calls to DataDog
 

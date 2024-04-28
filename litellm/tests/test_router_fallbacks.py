@@ -258,6 +258,7 @@ def test_sync_fallbacks_embeddings():
         model_list=model_list,
         fallbacks=[{"bad-azure-embedding-model": ["good-azure-embedding-model"]}],
         set_verbose=False,
+        num_retries=0,
     )
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
@@ -393,7 +394,7 @@ def test_dynamic_fallbacks_sync():
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True)
+        router = Router(model_list=model_list, set_verbose=True, num_retries=0)
         kwargs = {}
         kwargs["model"] = "azure/gpt-3.5-turbo"
         kwargs["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
@@ -830,6 +831,7 @@ def test_usage_based_routing_fallbacks():
             routing_strategy="usage-based-routing",
             redis_host=os.environ["REDIS_HOST"],
             redis_port=os.environ["REDIS_PORT"],
+            num_retries=0,
         )
 
         messages = [

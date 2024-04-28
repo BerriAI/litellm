@@ -1,7 +1,7 @@
 #### What this tests ####
 # This tests litellm router
 
-import sys, os, time
+import sys, os, time, openai
 import traceback, asyncio
 import pytest
 
@@ -17,6 +17,45 @@ from dotenv import load_dotenv
 import os, httpx
 
 load_dotenv()
+
+
+@pytest.mark.parametrize("num_retries", [None, 2])
+@pytest.mark.parametrize("max_retries", [None, 4])
+def test_router_num_retries_init(num_retries, max_retries):
+    """
+    - test when num_retries set v/s not
+    - test client value when max retries set v/s not
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "max_retries": max_retries,
+                },
+                "model_info": {"id": 12345},
+            },
+        ],
+        num_retries=num_retries,
+    )
+
+    if num_retries is not None:
+        assert router.num_retries == num_retries
+    else:
+        assert router.num_retries == openai.DEFAULT_MAX_RETRIES
+
+    model_client = router._get_client(
+        {"model_info": {"id": 12345}}, client_type="async", kwargs={}
+    )
+
+    if max_retries is not None:
+        assert getattr(model_client, "max_retries") == max_retries
+    else:
+        assert getattr(model_client, "max_retries") == 0
 
 
 @pytest.mark.parametrize(
@@ -99,6 +138,7 @@ def test_router_azure_ai_studio_init(mistral_api_base):
     print(f"uri_reference: {uri_reference}")
 
     assert "/v1/" in uri_reference
+    assert uri_reference.count("v1") == 1
 
 
 def test_exception_raising():

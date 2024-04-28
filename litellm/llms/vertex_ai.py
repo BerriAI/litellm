@@ -1039,6 +1039,7 @@ async def async_streaming(
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    safety_settings=None,
     **optional_params,
 ):
     """
@@ -1065,6 +1066,7 @@ async def async_streaming(
         response = await llm_model._generate_content_streaming_async(
             contents=content,
             generation_config=optional_params,
+            safety_settings=safety_settings,
             tools=tools,
         )
 

@@ -110,7 +110,7 @@ class LiteLLM_Params(BaseModel):
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
-    max_retries: int = 2  # follows openai default of 2
+    max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
@@ -148,9 +148,7 @@ class LiteLLM_Params(BaseModel):
         args.pop("self", None)
         args.pop("params", None)
         args.pop("__class__", None)
-        if max_retries is None:
-            max_retries = 2
-        elif isinstance(max_retries, str):
+        if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 

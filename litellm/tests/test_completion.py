@@ -2730,7 +2730,6 @@ async def test_acompletion_watsonx():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            space_id=os.getenv("WATSONX_SPACE_ID_TEST"),
         )
         # Add any assertions here to check the response
         print(response)
