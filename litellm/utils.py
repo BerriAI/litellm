@@ -4655,7 +4655,36 @@ def get_optional_params(
             k.startswith("vertex_") and custom_llm_provider != "vertex_ai"
         ):  # allow dynamically setting vertex ai init logic
             continue
+
         passed_params[k] = v
+
+    optional_params = {}
+
+    common_auth_dict = litellm.common_cloud_provider_auth_params
+    if custom_llm_provider in common_auth_dict["providers"]:
+        """
+        Check if params = ["project", "region_name", "token"]
+        and correctly translate for = ["azure", "vertex_ai", "watsonx", "aws"]
+        """
+        if custom_llm_provider == "azure":
+            optional_params = litellm.AzureOpenAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "bedrock":
+            optional_params = (
+                litellm.AmazonBedrockGlobalConfig().map_special_auth_params(
+                    non_default_params=passed_params, optional_params=optional_params
+                )
+            )
+        elif custom_llm_provider == "vertex_ai":
+            optional_params = litellm.VertexAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "watsonx":
+            optional_params = litellm.IBMWatsonXAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+
     default_params = {
         "functions": None,
         "function_call": None,
@@ -4691,7 +4720,7 @@ def get_optional_params(
             and v != default_params[k]
         )
     }
-    optional_params = {}
+
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
         "functions" in non_default_params
@@ -10125,6 +10154,21 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider == "watsonx":
                 response_obj = self.handle_watsonx_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj.get("prompt_tokens") is not None:
+                    prompt_token_count = getattr(
+                        model_response.usage, "prompt_tokens", 0
+                    )
+                    model_response.usage.prompt_tokens = (
+                        prompt_token_count + response_obj["prompt_tokens"]
+                    )
+                if response_obj.get("completion_tokens") is not None:
+                    model_response.usage.completion_tokens = response_obj[
+                        "completion_tokens"
+                    ]
+                model_response.usage.total_tokens = getattr(
+                    model_response.usage, "prompt_tokens", 0
+                ) + getattr(model_response.usage, "completion_tokens", 0)
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":

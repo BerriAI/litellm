@@ -59,6 +59,7 @@ max_tokens = 256  # OpenAI Defaults
 drop_params = False
 modify_params = False
 retry = True
+### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -77,6 +78,10 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+common_cloud_provider_auth_params: dict = {
+    "params": ["project", "region_name", "token"],
+    "providers": ["vertex_ai", "bedrock", "watsonx", "azure"],
+}
 use_client: bool = False
 ssl_verify: bool = True
 disable_streaming_logging: bool = False
@@ -655,6 +660,7 @@ from .llms.bedrock import (
     AmazonLlamaConfig,
     AmazonStabilityConfig,
     AmazonMistralConfig,
+    AmazonBedrockGlobalConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
