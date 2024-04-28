@@ -12,6 +12,7 @@ from litellm.caching import DualCache
 import asyncio
 import aiohttp
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+import datetime
 
 
 class SlackAlerting:
@@ -47,6 +48,18 @@ class SlackAlerting:
         self.internal_usage_cache = DualCache()
         self.async_http_handler = AsyncHTTPHandler()
         self.alert_to_webhook_url = alert_to_webhook_url
+        self.langfuse_logger = None
+
+        try:
+            from litellm.integrations.langfuse import LangFuseLogger
+
+            self.langfuse_logger = LangFuseLogger(
+                os.getenv("LANGFUSE_PUBLIC_KEY"),
+                os.getenv("LANGFUSE_SECRET_KEY"),
+                flush_interval=1,
+            )
+        except:
+            pass
 
         pass
 
@@ -93,38 +106,67 @@ class SlackAlerting:
         request_info: str,
         request_data: Optional[dict] = None,
         kwargs: Optional[dict] = None,
+        type: Literal["hanging_request", "slow_response"] = "hanging_request",
+        start_time: Optional[datetime.datetime] = None,
+        end_time: Optional[datetime.datetime] = None,
     ):
         import uuid
 
         # For now: do nothing as we're debugging why this is not working as expected
+        if request_data is not None:
+            trace_id = request_data.get("metadata", {}).get(
+                "trace_id", None
+            )  # get langfuse trace id
+            if trace_id is None:
+                trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
+                request_data["metadata"]["trace_id"] = trace_id
+        elif kwargs is not None:
+            _litellm_params = kwargs.get("litellm_params", {})
+            trace_id = _litellm_params.get("metadata", {}).get(
+                "trace_id", None
+            )  # get langfuse trace id
+            if trace_id is None:
+                trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
+                _litellm_params["metadata"]["trace_id"] = trace_id
+
+        # Log hanging request as an error on langfuse
+        if type == "hanging_request":
+            if self.langfuse_logger is not None:
+                _logging_kwargs = copy.deepcopy(request_data)
+                if _logging_kwargs is None:
+                    _logging_kwargs = {}
+                _logging_kwargs["litellm_params"] = {}
+                request_data = request_data or {}
+                _logging_kwargs["litellm_params"]["metadata"] = request_data.get(
+                    "metadata", {}
+                )
+                # log to langfuse in a separate thread
+                import threading
+
+                threading.Thread(
+                    target=self.langfuse_logger.log_event,
+                    args=(
+                        _logging_kwargs,
+                        None,
+                        start_time,
+                        end_time,
+                        None,
+                        print,
+                        "ERROR",
+                        "Requests is hanging",
+                    ),
+                ).start()
+
+        _langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        _langfuse_project_id = os.environ.get("LANGFUSE_PROJECT_ID")
+
+        # langfuse urls look like: https://us.cloud.langfuse.com/project/************/traces/litellm-alert-trace-ididi9dk-09292-************
+
+        _langfuse_url = (
+            f"{_langfuse_host}/project/{_langfuse_project_id}/traces/{trace_id}"
+        )
+        request_info += f"\n🪢 Langfuse Trace: {_langfuse_url}"
         return request_info
-
-        # if request_data is not None:
-        #     trace_id = request_data.get("metadata", {}).get(
-        #         "trace_id", None
-        #     )  # get langfuse trace id
-        #     if trace_id is None:
-        #         trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
-        #         request_data["metadata"]["trace_id"] = trace_id
-        # elif kwargs is not None:
-        #     _litellm_params = kwargs.get("litellm_params", {})
-        #     trace_id = _litellm_params.get("metadata", {}).get(
-        #         "trace_id", None
-        #     )  # get langfuse trace id
-        #     if trace_id is None:
-        #         trace_id = "litellm-alert-trace-" + str(uuid.uuid4())
-        #         _litellm_params["metadata"]["trace_id"] = trace_id
-
-        # _langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
-        # _langfuse_project_id = os.environ.get("LANGFUSE_PROJECT_ID")
-
-        # # langfuse urls look like: https://us.cloud.langfuse.com/project/************/traces/litellm-alert-trace-ididi9dk-09292-************
-
-        # _langfuse_url = (
-        #     f"{_langfuse_host}/project/{_langfuse_project_id}/traces/{trace_id}"
-        # )
-        # request_info += f"\n🪢 Langfuse Trace: {_langfuse_url}"
-        # return request_info
 
     def _response_taking_too_long_callback(
         self,
@@ -167,6 +209,14 @@ class SlackAlerting:
             _deployment_latencies = metadata["_latency_per_deployment"]
             if len(_deployment_latencies) == 0:
                 return None
+            try:
+                # try sorting deployments by latency
+                _deployment_latencies = sorted(
+                    _deployment_latencies.items(), key=lambda x: x[1]
+                )
+                _deployment_latencies = dict(_deployment_latencies)
+            except:
+                pass
             for api_base, latency in _deployment_latencies.items():
                 _message_to_send += f"\n{api_base}: {round(latency,2)}s"
             _message_to_send = "```" + _message_to_send + "```"
@@ -194,7 +244,7 @@ class SlackAlerting:
         if time_difference_float > self.alerting_threshold:
             if "langfuse" in litellm.success_callback:
                 request_info = self._add_langfuse_trace_id_to_alert(
-                    request_info=request_info, kwargs=kwargs
+                    request_info=request_info, kwargs=kwargs, type="slow_response"
                 )
             # add deployment latencies to alert
             if (
@@ -222,8 +272,8 @@ class SlackAlerting:
 
     async def response_taking_too_long(
         self,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
+        start_time: Optional[datetime.datetime] = None,
+        end_time: Optional[datetime.datetime] = None,
         type: Literal["hanging_request", "slow_response"] = "hanging_request",
         request_data: Optional[dict] = None,
     ):
@@ -243,10 +293,6 @@ class SlackAlerting:
             except:
                 messages = ""
             request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
-            if "langfuse" in litellm.success_callback:
-                request_info = self._add_langfuse_trace_id_to_alert(
-                    request_info=request_info, request_data=request_data
-                )
         else:
             request_info = ""
 
@@ -287,6 +333,15 @@ class SlackAlerting:
                 alerting_message = (
                     f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
                 )
+
+                if "langfuse" in litellm.success_callback:
+                    request_info = self._add_langfuse_trace_id_to_alert(
+                        request_info=request_info,
+                        request_data=request_data,
+                        type="hanging_request",
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
 
                 # add deployment latencies to alert
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
