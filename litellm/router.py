@@ -72,7 +72,9 @@ class Router:
         ## RELIABILITY ##
         num_retries: Optional[int] = None,
         timeout: Optional[float] = None,
-        default_litellm_params={},  # default params for Router.chat.completion.create
+        default_litellm_params: Optional[
+            dict
+        ] = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: Optional[int] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
@@ -158,6 +160,7 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+
         if semaphore:
             self.semaphore = semaphore
         self.set_verbose = set_verbose
@@ -260,6 +263,7 @@ class Router:
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
+        default_litellm_params = default_litellm_params or {}
         self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
         # default litellm args
@@ -475,6 +479,7 @@ class Router:
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
+
             model_name = data["model"]
             for k, v in self.default_litellm_params.items():
                 if (
