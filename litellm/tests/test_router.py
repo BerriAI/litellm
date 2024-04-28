@@ -57,6 +57,7 @@ def test_router_num_retries_init(num_retries, max_retries):
     else:
         assert getattr(model_client, "max_retries") == 0
 
+
 @pytest.mark.parametrize(
     "timeout", [10, 1.0, httpx.Timeout(timeout=300.0, connect=20.0)]
 )
@@ -137,6 +138,7 @@ def test_router_azure_ai_studio_init(mistral_api_base):
     print(f"uri_reference: {uri_reference}")
 
     assert "/v1/" in uri_reference
+    assert uri_reference.count("v1") == 1
 
 
 def test_exception_raising():

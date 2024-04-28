@@ -57,6 +57,7 @@ def test_router_timeouts():
         redis_password=os.getenv("REDIS_PASSWORD"),
         redis_port=int(os.getenv("REDIS_PORT")),
         timeout=10,
+        num_retries=0,
     )
 
     print("***** TPM SETTINGS *****")
@@ -89,15 +90,15 @@ def test_router_timeouts():
 
 @pytest.mark.asyncio
 async def test_router_timeouts_bedrock():
-    import openai
+    import openai, uuid
 
     # Model list for OpenAI and Anthropic models
-    model_list = [
+    _model_list = [
         {
             "model_name": "bedrock",
             "litellm_params": {
                 "model": "bedrock/anthropic.claude-instant-v1",
-                "timeout": 0.001,
+                "timeout": 0.00001,
             },
             "tpm": 80000,
         },
@@ -105,17 +106,18 @@ async def test_router_timeouts_bedrock():
 
     # Configure router
     router = Router(
-        model_list=model_list,
+        model_list=_model_list,
         routing_strategy="usage-based-routing",
         debug_level="DEBUG",
         set_verbose=True,
+        num_retries=0,
     )
 
     litellm.set_verbose = True
     try:
         response = await router.acompletion(
             model="bedrock",
-            messages=[{"role": "user", "content": "hello, who are u"}],
+            messages=[{"role": "user", "content": f"hello, who are u {uuid.uuid4()}"}],
         )
         print(response)
         pytest.fail("Did not raise error `openai.APITimeoutError`")

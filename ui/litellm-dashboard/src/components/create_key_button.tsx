@@ -39,6 +39,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [apiKey, setApiKey] = useState(null);
   const [softBudget, setSoftBudget] = useState(null);
   const [userModels, setUserModels] = useState([]);
+  const [modelsToPick, setModelsToPick] = useState([]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -94,6 +95,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleCopy = () => {
     message.success('API Key copied to clipboard');
 };
+
+  useEffect(() => {
+    let tempModelsToPick = [];
+
+    if (team) {
+      if (team.models.length > 0) {
+        if (team.models.includes("all-proxy-models")) {
+          // if the team has all-proxy-models show all available models
+          tempModelsToPick = userModels;
+        } else {
+          // show team models
+          tempModelsToPick = team.models;
+        }
+      } else {
+        // show all available models if the team has no models set
+        tempModelsToPick = userModels;
+      }
+    } else {
+      // no team set, show all available models
+      tempModelsToPick = userModels;
+    }
+
+    setModelsToPick(tempModelsToPick);
+  }, [team, userModels]);
   
 
   return (
@@ -161,30 +186,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
                     </Option>
-                    {team && team.models ? (
-                      team.models.includes("all-proxy-models") ? (
-                        userModels.map((model: string) => (
+                    {
+                      modelsToPick.map((model: string) => (
                           (
                             <Option key={model} value={model}>
                               {model}
                             </Option>
                           )
                         ))
-                      ) : (
-                        team.models.map((model: string) => (
-                          <Option key={model} value={model}>
-                            {model}
-                          </Option>
-                        ))
-                      )
-                    ) : (
-                      userModels.map((model: string) => (
-                        <Option key={model} value={model}>
-                          {model}
-                        </Option>
-                      ))
-                    )}
-
+                    }
                 </Select>
               </Form.Item>
               <Accordion className="mt-20 mb-8" >
