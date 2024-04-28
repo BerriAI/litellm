@@ -1994,6 +1994,8 @@ class Router:
                 # check if it ends with a trailing slash
                 if api_base.endswith("/"):
                     api_base += "v1/"
+                elif api_base.endswith("/v1"):
+                    api_base += "/"
                 else:
                     api_base += "/v1/"
 
