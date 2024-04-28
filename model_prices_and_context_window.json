@@ -3532,6 +3532,46 @@
         "output_cost_per_token": 0.000000,
         "litellm_provider": "voyage",
         "mode": "embedding"
+    },
+    "dashscope/qwen-turbo": {
+        "max_tokens": 1500,
+        "max_input_tokens": 6144,
+        "max_output_tokens": 1500,
+        "input_cost_per_token": 0.0000000692,
+        "output_cost_per_token": 0.0000002769,
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "dashscope/qwen-plus": {
+        "max_tokens": 2000,
+        "max_input_tokens": 30720,
+        "max_output_tokens": 2000,
+        "input_cost_per_token": 0.0000005537,
+        "output_cost_per_token": 0.0000016611,
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "dashscope/qwen-max": {
+        "max_tokens": 2000,
+        "max_input_tokens": 6144,
+        "max_output_tokens": 2000,
+        "input_cost_per_token": 0.0000055371,
+        "output_cost_per_token": 0.0000166113,
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "dashscope/qwen-max-longcontext": {
+        "max_tokens": 2000,
+        "max_input_tokens": 28672,
+        "max_output_tokens": 2000,
+        "input_cost_per_token": 0.0000055371,
+        "output_cost_per_token": 0.0000166113,
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "supports_function_calling": true
     }
-
+    
 }

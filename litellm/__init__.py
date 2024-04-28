@@ -549,6 +549,8 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
+dashscope_models = ["qwen-turbo", "qwen-plus", "qwen-max", "qwen-max-longcontext"]
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -572,6 +574,7 @@ model_list = (
     + maritalk_models
     + vertex_language_models
     + watsonx_models
+    + dashscope_models
 )
 
 provider_list: List = [
@@ -615,6 +618,7 @@ provider_list: List = [
     "watsonx",
     "triton",
     "predibase",
+    "dashscope",
     "custom",  # custom apis
 ]
 
@@ -641,6 +645,7 @@ models_by_provider: dict = {
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
+    "dashscope": dashscope_models,
 }
 
 # mapping for those models which have larger equivalents

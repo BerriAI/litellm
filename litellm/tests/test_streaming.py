@@ -3064,3 +3064,31 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         assert (
             chunk_dict == chunks[idx]
         ), f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"
+
+def test_completion_dashscope_stream():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        response = completion(
+            model="qwen-plus", messages=messages, stream=True, max_tokens=100
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+#test_completion_dashscope_stream()

@@ -70,6 +70,7 @@ from .llms import (
     vertex_ai_anthropic,
     maritalk,
     watsonx,
+    dashscope,
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
@@ -2296,6 +2297,37 @@ def completion(
                     resp_string,
                     model,
                     custom_llm_provider="petals",
+                    logging_obj=logging,
+                )
+                return response
+            response = model_response
+        elif custom_llm_provider == "dashscope" or model in litellm.dashscope_models:
+            custom_llm_provider = "dashscope"
+            dashscope_api_key = (
+                api_key
+                or os.environ.get("DASHSCOPE_API_KEY")
+                or litellm.api_key
+            )
+
+            model_response = dashscope.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=dashscope_api_key,
+                logging_obj=logging,
+            )
+            if inspect.isgenerator(model_response) or (
+                "stream" in optional_params and optional_params["stream"] == True
+            ):
+                response = CustomStreamWrapper(
+                    model_response,
+                    model,
+                    custom_llm_provider="dashscope",
                     logging_obj=logging,
                 )
                 return response

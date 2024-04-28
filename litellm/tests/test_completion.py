@@ -3496,3 +3496,28 @@ def test_moderation():
 
 
 # test_moderation()
+
+
+def test_completion_dashscope():
+    print("calling dashscope completion...")
+    api_key = os.environ["DASHSCOPE_API_KEY"]
+
+    try:
+        response = completion(
+            model="dashscope/qwen-plus",
+            messages=messages,
+            max_tokens=100,
+            temperature=0.1,
+            api_key=api_key,
+            stream=False,
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+#test_completion_dashscope()
+

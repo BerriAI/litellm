@@ -155,6 +155,7 @@ const sidebars = {
         "providers/openrouter", 
         "providers/custom_openai_proxy",
         "providers/petals",
+        "providers/dashscope",
         
       ],
     },

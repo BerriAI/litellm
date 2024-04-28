@@ -5190,6 +5190,7 @@ def get_optional_params(
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
             and custom_llm_provider not in litellm.openai_compatible_providers
+            and custom_llm_provider != "dashscope"
         ):
             if custom_llm_provider == "ollama":
                 # ollama actually supports json output
@@ -6764,6 +6765,9 @@ def get_llm_provider(
         ## petals
         elif model in litellm.petals_models:
             custom_llm_provider = "petals"
+        ## dashscope
+        elif model in litellm.dashscope_models:
+            custom_llm_provider = "dashscope"
         ## bedrock
         elif (
             model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
@@ -7436,6 +7440,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif custom_llm_provider == "dashscope":
+            if "DASHSCOPE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DASHSCOPE_API_KEY")
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
 
 
@@ -10784,6 +10793,75 @@ class CustomStreamWrapper:
                 "is_finished": chunk["is_finished"],
                 "finish_reason": finish_reason,
             }
+    
+    def handle_dashscope_stream(self, chunk):
+        try:
+            if chunk.status_code != 200:
+                raise Exception(
+                    chunk.message,
+                )
+            print_verbose(f"\nRaw DashScope Chunk\n{chunk}\n")
+            text = ""
+            is_finished = False
+            finish_reason = None
+            output = getattr(chunk, "output")
+            choices = getattr(output, "choices", [])
+            original_chunk = None
+            incremental_output = self.completion_stream.incremental_output
+            support_functions = self.completion_stream.support_functions
+            if len(choices) > 0:
+                text = choices[0]['message']['content']
+                if choices[0].finish_reason is not None and choices[0].finish_reason != "null":
+                    is_finished = True
+                    finish_reason = choices[0].finish_reason
+                if not incremental_output:                    
+                    # tool_calls doesn't support incremental_output yet. 
+                    if not is_finished:
+                        text = ""
+                    else:
+                        tool_calls = choices[0]['message'].get("tool_calls")
+                        if tool_calls:
+                            original_chunk = ModelResponse()
+                            original_chunk.id = chunk.request_id
+                            original_chunk.choices = []
+                            for choice in choices:
+                                new_choice = StreamingChoices(
+                                    finish_reason=choice.get("finish_reason"), 
+                                    delta=Delta(
+                                        role=choice['message'].get("role"),
+                                        content=choice['message'].get("content"),                            
+                                    )
+                                )
+                                if support_functions:
+                                    new_choice.delta.function_call = FunctionCall(
+                                        name=tool_calls[0]['function']['name'],
+                                        arguments=tool_calls[0]['function']['arguments'],
+                                    )
+                                else: 
+                                    new_choice.delta.tool_calls=[]
+                                    tool_calls=choice['message'].get("tool_calls")
+                                    idx = 0
+                                    for tool_call in tool_calls:
+                                        new_tool_call = ChatCompletionDeltaToolCall(    
+                                            id=tool_call['id'],
+                                            type=tool_call['type'],
+                                            function=Function(
+                                                name=tool_call['function']['name'],
+                                                arguments=tool_call['function']['arguments']
+                                            ),
+                                            index=idx
+                                        )
+                                        idx += 1
+                                        new_choice.delta.tool_calls.append(new_tool_call)
+                                original_chunk.choices.append(new_choice)
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+                "original_chunk": original_chunk,
+            }
+        except Exception as e:
+            raise e
 
     def handle_watsonx_stream(self, chunk):
         try:
@@ -11177,6 +11255,12 @@ class CustomStreamWrapper:
                     self.response_id = chunk.id
                 if hasattr(chunk, "system_fingerprint"):
                     self.system_fingerprint = chunk.system_fingerprint
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+            elif self.custom_llm_provider == "dashscope":
+                response_obj = self.handle_dashscope_stream(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
