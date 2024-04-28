@@ -1271,6 +1271,32 @@ def test_completion_sagemaker_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_watsonx_stream():
+    litellm.set_verbose = True
+    try:
+        response = completion(
+            model="watsonx/ibm/granite-13b-chat-v2",
+            messages=messages,
+            temperature=0.5,
+            max_tokens=20,
+            stream=True,
+        )
+        complete_response = ""
+        has_finish_reason = False
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            if finished:
+                break
+            complete_response += chunk
+        if has_finish_reason is False:
+            raise Exception("finish reason not set for last chunk")
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 # test_completion_sagemaker_stream()
 
 

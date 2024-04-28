@@ -50,7 +50,6 @@ class Router:
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
-    num_retries: int = 0
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
@@ -70,9 +69,11 @@ class Router:
         ] = None,  # if you want to cache across model groups
         client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
         ## RELIABILITY ##
-        num_retries: int = 0,
+        num_retries: Optional[int] = None,
         timeout: Optional[float] = None,
-        default_litellm_params={},  # default params for Router.chat.completion.create
+        default_litellm_params: Optional[
+            dict
+        ] = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: Optional[int] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
@@ -158,6 +159,7 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+
         if semaphore:
             self.semaphore = semaphore
         self.set_verbose = set_verbose
@@ -229,7 +231,14 @@ class Router:
         self.failed_calls = (
             InMemoryCache()
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
-        self.num_retries = num_retries or litellm.num_retries or 0
+
+        if num_retries is not None:
+            self.num_retries = num_retries
+        elif litellm.num_retries is not None:
+            self.num_retries = litellm.num_retries
+        else:
+            self.num_retries = openai.DEFAULT_MAX_RETRIES
+
         self.timeout = timeout or litellm.request_timeout
 
         self.retry_after = retry_after
@@ -255,6 +264,7 @@ class Router:
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
+        default_litellm_params = default_litellm_params or {}
         self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
         # default litellm args
@@ -428,6 +438,7 @@ class Router:
             kwargs["messages"] = messages
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
@@ -469,6 +480,7 @@ class Router:
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
+
             model_name = data["model"]
             for k, v in self.default_litellm_params.items():
                 if (
@@ -1415,10 +1427,12 @@ class Router:
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
-        verbose_router_logger.debug(
-            f"async function w/ retries: original_function - {original_function}"
-        )
+
         num_retries = kwargs.pop("num_retries")
+
+        verbose_router_logger.debug(
+            f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
+        )
         try:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await original_function(*args, **kwargs)
@@ -1445,6 +1459,7 @@ class Router:
                 await asyncio.sleep(timeout)
             elif RouterErrors.user_defined_ratelimit_error.value in str(e):
                 raise e  # don't wait to retry if deployment hits user-defined rate-limit
+
             elif hasattr(original_exception, "status_code") and litellm._should_retry(
                 status_code=original_exception.status_code
             ):
@@ -1606,6 +1621,28 @@ class Router:
                 raise e
             raise original_exception
 
+    def _router_should_retry(
+        self, e: Exception, remaining_retries: int, num_retries: int
+    ):
+        """
+        Calculate back-off, then retry
+        """
+        if hasattr(e, "response") and hasattr(e.response, "headers"):
+            timeout = litellm._calculate_retry_after(
+                remaining_retries=remaining_retries,
+                max_retries=num_retries,
+                response_headers=e.response.headers,
+                min_timeout=self.retry_after,
+            )
+            time.sleep(timeout)
+        else:
+            timeout = litellm._calculate_retry_after(
+                remaining_retries=remaining_retries,
+                max_retries=num_retries,
+                min_timeout=self.retry_after,
+            )
+            time.sleep(timeout)
+
     def function_with_retries(self, *args, **kwargs):
         """
         Try calling the model 3 times. Shuffle between available deployments.
@@ -1625,9 +1662,6 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-            verbose_router_logger.debug(
-                f"num retries in function with retries: {num_retries}"
-            )
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
@@ -1641,6 +1675,11 @@ class Router:
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             ### RETRY
+            self._router_should_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+            )
             for current_attempt in range(num_retries):
                 verbose_router_logger.debug(
                     f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}"
@@ -1654,34 +1693,11 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    if "No models available" in str(e):
-                        timeout = litellm._calculate_retry_after(
-                            remaining_retries=remaining_retries,
-                            max_retries=num_retries,
-                            min_timeout=self.retry_after,
-                        )
-                        time.sleep(timeout)
-                    elif (
-                        hasattr(e, "status_code")
-                        and hasattr(e, "response")
-                        and litellm._should_retry(status_code=e.status_code)
-                    ):
-                        if hasattr(e.response, "headers"):
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                response_headers=e.response.headers,
-                                min_timeout=self.retry_after,
-                            )
-                        else:
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                min_timeout=self.retry_after,
-                            )
-                        time.sleep(timeout)
-                    else:
-                        raise e
+                    self._router_should_retry(
+                        e=e,
+                        remaining_retries=remaining_retries,
+                        num_retries=num_retries,
+                    )
             raise original_exception
 
     ### HELPER FUNCTIONS
@@ -1929,6 +1945,7 @@ class Router:
             )
             default_api_base = api_base
             default_api_key = api_key
+
         if (
             model_name in litellm.open_ai_chat_completion_models
             or custom_llm_provider in litellm.openai_compatible_providers
@@ -1964,6 +1981,25 @@ class Router:
                 api_base = litellm.get_secret(api_base_env_name)
                 litellm_params["api_base"] = api_base
 
+            ## AZURE AI STUDIO MISTRAL CHECK ##
+            """
+            Make sure api base ends in /v1/
+
+            if not, add it - https://github.com/BerriAI/litellm/issues/2279
+            """
+            if (
+                custom_llm_provider == "openai"
+                and api_base is not None
+                and not api_base.endswith("/v1/")
+            ):
+                # check if it ends with a trailing slash
+                if api_base.endswith("/"):
+                    api_base += "v1/"
+                elif api_base.endswith("/v1"):
+                    api_base += "/"
+                else:
+                    api_base += "/v1/"
+
             api_version = litellm_params.get("api_version")
             if api_version and api_version.startswith("os.environ/"):
                 api_version_env_name = api_version.replace("os.environ/", "")
@@ -1986,7 +2022,9 @@ class Router:
                 stream_timeout = litellm.get_secret(stream_timeout_env_name)
                 litellm_params["stream_timeout"] = stream_timeout
 
-            max_retries = litellm_params.pop("max_retries", 2)
+            max_retries = litellm_params.pop(
+                "max_retries", 0
+            )  # router handles retry logic
             if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
                 max_retries_env_name = max_retries.replace("os.environ/", "")
                 max_retries = litellm.get_secret(max_retries_env_name)
@@ -2052,9 +2090,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
@@ -2074,9 +2114,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
@@ -2096,9 +2138,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
@@ -2118,9 +2162,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
@@ -2158,9 +2204,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
@@ -2178,9 +2226,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                verify=litellm.ssl_verify,
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
                             ),
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
@@ -2199,9 +2249,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),
@@ -2219,9 +2271,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
                         ),
@@ -2249,9 +2303,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=AsyncCustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
@@ -2271,9 +2327,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=CustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=sync_proxy_mounts,
                     ),  # type: ignore
@@ -2294,9 +2352,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=AsyncCustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
@@ -2317,9 +2377,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=CustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=sync_proxy_mounts,
                     ),  # type: ignore
