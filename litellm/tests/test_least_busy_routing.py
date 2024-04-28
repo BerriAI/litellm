@@ -201,6 +201,7 @@ async def test_router_atext_completion_streaming():
 
 @pytest.mark.asyncio
 async def test_router_completion_streaming():
+    litellm.set_verbose = True
     messages = [
         {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
     ]
@@ -219,9 +220,9 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-35-turbo",
-                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
-                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
                 "rpm": 6,
             },
             "model_info": {"id": 2},
@@ -229,9 +230,9 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-35-turbo",
-                "api_key": "os.environ/AZURE_CANADA_API_KEY",
-                "api_base": "https://my-endpoint-canada-berri992.openai.azure.com",
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
                 "rpm": 6,
             },
             "model_info": {"id": 3},
@@ -262,4 +263,4 @@ async def test_router_completion_streaming():
     ## check if calls equally distributed
     cache_dict = router.cache.get_cache(key=cache_key)
     for k, v in cache_dict.items():
-        assert v == 1
+        assert v == 1, f"Failed. K={k} called v={v} times, cache_dict={cache_dict}"

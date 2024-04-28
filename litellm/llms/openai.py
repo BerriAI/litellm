@@ -447,6 +447,7 @@ class OpenAIChatCompletion(BaseLLM):
                 )
             else:
                 openai_aclient = client
+
             ## LOGGING
             logging_obj.pre_call(
                 input=data["messages"],

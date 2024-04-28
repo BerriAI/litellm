@@ -161,40 +161,54 @@ async def make_async_calls():
     return total_time
 
 
-# def test_langfuse_logging_async_text_completion():
-#     try:
-#         pre_langfuse_setup()
-#         litellm.set_verbose = False
-#         litellm.success_callback = ["langfuse"]
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_langfuse_logging_without_request_response(stream):
+    try:
+        import uuid
 
-#         async def _test_langfuse():
-#             response = await litellm.atext_completion(
-#                 model="gpt-3.5-turbo-instruct",
-#                 prompt="this is a test",
-#                 max_tokens=5,
-#                 temperature=0.7,
-#                 timeout=5,
-#                 user="test_user",
-#                 stream=True
-#             )
-#             async for chunk in response:
-#                 print()
-#                 print(chunk)
-#             await asyncio.sleep(1)
-#             return response
+        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
+        litellm.set_verbose = True
+        litellm.turn_off_message_logging = True
+        litellm.success_callback = ["langfuse"]
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            mock_response="It's simple to use and easy to get started",
+            messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
+            max_tokens=10,
+            temperature=0.2,
+            stream=stream,
+            metadata={"trace_id": _unique_trace_name},
+        )
+        print(response)
+        if stream:
+            async for chunk in response:
+                print(chunk)
 
-#         response = asyncio.run(_test_langfuse())
-#         print(f"response: {response}")
+        await asyncio.sleep(3)
 
-#         # # check langfuse.log to see if there was a failed response
-#         search_logs("langfuse.log")
-#     except litellm.Timeout as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"An exception occurred - {e}")
+        import langfuse
 
+        langfuse_client = langfuse.Langfuse(
+            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+        )
 
-# test_langfuse_logging_async_text_completion()
+        # get trace with _unique_trace_name
+        trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
+
+        print("trace_from_langfuse", trace)
+
+        _trace_data = trace.data
+
+        assert _trace_data[0].input == {"messages": "redacted-by-litellm"}
+        assert _trace_data[0].output == {
+            "role": "assistant",
+            "content": "redacted-by-litellm",
+        }
+
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
