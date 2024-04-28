@@ -209,6 +209,14 @@ class SlackAlerting:
             _deployment_latencies = metadata["_latency_per_deployment"]
             if len(_deployment_latencies) == 0:
                 return None
+            try:
+                # try sorting deployments by latency
+                _deployment_latencies = sorted(
+                    _deployment_latencies.items(), key=lambda x: x[1]
+                )
+                _deployment_latencies = dict(_deployment_latencies)
+            except:
+                pass
             for api_base, latency in _deployment_latencies.items():
                 _message_to_send += f"\n{api_base}: {round(latency,2)}s"
             _message_to_send = "```" + _message_to_send + "```"
