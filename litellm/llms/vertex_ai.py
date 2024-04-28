@@ -143,7 +143,9 @@ class VertexAIConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "stream":
+            if (
+                param == "stream" and value == True
+            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
             if param == "n":
                 optional_params["candidate_count"] = value
@@ -527,6 +529,7 @@ def completion(
                 "instances": instances,
                 "vertex_location": vertex_location,
                 "vertex_project": vertex_project,
+                "safety_settings": safety_settings,
                 **optional_params,
             }
             if optional_params.get("stream", False) is True:
@@ -541,8 +544,9 @@ def completion(
             tools = optional_params.pop("tools", None)
             prompt, images = _gemini_vision_convert_messages(messages=messages)
             content = [prompt] + images
-            if "stream" in optional_params and optional_params["stream"] == True:
-                stream = optional_params.pop("stream")
+            stream = optional_params.pop("stream", False)
+            if stream == True:
+
                 request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), safety_settings={safety_settings}, stream={stream})\n"
                 logging_obj.pre_call(
                     input=prompt,
@@ -810,6 +814,7 @@ async def async_completion(
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    safety_settings=None,
     **optional_params,
 ):
     """
@@ -820,6 +825,7 @@ async def async_completion(
             print_verbose("\nMaking VertexAI Gemini Pro/Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
             tools = optional_params.pop("tools", None)
+            stream = optional_params.pop("stream", False)
 
             prompt, images = _gemini_vision_convert_messages(messages=messages)
             content = [prompt] + images
@@ -840,6 +846,7 @@ async def async_completion(
             response = await llm_model._generate_content_async(
                 contents=content,
                 generation_config=optional_params,
+                safety_settings=safety_settings,
                 tools=tools,
             )
 
@@ -1018,6 +1025,7 @@ async def async_streaming(
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    safety_settings=None,
     **optional_params,
 ):
     """
@@ -1044,6 +1052,7 @@ async def async_streaming(
         response = await llm_model._generate_content_streaming_async(
             contents=content,
             generation_config=optional_params,
+            safety_settings=safety_settings,
             tools=tools,
         )
 

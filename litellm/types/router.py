@@ -1,5 +1,5 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
-
+import httpx
 from pydantic import BaseModel, validator
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -104,11 +104,13 @@ class LiteLLM_Params(BaseModel):
     api_key: Optional[str] = None
     api_base: Optional[str] = None
     api_version: Optional[str] = None
-    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
+    timeout: Optional[Union[float, str, httpx.Timeout]] = (
+        None  # if str, pass in as os.environ/
+    )
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
-    max_retries: int = 2  # follows openai default of 2
+    max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
@@ -146,14 +148,13 @@ class LiteLLM_Params(BaseModel):
         args.pop("self", None)
         args.pop("params", None)
         args.pop("__class__", None)
-        if max_retries is None:
-            max_retries = 2
-        elif isinstance(max_retries, str):
+        if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
     class Config:
         extra = "allow"
+        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

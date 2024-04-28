@@ -1291,6 +1291,7 @@ def test_completion_logprobs_stream():
         for chunk in response:
             # check if atleast one chunk has log probs
             print(chunk)
+            print(f"chunk.choices[0]: {chunk.choices[0]}")
             if "logprobs" in chunk.choices[0]:
                 # assert we got a valid logprob in the choices
                 assert len(chunk.choices[0].logprobs.content[0].top_logprobs) == 3
@@ -1765,6 +1766,24 @@ def test_completion_azure_deployment_id():
 #         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_anthropic_openai_proxy()
+
+
+def test_completion_replicate_llama3():
+    litellm.set_verbose = True
+    model_name = "replicate/meta/meta-llama-3-8b-instruct"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+        )
+        print(response)
+        # Add any assertions here to check the response
+        response_str = response["choices"][0]["message"]["content"]
+        print("RESPONSE STRING\n", response_str)
+        if type(response_str) != str:
+            pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.skip(reason="replicate endpoints take +2 mins just for this request")
@@ -2632,6 +2651,42 @@ def test_completion_palm_stream():
             print(chunk)
     except litellm.APIError as e:
         pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+        )
+        # Add any assertions here to check the response
+        print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

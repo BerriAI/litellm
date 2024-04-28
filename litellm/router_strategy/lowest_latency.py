@@ -169,7 +169,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         request_count_dict[id] = {}
 
                     ## Latency
-                    request_count_dict[id].setdefault("latency", []).append(100.0)
+                    request_count_dict[id].setdefault("latency", []).append(1000.0)
                     self.router_cache.set_cache(
                         key=latency_key,
                         value=request_count_dict,
@@ -345,6 +345,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if isinstance(_call_latency, float):
                     total += _call_latency
             item_latency = total / len(item_latency)
+
+            # -------------- #
+            # Debugging Logic
+            # -------------- #
+            # We use _latency_per_deployment to log to langfuse, slack - this is not used to make a decision on routing
+            # this helps a user to debug why the router picked a specfic deployment      #
+            _deployment_api_base = _deployment.get("litellm_params", {}).get(
+                "api_base", ""
+            )
+            if _deployment_api_base is not None:
+                _latency_per_deployment[_deployment_api_base] = item_latency
+            # -------------- #
+            # End of Debugging Logic
+            # -------------- #
+
             if item_latency == 0:
                 deployment = _deployment
                 break
@@ -356,12 +371,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
             elif item_latency < lowest_latency:
                 lowest_latency = item_latency
                 deployment = _deployment
-
-            # _latency_per_deployment is used for debuggig
-            _deployment_api_base = _deployment.get("litellm_params", {}).get(
-                "api_base", ""
-            )
-            _latency_per_deployment[_deployment_api_base] = item_latency
         if request_kwargs is not None and "metadata" in request_kwargs:
             request_kwargs["metadata"][
                 "_latency_per_deployment"

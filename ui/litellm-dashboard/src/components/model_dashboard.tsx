@@ -261,6 +261,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <Form.Item 
                     label="tpm" 
                     name="tpm"
+                    tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
                   >
                   <InputNumber min={0} step={1} />
 
@@ -269,6 +270,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <Form.Item 
                     label="rpm" 
                     name="rpm"
+                    tooltip="int (optional) - Rate limit for this deployment: in requests per minute (rpm). Find this information on your model/providers website"
                   >
                   <InputNumber min={0} step={1} />
                   </Form.Item>
@@ -279,6 +281,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   >
 
                     
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="timeout" 
+                    name="timeout"
+                    tooltip="int (optional) - Timeout in seconds for LLM requests (Defaults to 600 seconds)"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="stream_timeout" 
+                    name="stream_timeout"
+                    tooltip="int (optional) - Timeout for stream requests (seconds)"
+                  >
                   <InputNumber min={0} step={1} />
 
                   </Form.Item>
