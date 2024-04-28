@@ -2722,7 +2722,7 @@ def test_unified_auth_params(provider, model, project, region_name, token):
 @pytest.mark.asyncio
 async def test_acompletion_watsonx():
     litellm.set_verbose = True
-    model_name = "watsonx/deployment/" + os.getenv("WATSONX_DEPLOYMENT_ID")
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
     print("testing watsonx")
     try:
         response = await litellm.acompletion(
