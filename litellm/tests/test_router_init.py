@@ -203,7 +203,7 @@ def test_timeouts_router():
                 },
             },
         ]
-        router = Router(model_list=model_list)
+        router = Router(model_list=model_list, num_retries=0)
 
         print("PASSED !")
 
