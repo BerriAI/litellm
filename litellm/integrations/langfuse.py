@@ -266,7 +266,8 @@ class LangFuseLogger:
 
             trace_name = metadata.get("trace_name", None)
             trace_id = metadata.get("trace_id", None)
-            if trace_name is None and trace_id is None:
+            existing_trace_id = metadata.get("existing_trace_id", None)
+            if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name
                 ## DO NOT SET TRACE_NAME if trace-id set. this can lead to overwriting of past traces.
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
@@ -275,7 +276,7 @@ class LangFuseLogger:
                 "name": trace_name,
                 "input": input,
                 "user_id": metadata.get("trace_user_id", user_id),
-                "id": trace_id,
+                "id": trace_id or existing_trace_id,
                 "session_id": metadata.get("session_id", None),
             }
 
