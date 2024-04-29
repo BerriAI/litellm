@@ -74,7 +74,7 @@ jobs:
           name: Black Formatting
           command: |
             cd litellm
-            python -m black .
+            python -m black . --check
             cd ..
       - run:
           name: Linting Testing
