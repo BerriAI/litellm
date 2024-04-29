@@ -312,6 +312,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
         except:
             input_tokens = 0
 
+        all_deployments = random.sample(all_deployments.items(), len(all_deployments))
+        all_deployments = dict(all_deployments)
         for item, item_map in all_deployments.items():
             ## get the item from model list
             _deployment = None
