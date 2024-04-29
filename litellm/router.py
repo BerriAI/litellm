@@ -2779,7 +2779,10 @@ class Router:
                 self.cache.get_cache(key=model_id, local_only=True) or 0
             )
             ### get usage based cache ###
-            if isinstance(model_group_cache, dict):
+            if (
+                isinstance(model_group_cache, dict)
+                and self.routing_strategy != "usage-based-routing-v2"
+            ):
                 model_group_cache[model_id] = model_group_cache.get(model_id, 0)
 
                 current_request = max(
