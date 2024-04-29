@@ -1059,8 +1059,18 @@ async def user_api_key_auth(
                 ):
                     pass
                 else:
+                    user_role = "unknown"
+                    user_id = "unknown"
+                    if user_id_information is not None and isinstance(
+                        user_id_information, list
+                    ):
+                        _user = user_id_information[0]
+                        user_role = _user.get("user_role", {}).get(
+                            "user_role", "unknown"
+                        )
+                        user_id = _user.get("user_id", "unknown")
                     raise Exception(
-                        f"Only master key can be used to generate, delete, update info for new keys/users/teams. Route={route}"
+                        f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
                     )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
