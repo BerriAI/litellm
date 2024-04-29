@@ -10154,21 +10154,6 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider == "watsonx":
                 response_obj = self.handle_watsonx_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj.get("prompt_tokens") is not None:
-                    prompt_token_count = getattr(
-                        model_response.usage, "prompt_tokens", 0
-                    )
-                    model_response.usage.prompt_tokens = (
-                        prompt_token_count + response_obj["prompt_tokens"]
-                    )
-                if response_obj.get("completion_tokens") is not None:
-                    model_response.usage.completion_tokens = response_obj[
-                        "completion_tokens"
-                    ]
-                model_response.usage.total_tokens = getattr(
-                    model_response.usage, "prompt_tokens", 0
-                ) + getattr(model_response.usage, "completion_tokens", 0)
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
