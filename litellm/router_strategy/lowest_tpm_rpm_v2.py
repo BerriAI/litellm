@@ -333,7 +333,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                     tpm_dict[tpm_key] = 0
 
         all_deployments = tpm_dict
-        deployment = None
+        potential_deployments = []  # if multiple deployments have the same low value
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
             _deployment = None
@@ -369,11 +369,17 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 rpm_dict[item] + 1 > _deployment_rpm
             ):
                 continue
+            elif item_tpm == lowest_tpm:
+                potential_deployments.append(_deployment)
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
-                deployment = _deployment
+                potential_deployments = [_deployment]
         print_verbose("returning picked lowest tpm/rpm deployment.")
-        return deployment
+
+        if len(potential_deployments) > 0:
+            return random.choice(potential_deployments)
+        else:
+            return None
 
     async def async_get_available_deployments(
         self,
