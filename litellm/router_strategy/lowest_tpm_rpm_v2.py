@@ -394,6 +394,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
+
         tpm_keys = []
         rpm_keys = []
         for m in healthy_deployments:
@@ -416,7 +417,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         tpm_values = combined_tpm_rpm_values[: len(tpm_keys)]
         rpm_values = combined_tpm_rpm_values[len(tpm_keys) :]
 
-        return self._common_checks_available_deployment(
+        deployment = self._common_checks_available_deployment(
             model_group=model_group,
             healthy_deployments=healthy_deployments,
             tpm_keys=tpm_keys,
@@ -426,6 +427,61 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             messages=messages,
             input=input,
         )
+
+        try:
+            assert deployment is not None
+            return deployment
+        except Exception as e:
+            ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
+            deployment_dict = {}
+            for index, _deployment in enumerate(healthy_deployments):
+                if isinstance(_deployment, dict):
+                    id = _deployment.get("model_info", {}).get("id")
+                    ### GET DEPLOYMENT TPM LIMIT ###
+                    _deployment_tpm = None
+                    if _deployment_tpm is None:
+                        _deployment_tpm = _deployment.get("tpm", None)
+                    if _deployment_tpm is None:
+                        _deployment_tpm = _deployment.get("litellm_params", {}).get(
+                            "tpm", None
+                        )
+                    if _deployment_tpm is None:
+                        _deployment_tpm = _deployment.get("model_info", {}).get(
+                            "tpm", None
+                        )
+                    if _deployment_tpm is None:
+                        _deployment_tpm = float("inf")
+
+                    ### GET CURRENT TPM ###
+                    current_tpm = tpm_values[index]
+
+                    ### GET DEPLOYMENT TPM LIMIT ###
+                    _deployment_rpm = None
+                    if _deployment_rpm is None:
+                        _deployment_rpm = _deployment.get("rpm", None)
+                    if _deployment_rpm is None:
+                        _deployment_rpm = _deployment.get("litellm_params", {}).get(
+                            "rpm", None
+                        )
+                    if _deployment_rpm is None:
+                        _deployment_rpm = _deployment.get("model_info", {}).get(
+                            "rpm", None
+                        )
+                    if _deployment_rpm is None:
+                        _deployment_rpm = float("inf")
+
+                    ### GET CURRENT RPM ###
+                    current_rpm = rpm_values[index]
+
+                    deployment_dict[id] = {
+                        "current_tpm": current_tpm,
+                        "tpm_limit": _deployment_tpm,
+                        "current_rpm": current_rpm,
+                        "rpm_limit": _deployment_rpm,
+                    }
+            raise ValueError(
+                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}"
+            )
 
     def get_available_deployments(
         self,
@@ -464,7 +520,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             keys=rpm_keys
         )  # [1, 2, None, ..]
 
-        return self._common_checks_available_deployment(
+        deployment = self._common_checks_available_deployment(
             model_group=model_group,
             healthy_deployments=healthy_deployments,
             tpm_keys=tpm_keys,
@@ -474,3 +530,58 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             messages=messages,
             input=input,
         )
+
+        try:
+            assert deployment is not None
+            return deployment
+        except Exception as e:
+            ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
+            deployment_dict = {}
+            for index, _deployment in enumerate(healthy_deployments):
+                if isinstance(_deployment, dict):
+                    id = _deployment.get("model_info", {}).get("id")
+                    ### GET DEPLOYMENT TPM LIMIT ###
+                    _deployment_tpm = None
+                    if _deployment_tpm is None:
+                        _deployment_tpm = _deployment.get("tpm", None)
+                    if _deployment_tpm is None:
+                        _deployment_tpm = _deployment.get("litellm_params", {}).get(
+                            "tpm", None
+                        )
+                    if _deployment_tpm is None:
+                        _deployment_tpm = _deployment.get("model_info", {}).get(
+                            "tpm", None
+                        )
+                    if _deployment_tpm is None:
+                        _deployment_tpm = float("inf")
+
+                    ### GET CURRENT TPM ###
+                    current_tpm = tpm_values[index]
+
+                    ### GET DEPLOYMENT TPM LIMIT ###
+                    _deployment_rpm = None
+                    if _deployment_rpm is None:
+                        _deployment_rpm = _deployment.get("rpm", None)
+                    if _deployment_rpm is None:
+                        _deployment_rpm = _deployment.get("litellm_params", {}).get(
+                            "rpm", None
+                        )
+                    if _deployment_rpm is None:
+                        _deployment_rpm = _deployment.get("model_info", {}).get(
+                            "rpm", None
+                        )
+                    if _deployment_rpm is None:
+                        _deployment_rpm = float("inf")
+
+                    ### GET CURRENT RPM ###
+                    current_rpm = rpm_values[index]
+
+                    deployment_dict[id] = {
+                        "current_tpm": current_tpm,
+                        "tpm_limit": _deployment_tpm,
+                        "current_rpm": current_rpm,
+                        "rpm_limit": _deployment_rpm,
+                    }
+            raise ValueError(
+                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}"
+            )

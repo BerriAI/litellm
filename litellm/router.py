@@ -2807,7 +2807,7 @@ class Router:
 
             if _rate_limit_error == True:  # allow generic fallback logic to take place
                 raise ValueError(
-                    f"No deployments available for selected model, passed model={model}"
+                    f"{RouterErrors.no_deployments_available.value}, passed model={model}"
                 )
             elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(
@@ -3000,7 +3000,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -3130,7 +3130,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
