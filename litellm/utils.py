@@ -4269,8 +4269,8 @@ def completion_cost(
             model = get_model_params_and_category(model)
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
-        elif model in litellm.replicate_models or "replicate" in model:
-            return get_replicate_completion_pricing(completion_response, total_time)
+        # elif model in litellm.replicate_models or "replicate" in model:
+        #     return get_replicate_completion_pricing(completion_response, total_time)
 
         (
             prompt_tokens_cost_usd_dollar,
