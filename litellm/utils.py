@@ -3641,12 +3641,12 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     a100_80gb_price_per_second_public = (
         0.001400  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:
+    if total_time == 0.0:  # total time is in ms
         start_time = completion_response["created"]
         end_time = completion_response["ended"]
         total_time = end_time - start_time
 
-    return a100_80gb_price_per_second_public * total_time
+    return a100_80gb_price_per_second_public * total_time / 1000
 
 
 def _select_tokenizer(model: str):
@@ -3668,7 +3668,7 @@ def _select_tokenizer(model: str):
         tokenizer = Tokenizer.from_str(json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # llama2
-    elif "llama-2" in model.lower():
+    elif "llama-2" in model.lower() or "replicate" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # default - tiktoken
@@ -4269,7 +4269,10 @@ def completion_cost(
             model = get_model_params_and_category(model)
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
-        elif model in litellm.replicate_models or "replicate" in model:
+        elif (
+            model in litellm.replicate_models or "replicate" in model
+        ) and model not in litellm.model_cost:
+            # for unmapped replicate model, default to replicate's time tracking logic
             return get_replicate_completion_pricing(completion_response, total_time)
 
         (
