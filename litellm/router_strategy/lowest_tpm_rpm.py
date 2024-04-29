@@ -206,7 +206,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
             elif (rpm_dict is not None and item in rpm_dict) and (
-                rpm_dict[item] + 1 > _deployment_rpm
+                rpm_dict[item] + 1 >= _deployment_rpm
             ):
                 continue
             elif item_tpm < lowest_tpm:
