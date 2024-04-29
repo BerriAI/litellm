@@ -228,91 +228,7 @@ If you don't want to call a real LLM API endpoint, you can setup a fake openai s
 
 :::
 
-### 1. Setup Router 
-
-```python
-from litellm import Router 
-import litellm
-litellm.suppress_debug_info = True
-litellm.set_verbose = False
-import logging
-logging.basicConfig(level=logging.CRITICAL)
-import os, random, uuid, time, asyncio
-
-os.environ["REDIS_SSL"] = "True"
-
-# Model list for OpenAI and Anthropic models
-model_list = [
-    {
-        "model_name": "fake-openai-endpoint",
-        "litellm_params": {
-            "model": "gpt-3.5-turbo",
-            "api_key": "my-fake-key",
-            "api_base": "http://0.0.0.0:8080",
-            "rpm": 100
-        },
-    },
-    {
-        "model_name": "fake-openai-endpoint",
-        "litellm_params": {
-            "model": "gpt-3.5-turbo",
-            "api_key": "my-fake-key",
-            "api_base": "http://0.0.0.0:8081",
-            "rpm": 100
-        },
-    },
-]
-
-router_1 = Router(model_list=model_list, num_retries=0, enable_pre_call_checks=True, redis_host=os.getenv("REDIS_HOST"), redis_port=os.getenv("REDIS_PORT"), redis_password=os.getenv("REDIS_PASSWORD"))
-router_2 = Router(model_list=model_list, num_retries=0, enable_pre_call_checks=True, redis_host=os.getenv("REDIS_HOST"), redis_port=os.getenv("REDIS_PORT"), redis_password=os.getenv("REDIS_PASSWORD"))
-
-
-
-async def router_completion_non_streaming():
-  try:
-    client: Router = random.sample([router_1, router_2], 1)[0] # randomly pick b/w clients
-    # print(f"client={client}")
-    response = await client.acompletion(
-              model="fake-openai-endpoint", # [CHANGE THIS] (if you call it something else on your proxy)
-              messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
-          )
-    return response
-  except Exception as e:
-    # print(e)
-    return None
-  
-async def loadtest_fn():
-    start = time.time()
-    n = 500  # Number of concurrent tasks
-    tasks = [router_completion_non_streaming() for _ in range(n)]
-    chat_completions = await asyncio.gather(*tasks)
-    successful_completions = [c for c in chat_completions if c is not None]
-    print(n, time.time() - start, len(successful_completions))
-
-def get_utc_datetime():
-    import datetime as dt
-    from datetime import datetime
-
-    if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
-    else:
-        return datetime.utcnow()  # type: ignore
-
-
-# Run the event loop to execute the async function
-async def parent_fn():
-  for _ in range(10):
-    dt = get_utc_datetime()
-    current_minute = dt.strftime("%H-%M")
-    print(f"triggered new batch - {current_minute}")
-    await loadtest_fn()
-    await asyncio.sleep(10)
-
-asyncio.run(parent_fn())
-
-```
-
-### 2. Test it! 
+### Code 
 
 Let's hit the router with 600 requests per minute. 
 
@@ -350,8 +266,8 @@ model_list = [
     },
 ]
 
-router_1 = Router(model_list=model_list, num_retries=0, enable_pre_call_checks=True, redis_host=os.getenv("REDIS_HOST"), redis_port=os.getenv("REDIS_PORT"), redis_password=os.getenv("REDIS_PASSWORD"))
-router_2 = Router(model_list=model_list, num_retries=0, enable_pre_call_checks=True, redis_host=os.getenv("REDIS_HOST"), redis_port=os.getenv("REDIS_PORT"), redis_password=os.getenv("REDIS_PASSWORD"))
+router_1 = Router(model_list=model_list, num_retries=0, enable_pre_call_checks=True, routing_strategy="usage-based-routing-v2", redis_host=os.getenv("REDIS_HOST"), redis_port=os.getenv("REDIS_PORT"), redis_password=os.getenv("REDIS_PASSWORD"))
+router_2 = Router(model_list=model_list, num_retries=0, routing_strategy="usage-based-routing-v2", enable_pre_call_checks=True, redis_host=os.getenv("REDIS_HOST"), redis_port=os.getenv("REDIS_PORT"), redis_password=os.getenv("REDIS_PASSWORD"))
 
 
 
@@ -439,6 +355,7 @@ router_settings:
   redis_host: os.environ/REDIS_HOST ## 👈 IMPORTANT! Setup the proxy w/ redis
   redis_password: os.environ/REDIS_PASSWORD
   redis_port: os.environ/REDIS_PORT
+  routing_strategy: usage-based-routing-v2
 ```
 
 ### 2. Start proxy 2 instances
