@@ -19,6 +19,7 @@ class LangFuseLogger:
         self,
         langfuse_public_key: Optional[str] = None,
         langfuse_secret: Optional[str] = None,
+        flush_interval: int = 1,
     ) -> None:
         try:
             from langfuse import Langfuse
@@ -38,7 +39,7 @@ class LangFuseLogger:
             host=self.langfuse_host,
             release=self.langfuse_release,
             debug=self.langfuse_debug,
-            flush_interval=1,  # flush interval in seconds
+            flush_interval=flush_interval,  # flush interval in seconds
         )
 
         # set the current langfuse project id in the environ
@@ -91,6 +92,7 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
+
             litellm_params = kwargs.get("litellm_params", {})
             metadata = (
                 litellm_params.get("metadata", {}) or {}
@@ -386,7 +388,11 @@ class LangFuseLogger:
                 # just log `litellm-{call_type}` as the generation name
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
-            system_fingerprint = response_obj.get("system_fingerprint", None)
+            if response_obj is not None and "system_fingerprint" in response_obj:
+                system_fingerprint = response_obj.get("system_fingerprint", None)
+            else:
+                system_fingerprint = None
+
             if system_fingerprint is not None:
                 optional_params["system_fingerprint"] = system_fingerprint
 
