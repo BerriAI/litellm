@@ -555,3 +555,79 @@ async def test_lowest_latency_routing_with_timeouts():
 
     # ALL the Requests should have been routed to the fast-endpoint
     assert deployments["fast-endpoint"] == 10
+
+
+@pytest.mark.asyncio
+async def test_lowest_latency_routing_first_pick():
+    """
+    PROD Test:
+    - When all deployments are latency=0, it should randomly pick a deployment
+    - IT SHOULD NEVER PICK THE Very First deployment everytime all deployment latencies are 0
+    - This ensures that after the ttl window resets it randomly picks a deployment
+    """
+    import litellm
+
+    litellm.set_verbose = True
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/fast-endpoint",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "fast-endpoint"},
+            },
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/fast-endpoint-2",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "fast-endpoint-2"},
+            },
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/fast-endpoint-2",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "fast-endpoint-3"},
+            },
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/fast-endpoint-2",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "fast-endpoint-4"},
+            },
+        ],
+        routing_strategy="latency-based-routing",
+        routing_strategy_args={"ttl": 0.0000000001},
+        set_verbose=True,
+        debug_level="DEBUG",
+    )  # type: ignore
+
+    deployments = {}
+    for _ in range(5):
+        response = await router.acompletion(
+            model="azure-model", messages=[{"role": "user", "content": "hello"}]
+        )
+        print(response)
+        _picked_model_id = response._hidden_params["model_id"]
+        if _picked_model_id not in deployments:
+            deployments[_picked_model_id] = 1
+        else:
+            deployments[_picked_model_id] += 1
+        await asyncio.sleep(0.000000000005)
+
+    print("deployments", deployments)
+
+    # assert that len(deployments) >1
+    assert len(deployments) > 1
