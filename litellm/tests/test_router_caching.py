@@ -264,3 +264,32 @@ async def test_acompletion_caching_on_router_caching_groups():
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
+
+def test_rpm_limiting():
+    try:
+        litellm.set_verbose = True
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 10000,
+                "rpm": 3,
+            },
+        ]
+        
+        router = Router(
+                    model_list = model_list, 
+                    routing_strategy = "usage-based-routing",
+                )
+        failedCount = 0
+        for i in range(10):
+            try:
+                response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": ""}])
+            except ValueError as e:
+                failedCount += 1
+        assert failedCount == 7
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
