@@ -430,7 +430,9 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
         prompt = default_pt(messages)
     return prompt
 
+
 ### IBM Granite
+
 
 def ibm_granite_pt(messages: list):
     """
@@ -440,22 +442,23 @@ def ibm_granite_pt(messages: list):
     See: https://www.ibm.com/docs/en/watsonx-as-a-service?topic=solutions-supported-foundation-models
     """
     return custom_prompt(
-        messages=messages, 
+        messages=messages,
         role_dict={
-            'system': {
-                'pre_message': '<|system|>\n',
-                'post_message': '\n',
+            "system": {
+                "pre_message": "<|system|>\n",
+                "post_message": "\n",
             },
-            'user': {
-                'pre_message': '<|user|>\n',
-                'post_message': '\n',
+            "user": {
+                "pre_message": "<|user|>\n",
+                "post_message": "\n",
             },
-            'assistant': {
-                'pre_message': '<|assistant|>\n',
-                'post_message': '\n',
-            }
-        }
+            "assistant": {
+                "pre_message": "<|assistant|>\n",
+                "post_message": "\n",
+            },
+        },
     ).strip()
+
 
 ### ANTHROPIC ###
 
@@ -1396,9 +1399,18 @@ def prompt_factory(
             # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
             return custom_prompt(
                 role_dict={
-                    "system": {"pre_message": "<|start_header_id|>system<|end_header_id|>\n", "post_message": "<|eot_id|>"},
-                    "user": {"pre_message": "<|start_header_id|>user<|end_header_id|>\n", "post_message": "<|eot_id|>"},
-                    "assistant": {"pre_message": "<|start_header_id|>assistant<|end_header_id|>\n", "post_message": "<|eot_id|>"},
+                    "system": {
+                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "user": {
+                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
                 },
                 messages=messages,
                 initial_prompt_value="<|begin_of_text|>",

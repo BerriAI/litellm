@@ -33,4 +33,4 @@ class CompletionRequest(BaseModel):
 
     class Config:
         extra = "allow"
-        protected_namespaces = ()      
+        protected_namespaces = ()

@@ -602,14 +602,18 @@ async def test_async_completion_azure_caching():
     router = Router(model_list=model_list)  # type: ignore
     response1 = await router.acompletion(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await router.acompletion(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel

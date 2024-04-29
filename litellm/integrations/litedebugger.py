@@ -92,9 +92,11 @@ class LiteDebugger:
             elif call_type == "completion":
                 litellm_data_obj = {
                     "model": model,
-                    "messages": messages
-                    if isinstance(messages, list)
-                    else [{"role": "user", "content": messages}],
+                    "messages": (
+                        messages
+                        if isinstance(messages, list)
+                        else [{"role": "user", "content": messages}]
+                    ),
                     "end_user": end_user,
                     "status": "initiated",
                     "litellm_call_id": litellm_call_id,
@@ -148,9 +150,11 @@ class LiteDebugger:
                 litellm_data_obj = {
                     "status": "received",
                     "additional_details": {
-                        "original_response": "Streamed response"
-                        if isinstance(original_response, types.GeneratorType)
-                        else original_response
+                        "original_response": (
+                            "Streamed response"
+                            if isinstance(original_response, types.GeneratorType)
+                            else original_response
+                        )
                     },
                     "litellm_call_id": litellm_call_id,
                     "user_email": self.user_email,

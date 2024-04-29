@@ -1297,6 +1297,7 @@ def test_completion_watsonx_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_completion_sagemaker_stream()
 
 

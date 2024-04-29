@@ -7,6 +7,7 @@ from pydantic import BaseModel
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
+
 class PromptLayerLogger:
     # Class variables or attributes
     def __init__(self):
@@ -32,7 +33,11 @@ class PromptLayerLogger:
                     tags = kwargs["litellm_params"]["metadata"]["pl_tags"]
 
                 # Remove "pl_tags" from metadata
-                metadata = {k:v for k, v in kwargs["litellm_params"]["metadata"].items() if k != "pl_tags"}
+                metadata = {
+                    k: v
+                    for k, v in kwargs["litellm_params"]["metadata"].items()
+                    if k != "pl_tags"
+                }
 
             print_verbose(
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"
