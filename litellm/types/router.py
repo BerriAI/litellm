@@ -211,9 +211,6 @@ class Deployment(BaseModel):
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
 
-    class Config:
-        protected_namespaces = ()
-
     def __init__(
         self,
         model_name: str,
