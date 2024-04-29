@@ -4,6 +4,13 @@ LiteLLM supports all models on VLLM.
 
 🚀[Code Tutorial](https://github.com/BerriAI/litellm/blob/main/cookbook/VLLM_Model_Testing.ipynb)
 
+
+:::info
+
+To call a HOSTED VLLM Endpoint use [these docs](./openai_compatible.md)
+
+:::
+
 ### Quick Start
 ```
 pip install litellm vllm
