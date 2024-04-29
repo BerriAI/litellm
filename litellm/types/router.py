@@ -263,3 +263,4 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    no_deployments_available = "No deployments available for selected model"
