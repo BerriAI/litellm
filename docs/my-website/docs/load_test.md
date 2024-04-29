@@ -220,7 +220,7 @@ Test if your defined tpm/rpm limits are respected across multiple instances.
 The quickest way to do this is by testing the [proxy](./proxy/quick_start.md). The proxy uses the [router](./routing.md) under the hood, so if you're using either of them, this test should work for you. 
 
 In our test:
-- Max RPM per deployment is 100 requests per minute
+- Max RPM per deployment is = 100 requests per minute
 - Max Throughput / min on proxy = 200 requests per minute (2 deployments)
 - Load we'll send to proxy = 600 requests per minute
 
