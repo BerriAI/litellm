@@ -53,6 +53,7 @@ from .llms import (
     ollama,
     ollama_chat,
     cloudflare,
+    clarifai,
     cohere,
     cohere_chat,
     petals,
@@ -1149,6 +1150,55 @@ def completion(
                     original_response=model_response,
                 )
 
+            response = model_response
+        elif ("clarifai" in model 
+              or custom_llm_provider == "clarifai"
+              or model in litellm.clarifai_models
+              ):
+            clarifai_key =  None
+            clarifai_key = (
+                api_key
+                or litellm.clarifai_key
+                or litellm.api_key
+                or get_secret("CLARIFAI_API_KEY")
+                or get_secret("CLARIFAI_API_TOKEN")
+            )
+            
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("CLARIFAI_API_BASE")
+                or "https://api.clarifai.com/v2"
+            )
+            
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            model_response = clarifai.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,  # for calculating input/output tokens
+                api_key=clarifai_key,
+                logging_obj=logging,
+                custom_prompt_dict=custom_prompt_dict,
+            )
+            
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+
+                model_response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="replicate")
+            
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=clarifai_key,
+                    original_response=model_response,
+                )
             response = model_response
 
         elif custom_llm_provider == "anthropic":
