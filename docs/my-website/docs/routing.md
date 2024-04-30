@@ -95,7 +95,7 @@ print(response)
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
 - `router.aimage_generation()` - async image generation calls
 
-### Advanced - Routing Strategies
+## Advanced - Routing Strategies
 #### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
@@ -279,7 +279,7 @@ router_settings:
 ```
 
 </TabItem>
-<TabItem value="simple-shuffle" label="(Default) Weighted Pick">
+<TabItem value="simple-shuffle" label="(Default) Weighted Pick (Async)">
 
 **Default** Picks a deployment based on the provided **Requests per minute (rpm) or Tokens per minute (tpm)**
 
@@ -442,6 +442,35 @@ asyncio.run(router_acompletion())
 </Tabs>
 
 ## Basic Reliability
+
+### Max Parallel Requests (ASYNC)
+
+Used in semaphore for async requests on router. Limit the max concurrent calls made to a deployment. Useful in high-traffic scenarios. 
+
+If tpm/rpm is set, and no max parallel request limit given, we use the RPM or calculated RPM (tpm/1000/6) as the max parallel request limit. 
+
+
+```python
+from litellm import Router 
+
+model_list = [{
+	"model_name": "gpt-4",
+	"litellm_params": {
+		"model": "azure/gpt-4",
+		...
+		"max_parallel_requests": 10 # 👈 SET PER DEPLOYMENT
+	}
+}]
+
+### OR ### 
+
+router = Router(model_list=model_list, default_max_parallel_requests=20) # 👈 SET DEFAULT MAX PARALLEL REQUESTS 
+
+
+# deployment max parallel requests > default max parallel requests
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/a978f2d8813c04dad34802cb95e0a0e35a3324bc/litellm/utils.py#L5605)
 
 ### Timeouts 
 

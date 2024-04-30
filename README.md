@@ -5,7 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
+<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a> | <a href="https://docs.litellm.ai/docs/hosted" target="_blank"> Hosted Proxy (Preview)</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -128,7 +128,9 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 
 # OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 
-Set Budgets & Rate limits across multiple projects
+Track spend + Load Balance across multiple projects
+
+[Hosted Proxy (Preview)](https://docs.litellm.ai/docs/hosted)
 
 The proxy provides:
 
@@ -225,6 +227,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [perplexity-ai](https://docs.litellm.ai/docs/providers/perplexity)                  | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [Groq AI](https://docs.litellm.ai/docs/providers/groq)                              | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [anyscale](https://docs.litellm.ai/docs/providers/anyscale)                         | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
+| [IBM - watsonx.ai](https://docs.litellm.ai/docs/providers/watsonx)                  | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅ 
 | [voyage ai](https://docs.litellm.ai/docs/providers/voyage)                          |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                            |
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference) |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                            |
 

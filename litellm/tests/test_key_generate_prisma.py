@@ -120,6 +120,15 @@ async def test_new_user_response(prisma_client):
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
 
+        await new_team(
+            NewTeamRequest(
+                team_id="ishaan-special-team",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            ),
+        )
+
         _response = await new_user(
             data=NewUserRequest(
                 models=["azure-gpt-3.5"],
@@ -999,10 +1008,32 @@ def test_generate_and_update_key(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
+
+            # create team "litellm-core-infra@gmail.com""
+            print("creating team litellm-core-infra@gmail.com")
+            await new_team(
+                NewTeamRequest(
+                    team_id="litellm-core-infra@gmail.com",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                ),
+            )
+
+            await new_team(
+                NewTeamRequest(
+                    team_id="ishaan-special-team",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                ),
+            )
+
             request = NewUserRequest(
-                metadata={"team": "litellm-team3", "project": "litellm-project3"},
+                metadata={"project": "litellm-project3"},
                 team_id="litellm-core-infra@gmail.com",
             )
+
             key = await new_user(request)
             print(key)
 
@@ -1015,7 +1046,6 @@ def test_generate_and_update_key(prisma_client):
             print("\n info for key=", result["info"])
             assert result["info"]["max_parallel_requests"] == None
             assert result["info"]["metadata"] == {
-                "team": "litellm-team3",
                 "project": "litellm-project3",
             }
             assert result["info"]["team_id"] == "litellm-core-infra@gmail.com"
@@ -1037,7 +1067,7 @@ def test_generate_and_update_key(prisma_client):
             # update the team id
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id="ishaan"),
+                data=UpdateKeyRequest(key=generated_key, team_id="ishaan-special-team"),
             )
             print("response2=", response2)
 
@@ -1048,11 +1078,10 @@ def test_generate_and_update_key(prisma_client):
             print("\n info for key=", result["info"])
             assert result["info"]["max_parallel_requests"] == None
             assert result["info"]["metadata"] == {
-                "team": "litellm-team3",
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == "ishaan"
+            assert result["info"]["team_id"] == "ishaan-special-team"
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -1554,7 +1583,7 @@ async def test_view_spend_per_user(prisma_client):
         first_user = user_by_spend[0]
 
         print("\nfirst_user=", first_user)
-        assert first_user.spend > 0
+        assert first_user["spend"] > 0
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
@@ -1925,3 +1954,55 @@ async def test_proxy_load_test_db(prisma_client):
         raise Exception(f"it worked! key={key.key}")
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
+
+
+@pytest.mark.asyncio()
+async def test_master_key_hashing(prisma_client):
+    try:
+
+        print("prisma client=", prisma_client)
+
+        master_key = "sk-1234"
+
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+        await litellm.proxy.proxy_server.prisma_client.connect()
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await new_team(
+            NewTeamRequest(
+                team_id="ishaans-special-team",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            ),
+        )
+
+        _response = await new_user(
+            data=NewUserRequest(
+                models=["azure-gpt-3.5"],
+                team_id="ishaans-special-team",
+                tpm_limit=20,
+            )
+        )
+        print(_response)
+        assert _response.models == ["azure-gpt-3.5"]
+        assert _response.team_id == "ishaans-special-team"
+        assert _response.tpm_limit == 20
+
+        bearer_token = "Bearer " + master_key
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        # use generated key to auth in
+        result: UserAPIKeyAuth = await user_api_key_auth(
+            request=request, api_key=bearer_token
+        )
+
+        assert result.api_key == hash_token(master_key)
+
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")

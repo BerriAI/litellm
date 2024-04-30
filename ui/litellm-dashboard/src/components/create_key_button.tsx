@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Card, Metric, Text, Title, Subtitle } from "@tremor/react";
+import { Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody, } from "@tremor/react";
 import { CopyToClipboard } from 'react-copy-to-clipboard';
 import {
   Button as Button2,
@@ -39,6 +39,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [apiKey, setApiKey] = useState(null);
   const [softBudget, setSoftBudget] = useState(null);
   const [userModels, setUserModels] = useState([]);
+  const [modelsToPick, setModelsToPick] = useState([]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -94,6 +95,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleCopy = () => {
     message.success('API Key copied to clipboard');
 };
+
+  useEffect(() => {
+    let tempModelsToPick = [];
+
+    if (team) {
+      if (team.models.length > 0) {
+        if (team.models.includes("all-proxy-models")) {
+          // if the team has all-proxy-models show all available models
+          tempModelsToPick = userModels;
+        } else {
+          // show team models
+          tempModelsToPick = team.models;
+        }
+      } else {
+        // show all available models if the team has no models set
+        tempModelsToPick = userModels;
+      }
+    } else {
+      // no team set, show all available models
+      tempModelsToPick = userModels;
+    }
+
+    setModelsToPick(tempModelsToPick);
+  }, [team, userModels]);
   
 
   return (
@@ -116,7 +141,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          {userRole === "App Owner" || userRole === "Admin" ? (
             <>
               <Form.Item 
                 label="Key Name" 
@@ -124,7 +148,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 rules={[{ required: true, message: 'Please input a key name' }]}
                 help="required"
               >
-                <Input />
+                <TextInput placeholder="" />
               </Form.Item>
               <Form.Item
                 label="Team ID"
@@ -147,37 +171,38 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   mode="multiple"
                   placeholder="Select models"
                   style={{ width: "100%" }}
+                  onChange={(values) => {
+                    // Check if "All Team Models" is selected
+                    const isAllTeamModelsSelected = values.includes("all-team-models");
+              
+                    // If "All Team Models" is selected, deselect all other models
+                    if (isAllTeamModelsSelected) {
+                      const newValues = ["all-team-models"];
+                      // You can call the form's setFieldsValue method to update the value
+                      form.setFieldsValue({ models: newValues });
+                    }
+                  }}
                 >
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
                     </Option>
-                    {team && team.models ? (
-                      team.models.includes("all-proxy-models") ? (
-                        userModels.map((model: string) => (
+                    {
+                      modelsToPick.map((model: string) => (
                           (
                             <Option key={model} value={model}>
                               {model}
                             </Option>
                           )
                         ))
-                      ) : (
-                        team.models.map((model: string) => (
-                          <Option key={model} value={model}>
-                            {model}
-                          </Option>
-                        ))
-                      )
-                    ) : (
-                      userModels.map((model: string) => (
-                        <Option key={model} value={model}>
-                          {model}
-                        </Option>
-                      ))
-                    )}
-
+                    }
                 </Select>
               </Form.Item>
-              <Form.Item 
+              <Accordion className="mt-20 mb-8" >
+                <AccordionHeader>
+                  <b>Optional Settings</b>
+                </AccordionHeader>
+                <AccordionBody>
+                <Form.Item 
                 className="mt-8"
                 label="Max Budget (USD)" 
                 name="max_budget" 
@@ -240,26 +265,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <InputNumber step={1} width={400} />
               </Form.Item>
               <Form.Item label="Expire Key (eg: 30s, 30h, 30d)" name="duration" className="mt-8">
-                <Input />
+                <TextInput placeholder="" />
               </Form.Item>
               <Form.Item label="Metadata" name="metadata">
                 <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
               </Form.Item>
-            </>
-          ) : (
-            <>
-              <Form.Item label="Key Name" name="key_alias">
-                <Input />
-              </Form.Item>
-              <Form.Item label="Team ID (Contact Group)" name="team_id">
-                <Input placeholder="default team (create a new team)" />
-              </Form.Item>
 
-              <Form.Item label="Description" name="description">
-                <Input.TextArea placeholder="Enter description" rows={4} />
-              </Form.Item>
+                </AccordionBody>
+              </Accordion>
             </>
-          )}
+          
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Create Key</Button2>
           </div>

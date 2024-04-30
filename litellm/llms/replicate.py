@@ -112,9 +112,15 @@ def start_prediction(
     }
 
     initial_prediction_data = {
-        "version": version_id,
         "input": input_data,
     }
+
+    if ":" in version_id and len(version_id) > 64:
+        model_parts = version_id.split(":")
+        if (
+            len(model_parts) > 1 and len(model_parts[1]) == 64
+        ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
+            initial_prediction_data["version"] = model_parts[1]
 
     ## LOGGING
     logging_obj.pre_call(
@@ -307,9 +313,7 @@ def completion(
         result, logs = handle_prediction_response(
             prediction_url, api_key, print_verbose
         )
-        model_response["ended"] = (
-            time.time()
-        )  # for pricing this must remain right after calling api
+
         ## LOGGING
         logging_obj.post_call(
             input=prompt,
@@ -345,7 +349,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
 
 

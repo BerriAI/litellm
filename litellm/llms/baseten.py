@@ -55,9 +55,11 @@ def completion(
         "inputs": prompt,
         "prompt": prompt,
         "parameters": optional_params,
-        "stream": True
-        if "stream" in optional_params and optional_params["stream"] == True
-        else False,
+        "stream": (
+            True
+            if "stream" in optional_params and optional_params["stream"] == True
+            else False
+        ),
     }
 
     ## LOGGING
@@ -71,9 +73,11 @@ def completion(
         completion_url_fragment_1 + model + completion_url_fragment_2,
         headers=headers,
         data=json.dumps(data),
-        stream=True
-        if "stream" in optional_params and optional_params["stream"] == True
-        else False,
+        stream=(
+            True
+            if "stream" in optional_params and optional_params["stream"] == True
+            else False
+        ),
     )
     if "text/event-stream" in response.headers["Content-Type"] or (
         "stream" in optional_params and optional_params["stream"] == True
@@ -102,28 +106,28 @@ def completion(
                     and "data" in completion_response["model_output"]
                     and isinstance(completion_response["model_output"]["data"], list)
                 ):
-                    model_response["choices"][0]["message"][
-                        "content"
-                    ] = completion_response["model_output"]["data"][0]
+                    model_response["choices"][0]["message"]["content"] = (
+                        completion_response["model_output"]["data"][0]
+                    )
                 elif isinstance(completion_response["model_output"], str):
-                    model_response["choices"][0]["message"][
-                        "content"
-                    ] = completion_response["model_output"]
+                    model_response["choices"][0]["message"]["content"] = (
+                        completion_response["model_output"]
+                    )
             elif "completion" in completion_response and isinstance(
                 completion_response["completion"], str
             ):
-                model_response["choices"][0]["message"][
-                    "content"
-                ] = completion_response["completion"]
+                model_response["choices"][0]["message"]["content"] = (
+                    completion_response["completion"]
+                )
             elif isinstance(completion_response, list) and len(completion_response) > 0:
                 if "generated_text" not in completion_response:
                     raise BasetenError(
                         message=f"Unable to parse response. Original response: {response.text}",
                         status_code=response.status_code,
                     )
-                model_response["choices"][0]["message"][
-                    "content"
-                ] = completion_response[0]["generated_text"]
+                model_response["choices"][0]["message"]["content"] = (
+                    completion_response[0]["generated_text"]
+                )
                 ## GETTING LOGPROBS
                 if (
                     "details" in completion_response[0]
@@ -155,7 +159,8 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+
+        setattr(model_response, "usage", usage)
         return model_response
 
 

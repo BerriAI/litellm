@@ -4,7 +4,7 @@
 import sys
 import os
 import io, asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -13,6 +13,10 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.caching import DualCache
 import litellm
 import pytest
+import asyncio
+from unittest.mock import patch, MagicMock
+from litellm.caching import DualCache
+from litellm.integrations.slack_alerting import SlackAlerting
 
 
 @pytest.mark.asyncio
@@ -43,7 +47,7 @@ async def test_get_api_base():
     end_time = datetime.now()
 
     time_difference_float, model, api_base, messages = (
-        _pl._response_taking_too_long_callback(
+        _pl.slack_alerting_instance._response_taking_too_long_callback(
             kwargs={
                 "model": model,
                 "messages": messages,
@@ -64,4 +68,29 @@ async def test_get_api_base():
     await _pl.alerting_handler(
         message=slow_message + request_info,
         level="Low",
+        alert_type="llm_too_slow",
     )
+    print("passed test_get_api_base")
+
+
+# Create a mock environment for testing
+@pytest.fixture
+def mock_env(monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://example.com/webhook")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    monkeypatch.setenv("LANGFUSE_PROJECT_ID", "test-project-id")
+
+
+# Test the __init__ method
+def test_init():
+    slack_alerting = SlackAlerting(
+        alerting_threshold=32, alerting=["slack"], alert_types=["llm_exceptions"]
+    )
+    assert slack_alerting.alerting_threshold == 32
+    assert slack_alerting.alerting == ["slack"]
+    assert slack_alerting.alert_types == ["llm_exceptions"]
+
+    slack_no_alerting = SlackAlerting()
+    assert slack_no_alerting.alerting == []
+
+    print("passed testing slack alerting init")

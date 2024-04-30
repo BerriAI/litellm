@@ -203,7 +203,7 @@ def test_timeouts_router():
                 },
             },
         ]
-        router = Router(model_list=model_list)
+        router = Router(model_list=model_list, num_retries=0)
 
         print("PASSED !")
 
@@ -396,7 +396,9 @@ def test_router_init_gpt_4_vision_enhancements():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_openai_with_organization():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_with_organization(sync_mode):
     try:
         print("Testing OpenAI with organization")
         model_list = [
@@ -418,32 +420,65 @@ def test_openai_with_organization():
         print(router.model_list)
         print(router.model_list[0])
 
-        openai_client = router._get_client(
-            deployment=router.model_list[0],
-            kwargs={"input": ["hello"], "model": "openai-bad-org"},
-        )
-        print(vars(openai_client))
-
-        assert openai_client.organization == "org-ikDc4ex8NB"
-
-        # bad org raises error
-
-        try:
-            response = router.completion(
-                model="openai-bad-org",
-                messages=[{"role": "user", "content": "this is a test"}],
+        if sync_mode:
+            openai_client = router._get_client(
+                deployment=router.model_list[0],
+                kwargs={"input": ["hello"], "model": "openai-bad-org"},
             )
-            pytest.fail("Request should have failed - This organization does not exist")
-        except Exception as e:
-            print("Got exception: " + str(e))
-            assert "No such organization: org-ikDc4ex8NB" in str(e)
+            print(vars(openai_client))
 
-        # good org works
-        response = router.completion(
-            model="openai-good-org",
-            messages=[{"role": "user", "content": "this is a test"}],
-            max_tokens=5,
-        )
+            assert openai_client.organization == "org-ikDc4ex8NB"
+
+            # bad org raises error
+
+            try:
+                response = router.completion(
+                    model="openai-bad-org",
+                    messages=[{"role": "user", "content": "this is a test"}],
+                )
+                pytest.fail(
+                    "Request should have failed - This organization does not exist"
+                )
+            except Exception as e:
+                print("Got exception: " + str(e))
+                assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+            # good org works
+            response = router.completion(
+                model="openai-good-org",
+                messages=[{"role": "user", "content": "this is a test"}],
+                max_tokens=5,
+            )
+        else:
+            openai_client = router._get_client(
+                deployment=router.model_list[0],
+                kwargs={"input": ["hello"], "model": "openai-bad-org"},
+                client_type="async",
+            )
+            print(vars(openai_client))
+
+            assert openai_client.organization == "org-ikDc4ex8NB"
+
+            # bad org raises error
+
+            try:
+                response = await router.acompletion(
+                    model="openai-bad-org",
+                    messages=[{"role": "user", "content": "this is a test"}],
+                )
+                pytest.fail(
+                    "Request should have failed - This organization does not exist"
+                )
+            except Exception as e:
+                print("Got exception: " + str(e))
+                assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+            # good org works
+            response = await router.acompletion(
+                model="openai-good-org",
+                messages=[{"role": "user", "content": "this is a test"}],
+                max_tokens=5,
+            )
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

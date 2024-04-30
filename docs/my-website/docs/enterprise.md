@@ -8,12 +8,13 @@ For companies that need SSO, user management and professional support for LiteLL
 :::
 
 This covers: 
-- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Features under the [LiteLLM Commercial License (Content Mod, Custom Tags, etc.)](https://docs.litellm.ai/docs/proxy/enterprise)**
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
 - ✅ **Custom SLAs**
-- ✅ **Secure access with Single Sign-On**
+- ✅ [**Secure UI access with Single Sign-On**](../docs/proxy/ui.md#setup-ssoauth-for-ui)
+- ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
 
 
 ## Frequently Asked Questions
