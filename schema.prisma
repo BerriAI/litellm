@@ -187,7 +187,7 @@ model LiteLLM_SpendLogs {
 model LiteLLM_ErrorLogs {
   request_id          String   @id @default(uuid())
   api_base            String   @default("") 
-  model_name          String   @default("")      // public model_name / model_group
+  model_group         String   @default("")      // public model_name / model_group
   model_id            String   @default("")      // ID of model in ProxyModelTable
   request_kwargs      Json     @default("{}")
   exception_type      String   @default("")
