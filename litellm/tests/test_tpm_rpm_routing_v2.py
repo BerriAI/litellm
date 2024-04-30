@@ -321,7 +321,7 @@ async def test_multiple_potential_deployments(sync_mode):
     )  # type: ignore
 
     model_ids = set()
-    for _ in range(5):
+    for _ in range(1000):
         if sync_mode:
             deployment = router.get_available_deployment(
                 model="azure-model",
