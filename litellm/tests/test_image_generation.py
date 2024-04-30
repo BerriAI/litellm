@@ -137,7 +137,7 @@ def test_image_generation_bedrock():
         response = litellm.image_generation(
             prompt="A cute baby sea otter",
             model="bedrock/stability.stable-diffusion-xl-v1",
-            aws_region_name="us-east-1",
+            aws_region_name="us-west-2",
         )
         print(f"response: {response}")
     except litellm.RateLimitError as e:
@@ -157,7 +157,7 @@ async def test_aimage_generation_bedrock_with_optional_params():
         response = await litellm.aimage_generation(
             prompt="A cute baby sea otter",
             model="bedrock/stability.stable-diffusion-xl-v1",
-            size="128x128",
+            size="256x256",
         )
         print(f"response: {response}")
     except litellm.RateLimitError as e:
