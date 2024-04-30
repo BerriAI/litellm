@@ -183,6 +183,16 @@ model LiteLLM_SpendLogs {
   end_user            String?
 }
 
+// View spend, model, api_key per request
+model LiteLLM_ErrorLogs {
+  request_id          String   @id @default(uuid())
+  model_name          String   @default("")      // public model_name / model_group
+  model_id            String   @default("")      // ID of model in ProxyModelTable
+  request_kwargs      Json     @default("{}")
+  exceptionType       String   @default("")
+  exceptionString     String   @default("")
+}
+
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
   request_id          String @id
