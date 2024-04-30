@@ -16,7 +16,7 @@ However, we also expose 3 public helper functions to calculate token usage acros
 ```python
 from litellm import token_counter
 
-messages = [{"user": "role", "content": "Hey, how's it going"}]
+messages = [{"role": "user", "content": "Hey, how's it going"}]
 print(token_counter(model="gpt-3.5-turbo", messages=messages))
 ```
 

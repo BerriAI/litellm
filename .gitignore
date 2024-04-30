@@ -50,3 +50,5 @@ kub.yaml
 loadtest_kub.yaml
 litellm/proxy/_new_secret_config.yaml
 litellm/proxy/_new_secret_config.yaml
+litellm/proxy/_super_secret_config.yaml
+litellm/proxy/_super_secret_config.yaml

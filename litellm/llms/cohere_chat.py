@@ -43,6 +43,7 @@ class CohereChatConfig:
         presence_penalty (float, optional): Used to reduce repetitiveness of generated tokens.
         tools (List[Dict[str, str]], optional): A list of available tools (functions) that the model may suggest invoking.
         tool_results (List[Dict[str, Any]], optional): A list of results from invoking tools.
+        seed (int, optional): A seed to assist reproducibility of the model's response.
     """
 
     preamble: Optional[str] = None
@@ -62,6 +63,7 @@ class CohereChatConfig:
     presence_penalty: Optional[int] = None
     tools: Optional[list] = None
     tool_results: Optional[list] = None
+    seed: Optional[int] = None
 
     def __init__(
         self,
@@ -82,6 +84,7 @@ class CohereChatConfig:
         presence_penalty: Optional[int] = None,
         tools: Optional[list] = None,
         tool_results: Optional[list] = None,
+        seed: Optional[int] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -302,5 +305,5 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response

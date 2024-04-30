@@ -484,6 +484,20 @@ def test_mistral_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="local test")
+def test_watsonx_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = litellm.embedding(
+            model="watsonx/ibm/slate-30m-english-rtrvr",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+        assert isinstance(response.usage, litellm.Usage)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_mistral_embeddings()
 
 

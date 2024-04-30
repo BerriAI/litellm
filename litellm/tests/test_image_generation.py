@@ -136,7 +136,7 @@ def test_image_generation_bedrock():
         litellm.set_verbose = True
         response = litellm.image_generation(
             prompt="A cute baby sea otter",
-            model="bedrock/stability.stable-diffusion-xl-v0",
+            model="bedrock/stability.stable-diffusion-xl-v1",
             aws_region_name="us-east-1",
         )
         print(f"response: {response}")
@@ -156,7 +156,7 @@ async def test_aimage_generation_bedrock_with_optional_params():
     try:
         response = await litellm.aimage_generation(
             prompt="A cute baby sea otter",
-            model="bedrock/stability.stable-diffusion-xl-v0",
+            model="bedrock/stability.stable-diffusion-xl-v1",
             size="128x128",
         )
         print(f"response: {response}")

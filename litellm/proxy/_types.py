@@ -4,6 +4,7 @@ import enum
 from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
 import uuid, json, sys, os
+from litellm.types.router import UpdateRouterConfig
 
 
 def hash_token(token: str):
@@ -85,6 +86,14 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
+    ]
+
+    sso_only_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/global/spend/logs",
+        "/global/predict/spend/logs",
     ]
 
     management_routes: List = [  # key
@@ -413,6 +422,9 @@ class LiteLLM_ModelTable(LiteLLMBase):
     created_by: str
     updated_by: str
 
+    class Config:
+        protected_namespaces = ()
+
 
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
@@ -476,6 +488,9 @@ class TeamBase(LiteLLMBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
 
+    class Config:
+        protected_namespaces = ()
+
 
 class GlobalEndUsersSpend(LiteLLMBase):
     api_key: Optional[str] = None
@@ -525,6 +540,9 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
 
+    class Config:
+        protected_namespaces = ()
+
     @root_validator(pre=True)
     def set_model_info(cls, values):
         dict_fields = [
@@ -560,6 +578,9 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+
+    class Config:
+        protected_namespaces = ()
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -697,6 +718,25 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
     )
+    alert_types: Optional[
+        List[
+            Literal[
+                "llm_exceptions",
+                "llm_too_slow",
+                "llm_requests_hanging",
+                "budget_alerts",
+                "db_exceptions",
+            ]
+        ]
+    ] = Field(
+        None,
+        description="List of alerting types. By default it is all alerts",
+    )
+    alert_to_webhook_url: Optional[Dict] = Field(
+        None,
+        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
+    )
+
     alerting_threshold: Optional[int] = Field(
         None,
         description="sends alerts if requests hang for 5min+",
@@ -727,7 +767,7 @@ class ConfigYAML(LiteLLMBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: Optional[ConfigGeneralSettings] = None
-    router_settings: Optional[dict] = Field(
+    router_settings: Optional[UpdateRouterConfig] = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
     )
@@ -777,6 +817,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
 
     team_spend: Optional[float] = None
+    team_alias: Optional[str] = None
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
@@ -800,6 +841,10 @@ class UserAPIKeyAuth(
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
             values.update({"token": hash_token(values.get("api_key"))})
+            if isinstance(values.get("api_key"), str) and values.get(
+                "api_key"
+            ).startswith("sk-"):
+                values.update({"api_key": hash_token(values.get("api_key"))})
         return values
 
 

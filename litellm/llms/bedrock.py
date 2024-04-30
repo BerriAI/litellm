@@ -29,6 +29,24 @@ class BedrockError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
+class AmazonBedrockGlobalConfig:
+    def __init__(self):
+        pass
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Mapping of common auth params across bedrock/vertex/azure/watsonx
+        """
+        return {"region_name": "aws_region_name"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
+
 class AmazonTitanConfig:
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-text-express-v1
@@ -653,6 +671,10 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
         prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="bedrock"
         )
+    elif provider == "meta":
+        prompt = prompt_factory(
+            model=model, messages=messages, custom_llm_provider="bedrock"
+        )
     else:
         prompt = ""
         for message in messages:
@@ -1028,7 +1050,7 @@ def completion(
                     total_tokens=response_body["usage"]["input_tokens"]
                     + response_body["usage"]["output_tokens"],
                 )
-                model_response.usage = _usage
+                setattr(model_response, "usage", _usage)
             else:
                 outputText = response_body["completion"]
                 model_response["finish_reason"] = response_body["stop_reason"]
@@ -1071,8 +1093,10 @@ def completion(
                     status_code=response_metadata.get("HTTPStatusCode", 500),
                 )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        if getattr(model_response.usage, "total_tokens", None) is None:
+        ## CALCULATING USAGE - bedrock charges on time, not tokens - have some mapping of cost here.
+        if not hasattr(model_response, "usage"):
+            setattr(model_response, "usage", Usage())
+        if getattr(model_response.usage, "total_tokens", None) is None:  # type: ignore
             prompt_tokens = response_metadata.get(
                 "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
             )
@@ -1089,7 +1113,7 @@ def completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-            model_response.usage = usage
+            setattr(model_response, "usage", usage)
 
         model_response["created"] = int(time.time())
         model_response["model"] = model

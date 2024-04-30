@@ -11,6 +11,7 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm import ModelResponse
 from litellm import token_counter
+import litellm
 
 
 class LiteLLMBase(BaseModel):
@@ -126,6 +127,61 @@ class LowestLatencyLoggingHandler(CustomLogger):
             traceback.print_exc()
             pass
 
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Check if Timeout Error, if timeout set deployment latency -> 100
+        """
+        try:
+            _exception = kwargs.get("exception", None)
+            if isinstance(_exception, litellm.Timeout):
+                if kwargs["litellm_params"].get("metadata") is None:
+                    pass
+                else:
+                    model_group = kwargs["litellm_params"]["metadata"].get(
+                        "model_group", None
+                    )
+
+                    id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                    if model_group is None or id is None:
+                        return
+                    elif isinstance(id, int):
+                        id = str(id)
+
+                    # ------------
+                    # Setup values
+                    # ------------
+                    """
+                    {
+                        {model_group}_map: {
+                            id: {
+                                "latency": [..]
+                                f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
+                            }
+                        }
+                    }
+                    """
+                    latency_key = f"{model_group}_map"
+                    request_count_dict = (
+                        self.router_cache.get_cache(key=latency_key) or {}
+                    )
+
+                    if id not in request_count_dict:
+                        request_count_dict[id] = {}
+
+                    ## Latency
+                    request_count_dict[id].setdefault("latency", []).append(1000.0)
+                    self.router_cache.set_cache(
+                        key=latency_key,
+                        value=request_count_dict,
+                        ttl=self.routing_args.ttl,
+                    )  # reset map within window
+            else:
+                # do nothing if it's not a timeout error
+                return
+        except Exception as e:
+            traceback.print_exc()
+            pass
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
@@ -216,12 +272,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
+        request_kwargs: Optional[Dict] = None,
     ):
         """
         Returns a deployment with the lowest latency
         """
         # get list of potential deployments
         latency_key = f"{model_group}_map"
+        _latency_per_deployment = {}
 
         request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
 
@@ -254,6 +312,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
         except:
             input_tokens = 0
 
+        # randomly sample from all_deployments, incase all deployments have latency=0.0
+        _items = all_deployments.items()
+        all_deployments = random.sample(list(_items), len(_items))
+        all_deployments = dict(all_deployments)
         for item, item_map in all_deployments.items():
             ## get the item from model list
             _deployment = None
@@ -287,6 +349,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if isinstance(_call_latency, float):
                     total += _call_latency
             item_latency = total / len(item_latency)
+
+            # -------------- #
+            # Debugging Logic
+            # -------------- #
+            # We use _latency_per_deployment to log to langfuse, slack - this is not used to make a decision on routing
+            # this helps a user to debug why the router picked a specfic deployment      #
+            _deployment_api_base = _deployment.get("litellm_params", {}).get(
+                "api_base", ""
+            )
+            if _deployment_api_base is not None:
+                _latency_per_deployment[_deployment_api_base] = item_latency
+            # -------------- #
+            # End of Debugging Logic
+            # -------------- #
+
             if item_latency == 0:
                 deployment = _deployment
                 break
@@ -298,4 +375,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
             elif item_latency < lowest_latency:
                 lowest_latency = item_latency
                 deployment = _deployment
+        if request_kwargs is not None and "metadata" in request_kwargs:
+            request_kwargs["metadata"][
+                "_latency_per_deployment"
+            ] = _latency_per_deployment
         return deployment
