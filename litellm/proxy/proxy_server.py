@@ -1263,6 +1263,8 @@ async def _PROXY_failure_handler(
             exception_type=_exception_type,
             status_code=_status_code,
             exception_string=_exception_string,
+            startTime=kwargs.get("start_time"),
+            endTime=kwargs.get("end_time"),
         )
 
         # helper function to convert to dict on pydantic v2 & v1
