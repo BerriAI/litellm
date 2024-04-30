@@ -912,5 +912,18 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     request_tags: Optional[Json] = None
 
 
+class LiteLLM_ErrorLogs(LiteLLMBase):
+    request_id: Optional[str] = str(uuid.uuid4())
+    api_base: Optional[str] = ""
+    model_group: Optional[str] = ""
+    model_id: Optional[str] = ""
+    request_kwargs: Optional[dict] = {}
+    exception_type: Optional[str] = ""
+    status_code: Optional[str] = ""
+    exception_string: Optional[str] = ""
+    startTime: Union[str, datetime, None]
+    endTime: Union[str, datetime, None]
+
+
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
