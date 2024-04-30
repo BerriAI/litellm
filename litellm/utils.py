@@ -1202,7 +1202,14 @@ class Logging:
             if verbose_logger.level == 0:
                 # this means verbose logger was not switched on - user is in litellm.set_verbose=True
                 print_verbose(f"\033[92m{curl_command}\033[0m\n")
-            verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
+
+            if litellm.json_logs:
+                verbose_logger.info(
+                    "POST Request Sent from LiteLLM",
+                    extra={"api_base": {api_base}, **masked_headers},
+                )
+            else:
+                verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -3641,12 +3648,12 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     a100_80gb_price_per_second_public = (
         0.001400  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:
+    if total_time == 0.0:  # total time is in ms
         start_time = completion_response["created"]
         end_time = completion_response["ended"]
         total_time = end_time - start_time
 
-    return a100_80gb_price_per_second_public * total_time
+    return a100_80gb_price_per_second_public * total_time / 1000
 
 
 def _select_tokenizer(model: str):
@@ -3668,7 +3675,7 @@ def _select_tokenizer(model: str):
         tokenizer = Tokenizer.from_str(json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # llama2
-    elif "llama-2" in model.lower():
+    elif "llama-2" in model.lower() or "replicate" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # default - tiktoken
@@ -4269,7 +4276,10 @@ def completion_cost(
             model = get_model_params_and_category(model)
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
-        elif model in litellm.replicate_models or "replicate" in model:
+        elif (
+            model in litellm.replicate_models or "replicate" in model
+        ) and model not in litellm.model_cost:
+            # for unmapped replicate model, default to replicate's time tracking logic
             return get_replicate_completion_pricing(completion_response, total_time)
 
         (
@@ -10154,21 +10164,6 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider == "watsonx":
                 response_obj = self.handle_watsonx_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj.get("prompt_tokens") is not None:
-                    prompt_token_count = getattr(
-                        model_response.usage, "prompt_tokens", 0
-                    )
-                    model_response.usage.prompt_tokens = (
-                        prompt_token_count + response_obj["prompt_tokens"]
-                    )
-                if response_obj.get("completion_tokens") is not None:
-                    model_response.usage.completion_tokens = response_obj[
-                        "completion_tokens"
-                    ]
-                model_response.usage.total_tokens = getattr(
-                    model_response.usage, "prompt_tokens", 0
-                ) + getattr(model_response.usage, "completion_tokens", 0)
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":

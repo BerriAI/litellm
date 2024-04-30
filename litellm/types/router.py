@@ -202,6 +202,9 @@ class updateDeployment(BaseModel):
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
 
+    class Config:
+        protected_namespaces = ()
+
 
 class Deployment(BaseModel):
     model_name: str
@@ -260,3 +263,4 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    no_deployments_available = "No deployments available for selected model"

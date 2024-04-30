@@ -1450,7 +1450,9 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if "No models available" in str(e):
+            if "No models available" in str(
+                e
+            ) or RouterErrors.no_deployments_available.value in str(e):
                 timeout = litellm._calculate_retry_after(
                     remaining_retries=num_retries,
                     max_retries=num_retries,
@@ -2779,7 +2781,10 @@ class Router:
                 self.cache.get_cache(key=model_id, local_only=True) or 0
             )
             ### get usage based cache ###
-            if isinstance(model_group_cache, dict):
+            if (
+                isinstance(model_group_cache, dict)
+                and self.routing_strategy != "usage-based-routing-v2"
+            ):
                 model_group_cache[model_id] = model_group_cache.get(model_id, 0)
 
                 current_request = max(
@@ -2807,7 +2812,7 @@ class Router:
 
             if _rate_limit_error == True:  # allow generic fallback logic to take place
                 raise ValueError(
-                    f"No deployments available for selected model, passed model={model}"
+                    f"{RouterErrors.no_deployments_available.value}, passed model={model}"
                 )
             elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(
@@ -2945,6 +2950,11 @@ class Router:
                 model=model, healthy_deployments=healthy_deployments, messages=messages
             )
 
+        if len(healthy_deployments) == 0:
+            raise ValueError(
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+            )
+
         if (
             self.routing_strategy == "usage-based-routing-v2"
             and self.lowesttpm_logger_v2 is not None
@@ -3000,7 +3010,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -3130,7 +3140,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
