@@ -326,9 +326,9 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
-        verbose_router_logger.info(
+        print(  # noqa
             f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
-        )
+        )  # noqa
         self.routing_strategy_args = routing_strategy_args
 
     def print_deployment(self, deployment: dict):
@@ -2616,6 +2616,11 @@ class Router:
         for var in vars_to_include:
             if var in _all_vars:
                 _settings_to_return[var] = _all_vars[var]
+            if (
+                var == "routing_strategy_args"
+                and self.routing_strategy == "latency-based-routing"
+            ):
+                _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
         return _settings_to_return
 
     def update_settings(self, **kwargs):
