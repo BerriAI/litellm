@@ -66,6 +66,7 @@ litellm_settings: # module level litellm settings - https://github.com/BerriAI/l
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  alerting: ["slack"] # [OPTIONAL] If you want Slack Alerts for Hanging LLM requests, Slow llm responses, Budget Alerts. Make sure to set `SLACK_WEBHOOK_URL` in your env
 ```
 :::info
 
