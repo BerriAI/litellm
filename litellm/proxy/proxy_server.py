@@ -7624,10 +7624,28 @@ async def model_metrics_exceptions(
         WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
         GROUP BY model_group, api_base, exception_type
         ORDER BY num_exceptions DESC
-        LIMIT 50;
+        LIMIT 200;
     """
     db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
     response: List[dict] = []
+    for model_data in db_response:
+        model = model_data.get("model_group", "")
+        api_base = model_data.get("api_base", "")
+        exception_type = model_data.get("exception_type", "")
+        num_exceptions = model_data.get("num_exceptions", 0)
+
+        response.append(
+            {
+                "model_group": model + "-" + api_base,
+                "exception_type": exception_type,
+                "num_exceptions": num_exceptions,
+            }
+        )
+
+    # sort all entries in descending order based on num_exceptions
+
+    response.sort(key=lambda x: x["num_exceptions"], reverse=True)
+
     return response
 
 
