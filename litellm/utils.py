@@ -8130,7 +8130,10 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response,
                     )
-                elif "None Unknown Error." in error_str:
+                elif (
+                    "None Unknown Error." in error_str
+                    or "Content has no parts." in error_str
+                ):
                     exception_mapping_worked = True
                     raise APIError(
                         message=f"VertexAIException - {error_str}",
