@@ -7606,8 +7606,8 @@ async def model_metrics(
 async def model_metrics_exceptions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     _selected_model_group: Optional[str] = None,
-    startTime: Optional[datetime] = datetime.now() - timedelta(days=30),
-    endTime: Optional[datetime] = datetime.now(),
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -7617,6 +7617,9 @@ async def model_metrics_exceptions(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
 
     sql_query = """
         SELECT model_group, api_base, exception_type, COUNT(*) AS num_exceptions
@@ -7628,25 +7631,29 @@ async def model_metrics_exceptions(
     """
     db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
     response: List[dict] = []
+    exception_types = set()
     for model_data in db_response:
         model = model_data.get("model_group", "")
         api_base = model_data.get("api_base", "")
         exception_type = model_data.get("exception_type", "")
         num_exceptions = model_data.get("num_exceptions", 0)
+        exception_types.add(exception_type)
 
         response.append(
             {
                 "model_group": model + "-" + api_base,
-                "exception_type": exception_type,
+                exception_type: num_exceptions,
                 "num_exceptions": num_exceptions,
             }
         )
 
     # sort all entries in descending order based on num_exceptions
+    response = sorted(response, key=lambda x: x["num_exceptions"], reverse=True)
 
-    response.sort(key=lambda x: x["num_exceptions"], reverse=True)
-
-    return response
+    return {
+        "data": response,
+        "exception_types": list(exception_types),
+    }
 
 
 @router.get(
