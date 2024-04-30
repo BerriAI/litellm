@@ -766,10 +766,10 @@ def test_usage_based_routing_fallbacks():
         load_dotenv()
 
         # Constants for TPM and RPM allocation
-        AZURE_FAST_TPM = 3
-        AZURE_BASIC_TPM = 4
-        OPENAI_TPM = 400
-        ANTHROPIC_TPM = 100000
+        AZURE_FAST_RPM = 3
+        AZURE_BASIC_RPM = 4
+        OPENAI_RPM = 10
+        ANTHROPIC_RPM = 100000
 
         def get_azure_params(deployment_name: str):
             params = {
@@ -798,22 +798,26 @@ def test_usage_based_routing_fallbacks():
             {
                 "model_name": "azure/gpt-4-fast",
                 "litellm_params": get_azure_params("chatgpt-v-2"),
-                "tpm": AZURE_FAST_TPM,
+                "model_info": {"id": 1},
+                "rpm": AZURE_FAST_RPM,
             },
             {
                 "model_name": "azure/gpt-4-basic",
                 "litellm_params": get_azure_params("chatgpt-v-2"),
-                "tpm": AZURE_BASIC_TPM,
+                "model_info": {"id": 2},
+                "rpm": AZURE_BASIC_RPM,
             },
             {
                 "model_name": "openai-gpt-4",
                 "litellm_params": get_openai_params("gpt-3.5-turbo"),
-                "tpm": OPENAI_TPM,
+                "model_info": {"id": 3},
+                "rpm": OPENAI_RPM,
             },
             {
                 "model_name": "anthropic-claude-instant-1.2",
                 "litellm_params": get_anthropic_params("claude-instant-1.2"),
-                "tpm": ANTHROPIC_TPM,
+                "model_info": {"id": 4},
+                "rpm": ANTHROPIC_RPM,
             },
         ]
         # litellm.set_verbose=True
@@ -844,10 +848,10 @@ def test_usage_based_routing_fallbacks():
             mock_response="very nice to meet you",
         )
         print("response: ", response)
-        print("response._hidden_params: ", response._hidden_params)
+        print(f"response._hidden_params: {response._hidden_params}")
         # in this test, we expect azure/gpt-4 fast to fail, then azure-gpt-4 basic to fail and then openai-gpt-4 to pass
         # the token count of this message is > AZURE_FAST_TPM, > AZURE_BASIC_TPM
-        assert response._hidden_params["custom_llm_provider"] == "openai"
+        assert response._hidden_params["model_id"] == "1"
 
         # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
         for i in range(20):
@@ -861,7 +865,7 @@ def test_usage_based_routing_fallbacks():
             print("response._hidden_params: ", response._hidden_params)
             if i == 19:
                 # by the 19th call we should have hit TPM LIMIT for OpenAI, it should fallback to anthropic-claude-instant-1.2
-                assert response._hidden_params["custom_llm_provider"] == "anthropic"
+                assert response._hidden_params["model_id"] == "4"
 
     except Exception as e:
         pytest.fail(f"An exception occurred {e}")
