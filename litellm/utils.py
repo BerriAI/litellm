@@ -1202,7 +1202,14 @@ class Logging:
             if verbose_logger.level == 0:
                 # this means verbose logger was not switched on - user is in litellm.set_verbose=True
                 print_verbose(f"\033[92m{curl_command}\033[0m\n")
-            verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
+
+            if litellm.json_logs:
+                verbose_logger.info(
+                    "POST Request Sent from LiteLLM",
+                    extra={"api_base": {api_base}, **masked_headers},
+                )
+            else:
+                verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
