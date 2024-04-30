@@ -912,5 +912,15 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     request_tags: Optional[Json] = None
 
 
+class LiteLLM_ErrorLogs(LiteLLMBase):
+    request_id: Optional[str] = str(uuid.uuid4())
+    model_name: Optional[str] = ""
+    model_id: Optional[str] = ""
+    request_kwargs: Optional[dict] = {}
+    exception_type: Optional[str] = ""
+    status_code: Optional[str] = ""
+    exception_string: Optional[str] = ""
+
+
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
