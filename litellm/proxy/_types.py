@@ -917,7 +917,7 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
     api_base: Optional[str] = ""
     model_group: Optional[str] = ""
     model_id: Optional[str] = ""
-    request_kwargs: Optional[Json] = {}
+    request_kwargs: Optional[dict] = {}
     exception_type: Optional[str] = ""
     status_code: Optional[str] = ""
     exception_string: Optional[str] = ""
