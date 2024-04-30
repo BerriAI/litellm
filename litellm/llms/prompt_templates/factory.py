@@ -1306,6 +1306,9 @@ def prompt_factory(
                 return anthropic_pt(messages=messages)
         elif "mistral." in model:
             return mistral_instruct_pt(messages=messages)
+    elif custom_llm_provider == "clarifai":
+        if "claude" in model:
+            return anthropic_pt(messages=messages)
     elif custom_llm_provider == "perplexity":
         for message in messages:
             message.pop("name", None)
