@@ -4,6 +4,7 @@ from pydantic import BaseModel, Extra, Field, root_validator
 import dotenv, os, requests, random
 from typing import Optional, Union, List, Dict
 from datetime import datetime, timedelta
+import random
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -29,6 +30,7 @@ class LiteLLMBase(BaseModel):
 
 class RoutingArgs(LiteLLMBase):
     ttl: int = 1 * 60 * 60  # 1 hour
+    lowest_latency_buffer: float = 0
 
 
 class LowestLatencyLoggingHandler(CustomLogger):
@@ -314,8 +316,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
         # randomly sample from all_deployments, incase all deployments have latency=0.0
         _items = all_deployments.items()
+
         all_deployments = random.sample(list(_items), len(_items))
         all_deployments = dict(all_deployments)
+        ### GET AVAILABLE DEPLOYMENTS ### filter out any deployments > tpm/rpm limits
+
+        potential_deployments = []
         for item, item_map in all_deployments.items():
             ## get the item from model list
             _deployment = None
@@ -364,17 +370,33 @@ class LowestLatencyLoggingHandler(CustomLogger):
             # End of Debugging Logic
             # -------------- #
 
-            if item_latency == 0:
-                deployment = _deployment
-                break
-            elif (
+            if (
                 item_tpm + input_tokens > _deployment_tpm
                 or item_rpm + 1 > _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
                 continue
-            elif item_latency < lowest_latency:
-                lowest_latency = item_latency
-                deployment = _deployment
+            else:
+                potential_deployments.append((_deployment, item_latency))
+
+        if len(potential_deployments) == 0:
+            return None
+
+        # Sort potential deployments by latency
+        sorted_deployments = sorted(potential_deployments, key=lambda x: x[1])
+
+        # Find lowest latency deployment
+        lowest_latency = sorted_deployments[0][1]
+
+        # Find deployments within buffer of lowest latency
+        buffer = self.routing_args.lowest_latency_buffer * lowest_latency
+        valid_deployments = [
+            x for x in sorted_deployments if x[1] <= lowest_latency + buffer
+        ]
+
+        # Pick a random deployment from valid deployments
+        random_valid_deployment = random.choice(valid_deployments)
+        deployment = random_valid_deployment[0]
+
         if request_kwargs is not None and "metadata" in request_kwargs:
             request_kwargs["metadata"][
                 "_latency_per_deployment"
