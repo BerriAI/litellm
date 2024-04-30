@@ -1230,39 +1230,39 @@ async def _PROXY_failure_handler(
         )
 
         _exception = kwargs.get("exception")
-        traceback = kwargs.get("traceback")
         _exception_type = _exception.__class__.__name__
         _model = kwargs.get("model", None)
 
-        _status_code = _exception.status_code
+        _optional_params = kwargs.get("optional_params", {})
+        _optional_params = copy.deepcopy(_optional_params)
+
+        for k, v in _optional_params.items():
+            v = str(v)
+            v = v[:100]
+
+        _status_code = "500"
+        try:
+            _status_code = str(_exception.status_code)
+        except:
+            # Don't let this fail logging the exception to the dB
+            pass
 
         _litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = _litellm_params.get("metadata", {}) or {}
         _model_id = _metadata.get("model_info", {}).get("id", "")
         _model_group = _metadata.get("model_group", "")
-
         api_base = litellm.get_api_base(model=_model, optional_params=_litellm_params)
+        _exception_string = str(_exception)[:500]
 
-        verbose_proxy_logger.debug(
-            "\nexception_type",
-            _exception_type,
-            "\nrequest_model",
-            _model,
-            "\nmodel_id",
-            _model_id,
-            "\nexception",
-            _exception,
-            "\ntraceback",
-            traceback,
-        )
         error_log = LiteLLM_ErrorLogs(
             request_id=str(uuid.uuid4()),
             model_group=_model_group,
             model_id=_model_id,
+            request_kwargs=_optional_params,
             api_base=api_base,
             exception_type=_exception_type,
             status_code=_status_code,
-            exception_string=str(_exception),
+            exception_string=_exception_string,
         )
 
         # helper function to convert to dict on pydantic v2 & v1
