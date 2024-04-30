@@ -1450,7 +1450,9 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if "No models available" in str(e):
+            if "No models available" in str(
+                e
+            ) or RouterErrors.no_deployments_available.value in str(e):
                 timeout = litellm._calculate_retry_after(
                     remaining_retries=num_retries,
                     max_retries=num_retries,
@@ -2946,6 +2948,11 @@ class Router:
         if self.enable_pre_call_checks and messages is not None:
             healthy_deployments = self._pre_call_checks(
                 model=model, healthy_deployments=healthy_deployments, messages=messages
+            )
+
+        if len(healthy_deployments) == 0:
+            raise ValueError(
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
             )
 
         if (
