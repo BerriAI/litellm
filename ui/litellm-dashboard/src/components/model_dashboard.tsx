@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall } from "./networking";
 import { BarChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -200,6 +200,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
+  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -445,12 +447,20 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         let _array_model_groups = Array.from(all_model_groups)
         setAvailableModelGroups(_array_model_groups);
 
-        // if userRole is Admin, show the pending requests
-        if (userRole === "Admin" && accessToken) {
-          const user_requests = await userGetRequesedtModelsCall(accessToken);
-          console.log("Pending Requests:", pendingRequests);
-          setPendingRequests(user_requests.requests || []);
-        }
+        const modelMetricsResponse = await modelMetricsCall(
+          accessToken,
+          userID,
+          userRole,
+          null
+        );
+
+        console.log("Model metrics response:", modelMetricsResponse);
+        // Sort by latency (avg_latency_seconds)
+        const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
+        console.log("Sorted by latency:", sortedByLatency);
+
+        setModelMetrics(modelMetricsResponse);
+        setModelLatencyMetrics(sortedByLatency);
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -603,6 +613,30 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   };
 
 
+  const updateModelMetrics = async (modelGroup: string | null) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole) {
+      return
+    }
+    setSelectedModelGroup(modelGroup);  // If you want to store the selected model group in state
+
+  
+    try {
+      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup);
+      console.log("Model metrics response:", modelMetricsResponse);
+  
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
+      console.log("Sorted by latency:", sortedByLatency);
+  
+      setModelMetrics(modelMetricsResponse);
+      setModelLatencyMetrics(sortedByLatency);
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  }
+
+
 
   const getPlaceholder = (selectedProvider: string): string => {
     if (selectedProvider === Providers.Vertex_AI) {
@@ -639,6 +673,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         <div className="flex">
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
+          <Tab>Model Analytics</Tab>
           <Tab><pre>/health Models</pre></Tab>
         </div>
 
@@ -944,6 +979,59 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         </Form>
       </Card>
       </TabPanel>
+      <TabPanel>
+              <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
+              <p style={{fontSize: '0.85rem', color: '#808080', fontStyle: 'italic'}}>(Beta feature) only supported for Azure Model Groups</p>
+
+
+            <Select
+              className="mb-4 mt-2"
+              defaultValue="all"
+            >
+              <SelectItem 
+                  value={"all"}
+                  onClick={() => updateModelMetrics(null)}
+                >
+                  All Model Groups
+                </SelectItem>
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => updateModelMetrics(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+            <Card>
+          <Title>Number Requests per Model</Title>
+              <BarChart
+                data={modelMetrics}
+                className="h-[50vh]"
+                index="model"
+                categories={["num_requests"]}
+                colors={["blue"]}
+                yAxisWidth={400}
+                layout="vertical"
+                tickGap={5}
+              />
+        </Card>
+        <Card className="mt-4">
+          <Title>Latency Per Model</Title>
+              <BarChart
+                data={modelLatencyMetrics}
+                className="h-[50vh]"
+                index="model"
+                categories={["avg_latency_seconds"]}
+                colors={["red"]}
+                yAxisWidth={400}
+                layout="vertical"
+                tickGap={5}
+              />
+        </Card>
+
+            </TabPanel>
       <TabPanel>
         <Card>
           <Text>`/health` will run a very small request through your models configured on litellm</Text>
