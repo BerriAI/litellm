@@ -1642,7 +1642,7 @@ class Router:
 
     def _router_should_retry(
         self, e: Exception, remaining_retries: int, num_retries: int
-    ) -> int | float:
+    ) -> Union[int, float]:
         """
         Calculate back-off, then retry
         """
