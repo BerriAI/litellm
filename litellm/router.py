@@ -1418,6 +1418,13 @@ class Router:
                 traceback.print_exc()
             raise original_exception
 
+    async def _async_router_should_retry(
+        self, e: Exception, remaining_retries: int, num_retries: int
+    ):
+        """
+        Calculate back-off, then retry
+        """
+
     async def async_function_with_retries(self, *args, **kwargs):
         verbose_router_logger.debug(
             f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
@@ -1450,40 +1457,47 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if "No models available" in str(
-                e
-            ) or RouterErrors.no_deployments_available.value in str(e):
-                timeout = litellm._calculate_retry_after(
-                    remaining_retries=num_retries,
-                    max_retries=num_retries,
-                    min_timeout=self.retry_after,
-                )
-                await asyncio.sleep(timeout)
-            elif RouterErrors.user_defined_ratelimit_error.value in str(e):
-                raise e  # don't wait to retry if deployment hits user-defined rate-limit
+            # if "No models available" in str(
+            #     e
+            # ) or RouterErrors.no_deployments_available.value in str(e):
+            #     timeout = litellm._calculate_retry_after(
+            #         remaining_retries=num_retries,
+            #         max_retries=num_retries,
+            #         min_timeout=self.retry_after,
+            #     )
+            #     await asyncio.sleep(timeout)
+            # elif RouterErrors.user_defined_ratelimit_error.value in str(e):
+            #     raise e  # don't wait to retry if deployment hits user-defined rate-limit
 
-            elif hasattr(original_exception, "status_code") and litellm._should_retry(
-                status_code=original_exception.status_code
-            ):
-                if hasattr(original_exception, "response") and hasattr(
-                    original_exception.response, "headers"
-                ):
-                    timeout = litellm._calculate_retry_after(
-                        remaining_retries=num_retries,
-                        max_retries=num_retries,
-                        response_headers=original_exception.response.headers,
-                        min_timeout=self.retry_after,
-                    )
-                else:
-                    timeout = litellm._calculate_retry_after(
-                        remaining_retries=num_retries,
-                        max_retries=num_retries,
-                        min_timeout=self.retry_after,
-                    )
-                await asyncio.sleep(timeout)
-            else:
-                raise original_exception
+            # elif hasattr(original_exception, "status_code") and litellm._should_retry(
+            #     status_code=original_exception.status_code
+            # ):
+            #     if hasattr(original_exception, "response") and hasattr(
+            #         original_exception.response, "headers"
+            #     ):
+            #         timeout = litellm._calculate_retry_after(
+            #             remaining_retries=num_retries,
+            #             max_retries=num_retries,
+            #             response_headers=original_exception.response.headers,
+            #             min_timeout=self.retry_after,
+            #         )
+            #     else:
+            #         timeout = litellm._calculate_retry_after(
+            #             remaining_retries=num_retries,
+            #             max_retries=num_retries,
+            #             min_timeout=self.retry_after,
+            #         )
+            #     await asyncio.sleep(timeout)
+            # else:
+            #     raise original_exception
 
+            ### RETRY
+            _timeout = self._router_should_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+            )
+            await asyncio.sleep(_timeout)
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
@@ -1505,34 +1519,37 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    if "No models available" in str(e):
-                        timeout = litellm._calculate_retry_after(
-                            remaining_retries=remaining_retries,
-                            max_retries=num_retries,
-                            min_timeout=self.retry_after,
-                        )
-                        await asyncio.sleep(timeout)
-                    elif (
-                        hasattr(e, "status_code")
-                        and hasattr(e, "response")
-                        and litellm._should_retry(status_code=e.status_code)
-                    ):
-                        if hasattr(e.response, "headers"):
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                response_headers=e.response.headers,
-                                min_timeout=self.retry_after,
-                            )
-                        else:
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                min_timeout=self.retry_after,
-                            )
-                        await asyncio.sleep(timeout)
-                    else:
-                        raise e
+                    # if "No models available" in str(e):
+                    #     timeout = litellm._calculate_retry_after(
+                    #         remaining_retries=remaining_retries,
+                    #         max_retries=num_retries,
+                    #         min_timeout=self.retry_after,
+                    #     )
+                    #     await asyncio.sleep(timeout)
+                    # elif (
+                    #     hasattr(e, "status_code")
+                    #     and hasattr(e, "response")
+                    #     and litellm._should_retry(status_code=e.status_code)
+                    # ):
+                    #     if hasattr(e.response, "headers"):
+                    #         timeout = litellm._calculate_retry_after(
+                    #             remaining_retries=remaining_retries,
+                    #             max_retries=num_retries,
+                    #             response_headers=e.response.headers,
+                    #             min_timeout=self.retry_after,
+                    #         )
+                    #     else:
+                    #         timeout = litellm._calculate_retry_after(
+                    #             remaining_retries=remaining_retries,
+                    #             max_retries=num_retries,
+                    #             min_timeout=self.retry_after,
+                    #         )
+                    _timeout = self._router_should_retry(
+                        e=original_exception,
+                        remaining_retries=remaining_retries,
+                        num_retries=num_retries,
+                    )
+                    await asyncio.sleep(_timeout)
             raise original_exception
 
     def function_with_fallbacks(self, *args, **kwargs):
@@ -1625,7 +1642,7 @@ class Router:
 
     def _router_should_retry(
         self, e: Exception, remaining_retries: int, num_retries: int
-    ):
+    ) -> int | float:
         """
         Calculate back-off, then retry
         """
@@ -1636,14 +1653,13 @@ class Router:
                 response_headers=e.response.headers,
                 min_timeout=self.retry_after,
             )
-            time.sleep(timeout)
         else:
             timeout = litellm._calculate_retry_after(
                 remaining_retries=remaining_retries,
                 max_retries=num_retries,
                 min_timeout=self.retry_after,
             )
-            time.sleep(timeout)
+        return timeout
 
     def function_with_retries(self, *args, **kwargs):
         """
@@ -1677,11 +1693,12 @@ class Router:
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             ### RETRY
-            self._router_should_retry(
+            _timeout = self._router_should_retry(
                 e=original_exception,
                 remaining_retries=num_retries,
                 num_retries=num_retries,
             )
+            time.sleep(_timeout)
             for current_attempt in range(num_retries):
                 verbose_router_logger.debug(
                     f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}"
@@ -1695,11 +1712,12 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    self._router_should_retry(
+                    _timeout = self._router_should_retry(
                         e=e,
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
                     )
+                    time.sleep(_timeout)
             raise original_exception
 
     ### HELPER FUNCTIONS

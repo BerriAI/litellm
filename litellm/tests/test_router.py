@@ -104,6 +104,42 @@ def test_router_timeout_init(timeout, ssl_verify):
         )
 
 
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_router_retries(sync_mode):
+    """
+    - make sure retries work as expected
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "bad-key"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list, num_retries=2)
+
+    if sync_mode:
+        router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    else:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+
 @pytest.mark.parametrize(
     "mistral_api_base",
     [
