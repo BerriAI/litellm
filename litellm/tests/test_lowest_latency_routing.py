@@ -631,3 +631,95 @@ async def test_lowest_latency_routing_first_pick():
 
     # assert that len(deployments) >1
     assert len(deployments) > 1
+
+
+@pytest.mark.parametrize("buffer", [0, 1])
+@pytest.mark.asyncio
+async def test_lowest_latency_routing_buffer(buffer):
+    """
+    Allow shuffling calls within a certain latency buffer
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="latency-based-routing",
+        set_verbose=False,
+        num_retries=3,
+        routing_strategy_args={"lowest_latency_buffer": buffer},
+    )  # type: ignore
+
+    ## DEPLOYMENT 1 ##
+    deployment_id = 1
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 1},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 50}}
+    time.sleep(3)
+    end_time = time.time()
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    ## DEPLOYMENT 2 ##
+    deployment_id = 2
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 2},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 20}}
+    time.sleep(2)
+    end_time = time.time()
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    ## CHECK WHAT'S SELECTED ##
+    # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
+    selected_deployments = {}
+    for _ in range(50):
+        print(router.get_available_deployment(model="azure-model"))
+        selected_deployments[
+            router.get_available_deployment(model="azure-model")["model_info"]["id"]
+        ] = 1
+
+    if buffer == 0:
+        assert len(selected_deployments.keys()) == 1
+    else:
+        assert len(selected_deployments.keys()) == 2
