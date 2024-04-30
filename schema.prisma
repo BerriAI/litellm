@@ -186,6 +186,8 @@ model LiteLLM_SpendLogs {
 // View spend, model, api_key per request
 model LiteLLM_ErrorLogs {
   request_id          String   @id @default(uuid())
+  startTime           DateTime // Assuming start_time is a DateTime field
+  endTime             DateTime // Assuming end_time is a DateTime field
   api_base            String   @default("") 
   model_group         String   @default("")      // public model_name / model_group
   model_id            String   @default("")      // ID of model in ProxyModelTable

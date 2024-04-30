@@ -921,6 +921,8 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
     exception_type: Optional[str] = ""
     status_code: Optional[str] = ""
     exception_string: Optional[str] = ""
+    startTime: Union[str, datetime, None]
+    endTime: Union[str, datetime, None]
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
