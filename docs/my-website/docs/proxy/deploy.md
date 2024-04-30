@@ -272,26 +272,63 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 #### Step 1. Create deployment.yaml
 
 ```yaml
-   apiVersion: apps/v1
-   kind: Deployment
-   metadata:
-     name: litellm-deployment
-   spec:
-     replicas: 1
-     selector:
-       matchLabels:
-         app: litellm
-     template:
-       metadata:
-         labels:
-           app: litellm
-       spec:
-         containers:
-           - name: litellm-container
-             image: ghcr.io/berriai/litellm-database:main-latest
-             env:
-              - name: DATABASE_URL
-                value: postgresql://<user>:<password>@<host>:<port>/<dbname>
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      containers:
+        - name: litellm-container
+          image: ghcr.io/berriai/litellm:main-latest
+          imagePullPolicy: Always
+          env:
+            - name: AZURE_API_KEY
+              value: "d6******"
+            - name: AZURE_API_BASE
+              value: "https://ope******"
+            - name: LITELLM_MASTER_KEY
+              value: "sk-1234"
+            - name: DATABASE_URL
+              value: "po**********"
+          args:
+            - "--config"
+            - "/app/proxy_config.yaml"  # Update the path to mount the config file
+          volumeMounts:                 # Define volume mount for proxy_config.yaml
+            - name: config-volume
+              mountPath: /app
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            successThreshold: 1
+            failureThreshold: 3
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            successThreshold: 1
+            failureThreshold: 3
+            timeoutSeconds: 10
+      volumes:  # Define volume to mount proxy_config.yaml
+        - name: config-volume
+          configMap:
+            name: litellm-config  
+
 ```
 
 ```bash
