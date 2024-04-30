@@ -914,6 +914,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
 
 class LiteLLM_ErrorLogs(LiteLLMBase):
     request_id: Optional[str] = str(uuid.uuid4())
+    api_base: Optional[str] = ""
     model_name: Optional[str] = ""
     model_id: Optional[str] = ""
     request_kwargs: Optional[Json] = {}

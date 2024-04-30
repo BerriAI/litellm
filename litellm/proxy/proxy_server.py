@@ -1239,6 +1239,9 @@ async def _PROXY_failure_handler(
         _litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = _litellm_params.get("metadata", {}) or {}
         _model_id = _metadata.get("model_info", {}).get("id", None)
+
+        api_base = litellm.get_api_base(model=_model, optional_params=_litellm_params)
+
         verbose_proxy_logger.debug(
             "\nexception_type",
             _exception_type,
@@ -1252,8 +1255,10 @@ async def _PROXY_failure_handler(
             traceback,
         )
         error_log = LiteLLM_ErrorLogs(
+            request_id=str(uuid.uuid4()),
             model_name=_model,
             model_id=_model_id,
+            api_base=api_base,
             exception_type=_exception_type,
             status_code=_status_code,
             exception_string=str(_exception),
