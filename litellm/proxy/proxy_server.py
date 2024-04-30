@@ -7597,6 +7597,41 @@ async def model_metrics(
 
 
 @router.get(
+    "/model/metrics/exceptions",
+    description="View number of failed requests per model on config.yaml",
+    tags=["model management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_metrics_exceptions(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = None,
+    startTime: Optional[datetime] = datetime.now() - timedelta(days=30),
+    endTime: Optional[datetime] = datetime.now(),
+):
+    global prisma_client, llm_router
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    sql_query = """
+        SELECT model_group, api_base, exception_type, COUNT(*) AS num_exceptions
+        FROM "LiteLLM_ErrorLogs"
+        WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
+        GROUP BY model_group, api_base, exception_type
+        ORDER BY num_exceptions DESC
+        LIMIT 50;
+    """
+    db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
+    response: List[dict] = []
+    return response
+
+
+@router.get(
     "/model/info",
     description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
