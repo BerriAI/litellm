@@ -1217,6 +1217,67 @@ def cost_tracking():
                 litellm.success_callback.append(_PROXY_track_cost_callback)  # type: ignore
 
 
+async def _PROXY_failure_handler(
+    kwargs,  # kwargs to completion
+    completion_response: litellm.ModelResponse,  # response from completion
+    start_time=None,
+    end_time=None,  # start/end time for completion
+):
+    global prisma_client
+    if prisma_client is not None:
+        verbose_proxy_logger.debug(
+            "inside _PROXY_failure_handler kwargs=", extra=kwargs
+        )
+
+        _exception = kwargs.get("exception")
+        _exception_type = _exception.__class__.__name__
+        _model = kwargs.get("model", None)
+
+        _optional_params = kwargs.get("optional_params", {})
+        _optional_params = copy.deepcopy(_optional_params)
+
+        for k, v in _optional_params.items():
+            v = str(v)
+            v = v[:100]
+
+        _status_code = "500"
+        try:
+            _status_code = str(_exception.status_code)
+        except:
+            # Don't let this fail logging the exception to the dB
+            pass
+
+        _litellm_params = kwargs.get("litellm_params", {}) or {}
+        _metadata = _litellm_params.get("metadata", {}) or {}
+        _model_id = _metadata.get("model_info", {}).get("id", "")
+        _model_group = _metadata.get("model_group", "")
+        api_base = litellm.get_api_base(model=_model, optional_params=_litellm_params)
+        _exception_string = str(_exception)[:500]
+
+        error_log = LiteLLM_ErrorLogs(
+            request_id=str(uuid.uuid4()),
+            model_group=_model_group,
+            model_id=_model_id,
+            request_kwargs=_optional_params,
+            api_base=api_base,
+            exception_type=_exception_type,
+            status_code=_status_code,
+            exception_string=_exception_string,
+            startTime=kwargs.get("start_time"),
+            endTime=kwargs.get("end_time"),
+        )
+
+        # helper function to convert to dict on pydantic v2 & v1
+        error_log_dict = _get_pydantic_json_dict(error_log)
+        error_log_dict["request_kwargs"] = json.dumps(error_log_dict["request_kwargs"])
+
+        await prisma_client.db.litellm_errorlogs.create(
+            data=error_log_dict  # type: ignore
+        )
+
+    pass
+
+
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion
@@ -1300,6 +1361,15 @@ async def _PROXY_track_cost_callback(
             )
         )
         verbose_proxy_logger.debug("error in tracking cost callback - %s", e)
+
+
+def error_tracking():
+    global prisma_client, custom_db_client
+    if prisma_client is not None or custom_db_client is not None:
+        if isinstance(litellm.failure_callback, list):
+            verbose_proxy_logger.debug("setting litellm failure callback to track cost")
+            if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
+                litellm.failure_callback.append(_PROXY_failure_handler)  # type: ignore
 
 
 def _set_spend_logs_payload(
@@ -3193,6 +3263,9 @@ async def startup_event():
 
     ## COST TRACKING ##
     cost_tracking()
+
+    ## Error Tracking ##
+    error_tracking()
 
     db_writer_client = HTTPHandler()
 
