@@ -401,7 +401,7 @@ litellm_settings:
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
 ## Logging Proxy Input/Output - Langfuse
-We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
 **Step 1** Install langfuse
 
@@ -419,7 +419,13 @@ litellm_settings:
   success_callback: ["langfuse"]
 ```
 
-**Step 3**: Start the proxy, make a test request
+**Step 3**: Set required env variables for logging to langfuse
+```shell
+export LANGFUSE_PUBLIC_KEY="pk_kk"
+export LANGFUSE_SECRET_KEY="sk_ss
+```
+
+**Step 4**: Start the proxy, make a test request
 
 Start proxy
 ```shell
