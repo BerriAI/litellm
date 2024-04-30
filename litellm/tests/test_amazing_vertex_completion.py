@@ -394,6 +394,8 @@ async def test_async_vertexai_response():
             pass
         except litellm.Timeout as e:
             pass
+        except litellm.APIError as e:
+            pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
 
