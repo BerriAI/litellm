@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall } from "./networking";
 import { BarChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -202,6 +202,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
   const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
   const [modelMetrics, setModelMetrics] = useState<any[]>([]);
+  const [modelExceptions, setModelExceptions] = useState<any[]>([]);
+  const [allExceptions, setAllExceptions] = useState<any[]>([]);
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -461,6 +463,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
         setModelMetrics(modelMetricsResponse);
         setModelLatencyMetrics(sortedByLatency);
+
+        const modelExceptionsResponse = await modelExceptionsCall(
+          accessToken,
+          userID,
+          userRole,
+          null
+        )
+        console.log("Model exceptions response:", modelExceptionsResponse);
+        setModelExceptions(modelExceptionsResponse.data);
+        setAllExceptions(modelExceptionsResponse.exception_types);
+
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -1016,6 +1029,20 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 layout="vertical"
                 tickGap={5}
               />
+        </Card>
+
+        <Card className="mt-4">
+        <Title>Exceptions per Model</Title>
+        <BarChart
+        className="h-72"
+        data={modelExceptions}
+        index="model_group"
+        categories={allExceptions}
+        stack={true}
+        colors={['indigo-300', 'rose-200', '#ffcc33']}
+        yAxisWidth={30}
+      />
+
         </Card>
         <Card className="mt-4">
           <Title>Latency Per Model</Title>
