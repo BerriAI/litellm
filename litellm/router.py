@@ -1959,8 +1959,10 @@ class Router:
             or "ft:gpt-3.5-turbo" in model_name
             or model_name in litellm.open_ai_embedding_models
         ):
+            is_azure_ai_studio_model: bool = False
             if custom_llm_provider == "azure":
                 if litellm.utils._is_non_openai_azure_model(model_name):
+                    is_azure_ai_studio_model = True
                     custom_llm_provider = "openai"
                     # remove azure prefx from model_name
                     model_name = model_name.replace("azure/", "")
@@ -1990,7 +1992,7 @@ class Router:
             if not, add it - https://github.com/BerriAI/litellm/issues/2279
             """
             if (
-                custom_llm_provider == "openai"
+                is_azure_ai_studio_model == True
                 and api_base is not None
                 and not api_base.endswith("/v1/")
             ):
