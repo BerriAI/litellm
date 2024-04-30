@@ -189,8 +189,9 @@ model LiteLLM_ErrorLogs {
   model_name          String   @default("")      // public model_name / model_group
   model_id            String   @default("")      // ID of model in ProxyModelTable
   request_kwargs      Json     @default("{}")
-  exceptionType       String   @default("")
-  exceptionString     String   @default("")
+  exception_type      String   @default("")
+  exception_string    String   @default("")
+  status_code         String   @default("")
 }
 
 // Beta - allow team members to request access to a model
