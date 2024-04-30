@@ -343,6 +343,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                     _deployment = m
             if _deployment is None:
                 continue  # skip to next one
+            elif item_tpm is None:
+                continue  # skip if unhealthy deployment
 
             _deployment_tpm = None
             if _deployment_tpm is None:
