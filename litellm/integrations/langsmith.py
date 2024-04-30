@@ -7,6 +7,19 @@ from datetime import datetime
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
+import asyncio
+import types
+from pydantic import BaseModel
+
+
+def is_serializable(value):
+    non_serializable_types = (
+        types.CoroutineType,
+        types.FunctionType,
+        types.GeneratorType,
+        BaseModel,
+    )
+    return not isinstance(value, non_serializable_types)
 
 
 class LangsmithLogger:
@@ -21,7 +34,9 @@ class LangsmithLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
         # inspired by Langsmith http api here: https://github.com/langchain-ai/langsmith-cookbook/blob/main/tracing-examples/rest/rest.ipynb
-        metadata = kwargs.get('litellm_params', {}).get("metadata", {}) or {}  # if metadata is None
+        metadata = (
+            kwargs.get("litellm_params", {}).get("metadata", {}) or {}
+        )  # if metadata is None
 
         # set project name and run_name for langsmith logging
         # users can pass project_name and run name to litellm.completion()
@@ -51,26 +66,42 @@ class LangsmithLogger:
             new_kwargs = {}
             for key in kwargs:
                 value = kwargs[key]
-                if key == "start_time" or key == "end_time":
+                if key == "start_time" or key == "end_time" or value is None:
                     pass
                 elif type(value) == datetime.datetime:
                     new_kwargs[key] = value.isoformat()
-                elif type(value) != dict:
+                elif type(value) != dict and is_serializable(value=value):
                     new_kwargs[key] = value
 
-            requests.post(
+            if isinstance(response_obj, BaseModel):
+                try:
+                    response_obj = response_obj.model_dump()
+                except:
+                    response_obj = response_obj.dict()  # type: ignore
+
+            print(f"response_obj: {response_obj}")
+
+            data = {
+                "name": run_name,
+                "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
+                "inputs": new_kwargs,
+                "outputs": response_obj,
+                "session_name": project_name,
+                "start_time": start_time,
+                "end_time": end_time,
+            }
+            print(f"data: {data}")
+
+            response = requests.post(
                 "https://api.smith.langchain.com/runs",
-                json={
-                    "name": run_name,
-                    "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
-                    "inputs": {**new_kwargs},
-                    "outputs": response_obj.json(),
-                    "session_name": project_name,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                },
+                json=data,
                 headers={"x-api-key": self.langsmith_api_key},
             )
+
+            if response.status_code >= 300:
+                print_verbose(f"Error: {response.status_code}")
+            else:
+                print_verbose("Run successfully created")
             print_verbose(
                 f"Langsmith Layer Logging - final response object: {response_obj}"
             )

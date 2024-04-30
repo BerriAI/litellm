@@ -349,7 +349,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
@@ -422,7 +422,7 @@ async def async_completion(
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 

@@ -2,7 +2,7 @@
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
+from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -16,11 +16,24 @@ dotenv.load_dotenv()
 if set_verbose == True:
     _turn_on_debug()
 #############################################
+### Callbacks /Logging / Success / Failure Handlers ###
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+_langfuse_default_tags: Optional[
+    List[
+        Literal[
+            "user_api_key_alias",
+            "user_api_key_user_id",
+            "user_api_key_user_email",
+            "user_api_key_team_alias",
+            "semantic-similarity",
+            "proxy_base_url",
+        ]
+    ]
+] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -32,6 +45,9 @@ _async_failure_callback: List[Callable] = (
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
+turn_off_message_logging: Optional[bool] = False
+## end of callbacks #############
+
 email: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
@@ -43,6 +59,7 @@ max_tokens = 256  # OpenAI Defaults
 drop_params = False
 modify_params = False
 retry = True
+### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -52,6 +69,7 @@ cohere_key: Optional[str] = None
 clarifai_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
+ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
@@ -61,7 +79,12 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+common_cloud_provider_auth_params: dict = {
+    "params": ["project", "region_name", "token"],
+    "providers": ["vertex_ai", "bedrock", "watsonx", "azure"],
+}
 use_client: bool = False
+ssl_verify: bool = True
 disable_streaming_logging: bool = False
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
@@ -283,6 +306,7 @@ aleph_alpha_models: List = []
 bedrock_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
+watsonx_models: List = []
 for key, value in model_cost.items():
     if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
@@ -327,6 +351,8 @@ for key, value in model_cost.items():
         deepinfra_models.append(key)
     elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
+    elif value.get("litellm_provider") == "watsonx":
+        watsonx_models.append(key)
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
@@ -530,6 +556,7 @@ model_list = (
     + perplexity_models
     + maritalk_models
     + vertex_language_models
+    + watsonx_models
 )
 
 provider_list: List = [
@@ -569,6 +596,7 @@ provider_list: List = [
     "cloudflare",
     "xinference",
     "fireworks_ai",
+    "watsonx",
     "custom",  # custom apis
 ]
 
@@ -590,6 +618,7 @@ models_by_provider: dict = {
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
+    "watsonx": watsonx_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -701,9 +730,11 @@ from .llms.bedrock import (
     AmazonLlamaConfig,
     AmazonStabilityConfig,
     AmazonMistralConfig,
+    AmazonBedrockGlobalConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
+from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
