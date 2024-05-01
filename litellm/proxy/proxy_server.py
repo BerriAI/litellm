@@ -7549,7 +7549,7 @@ async def model_metrics(
             "LiteLLM_SpendLogs"
         WHERE
             "startTime" >= NOW() - INTERVAL '30 days'
-            AND "model" = $1
+            AND "model" = $1 AND "cache_hit" != 'True'
         GROUP BY
             api_base,
             model,
@@ -7598,7 +7598,7 @@ async def model_metrics(
         for day in _daily_entries:
             entry = {"date": str(day)}
             for model_key, latency in _daily_entries[day].items():
-                entry[model_key] = round(latency, 8)
+                entry[model_key] = latency
             response.append(entry)
 
         return {

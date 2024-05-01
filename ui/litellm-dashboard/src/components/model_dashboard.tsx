@@ -720,17 +720,20 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     return (
       <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
         {date && <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>}
-        {sortedPayload.map((category: any, idx: number) => (
-          <div key={idx} className="flex justify-between">
-            <div className="flex items-center space-x-2">
-              <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
-              <p className="text-tremor-content">{category.dataKey}</p>
+        {sortedPayload.map((category: any, idx: number) => {
+          const roundedValue = parseFloat(category.value.toFixed(5));
+          const displayValue =
+            roundedValue === 0 && category.value > 0 ? "<0.00001" : roundedValue.toFixed(5);
+          return (
+            <div key={idx} className="flex justify-between">
+              <div className="flex items-center space-x-2">
+                <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
+                <p className="text-tremor-content">{category.dataKey}</p>
+              </div>
+              <p className="font-medium text-tremor-content-emphasis text-righ ml-2">{displayValue}</p>
             </div>
-            <p className="font-medium text-tremor-content-emphasis text-righ ml-2">
-              {category.value.toFixed(5)}
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
