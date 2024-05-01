@@ -693,45 +693,40 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     }
   }
 
-  const customTooltip = (props) => {
+  const customTooltip = (props: any) => {
     const { payload, active } = props;
     if (!active || !payload) return null;
   
+    // Extract the date from the first item in the payload array
+    const date = payload[0]?.payload?.date;
+  
     // Sort the payload array by category.value in descending order
-    let sortedPayload = payload.sort((a, b) =>  b.value - a.value);
-
-    console.log("sortedPayload:", sortedPayload);
-
-    // only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
-    if (sortedPayload.length > 5 ) {
+    let sortedPayload = payload.sort((a: any, b: any) => b.value - a.value);
+  
+    // Only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
+    if (sortedPayload.length > 5) {
       let remainingItems = sortedPayload.length - 5;
       sortedPayload = sortedPayload.slice(0, 5);
-
-
       sortedPayload.push({
         dataKey: `${remainingItems} other deployments`,
-        value: payload.slice(5).reduce((acc, curr) => acc + curr.value, 0),
+        value: payload.slice(5).reduce((acc: number, curr: any) => acc + curr.value, 0),
         color: "gray",
-      })
+      });
     }
-
   
     return (
       <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
-        {sortedPayload.map((category, idx) => (
-          <div key={idx} className="flex flex-1 space-x-2.5">
-            
-            {/* <div
-              className={`flex w-1 flex-col bg-${category.color}-500 rounded`}
-              > */}
-
+        {date && <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>}
+        {sortedPayload.map((category: any, idx: number) => (
+          <div key={idx} className="flex justify-between">
+            <div className="flex items-center space-x-2">
+              <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
               <p className="text-tremor-content">{category.dataKey}</p>
-              <p className="font-medium text-tremor-content-emphasis">
-                {category.value.toFixed(5)}
-              </p>
-              </div>
-              // </div>
-     
+            </div>
+            <p className="font-medium text-tremor-content-emphasis text-righ ml-2">
+              {category.value.toFixed(5)}
+            </p>
+          </div>
         ))}
       </div>
     );
