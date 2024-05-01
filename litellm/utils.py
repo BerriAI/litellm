@@ -7171,6 +7171,7 @@ def convert_to_model_response_object(
     end_time=None,
     hidden_params: Optional[dict] = None,
 ):
+    received_args = locals()
     try:
         if response_type == "completion" and (
             model_response_object is None
@@ -7182,6 +7183,7 @@ def convert_to_model_response_object(
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list = []
+
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["message"].get("content", None),
@@ -7303,7 +7305,9 @@ def convert_to_model_response_object(
                 model_response_object._hidden_params = hidden_params
             return model_response_object
     except Exception as e:
-        raise Exception(f"Invalid response object {traceback.format_exc()}")
+        raise Exception(
+            f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
+        )
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
