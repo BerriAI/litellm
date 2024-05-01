@@ -41,6 +41,35 @@ response = completion(
 ) 
 ```
 
+## Additional information in metadata
+You can send some additional information to Athina by using the `metadata` field in completion. This can be useful for sending metadata about the request, such as the customer_id, prompt_slug, or any other information you want to track.
+
+```python
+#openai call with additional metadata
+response = completion(
+  model="gpt-3.5-turbo",
+  messages=[
+    {"role": "user", "content": "Hi 👋 - i'm openai"}
+  ],
+  metadata={
+    "environment": "staging",
+    "prompt_slug": "my_prompt_slug/v1"
+  }
+)
+```
+
+Following are the allowed fields in metadata, their types, and their descriptions:
+
+* `environment: Optional[str]` - Environment your app is running in (ex: production, staging, etc). This is useful for segmenting inference calls by environment.
+* `prompt_slug: Optional[str]` - Identifier for the prompt used for inference. This is useful for segmenting inference calls by prompt.
+* `customer_id: Optional[str]` - This is your customer ID. This is useful for segmenting inference calls by customer.
+* `customer_user_id: Optional[str]` - This is the end user ID. This is useful for segmenting inference calls by the end user.
+* `session_id: Optional[str]` - is the session or conversation ID. This is used for grouping different inferences into a conversation or chain. [Read more].(https://docs.athina.ai/logging/grouping_inferences)
+* `external_reference_id: Optional[str]` - This is useful if you want to associate your own internal identifier with the inference logged to Athina.
+* `context: Optional[Union[dict, str]]` - This is the context used as information for the prompt. For RAG applications, this is the "retrieved" data. You may log context as a string or as an object (dictionary).
+* `expected_response: Optional[str]` - This is the reference response to compare against for evaluation purposes. This is useful for segmenting inference calls by expected response.
+* `user_query: Optional[str]` - This is the user's query. For conversational applications, this is the user's last message.
+
 ## Support & Talk with Athina Team
 
 - [Schedule Demo 👋](https://cal.com/shiv-athina/30min)

@@ -176,8 +176,7 @@ general_settings:
   master_key: sk-1234
 
 litellm_settings:
-  max_budget: 10      # global budget for proxy 
-  max_user_budget: 0.0001 # budget for 'user' passed to /chat/completions
+  max_end_user_budget: 0.0001 # budget for 'user' passed to /chat/completions
 ```
 
 2. Make a /chat/completions call, pass 'user' - First call Works 

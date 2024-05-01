@@ -3,15 +3,15 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, Langfuse, ClickHouse, s3 Bucket, Sentry, OpenTelemetry, Athina
+# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
-- [Logging to ClickHouse](#logging-proxy-inputoutput---clickhouse)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
+- [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
 - [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
@@ -401,7 +401,7 @@ litellm_settings:
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
 ## Logging Proxy Input/Output - Langfuse
-We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
 **Step 1** Install langfuse
 
@@ -419,7 +419,13 @@ litellm_settings:
   success_callback: ["langfuse"]
 ```
 
-**Step 3**: Start the proxy, make a test request
+**Step 3**: Set required env variables for logging to langfuse
+```shell
+export LANGFUSE_PUBLIC_KEY="pk_kk"
+export LANGFUSE_SECRET_KEY="sk_ss
+```
+
+**Step 4**: Start the proxy, make a test request
 
 Start proxy
 ```shell
@@ -539,32 +545,54 @@ print(response)
 </Tabs>
 
 
-## Logging Proxy Input/Output - Clickhouse
-We will use the `--config` to set `litellm.success_callback = ["clickhouse"]` this will log all successfull LLM calls to ClickHouse DB
+### Team based Logging to Langfuse
 
-### [Optional] - Docker Compose - LiteLLM Proxy + Self Hosted Clickhouse DB
-Use this docker compose yaml to start LiteLLM Proxy + Clickhouse DB
+**Example:**
+
+This config would send langfuse logs to 2 different langfuse projects, based on the team id 
+
 ```yaml
-version: "3.9"
-services:
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    volumes:
-      - ./proxy_server_config.yaml:/app/proxy_server_config.yaml # mount your litellm config.yaml
-    ports:
-      - "4000:4000"
-    environment:
-      - AZURE_API_KEY=sk-123
-  clickhouse:
-    image: clickhouse/clickhouse-server
-    environment:
-      - CLICKHOUSE_DB=litellm-test
-      - CLICKHOUSE_USER=admin
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-      - CLICKHOUSE_PASSWORD=admin
-    ports:
-      - "8123:8123"
+litellm_settings:
+  default_team_settings: 
+    - team_id: my-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
+    - team_id: ishaans-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
+      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
 ```
+
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "ishaans-secret-project"}'
+```
+
+All requests made with these keys will log data to their team-specific logging.
+
+### Redacting Messages, Response Content from Langfuse Logging 
+
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+  turn_off_message_logging: True
+```
+
+
+
+## Logging Proxy Input/Output - DataDog
+We will use the `--config` to set `litellm.success_callback = ["datadog"]` this will log all successfull LLM calls to DataDog
 
 **Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
 ```yaml
@@ -573,42 +601,15 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["clickhouse"]
+  success_callback: ["datadog"]
 ```
 
-**Step 2**: Set Required env variables for clickhouse
-
-<Tabs>
-<TabItem value="self" label="Self Hosted Clickhouse">
-
-Env Variables for self hosted click house 
-```shell
-CLICKHOUSE_HOST = "localhost"
-CLICKHOUSE_PORT = "8123"
-CLICKHOUSE_USERNAME = "admin"
-CLICKHOUSE_PASSWORD = "admin"
-```
-
-</TabItem>
-
-
-
-<TabItem value="cloud" label="Clickhouse.cloud">
-
-Env Variables for cloud click house
+**Step 2**: Set Required env variables for datadog
 
 ```shell
-CLICKHOUSE_HOST = "hjs1z7j37j.us-east1.gcp.clickhouse.cloud"
-CLICKHOUSE_PORT = "8443"
-CLICKHOUSE_USERNAME = "default"
-CLICKHOUSE_PASSWORD = "M~PimRs~c3Z6b"
+DD_API_KEY="5f2d0f310***********" # your datadog API Key
+DD_SITE="us5.datadoghq.com"       # your datadog base url
 ```
-
-</TabItem>
-</Tabs>
-
-
-
 
 **Step 3**: Start the proxy, make a test request
 
@@ -618,9 +619,27 @@ litellm --config config.yaml --debug
 ```
 
 Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "your-custom-metadata": "custom-field",
+    }
+}'
 ```
-litellm --test
-```
+
+Expected output on Datadog
+
+<Image img={require('../../img/dd_small1.png')} />
 
 
 ## Logging Proxy Input/Output - s3 Buckets
