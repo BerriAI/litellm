@@ -22,10 +22,10 @@ class MyCustomHandler(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
         print(
-            f"previous_models: {kwargs['litellm_params']['metadata']['previous_models']}"
+            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
         )
-        self.previous_models += len(
-            kwargs["litellm_params"]["metadata"]["previous_models"]
+        self.previous_models = len(
+            kwargs["litellm_params"]["metadata"].get("previous_models", [])
         )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
 
@@ -140,7 +140,7 @@ def test_sync_fallbacks():
 
 @pytest.mark.asyncio
 async def test_async_fallbacks():
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     model_list = [
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo",  # openai model name

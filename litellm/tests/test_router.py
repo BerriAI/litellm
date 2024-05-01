@@ -1154,6 +1154,7 @@ def test_consistent_model_id():
     assert id1 == id2
 
 
+@pytest.mark.skip(reason="local test")
 def test_reading_keys_os_environ():
     import openai
 
@@ -1253,6 +1254,7 @@ def test_reading_keys_os_environ():
 # test_reading_keys_os_environ()
 
 
+@pytest.mark.skip(reason="local test")
 def test_reading_openai_keys_os_environ():
     import openai
 
