@@ -47,13 +47,17 @@ Your Proxy Swagger is available on the root of the Proxy: e.g.: `http://localhos
 Set the following in your .env on the Proxy
 
 ```shell
-UI_USERNAME=ishaan-litellm
-UI_PASSWORD=langchain
+LITELLM_MASTER_KEY="sk-1234" # this is your master key for using the proxy server
+UI_USERNAME=ishaan-litellm   # username to sign in on UI
+UI_PASSWORD=langchain        # password to sign in on UI
 ```
 
 On accessing the LiteLLM UI, you will be prompted to enter your username, password
 
 ## ✨ Enterprise Features
+
+Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
+
 
 ### Setup SSO/Auth for UI
 

@@ -1,9 +1,13 @@
 ### INIT VARIABLES ###
 import threading, requests, os
-from typing import Callable, List, Optional, Dict, Union, Any
+from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
-from litellm.proxy._types import KeyManagementSystem
+from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
+from litellm.proxy._types import (
+    KeyManagementSystem,
+    KeyManagementSettings,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 import httpx
 import dotenv
 
@@ -12,10 +16,24 @@ dotenv.load_dotenv()
 if set_verbose == True:
     _turn_on_debug()
 #############################################
+### Callbacks /Logging / Success / Failure Handlers ###
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
+service_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+_langfuse_default_tags: Optional[
+    List[
+        Literal[
+            "user_api_key_alias",
+            "user_api_key_user_id",
+            "user_api_key_user_email",
+            "user_api_key_team_alias",
+            "semantic-similarity",
+            "proxy_base_url",
+        ]
+    ]
+] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -27,6 +45,9 @@ _async_failure_callback: List[Callable] = (
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
+turn_off_message_logging: Optional[bool] = False
+## end of callbacks #############
+
 email: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
@@ -36,7 +57,9 @@ token: Optional[str] = (
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
+modify_params = False
 retry = True
+### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -45,6 +68,7 @@ replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
+ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
@@ -54,7 +78,13 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+common_cloud_provider_auth_params: dict = {
+    "params": ["project", "region_name", "token"],
+    "providers": ["vertex_ai", "bedrock", "watsonx", "azure"],
+}
 use_client: bool = False
+ssl_verify: bool = True
+disable_streaming_logging: bool = False
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 presidio_ad_hoc_recognizers: Optional[str] = None
@@ -62,6 +92,7 @@ google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
+llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 ##################
 logging: bool = True
 caching: bool = (
@@ -73,6 +104,8 @@ caching_with_models: bool = (
 cache: Optional[Cache] = (
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
+default_in_memory_ttl: Optional[float] = None
+default_redis_ttl: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
@@ -167,10 +200,11 @@ dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
-upperbound_key_generate_params: Optional[Dict] = None
+upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
+max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
@@ -186,6 +220,7 @@ secret_manager_client: Optional[Any] = (
 )
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional[KeyManagementSystem] = None
+_key_management_settings: Optional[KeyManagementSettings] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -253,6 +288,7 @@ open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
 cohere_chat_models: List = []
+mistral_chat_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
@@ -262,12 +298,14 @@ vertex_code_chat_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
 vertex_embedding_models: List = []
+vertex_anthropic_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
+watsonx_models: List = []
 for key, value in model_cost.items():
     if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
@@ -277,6 +315,8 @@ for key, value in model_cost.items():
         cohere_models.append(key)
     elif value.get("litellm_provider") == "cohere_chat":
         cohere_chat_models.append(key)
+    elif value.get("litellm_provider") == "mistral":
+        mistral_chat_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
@@ -295,6 +335,9 @@ for key, value in model_cost.items():
         vertex_code_chat_models.append(key)
     elif value.get("litellm_provider") == "vertex_ai-embedding-models":
         vertex_embedding_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_anthropic_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -307,6 +350,8 @@ for key, value in model_cost.items():
         deepinfra_models.append(key)
     elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
+    elif value.get("litellm_provider") == "watsonx":
+        watsonx_models.append(key)
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
@@ -327,6 +372,7 @@ openai_compatible_providers: List = [
     "perplexity",
     "xinference",
     "together_ai",
+    "fireworks_ai",
 ]
 
 
@@ -340,7 +386,7 @@ replicate_models: List = [
     "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b",
     "joehoover/instructblip-vicuna13b:c4c54e3c8c97cd50c2d2fec9be3b6065563ccf7d43787fb99f84151b867178fe",
     # Flan T-5
-    "daanelson/flan-t5-large:ce962b3f6792a57074a601d3979db5839697add2e4e02696b3ced4c022d4767f"
+    "daanelson/flan-t5-large:ce962b3f6792a57074a601d3979db5839697add2e4e02696b3ced4c022d4767f",
     # Others
     "replicate/dolly-v2-12b:ef0e1aefc61f8e096ebe4db6b2bacc297daf2ef6899f0f7e001ec445893500e5",
     "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
@@ -441,6 +487,8 @@ model_list = (
     + deepinfra_models
     + perplexity_models
     + maritalk_models
+    + vertex_language_models
+    + watsonx_models
 )
 
 provider_list: List = [
@@ -478,6 +526,8 @@ provider_list: List = [
     "voyage",
     "cloudflare",
     "xinference",
+    "fireworks_ai",
+    "watsonx",
     "custom",  # custom apis
 ]
 
@@ -499,6 +549,7 @@ models_by_provider: dict = {
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
+    "watsonx": watsonx_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -561,6 +612,7 @@ from .utils import (
     completion_cost,
     supports_function_calling,
     supports_parallel_function_calling,
+    supports_vision,
     get_litellm_params,
     Logging,
     acreate,
@@ -578,6 +630,7 @@ from .utils import (
     _should_retry,
     get_secret,
     get_supported_openai_params,
+    get_api_base,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -593,6 +646,7 @@ from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
+from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
@@ -606,9 +660,11 @@ from .llms.bedrock import (
     AmazonLlamaConfig,
     AmazonStabilityConfig,
     AmazonMistralConfig,
+    AmazonBedrockGlobalConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
+from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (

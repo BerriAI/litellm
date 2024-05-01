@@ -20,7 +20,7 @@ class OllamaError(Exception):
 
 class OllamaChatConfig:
     """
-    Reference: https://github.com/jmorganca/ollama/blob/main/docs/api.md#parameters
+    Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 
     The class `OllamaConfig` provides the configuration for the Ollama's API interface. Below are the parameters:
 
@@ -69,7 +69,7 @@ class OllamaChatConfig:
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
@@ -134,6 +134,7 @@ class OllamaChatConfig:
             "tools",
             "tool_choice",
             "functions",
+            "response_format",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -147,9 +148,11 @@ class OllamaChatConfig:
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "frequency_penalty":
-                optional_params["repeat_penalty"] = param
+                optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
+            if param == "response_format" and value["type"] == "json_object":
+                optional_params["format"] = "json"
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 # ollama actually supports json output
@@ -170,16 +173,18 @@ class OllamaChatConfig:
                 litellm.add_function_to_prompt = (
                     True  # so that main.py adds the function call to the prompt
                 )
-                optional_params["functions_unsupported_model"] = non_default_params.pop(
+                optional_params["functions_unsupported_model"] = non_default_params.get(
                     "functions"
                 )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
+        non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
 
 
 # ollama implementation
 def get_ollama_response(
     api_base="http://localhost:11434",
+    api_key: Optional[str] = None,
     model="llama2",
     messages=None,
     optional_params=None,
@@ -232,6 +237,7 @@ def get_ollama_response(
         if stream == True:
             response = ollama_async_streaming(
                 url=url,
+                api_key=api_key,
                 data=data,
                 model_response=model_response,
                 encoding=encoding,
@@ -240,6 +246,7 @@ def get_ollama_response(
         else:
             response = ollama_acompletion(
                 url=url,
+                api_key=api_key,
                 data=data,
                 model_response=model_response,
                 encoding=encoding,
@@ -248,12 +255,17 @@ def get_ollama_response(
             )
         return response
     elif stream == True:
-        return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
+        return ollama_completion_stream(
+            url=url, api_key=api_key, data=data, logging_obj=logging_obj
+        )
 
-    response = requests.post(
-        url=f"{url}",
-        json=data,
-    )
+    _request = {
+        "url": f"{url}",
+        "json": data,
+    }
+    if api_key is not None:
+        _request["headers"] = "Bearer {}".format(api_key)
+    response = requests.post(**_request)  # type: ignore
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 
@@ -303,10 +315,16 @@ def get_ollama_response(
     return model_response
 
 
-def ollama_completion_stream(url, data, logging_obj):
-    with httpx.stream(
-        url=url, json=data, method="POST", timeout=litellm.request_timeout
-    ) as response:
+def ollama_completion_stream(url, api_key, data, logging_obj):
+    _request = {
+        "url": f"{url}",
+        "json": data,
+        "method": "POST",
+        "timeout": litellm.request_timeout,
+    }
+    if api_key is not None:
+        _request["headers"] = "Bearer {}".format(api_key)
+    with httpx.stream(**_request) as response:
         try:
             if response.status_code != 200:
                 raise OllamaError(
@@ -325,12 +343,20 @@ def ollama_completion_stream(url, data, logging_obj):
             raise e
 
 
-async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
+async def ollama_async_streaming(
+    url, api_key, data, model_response, encoding, logging_obj
+):
     try:
         client = httpx.AsyncClient()
-        async with client.stream(
-            url=f"{url}", json=data, method="POST", timeout=litellm.request_timeout
-        ) as response:
+        _request = {
+            "url": f"{url}",
+            "json": data,
+            "method": "POST",
+            "timeout": litellm.request_timeout,
+        }
+        if api_key is not None:
+            _request["headers"] = "Bearer {}".format(api_key)
+        async with client.stream(**_request) as response:
             if response.status_code != 200:
                 raise OllamaError(
                     status_code=response.status_code, message=response.text
@@ -349,13 +375,25 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
 
 
 async def ollama_acompletion(
-    url, data, model_response, encoding, logging_obj, function_name
+    url,
+    api_key: Optional[str],
+    data,
+    model_response,
+    encoding,
+    logging_obj,
+    function_name,
 ):
     data["stream"] = False
     try:
         timeout = aiohttp.ClientTimeout(total=litellm.request_timeout)  # 10 minutes
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            resp = await session.post(url, json=data)
+            _request = {
+                "url": f"{url}",
+                "json": data,
+            }
+            if api_key is not None:
+                _request["headers"] = "Bearer {}".format(api_key)
+            resp = await session.post(**_request)
 
             if resp.status != 200:
                 text = await resp.text()

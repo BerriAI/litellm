@@ -203,7 +203,7 @@ def test_timeouts_router():
                 },
             },
         ]
-        router = Router(model_list=model_list)
+        router = Router(model_list=model_list, num_retries=0)
 
         print("PASSED !")
 
@@ -252,24 +252,31 @@ def test_stream_timeouts_router():
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "timeout": 200,  # regular calls will not timeout, stream calls will
-                    "stream_timeout": 0.000_001,
+                    "stream_timeout": 10,
                 },
             },
         ]
         router = Router(model_list=model_list)
 
         print("PASSED !")
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hello, write a 20 pg essay"}],
+            "stream": True,
+        }
         selected_client = router._get_client(
             deployment=router.model_list[0],
-            kwargs={
-                "model": "gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": "hello, write a 20 pg essay"}],
-                "stream": True,
-            },
+            kwargs=data,
             client_type=None,
         )
         print("Select client timeout", selected_client.timeout)
-        assert selected_client.timeout == 0.000_001
+        assert selected_client.timeout == 10
+
+        # make actual call
+        response = router.completion(**data)
+
+        for chunk in response:
+            print(f"chunk: {chunk}")
     except openai.APITimeoutError as e:
         print(
             "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
@@ -389,7 +396,9 @@ def test_router_init_gpt_4_vision_enhancements():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_openai_with_organization():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_with_organization(sync_mode):
     try:
         print("Testing OpenAI with organization")
         model_list = [
@@ -411,6 +420,141 @@ def test_openai_with_organization():
         print(router.model_list)
         print(router.model_list[0])
 
+        if sync_mode:
+            openai_client = router._get_client(
+                deployment=router.model_list[0],
+                kwargs={"input": ["hello"], "model": "openai-bad-org"},
+            )
+            print(vars(openai_client))
+
+            assert openai_client.organization == "org-ikDc4ex8NB"
+
+            # bad org raises error
+
+            try:
+                response = router.completion(
+                    model="openai-bad-org",
+                    messages=[{"role": "user", "content": "this is a test"}],
+                )
+                pytest.fail(
+                    "Request should have failed - This organization does not exist"
+                )
+            except Exception as e:
+                print("Got exception: " + str(e))
+                assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+            # good org works
+            response = router.completion(
+                model="openai-good-org",
+                messages=[{"role": "user", "content": "this is a test"}],
+                max_tokens=5,
+            )
+        else:
+            openai_client = router._get_client(
+                deployment=router.model_list[0],
+                kwargs={"input": ["hello"], "model": "openai-bad-org"},
+                client_type="async",
+            )
+            print(vars(openai_client))
+
+            assert openai_client.organization == "org-ikDc4ex8NB"
+
+            # bad org raises error
+
+            try:
+                response = await router.acompletion(
+                    model="openai-bad-org",
+                    messages=[{"role": "user", "content": "this is a test"}],
+                )
+                pytest.fail(
+                    "Request should have failed - This organization does not exist"
+                )
+            except Exception as e:
+                print("Got exception: " + str(e))
+                assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+            # good org works
+            response = await router.acompletion(
+                model="openai-good-org",
+                messages=[{"role": "user", "content": "this is a test"}],
+                max_tokens=5,
+            )
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_init_clients_azure_command_r_plus():
+    # This tests that the router uses the OpenAI client for Azure/Command-R+
+    # For azure/command-r-plus we need to use openai.OpenAI because of how the Azure provider requires requests being sent
+    litellm.set_verbose = True
+    import logging
+    from litellm._logging import verbose_router_logger
+
+    verbose_router_logger.setLevel(logging.DEBUG)
+    try:
+        print("testing init 4 clients with diff timeouts")
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/command-r-plus",
+                    "api_key": os.getenv("AZURE_COHERE_API_KEY"),
+                    "api_base": os.getenv("AZURE_COHERE_API_BASE"),
+                    "timeout": 0.01,
+                    "stream_timeout": 0.000_001,
+                    "max_retries": 7,
+                },
+            },
+        ]
+        router = Router(model_list=model_list, set_verbose=True)
+        for elem in router.model_list:
+            model_id = elem["model_info"]["id"]
+            async_client = router.cache.get_cache(f"{model_id}_async_client")
+            stream_async_client = router.cache.get_cache(
+                f"{model_id}_stream_async_client"
+            )
+            # Assert the Async Clients used are OpenAI clients and not Azure
+            # For using Azure/Command-R-Plus and Azure/Mistral the clients NEED to be OpenAI clients used
+            # this is weirdness introduced on Azure's side
+
+            assert "openai.AsyncOpenAI" in str(async_client)
+            assert "openai.AsyncOpenAI" in str(stream_async_client)
+        print("PASSED !")
+
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_text_completion_with_organization():
+    try:
+        print("Testing Text OpenAI with organization")
+        model_list = [
+            {
+                "model_name": "openai-bad-org",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": os.getenv("OPENAI_API_KEY", None),
+                    "organization": "org-ikDc4ex8NB",
+                },
+            },
+            {
+                "model_name": "openai-good-org",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": os.getenv("OPENAI_API_KEY", None),
+                    "organization": os.getenv("OPENAI_ORGANIZATION", None),
+                },
+            },
+        ]
+
+        router = Router(model_list=model_list)
+
+        print(router.model_list)
+        print(router.model_list[0])
+
         openai_client = router._get_client(
             deployment=router.model_list[0],
             kwargs={"input": ["hello"], "model": "openai-bad-org"},
@@ -422,9 +566,9 @@ def test_openai_with_organization():
         # bad org raises error
 
         try:
-            response = router.completion(
+            response = await router.atext_completion(
                 model="openai-bad-org",
-                messages=[{"role": "user", "content": "this is a test"}],
+                prompt="this is a test",
             )
             pytest.fail("Request should have failed - This organization does not exist")
         except Exception as e:
@@ -432,11 +576,12 @@ def test_openai_with_organization():
             assert "No such organization: org-ikDc4ex8NB" in str(e)
 
         # good org works
-        response = router.completion(
+        response = await router.atext_completion(
             model="openai-good-org",
-            messages=[{"role": "user", "content": "this is a test"}],
+            prompt="this is a test",
             max_tokens=5,
         )
+        print("working response: ", response)
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
