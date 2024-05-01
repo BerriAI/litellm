@@ -279,7 +279,7 @@ class LangFuseLogger:
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             if existing_trace_id is not None:
-                trace_params = {"trace_id": existing_trace_id}
+                trace_params = {"id": existing_trace_id}
             else:  # don't overwrite an existing trace
                 trace_params = {
                     "name": trace_name,
@@ -289,10 +289,10 @@ class LangFuseLogger:
                     "session_id": metadata.get("session_id", None),
                 }
 
-            if level == "ERROR":
-                trace_params["status_message"] = output
-            else:
-                trace_params["output"] = output
+                if level == "ERROR":
+                    trace_params["status_message"] = output
+                else:
+                    trace_params["output"] = output
 
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
@@ -350,7 +350,8 @@ class LangFuseLogger:
                         kwargs["cache_hit"] = False
                     tags.append(f"cache_hit:{kwargs['cache_hit']}")
                     clean_metadata["cache_hit"] = kwargs["cache_hit"]
-                trace_params.update({"tags": tags})
+                if existing_trace_id is None:
+                    trace_params.update({"tags": tags})
 
             proxy_server_request = litellm_params.get("proxy_server_request", None)
             if proxy_server_request:
@@ -372,6 +373,7 @@ class LangFuseLogger:
 
             print_verbose(f"trace_params: {trace_params}")
 
+            print(f"trace_params: {trace_params}")
             trace = self.Langfuse.trace(**trace_params)
 
             generation_id = None
