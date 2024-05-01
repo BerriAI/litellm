@@ -387,6 +387,19 @@ def mock_completion(
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
     """
     try:
+        ## LOGGING
+        logging.pre_call(
+            input=messages,
+            api_key="mock-key",
+        )
+        if isinstance(mock_response, Exception):
+            raise litellm.APIError(
+                status_code=500,  # type: ignore
+                message=str(mock_response),
+                llm_provider="openai",  # type: ignore
+                model=model,  # type: ignore
+                request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            )
         model_response = ModelResponse(stream=stream)
         if stream is True:
             # don't try to access stream object,

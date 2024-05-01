@@ -1418,13 +1418,6 @@ class Router:
                 traceback.print_exc()
             raise original_exception
 
-    async def _async_router_should_retry(
-        self, e: Exception, remaining_retries: int, num_retries: int
-    ):
-        """
-        Calculate back-off, then retry
-        """
-
     async def async_function_with_retries(self, *args, **kwargs):
         verbose_router_logger.debug(
             f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
@@ -1674,6 +1667,7 @@ class Router:
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
+
         try:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = original_function(*args, **kwargs)
@@ -1751,10 +1745,11 @@ class Router:
             )  # i.e. azure
             metadata = kwargs.get("litellm_params", {}).get("metadata", None)
             _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
+
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
                 self._set_cooldown_deployments(
-                    deployment_id
+                    exception_status=exception_status, deployment=deployment_id
                 )  # setting deployment_id in cooldown deployments
             if custom_llm_provider:
                 model_name = f"{custom_llm_provider}/{model_name}"
@@ -1814,9 +1809,15 @@ class Router:
                 key=rpm_key, value=request_count, local_only=True
             )  # don't change existing ttl
 
-    def _set_cooldown_deployments(self, deployment: Optional[str] = None):
+    def _set_cooldown_deployments(
+        self, exception_status: Union[str, int], deployment: Optional[str] = None
+    ):
         """
         Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
+
+        or
+
+        the exception is not one that should be immediately retried (e.g. 401)
         """
         if deployment is None:
             return
@@ -1833,7 +1834,20 @@ class Router:
             f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
         )
         cooldown_time = self.cooldown_time or 1
-        if updated_fails > self.allowed_fails:
+
+        if isinstance(exception_status, str):
+            try:
+                exception_status = int(exception_status)
+            except Exception as e:
+                verbose_router_logger.debug(
+                    "Unable to cast exception status to int {}. Defaulting to status=500.".format(
+                        exception_status
+                    )
+                )
+                exception_status = 500
+        _should_retry = litellm._should_retry(status_code=exception_status)
+
+        if updated_fails > self.allowed_fails or _should_retry == False:
             # get the current cooldown list for that minute
             cooldown_key = f"{current_minute}:cooldown_models"  # group cooldown models by minute to reduce number of redis calls
             cached_value = self.cache.get_cache(key=cooldown_key)
