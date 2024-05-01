@@ -7549,7 +7549,7 @@ async def model_metrics(
             "LiteLLM_SpendLogs"
         WHERE
             "startTime" >= NOW() - INTERVAL '30 days'
-            AND "model" = $1
+            AND "model" = $1 AND "cache_hit" != 'True'
         GROUP BY
             api_base,
             model,
