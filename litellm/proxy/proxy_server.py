@@ -7524,7 +7524,7 @@ async def model_info_v2(
 )
 async def model_metrics(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    _selected_model_group: Optional[str] = None,
+    _selected_model_group: Optional[str] = "gpt-4-32k",
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
 ):
@@ -7538,61 +7538,62 @@ async def model_metrics(
         )
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
-    if _selected_model_group and llm_router is not None:
-        _model_list = llm_router.get_model_list()
-        _relevant_api_bases = []
-        for model in _model_list:
-            if model["model_name"] == _selected_model_group:
-                _litellm_params = model["litellm_params"]
-                _api_base = _litellm_params.get("api_base", "")
-                _relevant_api_bases.append(_api_base)
-                _relevant_api_bases.append(_api_base + "/openai/")
 
-        sql_query = """
-            SELECT
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-                COUNT(*) AS num_requests,
-                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
-            FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-            AND api_base = ANY($3)
-            GROUP BY CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-            ORDER BY num_requests DESC
-            LIMIT 50;
-        """
-
-        db_response = await prisma_client.db.query_raw(
-            sql_query, startTime, endTime, _relevant_api_bases
-        )
-    else:
-
-        sql_query = """
-            SELECT
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-                COUNT(*) AS num_requests,
-                AVG(EXTRACT(epoch FROM ("endTime" - "startTime")) / total_tokens) AS avg_latency_per_token
-            FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-            GROUP BY CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-            ORDER BY num_requests DESC;
-        """
-
-        db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
-    response: List[dict] = []
-    if response is not None:
-        # loop through all models
+    sql_query = """
+        SELECT api_base, model, DATE_TRUNC('day', "startTime")::DATE AS day,
+        CASE
+            WHEN SUM(total_tokens) = 0 THEN 0
+            ELSE AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) / SUM(total_tokens)
+        END AS avg_latency_per_token
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime" >= NOW() - INTERVAL '30 days' AND "model" = $1
+        GROUP BY api_base, model, day
+        ORDER BY avg_latency_per_token DESC;
+    """
+    _all_api_bases = set()
+    db_response = await prisma_client.db.query_raw(
+        sql_query, _selected_model_group, startTime, endTime
+    )
+    _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
+    if db_response is not None:
         for model_data in db_response:
-            model = model_data.get("combined_model_api_base", "")
-            num_requests = model_data.get("num_requests", 0)
-            avg_latency_per_token = model_data.get("avg_latency_per_token", 0)
-            response.append(
-                {
-                    "model": model,
-                    "num_requests": num_requests,
-                    "avg_latency_per_token": avg_latency_per_token,
-                }
-            )
-    return response
+            _api_base = model_data["api_base"]
+            _model = model_data["model"]
+            _day = model_data["day"]
+            _avg_latency_per_token = model_data["avg_latency_per_token"]
+            if _day not in _daily_entries:
+                _daily_entries[_day] = {}
+            _combined_model_name = str(_model)
+            if "https://" in _api_base:
+                _combined_model_name = str(_api_base)
+
+            _all_api_bases.add(_combined_model_name)
+            _daily_entries[_day][_combined_model_name] = _avg_latency_per_token
+
+        """
+        each entry needs to be like this:
+        {
+            date: 'Jun 23',
+            'gpt-4-https://api.openai.com/v1/': 0.002,
+            'gpt-43-https://api.openai.com-12/v1/': 0.002,
+        }
+        """
+        # convert daily entries to list of dicts
+
+        response: List[dict] = []
+
+        # sort daily entries by date
+        _daily_entries = dict(sorted(_daily_entries.items(), key=lambda item: item[0]))
+        for day in _daily_entries:
+            entry = {"date": str(day)}
+            for model_key, latency in _daily_entries[day].items():
+                entry[model_key] = latency.__round__(5)
+            response.append(entry)
+
+        return {
+            "data": response,
+            "all_api_bases": list(_all_api_bases),
+        }
 
 
 @router.get(
