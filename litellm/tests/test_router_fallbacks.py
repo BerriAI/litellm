@@ -766,9 +766,9 @@ def test_usage_based_routing_fallbacks():
         load_dotenv()
 
         # Constants for TPM and RPM allocation
-        AZURE_FAST_RPM = 3
-        AZURE_BASIC_RPM = 4
-        OPENAI_RPM = 10
+        AZURE_FAST_RPM = 1
+        AZURE_BASIC_RPM = 1
+        OPENAI_RPM = 2
         ANTHROPIC_RPM = 100000
 
         def get_azure_params(deployment_name: str):
