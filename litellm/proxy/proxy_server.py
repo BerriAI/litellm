@@ -7524,8 +7524,8 @@ async def model_info_v2(
 async def model_metrics(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     _selected_model_group: Optional[str] = None,
-    startTime: Optional[datetime] = datetime.now() - timedelta(days=30),
-    endTime: Optional[datetime] = datetime.now(),
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -7535,6 +7535,8 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
     if _selected_model_group and llm_router is not None:
         _model_list = llm_router.get_model_list()
         _relevant_api_bases = []
@@ -7567,15 +7569,11 @@ async def model_metrics(
             SELECT
                 CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
                 COUNT(*) AS num_requests,
-                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
-            FROM
-                "LiteLLM_SpendLogs"
+                AVG(EXTRACT(epoch FROM ("endTime" - "startTime")) / total_tokens) AS avg_latency_per_token
+            FROM "LiteLLM_SpendLogs"
             WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-            GROUP BY
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-            ORDER BY
-                num_requests DESC
-            LIMIT 50;
+            GROUP BY CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
+            ORDER BY num_requests DESC;
         """
 
         db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
@@ -7585,12 +7583,12 @@ async def model_metrics(
         for model_data in db_response:
             model = model_data.get("combined_model_api_base", "")
             num_requests = model_data.get("num_requests", 0)
-            avg_latency_seconds = model_data.get("avg_latency_seconds", 0)
+            avg_latency_per_token = model_data.get("avg_latency_per_token", 0)
             response.append(
                 {
                     "model": model,
                     "num_requests": num_requests,
-                    "avg_latency_seconds": avg_latency_seconds,
+                    "avg_latency_per_token": avg_latency_per_token,
                 }
             )
     return response
