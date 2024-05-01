@@ -9603,9 +9603,14 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
                     if finish_reason == "content_filter":
-                        error_message = json.dumps(
-                            str_line.choices[0].content_filter_result
-                        )
+                        if hasattr(str_line.choices[0], "content_filter_result"):
+                            error_message = json.dumps(
+                                str_line.choices[0].content_filter_result
+                            )
+                        else:
+                            error_message = "Azure Response={}".format(
+                                str(dict(str_line))
+                            )
                         raise litellm.AzureOpenAIError(
                             status_code=400, message=error_message
                         )
