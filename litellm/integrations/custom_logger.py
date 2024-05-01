@@ -2,9 +2,11 @@
 #    On success, logs events to Promptlayer
 import dotenv, os
 import requests
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
-from typing import Literal
+
+from typing import Literal, Union, Optional
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -44,6 +46,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    #### PRE-CALL CHECKS - router/proxy only ####
+    """
+    Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
+    """
+
+    async def async_pre_call_check(self, deployment: dict) -> Optional[dict]:
+        pass
+
+    def pre_call_check(self, deployment: dict) -> Optional[dict]:
+        pass
+
     #### CALL HOOKS - proxy only ####
     """
     Control the modify incoming / outgoung data before calling the model
@@ -54,12 +67,34 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal["completion", "embeddings"],
+        call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         pass
 
     async def async_post_call_failure_hook(
         self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+    ):
+        pass
+
+    async def async_post_call_success_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+    ):
+        pass
+
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: Literal["completion", "embeddings", "image_generation"],
+    ):
+        pass
+
+    async def async_post_call_streaming_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: str,
     ):
         pass
 
@@ -105,7 +140,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-            print_verbose(f"Custom Logger - final response object: {response_obj}")
         except:
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
@@ -123,7 +157,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-            print_verbose(f"Custom Logger - final response object: {response_obj}")
         except:
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")

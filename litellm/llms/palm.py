@@ -98,7 +98,7 @@ def completion(
     logger_fn=None,
 ):
     try:
-        import google.generativeai as palm
+        import google.generativeai as palm  # type: ignore
     except:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
@@ -191,7 +191,7 @@ def completion(
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 

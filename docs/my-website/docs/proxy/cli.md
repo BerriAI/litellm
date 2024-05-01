@@ -15,7 +15,7 @@ Cli arguments,  --host, --port, --num_workers
     ```
 
 ## --port
-   - **Default:** `8000`
+   - **Default:** `4000`
    - The port to bind the server to.
    - **Usage:** 
      ```shell

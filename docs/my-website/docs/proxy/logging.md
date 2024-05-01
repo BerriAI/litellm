@@ -3,16 +3,19 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, Langfuse, s3 Bucket, Sentry, OpenTelemetry
+# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
 - [Async Custom Callbacks](#custom-callback-class-async)
+- [Async Custom Callback APIs](#custom-callback-apis-async)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
+- [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
-- [Logging to Traceloop (OpenTelemetry)](#opentelemetry---traceloop)
+- [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
+- [Logging to Athina](#logging-proxy-inputoutput-athina)
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -147,7 +150,7 @@ litellm --config proxy_config.yaml
 ```
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --data ' {
     "model": "gpt-3.5-turbo",
@@ -171,7 +174,7 @@ On Success
     Usage: {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21},
     Cost: 3.65e-05,
     Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
-    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
+    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:4000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
 ```
 
 #### Logging Proxy Request Object, Header, Url
@@ -297,8 +300,108 @@ ModelResponse(
 ```
 
 
+## Custom Callback APIs [Async]
+
+:::info
+
+This is an Enterprise only feature [Get Started with Enterprise here](https://github.com/BerriAI/litellm/tree/main/enterprise)
+
+:::
+
+Use this if you:
+- Want to use custom callbacks written in a non Python programming language
+- Want your callbacks to run on a different microservice
+
+#### Step 1. Create your generic logging API endpoint
+Set up a generic API endpoint that can receive data in JSON format. The data will be included within a "data" field. 
+
+Your server should support the following Request format:
+
+```shell
+curl --location https://your-domain.com/log-event \
+     --request POST \
+     --header "Content-Type: application/json" \
+     --data '{
+       "data": {
+         "id": "chatcmpl-8sgE89cEQ4q9biRtxMvDfQU1O82PT",
+         "call_type": "acompletion",
+         "cache_hit": "None",
+         "startTime": "2024-02-15 16:18:44.336280",
+         "endTime": "2024-02-15 16:18:45.045539",
+         "model": "gpt-3.5-turbo",
+         "user": "ishaan-2",
+         "modelParameters": "{'temperature': 0.7, 'max_tokens': 10, 'user': 'ishaan-2', 'extra_body': {}}",
+         "messages": "[{'role': 'user', 'content': 'This is a test'}]",
+         "response": "ModelResponse(id='chatcmpl-8sgE89cEQ4q9biRtxMvDfQU1O82PT', choices=[Choices(finish_reason='length', index=0, message=Message(content='Great! How can I assist you with this test', role='assistant'))], created=1708042724, model='gpt-3.5-turbo-0613', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=10, prompt_tokens=11, total_tokens=21))",
+         "usage": "Usage(completion_tokens=10, prompt_tokens=11, total_tokens=21)",
+         "metadata": "{}",
+         "cost": "3.65e-05"
+       }
+     }'
+```
+
+Reference FastAPI Python Server
+
+Here's a reference FastAPI Server that is compatible with LiteLLM Proxy:
+
+```python
+# this is an example endpoint to receive data from litellm
+from fastapi import FastAPI, HTTPException, Request
+
+app = FastAPI()
+
+
+@app.post("/log-event")
+async def log_event(request: Request):
+    try:
+        print("Received /log-event request")
+        # Assuming the incoming request has JSON data
+        data = await request.json()
+        print("Received request data:")
+        print(data)
+
+        # Your additional logic can go here
+        # For now, just printing the received data
+
+        return {"message": "Request received successfully"}
+    except Exception as e:
+        print(f"Error processing request: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=4000)
+
+
+```
+
+
+#### Step 2. Set your `GENERIC_LOGGER_ENDPOINT` to the endpoint + route we should send callback logs to
+
+```shell
+os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:4000/log-event"
+```
+
+#### Step 3. Create a `config.yaml` file and set `litellm_settings`: `success_callback` = ["generic"]
+
+Example litellm proxy config.yaml
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["generic"]
+```
+
+Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
+
 ## Logging Proxy Input/Output - Langfuse
-We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
 **Step 1** Install langfuse
 
@@ -316,7 +419,13 @@ litellm_settings:
   success_callback: ["langfuse"]
 ```
 
-**Step 3**: Start the proxy, make a test request
+**Step 3**: Set required env variables for logging to langfuse
+```shell
+export LANGFUSE_PUBLIC_KEY="pk_kk"
+export LANGFUSE_SECRET_KEY="sk_ss
+```
+
+**Step 4**: Start the proxy, make a test request
 
 Start proxy
 ```shell
@@ -342,7 +451,7 @@ Expected output on Langfuse
 Pass `metadata` as part of the request body
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -369,7 +478,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 import openai
 client = openai.OpenAI(
     api_key="anything",
-    base_url="http://0.0.0.0:8000"
+    base_url="http://0.0.0.0:4000"
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
@@ -406,7 +515,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",
+    openai_api_base="http://0.0.0.0:4000",
     model = "gpt-3.5-turbo",
     temperature=0.1,
     extra_body={
@@ -434,6 +543,104 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+
+### Team based Logging to Langfuse
+
+**Example:**
+
+This config would send langfuse logs to 2 different langfuse projects, based on the team id 
+
+```yaml
+litellm_settings:
+  default_team_settings: 
+    - team_id: my-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
+    - team_id: ishaans-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
+      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
+```
+
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "ishaans-secret-project"}'
+```
+
+All requests made with these keys will log data to their team-specific logging.
+
+### Redacting Messages, Response Content from Langfuse Logging 
+
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+  turn_off_message_logging: True
+```
+
+
+
+## Logging Proxy Input/Output - DataDog
+We will use the `--config` to set `litellm.success_callback = ["datadog"]` this will log all successfull LLM calls to DataDog
+
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["datadog"]
+```
+
+**Step 2**: Set Required env variables for datadog
+
+```shell
+DD_API_KEY="5f2d0f310***********" # your datadog API Key
+DD_SITE="us5.datadoghq.com"       # your datadog base url
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "your-custom-metadata": "custom-field",
+    }
+}'
+```
+
+Expected output on Datadog
+
+<Image img={require('../../img/dd_small1.png')} />
+
 
 ## Logging Proxy Input/Output - s3 Buckets
 
@@ -475,7 +682,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "Azure OpenAI GPT-4 East",
@@ -526,7 +733,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "Azure OpenAI GPT-4 East",
@@ -687,7 +894,7 @@ litellm --config config.yaml --debug
 
 Test Request
 ```
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
     "model": "gpt-3.5-turbo",
@@ -700,4 +907,46 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }'
 ```
 
+## Logging Proxy Input/Output Athina
 
+[Athina](https://athina.ai/) allows you to log LLM Input/Output for monitoring, analytics, and observability.
+
+We will use the `--config` to set `litellm.success_callback = ["athina"]` this will log all successfull LLM calls to athina
+
+**Step 1** Set Athina API key
+
+```shell
+ATHINA_API_KEY = "your-athina-api-key"
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["athina"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "which llm are you"
+        }
+    ]
+    }'
+```
