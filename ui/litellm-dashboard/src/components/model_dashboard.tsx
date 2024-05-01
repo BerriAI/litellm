@@ -448,6 +448,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         }
         console.log("all_model_groups:", all_model_groups)
         let _array_model_groups = Array.from(all_model_groups)
+        // sort _array_model_groups alphabetically
+        _array_model_groups = _array_model_groups.sort();
+
         setAvailableModelGroups(_array_model_groups);
 
         const modelMetricsResponse = await modelMetricsCall(
@@ -1090,14 +1093,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
             <Select
               className="mb-4 mt-2"
-              defaultValue="all"
             >
-              <SelectItem 
-                  value={"all"}
-                  onClick={() => updateModelMetrics(null)}
-                >
-                  All Model Groups
-                </SelectItem>
               {availableModelGroups.map((group, idx) => (
                 <SelectItem 
                   key={idx} 
