@@ -32,5 +32,5 @@ class CompletionRequest(BaseModel):
     model_list: Optional[List[str]] = None
 
     class Config:
-        # allow kwargs
         extra = "allow"
+        protected_namespaces = ()      

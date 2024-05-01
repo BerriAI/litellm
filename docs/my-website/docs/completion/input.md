@@ -24,15 +24,26 @@ print(response)
 ```
 
 ### Translated OpenAI params
+
+Use this function to get an up-to-date list of supported openai params for any model + provider. 
+
+```python
+from litellm import get_supported_openai_params
+
+response = get_supported_openai_params(model="anthropic.claude-3", custom_llm_provider="bedrock")
+
+print(response) # ["max_tokens", "tools", "tool_choice", "stream"]
+```
+
 This is a list of openai params we translate across providers.
 
 This list is constantly being updated.
 
-| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers | 
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|--|
 |Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
-|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |
-|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
+|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
 |Anyscale | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
@@ -42,7 +53,7 @@ This list is constantly being updated.
 |VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
+|TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |

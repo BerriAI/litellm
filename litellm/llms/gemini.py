@@ -1,4 +1,4 @@
-import os, types, traceback, copy
+import os, types, traceback, copy, asyncio
 import json
 from enum import Enum
 import time
@@ -6,7 +6,8 @@ from typing import Callable, Optional
 from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
 import litellm
 import sys, httpx
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from .prompt_templates.factory import prompt_factory, custom_prompt, get_system_prompt
+from packaging.version import Version
 
 
 class GeminiError(Exception):
@@ -82,6 +83,34 @@ class GeminiConfig:
         }
 
 
+class TextStreamer:
+    """
+    A class designed to return an async stream from AsyncGenerateContentResponse object.
+    """
+
+    def __init__(self, response):
+        self.response = response
+        self._aiter = self.response.__aiter__()
+
+    async def __aiter__(self):
+        while True:
+            try:
+                # This will manually advance the async iterator.
+                # In the case the next object doesn't exists, __anext__() will simply raise a StopAsyncIteration exception
+                next_object = await self._aiter.__anext__()
+                yield next_object
+            except StopAsyncIteration:
+                # After getting all items from the async iterator, stop iterating
+                break
+
+
+def supports_system_instruction():
+    import google.generativeai as genai
+
+    gemini_pkg_version = Version(genai.__version__)
+    return gemini_pkg_version >= Version("0.5.0")
+
+
 def completion(
     model: str,
     messages: list,
@@ -97,13 +126,13 @@ def completion(
     logger_fn=None,
 ):
     try:
-        import google.generativeai as genai
+        import google.generativeai as genai  # type: ignore
     except:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
         )
     genai.configure(api_key=api_key)
-
+    system_prompt = ""
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
@@ -114,15 +143,23 @@ def completion(
             messages=messages,
         )
     else:
+        system_prompt, messages = get_system_prompt(messages=messages)
         prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="gemini"
         )
 
     ## Load Config
     inference_params = copy.deepcopy(optional_params)
-    inference_params.pop(
-        "stream", None
-    )  # palm does not support streaming, so we handle this by fake streaming in main.py
+    stream = inference_params.pop("stream", None)
+
+    # Handle safety settings
+    safety_settings_param = inference_params.pop("safety_settings", None)
+    safety_settings = None
+    if safety_settings_param:
+        safety_settings = [
+            genai.types.SafetySettingDict(x) for x in safety_settings_param
+        ]
+
     config = litellm.GeminiConfig.get_config()
     for k, v in config.items():
         if (
@@ -134,15 +171,72 @@ def completion(
     logging_obj.pre_call(
         input=prompt,
         api_key="",
-        additional_args={"complete_input_dict": {"inference_params": inference_params}},
+        additional_args={
+            "complete_input_dict": {
+                "inference_params": inference_params,
+                "system_prompt": system_prompt,
+            }
+        },
     )
     ## COMPLETION CALL
     try:
-        _model = genai.GenerativeModel(f"models/{model}")
-        response = _model.generate_content(
-            contents=prompt,
-            generation_config=genai.types.GenerationConfig(**inference_params),
-        )
+        _params = {"model_name": "models/{}".format(model)}
+        _system_instruction = supports_system_instruction()
+        if _system_instruction and len(system_prompt) > 0:
+            _params["system_instruction"] = system_prompt
+        _model = genai.GenerativeModel(**_params)
+        if stream == True:
+            if acompletion == True:
+
+                async def async_streaming():
+                    try:
+                        response = await _model.generate_content_async(
+                            contents=prompt,
+                            generation_config=genai.types.GenerationConfig(
+                                **inference_params
+                            ),
+                            safety_settings=safety_settings,
+                            stream=True,
+                        )
+
+                        response = litellm.CustomStreamWrapper(
+                            TextStreamer(response),
+                            model,
+                            custom_llm_provider="gemini",
+                            logging_obj=logging_obj,
+                        )
+                        return response
+                    except Exception as e:
+                        raise GeminiError(status_code=500, message=str(e))
+
+                return async_streaming()
+            response = _model.generate_content(
+                contents=prompt,
+                generation_config=genai.types.GenerationConfig(**inference_params),
+                safety_settings=safety_settings,
+                stream=True,
+            )
+            return response
+        elif acompletion == True:
+            return async_completion(
+                _model=_model,
+                model=model,
+                prompt=prompt,
+                inference_params=inference_params,
+                safety_settings=safety_settings,
+                logging_obj=logging_obj,
+                print_verbose=print_verbose,
+                model_response=model_response,
+                messages=messages,
+                encoding=encoding,
+            )
+        else:
+            params = {
+                "contents": prompt,
+                "generation_config": genai.types.GenerationConfig(**inference_params),
+                "safety_settings": safety_settings,
+            }
+            response = _model.generate_content(**params)
     except Exception as e:
         raise GeminiError(
             message=str(e),
@@ -177,16 +271,112 @@ def completion(
 
     try:
         completion_response = model_response["choices"][0]["message"].get("content")
-        if completion_response is None: 
+        if completion_response is None:
             raise Exception
     except:
         original_response = f"response: {response}"
-        if hasattr(response, "candidates"): 
+        if hasattr(response, "candidates"):
             original_response = f"response: {response.candidates}"
-            if "SAFETY" in original_response: 
-                original_response += "\nThe candidate content was flagged for safety reasons."
+            if "SAFETY" in original_response:
+                original_response += (
+                    "\nThe candidate content was flagged for safety reasons."
+                )
             elif "RECITATION" in original_response:
-                original_response += "\nThe candidate content was flagged for recitation reasons."
+                original_response += (
+                    "\nThe candidate content was flagged for recitation reasons."
+                )
+        raise GeminiError(
+            status_code=400,
+            message=f"No response received. Original response - {original_response}",
+        )
+
+    ## CALCULATING USAGE
+    prompt_str = ""
+    for m in messages:
+        if isinstance(m["content"], str):
+            prompt_str += m["content"]
+        elif isinstance(m["content"], list):
+            for content in m["content"]:
+                if content["type"] == "text":
+                    prompt_str += content["text"]
+    prompt_tokens = len(encoding.encode(prompt_str))
+    completion_tokens = len(
+        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+    )
+
+    model_response["created"] = int(time.time())
+    model_response["model"] = "gemini/" + model
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    setattr(model_response, "usage", usage)
+    return model_response
+
+
+async def async_completion(
+    _model,
+    model,
+    prompt,
+    inference_params,
+    safety_settings,
+    logging_obj,
+    print_verbose,
+    model_response,
+    messages,
+    encoding,
+):
+    import google.generativeai as genai  # type: ignore
+
+    response = await _model.generate_content_async(
+        contents=prompt,
+        generation_config=genai.types.GenerationConfig(**inference_params),
+        safety_settings=safety_settings,
+    )
+
+    ## LOGGING
+    logging_obj.post_call(
+        input=prompt,
+        api_key="",
+        original_response=response,
+        additional_args={"complete_input_dict": {}},
+    )
+    print_verbose(f"raw model_response: {response}")
+    ## RESPONSE OBJECT
+    completion_response = response
+    try:
+        choices_list = []
+        for idx, item in enumerate(completion_response.candidates):
+            if len(item.content.parts) > 0:
+                message_obj = Message(content=item.content.parts[0].text)
+            else:
+                message_obj = Message(content=None)
+            choice_obj = Choices(index=idx + 1, message=message_obj)
+            choices_list.append(choice_obj)
+        model_response["choices"] = choices_list
+    except Exception as e:
+        traceback.print_exc()
+        raise GeminiError(
+            message=traceback.format_exc(), status_code=response.status_code
+        )
+
+    try:
+        completion_response = model_response["choices"][0]["message"].get("content")
+        if completion_response is None:
+            raise Exception
+    except:
+        original_response = f"response: {response}"
+        if hasattr(response, "candidates"):
+            original_response = f"response: {response.candidates}"
+            if "SAFETY" in original_response:
+                original_response += (
+                    "\nThe candidate content was flagged for safety reasons."
+                )
+            elif "RECITATION" in original_response:
+                original_response += (
+                    "\nThe candidate content was flagged for recitation reasons."
+                )
         raise GeminiError(
             status_code=400,
             message=f"No response received. Original response - {original_response}",

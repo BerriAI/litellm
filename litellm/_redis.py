@@ -11,11 +11,31 @@
 import os
 import inspect
 import redis, litellm
+import redis.asyncio as async_redis
 from typing import List, Optional
 
 
 def _get_redis_kwargs():
     arg_spec = inspect.getfullargspec(redis.Redis)
+
+    # Only allow primitive arguments
+    exclude_args = {
+        "self",
+        "connection_pool",
+        "retry",
+    }
+
+    include_args = ["url"]
+
+    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+
+    return available_args
+
+
+def _get_redis_url_kwargs(client=None):
+    if client is None:
+        client = redis.Redis.from_url
+    arg_spec = inspect.getfullargspec(redis.Redis.from_url)
 
     # Only allow primitive arguments
     exclude_args = {
@@ -67,7 +87,10 @@ def get_redis_url_from_environment():
     )
 
 
-def get_redis_client(**env_overrides):
+def _get_redis_client_logic(**env_overrides):
+    """
+    Common functionality across sync + async redis client implementations
+    """
     ### check if "os.environ/<key-name>" passed in
     for k, v in env_overrides.items():
         if isinstance(v, str) and v.startswith("os.environ/"):
@@ -85,9 +108,56 @@ def get_redis_client(**env_overrides):
         redis_kwargs.pop("port", None)
         redis_kwargs.pop("db", None)
         redis_kwargs.pop("password", None)
-
-        return redis.Redis.from_url(**redis_kwargs)
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
-    litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
+    # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
+    return redis_kwargs
+
+
+def get_redis_client(**env_overrides):
+    redis_kwargs = _get_redis_client_logic(**env_overrides)
+    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        args = _get_redis_url_kwargs()
+        url_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                url_kwargs[arg] = redis_kwargs[arg]
+
+        return redis.Redis.from_url(**url_kwargs)
     return redis.Redis(**redis_kwargs)
+
+
+def get_redis_async_client(**env_overrides):
+    redis_kwargs = _get_redis_client_logic(**env_overrides)
+    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
+        url_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                url_kwargs[arg] = redis_kwargs[arg]
+            else:
+                litellm.print_verbose(
+                    "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(
+                        arg
+                    )
+                )
+        return async_redis.Redis.from_url(**url_kwargs)
+
+    return async_redis.Redis(
+        socket_timeout=5,
+        **redis_kwargs,
+    )
+
+
+def get_redis_connection_pool(**env_overrides):
+    redis_kwargs = _get_redis_client_logic(**env_overrides)
+    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        return async_redis.BlockingConnectionPool.from_url(
+            timeout=5, url=redis_kwargs["url"]
+        )
+    connection_class = async_redis.Connection
+    if "ssl" in redis_kwargs and redis_kwargs["ssl"] is not None:
+        connection_class = async_redis.SSLConnection
+        redis_kwargs.pop("ssl", None)
+        redis_kwargs["connection_class"] = connection_class
+    return async_redis.BlockingConnectionPool(timeout=5, **redis_kwargs)

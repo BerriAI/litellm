@@ -1,0 +1,28 @@
+[
+    {
+        "name": "Zip code Recognizer",
+        "supported_language": "en",
+        "patterns": [
+            {
+                "name": "zip code (weak)",
+                "regex": "(\\b\\d{5}(?:\\-\\d{4})?\\b)",
+                "score": 0.01
+            }
+        ],
+        "context": ["zip", "code"],
+        "supported_entity": "ZIP"
+    },
+    {
+        "name": "Swiss AHV Number Recognizer",
+        "supported_language": "en",
+        "patterns": [
+            {
+                "name": "AHV number (strong)",
+                "regex": "(756\\.\\d{4}\\.\\d{4}\\.\\d{2})|(756\\d{10})",
+                "score": 0.95
+            }
+        ],
+        "context": ["AHV", "social security", "Swiss"],
+        "supported_entity": "AHV_NUMBER"
+    }
+]

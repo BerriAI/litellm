@@ -5,6 +5,7 @@ import random
 from datetime import datetime
 import importlib
 from dotenv import load_dotenv
+import urllib.parse as urlparse
 
 sys.path.append(os.getcwd())
 
@@ -15,6 +16,19 @@ from importlib import resources
 import shutil
 
 telemetry = None
+
+
+def append_query_params(url, params):
+    from litellm._logging import verbose_proxy_logger
+
+    verbose_proxy_logger.debug(f"url: {url}")
+    verbose_proxy_logger.debug(f"params: {params}")
+    parsed_url = urlparse.urlparse(url)
+    parsed_query = urlparse.parse_qs(parsed_url.query)
+    parsed_query.update(params)
+    encoded_query = urlparse.urlencode(parsed_query, doseq=True)
+    modified_url = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
+    return modified_url
 
 
 def run_ollama_serve():
@@ -42,7 +56,7 @@ def is_port_in_use(port):
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
 )
-@click.option("--port", default=8000, help="Port to bind the server to.", envvar="PORT")
+@click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
     default=1,
@@ -157,6 +171,26 @@ def is_port_in_use(port):
     type=int,
     help="Number of requests to hit async endpoint with",
 )
+@click.option(
+    "--run_gunicorn",
+    default=False,
+    is_flag=True,
+    help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
+)
+@click.option(
+    "--ssl_keyfile_path",
+    default=None,
+    type=str,
+    help="Path to the SSL keyfile. Use this when you want to provide SSL certificate when starting proxy",
+    envvar="SSL_KEYFILE_PATH",
+)
+@click.option(
+    "--ssl_certfile_path",
+    default=None,
+    type=str,
+    help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
+    envvar="SSL_CERTFILE_PATH",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(
     host,
@@ -186,22 +220,31 @@ def run_server(
     use_queue,
     health,
     version,
+    run_gunicorn,
+    ssl_keyfile_path,
+    ssl_certfile_path,
 ):
-    global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry
+        from proxy_server import app, save_worker_config, ProxyConfig
     else:
         try:
-            from .proxy_server import app, save_worker_config, usage_telemetry
+            from .proxy_server import (
+                app,
+                save_worker_config,
+                ProxyConfig,
+            )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
                 raise e
             else:
                 # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import app, save_worker_config, usage_telemetry
-    feature_telemetry = usage_telemetry
+                from proxy_server import (
+                    app,
+                    save_worker_config,
+                    ProxyConfig,
+                )
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
@@ -221,7 +264,7 @@ def run_server(
                 ],
             }
 
-            response = requests.post("http://0.0.0.0:8000/queue/request", json=data)
+            response = requests.post("http://0.0.0.0:4000/queue/request", json=data)
 
             response = response.json()
 
@@ -363,9 +406,11 @@ def run_server(
                 import gunicorn.app.base
         except:
             raise ImportError(
-                "Uvicorn, gunicorn needs to be imported. Run - `pip 'litellm[proxy]'`"
+                "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
             )
 
+        db_connection_pool_limit = 100
+        db_connection_timeout = 60
         if config is not None:
             """
             Allow user to pass in db url via config
@@ -373,17 +418,24 @@ def run_server(
             read from there and save it to os.env['DATABASE_URL']
             """
             try:
-                import yaml
+                import yaml, asyncio
             except:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
                 )
 
-            if os.path.exists(config):
-                with open(config, "r") as config_file:
-                    config = yaml.safe_load(config_file)
-            general_settings = config.get("general_settings", {})
+            proxy_config = ProxyConfig()
+            _config = asyncio.run(proxy_config.get_config(config_file_path=config))
+            general_settings = _config.get("general_settings", {})
+            if general_settings is None:
+                general_settings = {}
             database_url = general_settings.get("database_url", None)
+            db_connection_pool_limit = general_settings.get(
+                "database_connection_pool_limit", 100
+            )
+            db_connection_timeout = general_settings.get(
+                "database_connection_timeout", 60
+            )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
@@ -397,8 +449,30 @@ def run_server(
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
 
-        if os.getenv("DATABASE_URL", None) is not None:
+        if (
+            os.getenv("DATABASE_URL", None) is not None
+            or os.getenv("DIRECT_URL", None) is not None
+        ):
             try:
+                if os.getenv("DATABASE_URL", None) is not None:
+                    ### add connection pool + pool timeout args
+                    params = {
+                        "connection_limit": db_connection_pool_limit,
+                        "pool_timeout": db_connection_timeout,
+                    }
+                    database_url = os.getenv("DATABASE_URL")
+                    modified_url = append_query_params(database_url, params)
+                    os.environ["DATABASE_URL"] = modified_url
+                if os.getenv("DIRECT_URL", None) is not None:
+                    ### add connection pool + pool timeout args
+                    params = {
+                        "connection_limit": db_connection_pool_limit,
+                        "pool_timeout": db_connection_timeout,
+                    }
+                    database_url = os.getenv("DIRECT_URL")
+                    modified_url = append_query_params(database_url, params)
+                    os.environ["DIRECT_URL"] = modified_url
+                    ###
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
@@ -425,13 +499,26 @@ def run_server(
                 print(
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
                 )
-        if port == 8000 and is_port_in_use(port):
+        if port == 4000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
+
         from litellm.proxy.proxy_server import app
 
-        if os.name == "nt":
-            uvicorn.run(app, host=host, port=port)  # run uvicorn
-        else:
+        if run_gunicorn == False:
+            if ssl_certfile_path is not None and ssl_keyfile_path is not None:
+                print(
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                )
+                uvicorn.run(
+                    app,
+                    host=host,
+                    port=port,
+                    ssl_keyfile=ssl_keyfile_path,
+                    ssl_certfile=ssl_certfile_path,
+                )  # run uvicorn
+            else:
+                uvicorn.run(app, host=host, port=port)  # run uvicorn
+        elif run_gunicorn == True:
             import gunicorn.app.base
 
             # Gunicorn Application Class
@@ -497,8 +584,17 @@ def run_server(
                 "worker_class": "uvicorn.workers.UvicornWorker",
                 "preload": True,  # Add the preload flag,
                 "accesslog": "-",  # Log to stdout
+                "timeout": 600,  # default to very high number, bedrock/anthropic.claude-v2:1 can take 30+ seconds for the 1st chunk to come in
                 "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
             }
+
+            if ssl_certfile_path is not None and ssl_keyfile_path is not None:
+                print(
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                )
+                gunicorn_options["certfile"] = ssl_certfile_path
+                gunicorn_options["keyfile"] = ssl_keyfile_path
+
             StandaloneApplication(
                 app=app, options=gunicorn_options
             ).run()  # Run gunicorn

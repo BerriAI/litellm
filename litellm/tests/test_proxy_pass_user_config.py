@@ -32,7 +32,7 @@ from litellm.proxy.proxy_server import (
 )  # Replace with the actual module where your FastAPI router is defined
 
 # Your bearer token
-token = ""
+token = "sk-1234"
 
 headers = {"Authorization": f"Bearer {token}"}
 

@@ -38,7 +38,7 @@ $ litellm --config /path/to/config.yaml
 3. Test the embedding call
 
 ```shell
-curl --location 'http://0.0.0.0:8000/v1/embeddings' \
+curl --location 'http://0.0.0.0:4000/v1/embeddings' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{

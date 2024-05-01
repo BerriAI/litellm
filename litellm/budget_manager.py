@@ -1,3 +1,12 @@
+# +-----------------------------------------------+
+# |                                               |
+# |           NOT PROXY BUDGET MANAGER            |
+# |  proxy budget manager is in proxy_server.py   |
+# |                                               |
+# +-----------------------------------------------+
+#
+#  Thank you users! We ❤️ you! - Krrish & Ishaan
+
 import os, json, time
 import litellm
 from litellm.utils import ModelResponse
@@ -16,7 +25,7 @@ class BudgetManager:
         self.client_type = client_type
         self.project_name = project_name
         self.api_base = api_base or "https://api.litellm.ai"
-        self.headers = headers or {'Content-Type': 'application/json'}
+        self.headers = headers or {"Content-Type": "application/json"}
         ## load the data or init the initial dictionaries
         self.load_data()
 
