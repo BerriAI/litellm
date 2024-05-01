@@ -22,10 +22,10 @@ class MyCustomHandler(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
         print(
-            f"previous_models: {kwargs['litellm_params']['metadata']['previous_models']}"
+            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
         )
-        self.previous_models += len(
-            kwargs["litellm_params"]["metadata"]["previous_models"]
+        self.previous_models = len(
+            kwargs["litellm_params"]["metadata"].get("previous_models", [])
         )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
 
@@ -127,7 +127,7 @@ def test_sync_fallbacks():
         response = router.completion(**kwargs)
         print(f"response: {response}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4
 
         print("Passed ! Test router_fallbacks: test_sync_fallbacks()")
         router.reset()
@@ -140,7 +140,7 @@ def test_sync_fallbacks():
 
 @pytest.mark.asyncio
 async def test_async_fallbacks():
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     model_list = [
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo",  # openai model name
@@ -209,12 +209,13 @@ async def test_async_fallbacks():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
+        kwargs["model"] = "azure/gpt-3.5-turbo"
         response = await router.acompletion(**kwargs)
         print(f"customHandler.previous_models: {customHandler.previous_models}")
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -258,7 +259,6 @@ def test_sync_fallbacks_embeddings():
         model_list=model_list,
         fallbacks=[{"bad-azure-embedding-model": ["good-azure-embedding-model"]}],
         set_verbose=False,
-        num_retries=0,
     )
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
@@ -269,7 +269,7 @@ def test_sync_fallbacks_embeddings():
         response = router.embedding(**kwargs)
         print(f"customHandler.previous_models: {customHandler.previous_models}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -323,7 +323,7 @@ async def test_async_fallbacks_embeddings():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -394,7 +394,7 @@ def test_dynamic_fallbacks_sync():
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, num_retries=0)
+        router = Router(model_list=model_list, set_verbose=True)
         kwargs = {}
         kwargs["model"] = "azure/gpt-3.5-turbo"
         kwargs["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
@@ -402,7 +402,7 @@ def test_dynamic_fallbacks_sync():
         response = router.completion(**kwargs)
         print(f"response: {response}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
@@ -488,7 +488,7 @@ async def test_dynamic_fallbacks_async():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
@@ -573,7 +573,7 @@ async def test_async_fallbacks_streaming():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
