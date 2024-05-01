@@ -360,7 +360,7 @@ def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
-    mock_response: str = "This is a mock request",
+    mock_response: Union[str, Exception] = "This is a mock request",
     logging=None,
     **kwargs,
 ):
@@ -388,10 +388,11 @@ def mock_completion(
     """
     try:
         ## LOGGING
-        logging.pre_call(
-            input=messages,
-            api_key="mock-key",
-        )
+        if logging is not None:
+            logging.pre_call(
+                input=messages,
+                api_key="mock-key",
+            )
         if isinstance(mock_response, Exception):
             raise litellm.APIError(
                 status_code=500,  # type: ignore
