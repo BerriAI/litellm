@@ -470,8 +470,26 @@ def test_langfuse_existing_trace_id():
 
     new_metadata = {"existing_trace_id": trace_id}
     new_messages = [{"role": "user", "content": "What do you know?"}]
+    new_response_obj = litellm.ModelResponse(
+        id="chatcmpl-9K5HUAbVRqFrMZKXL0WoC295xhguY",
+        choices=[
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(
+                    content="What do I know?",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1714573888,
+        model="gpt-3.5-turbo-0125",
+        object="chat.completion",
+        system_fingerprint="fp_3b956da36b",
+        usage=litellm.Usage(completion_tokens=37, prompt_tokens=14, total_tokens=51),
+    )
     langfuse_args = {
-        "response_obj": response_obj,
+        "response_obj": new_response_obj,
         "kwargs": {
             "model": "gpt-3.5-turbo",
             "litellm_params": {
@@ -528,6 +546,10 @@ def test_langfuse_existing_trace_id():
     }
 
     langfuse_response_object = langfuse_Logger.log_event(**langfuse_args)
+
+    new_trace_id = langfuse_response_object["trace_id"]
+
+    assert new_trace_id == trace_id
 
     langfuse_client.flush()
 
