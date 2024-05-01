@@ -1572,6 +1572,17 @@
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
+    "openrouter/anthropic/claude-3-opus": {
+        "max_tokens": 4096,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000075,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "tool_use_system_prompt_tokens": 395
+    },
     "openrouter/google/palm-2-chat-bison": {
         "max_tokens": 8000,
         "input_cost_per_token": 0.0000005,
