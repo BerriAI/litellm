@@ -448,6 +448,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         }
         console.log("all_model_groups:", all_model_groups)
         let _array_model_groups = Array.from(all_model_groups)
+        // sort _array_model_groups alphabetically
+        _array_model_groups = _array_model_groups.sort();
+
         setAvailableModelGroups(_array_model_groups);
 
         const modelMetricsResponse = await modelMetricsCall(
@@ -475,38 +478,40 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         setModelExceptions(modelExceptionsResponse.data);
         setAllExceptions(modelExceptionsResponse.exception_types);
 
-        // let successdeploymentToSuccess: Record<string, number> = {};
-        // for  (let i = 0; i < modelMetricsResponse.length; i++) {
-        //   let element = modelMetricsResponse[i];
-        //   let _model_name = element.model;
-        //   let _num_requests = element.num_requests;
-        //   successdeploymentToSuccess[_model_name] = _num_requests
-        // }
-        // console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
+
+        let modelMetricsData = modelMetricsResponse.data;
+        let successdeploymentToSuccess: Record<string, number> = {};
+        for  (let i = 0; i < modelMetricsData.length; i++) {
+          let element = modelMetricsData[i];
+          let _model_name = element.model;
+          let _num_requests = element.num_requests;
+          successdeploymentToSuccess[_model_name] = _num_requests
+        }
+        console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
         
-        // let failureTableData = [];
-        // let _failureData = modelExceptionsResponse.data;
-        // for (let i = 0; i < _failureData.length; i++) {
-        //   const model = _failureData[i];
-        //   let _model_name = model.model;
-        //   let total_exceptions = model.total_exceptions;
-        //   let total_Requests = successdeploymentToSuccess[_model_name];
-        //   if (total_Requests == null) {
-        //     total_Requests = 0
-        //   }
-        //   let _data = {
-        //     model: _model_name,
-        //     total_exceptions: total_exceptions,
-        //     total_Requests: total_Requests,
-        //     failure_rate: total_Requests / total_exceptions
-        //   }
-        //   failureTableData.push(_data);
-        //   // sort failureTableData by failure_rate
-        //   failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
+        let failureTableData = [];
+        let _failureData = modelExceptionsResponse.data;
+        for (let i = 0; i < _failureData.length; i++) {
+          const model = _failureData[i];
+          let _model_name = model.model;
+          let total_exceptions = model.total_exceptions;
+          let total_Requests = successdeploymentToSuccess[_model_name];
+          if (total_Requests == null) {
+            total_Requests = 0
+          }
+          let _data = {
+            model: _model_name,
+            total_exceptions: total_exceptions,
+            total_Requests: total_Requests,
+            failure_rate: total_Requests / total_exceptions
+          }
+          failureTableData.push(_data);
+          // sort failureTableData by failure_rate
+          failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
         
-        //   setFailureTableData(failureTableData);
-        //   console.log("failureTableData:", failureTableData);
-        // }
+          setFailureTableData(failureTableData);
+          console.log("failureTableData:", failureTableData);
+        }
 
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -690,6 +695,45 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       console.error("Failed to fetch model metrics", error);
     }
   }
+
+  const customTooltip = (props: any) => {
+    const { payload, active } = props;
+    if (!active || !payload) return null;
+  
+    // Extract the date from the first item in the payload array
+    const date = payload[0]?.payload?.date;
+  
+    // Sort the payload array by category.value in descending order
+    let sortedPayload = payload.sort((a: any, b: any) => b.value - a.value);
+  
+    // Only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
+    if (sortedPayload.length > 5) {
+      let remainingItems = sortedPayload.length - 5;
+      sortedPayload = sortedPayload.slice(0, 5);
+      sortedPayload.push({
+        dataKey: `${remainingItems} other deployments`,
+        value: payload.slice(5).reduce((acc: number, curr: any) => acc + curr.value, 0),
+        color: "gray",
+      });
+    }
+  
+    return (
+      <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
+        {date && <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>}
+        {sortedPayload.map((category: any, idx: number) => (
+          <div key={idx} className="flex justify-between">
+            <div className="flex items-center space-x-2">
+              <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
+              <p className="text-tremor-content">{category.dataKey}</p>
+            </div>
+            <p className="font-medium text-tremor-content-emphasis text-righ ml-2">
+              {category.value.toFixed(5)}
+            </p>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
 
 
@@ -1049,14 +1093,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
             <Select
               className="mb-4 mt-2"
-              defaultValue="all"
             >
-              <SelectItem 
-                  value={"all"}
-                  onClick={() => updateModelMetrics(null)}
-                >
-                  All Model Groups
-                </SelectItem>
               {availableModelGroups.map((group, idx) => (
                 <SelectItem 
                   key={idx} 
@@ -1071,34 +1108,23 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             <Grid numItems={2}>
               <Col>
               <Card className="mr-2">
+                <Title>Avg Latency per Token</Title><p className="text-gray-500 italic"> (seconds/token)</p>
+                <Text className="text-gray-500 italic mt-1 mb-1">average Latency for successfull requests divided by the total tokens</Text>
               { modelMetrics && modelMetricsCategories && (
                 <AreaChart
+                  title="Model Latency"
                   className="h-72"
                   data={modelMetrics}
                   showLegend={false}
                   index="date"
                   categories={modelMetricsCategories}
                   connectNulls={true}
+                  customTooltip={customTooltip}
                 />
               )}
 
                   
-              <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Median Latency/Token</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {modelLatencyMetrics.map((metric, idx) => (
-                  <TableRow key={idx}>
-                    <TableCell>{metric.model}</TableCell>
-                    <TableCell>{metric.avg_latency_per_token.toFixed(4)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-              </Table>
+              
               </Card>
               </Col>
             <Col>
