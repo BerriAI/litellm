@@ -475,38 +475,40 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         setModelExceptions(modelExceptionsResponse.data);
         setAllExceptions(modelExceptionsResponse.exception_types);
 
-        // let successdeploymentToSuccess: Record<string, number> = {};
-        // for  (let i = 0; i < modelMetricsResponse.length; i++) {
-        //   let element = modelMetricsResponse[i];
-        //   let _model_name = element.model;
-        //   let _num_requests = element.num_requests;
-        //   successdeploymentToSuccess[_model_name] = _num_requests
-        // }
-        // console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
+
+        let modelMetricsData = modelMetricsResponse.data;
+        let successdeploymentToSuccess: Record<string, number> = {};
+        for  (let i = 0; i < modelMetricsData.length; i++) {
+          let element = modelMetricsData[i];
+          let _model_name = element.model;
+          let _num_requests = element.num_requests;
+          successdeploymentToSuccess[_model_name] = _num_requests
+        }
+        console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
         
-        // let failureTableData = [];
-        // let _failureData = modelExceptionsResponse.data;
-        // for (let i = 0; i < _failureData.length; i++) {
-        //   const model = _failureData[i];
-        //   let _model_name = model.model;
-        //   let total_exceptions = model.total_exceptions;
-        //   let total_Requests = successdeploymentToSuccess[_model_name];
-        //   if (total_Requests == null) {
-        //     total_Requests = 0
-        //   }
-        //   let _data = {
-        //     model: _model_name,
-        //     total_exceptions: total_exceptions,
-        //     total_Requests: total_Requests,
-        //     failure_rate: total_Requests / total_exceptions
-        //   }
-        //   failureTableData.push(_data);
-        //   // sort failureTableData by failure_rate
-        //   failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
+        let failureTableData = [];
+        let _failureData = modelExceptionsResponse.data;
+        for (let i = 0; i < _failureData.length; i++) {
+          const model = _failureData[i];
+          let _model_name = model.model;
+          let total_exceptions = model.total_exceptions;
+          let total_Requests = successdeploymentToSuccess[_model_name];
+          if (total_Requests == null) {
+            total_Requests = 0
+          }
+          let _data = {
+            model: _model_name,
+            total_exceptions: total_exceptions,
+            total_Requests: total_Requests,
+            failure_rate: total_Requests / total_exceptions
+          }
+          failureTableData.push(_data);
+          // sort failureTableData by failure_rate
+          failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
         
-        //   setFailureTableData(failureTableData);
-        //   console.log("failureTableData:", failureTableData);
-        // }
+          setFailureTableData(failureTableData);
+          console.log("failureTableData:", failureTableData);
+        }
 
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -690,6 +692,50 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       console.error("Failed to fetch model metrics", error);
     }
   }
+
+  const customTooltip = (props) => {
+    const { payload, active } = props;
+    if (!active || !payload) return null;
+  
+    // Sort the payload array by category.value in descending order
+    let sortedPayload = payload.sort((a, b) =>  b.value - a.value);
+
+    console.log("sortedPayload:", sortedPayload);
+
+    // only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
+    if (sortedPayload.length > 5 ) {
+      let remainingItems = sortedPayload.length - 5;
+      sortedPayload = sortedPayload.slice(0, 5);
+
+
+      sortedPayload.push({
+        dataKey: `${remainingItems} other deployments`,
+        value: payload.slice(5).reduce((acc, curr) => acc + curr.value, 0),
+        color: "gray",
+      })
+    }
+
+  
+    return (
+      <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
+        {sortedPayload.map((category, idx) => (
+          <div key={idx} className="flex flex-1 space-x-2.5">
+            
+            {/* <div
+              className={`flex w-1 flex-col bg-${category.color}-500 rounded`}
+              > */}
+
+              <p className="text-tremor-content">{category.dataKey}</p>
+              <p className="font-medium text-tremor-content-emphasis">
+                {category.value.toFixed(5)}
+              </p>
+              </div>
+              // </div>
+     
+        ))}
+      </div>
+    );
+  };
 
 
 
@@ -1073,12 +1119,14 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <Card className="mr-2">
               { modelMetrics && modelMetricsCategories && (
                 <AreaChart
+                  title="Model Latency"
                   className="h-72"
                   data={modelMetrics}
                   showLegend={false}
                   index="date"
                   categories={modelMetricsCategories}
                   connectNulls={true}
+                  customTooltip={customTooltip}
                 />
               )}
 
