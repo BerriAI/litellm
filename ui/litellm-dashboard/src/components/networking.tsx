@@ -474,6 +474,43 @@ export const modelMetricsCall = async (
   }
 };
 
+
+export const modelExceptionsCall = async (
+  accessToken: String,
+  userID: String,
+  userRole: String, 
+  modelGroup: String | null,
+) => {
+  /**
+   * Get all models on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/exceptions` : `/model/metrics/exceptions`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 20);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    // message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+
 export const modelAvailableCall = async (
   accessToken: String,
   userID: String,

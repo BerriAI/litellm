@@ -2049,6 +2049,11 @@ async def update_spend(
                 raise e
 
     ### UPDATE KEY TABLE ###
+    verbose_proxy_logger.debug(
+        "KEY Spend transactions: {}".format(
+            len(prisma_client.key_list_transactons.keys())
+        )
+    )
     if len(prisma_client.key_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
             start_time = time.time()

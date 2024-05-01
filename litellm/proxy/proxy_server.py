@@ -1258,6 +1258,7 @@ async def _PROXY_failure_handler(
             request_id=str(uuid.uuid4()),
             model_group=_model_group,
             model_id=_model_id,
+            litellm_model_name=kwargs.get("model"),
             request_kwargs=_optional_params,
             api_base=api_base,
             exception_type=_exception_type,
@@ -7523,9 +7524,9 @@ async def model_info_v2(
 )
 async def model_metrics(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    _selected_model_group: Optional[str] = None,
-    startTime: Optional[datetime] = datetime.now() - timedelta(days=30),
-    endTime: Optional[datetime] = datetime.now(),
+    _selected_model_group: Optional[str] = "gpt-4-32k",
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -7535,65 +7536,153 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    if _selected_model_group and llm_router is not None:
-        _model_list = llm_router.get_model_list()
-        _relevant_api_bases = []
-        for model in _model_list:
-            if model["model_name"] == _selected_model_group:
-                _litellm_params = model["litellm_params"]
-                _api_base = _litellm_params.get("api_base", "")
-                _relevant_api_bases.append(_api_base)
-                _relevant_api_bases.append(_api_base + "/openai/")
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
 
-        sql_query = """
-            SELECT
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-                COUNT(*) AS num_requests,
-                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
-            FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-            AND api_base = ANY($3)
-            GROUP BY CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-            ORDER BY num_requests DESC
-            LIMIT 50;
+    sql_query = """
+        SELECT
+            api_base,
+            model,
+            DATE_TRUNC('day', "startTime")::DATE AS day,
+            AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) / SUM(total_tokens) AS avg_latency_per_token
+        FROM
+            "LiteLLM_SpendLogs"
+        WHERE
+            "startTime" >= NOW() - INTERVAL '30 days'
+            AND "model" = $1
+        GROUP BY
+            api_base,
+            model,
+            day
+        HAVING
+            SUM(total_tokens) > 0
+        ORDER BY
+            avg_latency_per_token DESC;
+    """
+    _all_api_bases = set()
+    db_response = await prisma_client.db.query_raw(
+        sql_query, _selected_model_group, startTime, endTime
+    )
+    _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
+    if db_response is not None:
+        for model_data in db_response:
+            _api_base = model_data["api_base"]
+            _model = model_data["model"]
+            _day = model_data["day"]
+            _avg_latency_per_token = model_data["avg_latency_per_token"]
+            if _day not in _daily_entries:
+                _daily_entries[_day] = {}
+            _combined_model_name = str(_model)
+            if "https://" in _api_base:
+                _combined_model_name = str(_api_base)
+            if "/openai/" in _combined_model_name:
+                _combined_model_name = _combined_model_name.split("/openai/")[0]
+
+            _all_api_bases.add(_combined_model_name)
+            _daily_entries[_day][_combined_model_name] = _avg_latency_per_token
+
         """
+        each entry needs to be like this:
+        {
+            date: 'Jun 23',
+            'gpt-4-https://api.openai.com/v1/': 0.002,
+            'gpt-43-https://api.openai.com-12/v1/': 0.002,
+        }
+        """
+        # convert daily entries to list of dicts
 
-        db_response = await prisma_client.db.query_raw(
-            sql_query, startTime, endTime, _relevant_api_bases
+        response: List[dict] = []
+
+        # sort daily entries by date
+        _daily_entries = dict(sorted(_daily_entries.items(), key=lambda item: item[0]))
+        for day in _daily_entries:
+            entry = {"date": str(day)}
+            for model_key, latency in _daily_entries[day].items():
+                entry[model_key] = round(latency, 8)
+            response.append(entry)
+
+        return {
+            "data": response,
+            "all_api_bases": list(_all_api_bases),
+        }
+
+
+@router.get(
+    "/model/metrics/exceptions",
+    description="View number of failed requests per model on config.yaml",
+    tags=["model management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_metrics_exceptions(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = None,
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
+):
+    global prisma_client, llm_router
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    else:
 
-        sql_query = """
-            SELECT
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-                COUNT(*) AS num_requests,
-                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
-            FROM
-                "LiteLLM_SpendLogs"
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
+
+    """
+    """
+    sql_query = """
+        WITH cte AS (
+            SELECT 
+                CASE WHEN api_base = '' THEN litellm_model_name ELSE CONCAT(litellm_model_name, '-', api_base) END AS combined_model_api_base,
+                exception_type,
+                COUNT(*) AS num_exceptions
+            FROM "LiteLLM_ErrorLogs"
             WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-            GROUP BY
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-            ORDER BY
-                num_requests DESC
-            LIMIT 50;
-        """
-
-        db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
+            GROUP BY combined_model_api_base, exception_type
+        )
+        SELECT 
+            combined_model_api_base,
+            COUNT(*) AS total_exceptions,
+            json_object_agg(exception_type, num_exceptions) AS exception_counts
+        FROM cte
+        GROUP BY combined_model_api_base
+        ORDER BY total_exceptions DESC
+        LIMIT 200;
+    """
+    db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
     response: List[dict] = []
-    if response is not None:
+    exception_types = set()
+
+    """
+    Return Data
+    {
+        "combined_model_api_base": "gpt-3.5-turbo-https://api.openai.com/v1/,
+        "total_exceptions": 5,
+        "BadRequestException": 5,
+        "TimeoutException": 2
+    }
+    """
+
+    if db_response is not None:
         # loop through all models
         for model_data in db_response:
             model = model_data.get("combined_model_api_base", "")
-            num_requests = model_data.get("num_requests", 0)
-            avg_latency_seconds = model_data.get("avg_latency_seconds", 0)
-            response.append(
-                {
-                    "model": model,
-                    "num_requests": num_requests,
-                    "avg_latency_seconds": avg_latency_seconds,
-                }
-            )
-    return response
+            total_exceptions = model_data.get("total_exceptions", 0)
+            exception_counts = model_data.get("exception_counts", {})
+            curr_row = {
+                "model": model,
+                "total_exceptions": total_exceptions,
+            }
+            curr_row.update(exception_counts)
+            response.append(curr_row)
+            for k, v in exception_counts.items():
+                exception_types.add(k)
+
+    return {"data": response, "exception_types": list(exception_types)}
 
 
 @router.get(
