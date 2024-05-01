@@ -47,9 +47,10 @@ for chunk in response:
 |------------|----------------|
 | command-r | `completion('command-r', messages)` |
 | command-light | `completion('command-light', messages)` |  
+| command-r-plus | `completion('command-r-plus', messages)` |  
 | command-medium | `completion('command-medium', messages)` |
 | command-medium-beta | `completion('command-medium-beta', messages)` |
-| command-xlarge-beta | `completion('command-xlarge-beta', messages)` |
+| command-xlarge-nightly | `completion('command-xlarge-nightly', messages)` |
 | command-nightly | `completion('command-nightly', messages)` |
 
 

@@ -19,6 +19,7 @@ def setup_and_teardown():
         0, os.path.abspath("../..")
     )  # Adds the project directory to the system path
     import litellm
+    from litellm import Router
 
     importlib.reload(litellm)
     import asyncio

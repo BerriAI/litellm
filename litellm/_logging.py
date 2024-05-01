@@ -1,14 +1,14 @@
 import logging
 
 set_verbose = False
-
+json_logs = False
 # Create a handler for the logger (you may need to adapt this based on your needs)
 handler = logging.StreamHandler()
 handler.setLevel(logging.DEBUG)
 
 # Create a formatter and set it for the handler
 formatter = logging.Formatter(
-    "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(message)s",
+    "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
     datefmt="%H:%M:%S",
 )
 

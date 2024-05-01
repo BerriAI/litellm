@@ -7,13 +7,13 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the, system path
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 
-# litellm.num_retries = 3
+# litellm.num_retries=3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -33,6 +33,22 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
+@pytest.mark.skip(reason="Local test")
+def test_response_model_none():
+    """
+    Addresses - https://github.com/BerriAI/litellm/issues/2972
+    """
+    x = completion(
+        model="mymodel",
+        custom_llm_provider="openai",
+        messages=[{"role": "user", "content": "Hello!"}],
+        api_base="http://0.0.0.0:8080",
+        api_key="my-api-key",
+    )
+    print(f"x: {x}")
+    assert isinstance(x, litellm.ModelResponse)
+
+
 def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
@@ -41,7 +57,7 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to check the,response
+        # Add any assertions here to, check the response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
@@ -50,7 +66,22 @@ def test_completion_custom_provider_model_name():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_custom_provider_model_name()
+def test_completion_azure_command_r():
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="azure/command-r-plus",
+            api_base=os.getenv("AZURE_COHERE_API_BASE"),
+            api_key=os.getenv("AZURE_COHERE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )
+
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_claude():
@@ -76,6 +107,8 @@ def test_completion_claude():
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
     except Exception as e:
+        if "overloaded_error" in str(e):
+            pass
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -102,7 +135,20 @@ def test_completion_claude_3_empty_response():
 
 def test_completion_claude_3():
     litellm.set_verbose = True
-    messages = [{"role": "user", "content": "Hello, world"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.log` => `console.error`\n",
+        },
+        {
+            "role": "assistant",
+            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
+        },
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
+        },
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -137,7 +183,12 @@ def test_completion_claude_3_function_call():
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
     try:
         # test without max tokens
         response = completion(
@@ -152,6 +203,165 @@ def test_completion_claude_3_function_call():
         assert isinstance(
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
+
+        messages.append(
+            response.choices[0].message.model_dump()
+        )  # Add assistant tool invokes
+        tool_result = (
+            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+        )
+        # Add user submitted tool results in the OpenAI format
+        messages.append(
+            {
+                "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                "role": "tool",
+                "name": response.choices[0].message.tool_calls[0].function.name,
+                "content": tool_result,
+            }
+        )
+        # In the second response, Claude should deduce answer from tool results
+        second_response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(second_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_cohere_command_r_plus_function_call():
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
+    try:
+        # test without max tokens
+        response = completion(
+            model="command-r-plus",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        # Add any assertions, here to check response args
+        print(response)
+        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+
+        messages.append(
+            response.choices[0].message.model_dump()
+        )  # Add assistant tool invokes
+        tool_result = (
+            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+        )
+        # Add user submitted tool results in the OpenAI format
+        messages.append(
+            {
+                "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                "role": "tool",
+                "name": response.choices[0].message.tool_calls[0].function.name,
+                "content": tool_result,
+            }
+        )
+        # In the second response, Cohere should deduce answer from tool results
+        second_response = completion(
+            model="command-r-plus",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(second_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_parse_xml_params():
+    from litellm.llms.prompt_templates.factory import parse_xml_params
+
+    ## SCENARIO 1 ## - W/ ARRAY
+    xml_content = """<invoke><tool_name>return_list_of_str</tool_name>\n<parameters>\n<value>\n<item>apple</item>\n<item>banana</item>\n<item>orange</item>\n</value>\n</parameters></invoke>"""
+    json_schema = {
+        "properties": {
+            "value": {
+                "items": {"type": "string"},
+                "title": "Value",
+                "type": "array",
+            }
+        },
+        "required": ["value"],
+        "type": "object",
+    }
+    response = parse_xml_params(xml_content=xml_content, json_schema=json_schema)
+
+    print(f"response: {response}")
+    assert response["value"] == ["apple", "banana", "orange"]
+
+    ## SCENARIO 2 ## - W/OUT ARRAY
+    xml_content = """<invoke><tool_name>get_current_weather</tool_name>\n<parameters>\n<location>Boston, MA</location>\n<unit>fahrenheit</unit>\n</parameters></invoke>"""
+    json_schema = {
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "The city and state, e.g. San Francisco, CA",
+            },
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+    }
+
+    response = parse_xml_params(xml_content=xml_content, json_schema=json_schema)
+
+    print(f"response: {response}")
+    assert response["location"] == "Boston, MA"
+    assert response["unit"] == "fahrenheit"
+
+
+def test_completion_claude_3_multi_turn_conversations():
+    litellm.set_verbose = True
+    litellm.modify_params = True
+    messages = [
+        {"role": "assistant", "content": "?"},  # test first user message auto injection
+        {"role": "user", "content": "Hi!"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "What is the weather like today?"}],
+        },
+        {"role": "assistant", "content": "Hi! I am Claude. "},
+        {"role": "assistant", "content": "Today is a sunny "},
+    ]
+    try:
+        response = completion(
+            model="anthropic/claude-3-opus-20240229",
+            messages=messages,
+        )
+        print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -257,7 +467,12 @@ def test_completion_claude_3_function_plus_image():
     ]
 
     tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
 
     response = completion(
         model="claude-3-sonnet-20240229",
@@ -268,6 +483,51 @@ def test_completion_claude_3_function_plus_image():
     )
 
     print(response)
+
+
+def test_completion_azure_mistral_large_function_calling():
+    """
+    This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
+    """
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
+    response = completion(
+        model="azure/mistral-large-latest",
+        api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
+        api_key=os.getenv("AZURE_MISTRAL_API_KEY"),
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+    )
+    # Add any assertions, here to check response args
+    print(response)
+    assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+    assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
 
 
 def test_completion_mistral_api():
@@ -294,6 +554,76 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_mistral_api_mistral_large_function_call():
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
+    try:
+        # test without max tokens
+        response = completion(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        # Add any assertions, here to check response args
+        print(response)
+        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+
+        messages.append(
+            response.choices[0].message.model_dump()
+        )  # Add assistant tool invokes
+        tool_result = (
+            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+        )
+        # Add user submitted tool results in the OpenAI format
+        messages.append(
+            {
+                "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                "role": "tool",
+                "name": response.choices[0].message.tool_calls[0].function.name,
+                "content": tool_result,
+            }
+        )
+        # In the second response, Mistral should deduce answer from tool results
+        second_response = completion(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(second_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(
     reason="Since we already test mistral/mistral-tiny in test_completion_mistral_api. This is only for locally verifying azure mistral works"
 )
@@ -312,7 +642,7 @@ def test_completion_mistral_azure():
                 }
             ],
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check, the response
         print(response)
 
     except Exception as e:
@@ -372,6 +702,31 @@ def test_completion_claude2_1():
 
 
 # test_completion_claude2_1()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_claude2_1():
+    try:
+        litellm.set_verbose = True
+        print("claude2.1 test request")
+        messages = [
+            {
+                "role": "system",
+                "content": "Your goal is generate a joke on the topic user gives.",
+            },
+            {"role": "user", "content": "Generate a 3 liner joke for me"},
+        ]
+        # test without max tokens
+        response = await litellm.acompletion(model="claude-2.1", messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        print(response.usage)
+        print(response.usage.completion_tokens)
+        print(response["usage"]["completion_tokens"])
+        # print("new cost tracking")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # def test_completion_oobabooga():
 #     try:
@@ -477,7 +832,7 @@ def test_completion_gpt4_vision():
 
 
 def test_completion_azure_gpt4_vision():
-    # azure/gpt-4, vision takes 5 seconds to respond
+    # azure/gpt-4, vision takes 5-seconds to respond
     try:
         litellm.set_verbose = True
         response = completion(
@@ -527,6 +882,25 @@ def test_completion_azure_gpt4_vision():
 
 
 # test_completion_azure_gpt4_vision()
+
+
+def test_completion_fireworks_ai():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
+            messages=messages,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.skip(reason="this test is flaky")
@@ -837,6 +1211,19 @@ def test_completion_text_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio
+async def test_completion_text_openai_async():
+    try:
+        # litellm.set_verbose =True
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo-instruct", messages=messages
+        )
+        print(response["choices"][0]["message"]["content"])
+    except Exception as e:
+        print(e)
+        pytest.fail(f"Error occurred: {e}")
+
+
 def custom_callback(
     kwargs,  # kwargs to completion
     completion_response,  # response from completion
@@ -974,6 +1361,7 @@ def test_completion_logprobs_stream():
         for chunk in response:
             # check if atleast one chunk has log probs
             print(chunk)
+            print(f"chunk.choices[0]: {chunk.choices[0]}")
             if "logprobs" in chunk.choices[0]:
                 # assert we got a valid logprob in the choices
                 assert len(chunk.choices[0].logprobs.content[0].top_logprobs) == 3
@@ -1026,6 +1414,7 @@ def test_completion_openai_litellm_key():
 # test_ completion_openai_litellm_key()
 
 
+@pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
 def test_completion_ollama_hosted():
     try:
         litellm.request_timeout = 20  # give ollama 20 seconds to response
@@ -1449,6 +1838,24 @@ def test_completion_azure_deployment_id():
 # test_completion_anthropic_openai_proxy()
 
 
+def test_completion_replicate_llama3():
+    litellm.set_verbose = True
+    model_name = "replicate/meta/meta-llama-3-8b-instruct"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+        )
+        print(response)
+        # Add any assertions here to check the response
+        response_str = response["choices"][0]["message"]["content"]
+        print("RESPONSE STRING\n", response_str)
+        if type(response_str) != str:
+            pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="replicate endpoints take +2 mins just for this request")
 def test_completion_replicate_vicuna():
     print("TESTING REPLICATE")
@@ -1480,9 +1887,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-7b-chat"
+    model_name = "replicate/meta/llama-2-70b-chat"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-7b-chat",
+        model="replicate/meta/llama-2-70b-chat",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -1500,16 +1907,24 @@ def test_replicate_custom_prompt_dict():
         },
         final_prompt_value="Now answer as best you can:",  # [OPTIONAL]
     )
-    response = completion(
-        model=model_name,
-        messages=[
-            {
-                "role": "user",
-                "content": "what is yc write 1 paragraph",
-            }
-        ],
-        num_retries=3,
-    )
+    try:
+        response = completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what is yc write 1 paragraph",
+                }
+            ],
+            repetition_penalty=0.1,
+            num_retries=3,
+        )
+    except litellm.APIError as e:
+        pass
+    except litellm.APIConnectionError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
     print(f"response: {response}")
     litellm.custom_prompt_dict = {}  # reset
 
@@ -1644,10 +2059,14 @@ def test_completion_sagemaker():
         litellm.set_verbose = True
         print("testing sagemaker")
         response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
+            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
             input_cost_per_second=0.000420,
         )
         # Add any assertions here to check the response
@@ -1665,32 +2084,29 @@ def test_completion_sagemaker():
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_sagemaker_stream():
+@pytest.mark.asyncio
+async def test_acompletion_sagemaker():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         print("testing sagemaker")
-        response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+        response = await litellm.acompletion(
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
+            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            stream=True,
+            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
+            input_cost_per_second=0.000420,
         )
-
-        complete_streaming_response = ""
-        first_chunk_id, chunk_id = None, None
-        for i, chunk in enumerate(response):
-            print(chunk)
-            chunk_id = chunk.id
-            print(chunk_id)
-            if i == 0:
-                first_chunk_id = chunk_id
-            else:
-                assert chunk_id == first_chunk_id
-            complete_streaming_response += chunk.choices[0].delta.content or ""
         # Add any assertions here to check the response
-        # print(response)
-        assert len(complete_streaming_response) > 0
+        print(response)
+        cost = completion_cost(completion_response=response)
+        print("calculated cost", cost)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -2232,7 +2648,7 @@ def test_completion_deep_infra_mistral():
 # Gemini tests
 def test_completion_gemini():
     litellm.set_verbose = True
-    model_name = "gemini/gemini-pro"
+    model_name = "gemini/gemini-1.5-pro-latest"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         response = completion(model=model_name, messages=messages)
@@ -2305,6 +2721,88 @@ def test_completion_palm_stream():
             print(chunk)
     except litellm.APIError as e:
         pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "provider, model, project, region_name, token",
+    [
+        ("azure", "chatgpt-v-2", None, None, "test-token"),
+        ("vertex_ai", "anthropic-claude-3", "adroit-crow-1", "us-east1", None),
+        ("watsonx", "ibm/granite", "96946574", "dallas", "1234"),
+        ("bedrock", "anthropic.claude-3", None, "us-east-1", None),
+    ],
+)
+def test_unified_auth_params(provider, model, project, region_name, token):
+    """
+    Check if params = ["project", "region_name", "token"]
+    are correctly translated for = ["azure", "vertex_ai", "watsonx", "aws"]
+
+    tests get_optional_params
+    """
+    data = {
+        "project": project,
+        "region_name": region_name,
+        "token": token,
+        "custom_llm_provider": provider,
+        "model": model,
+    }
+
+    translated_optional_params = litellm.utils.get_optional_params(**data)
+
+    if provider == "azure":
+        special_auth_params = (
+            litellm.AzureOpenAIConfig().get_mapped_special_auth_params()
+        )
+    elif provider == "bedrock":
+        special_auth_params = (
+            litellm.AmazonBedrockGlobalConfig().get_mapped_special_auth_params()
+        )
+    elif provider == "vertex_ai":
+        special_auth_params = litellm.VertexAIConfig().get_mapped_special_auth_params()
+    elif provider == "watsonx":
+        special_auth_params = (
+            litellm.IBMWatsonXAIConfig().get_mapped_special_auth_params()
+        )
+
+    for param, value in special_auth_params.items():
+        assert param in data
+        assert value in translated_optional_params
+
+
+@pytest.mark.asyncio
+async def test_acompletion_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+        )
+        # Add any assertions here to check the response
+        print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

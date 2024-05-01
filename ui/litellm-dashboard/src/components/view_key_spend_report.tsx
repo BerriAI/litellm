@@ -106,7 +106,7 @@ const ViewKeySpendReport: React.FC<ViewKeySpendReportProps> = ({
   return (
     <div>
       <Button size = "xs" onClick={showModal} variant="secondary">
-        View Spend Report
+        Spend Report
       </Button>
       <Modal
         visible={isModalVisible}

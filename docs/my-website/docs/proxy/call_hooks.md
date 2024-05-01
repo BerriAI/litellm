@@ -1,7 +1,10 @@
+import Image from '@theme/IdealImage';
+
 # Modify / Reject Incoming Requests
 
 - Modify data before making llm api calls on proxy
 - Reject data before making llm api calls / before returning the response 
+- Enforce 'user' param for all openai endpoint calls
 
 See a complete example with our [parallel request rate limiter](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py)
 
@@ -95,7 +98,7 @@ We might need to update the function schema in the future, to support multiple e
 
 :::
 
-See a complete example with our [Llama Guard content moderation hook](https://github.com/BerriAI/litellm/blob/main/enterprise/hooks/llama_guard.py)
+See a complete example with our [Llama Guard content moderation hook](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_hooks/llm_guard.py)
 
 ```python
 from litellm.integrations.custom_logger import CustomLogger
@@ -173,3 +176,18 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     ],
     }'
 ```
+
+## Advanced - Enforce 'user' param 
+
+Set `enforce_user_param` to true, to require all calls to the openai endpoints to have the 'user' param. 
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/4777921a31c4c70e4d87b927cb233b6a09cd8b51/litellm/proxy/auth/auth_checks.py#L72)
+
+```yaml
+general_settings:
+  enforce_user_param: True
+```
+
+**Result**
+
+<Image img={require('../../img/end_user_enforcement.png')}/>

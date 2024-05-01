@@ -328,3 +328,56 @@ def test_dalle_3_azure_cost_tracking():
         completion_response=response, call_type="image_generation"
     )
     assert cost > 0
+
+
+def test_replicate_llama3_cost_tracking():
+    litellm.set_verbose = True
+    model = "replicate/meta/meta-llama-3-8b-instruct"
+    litellm.register_model(
+        {
+            "replicate/meta/meta-llama-3-8b-instruct": {
+                "input_cost_per_token": 0.00000005,
+                "output_cost_per_token": 0.00000025,
+                "litellm_provider": "replicate",
+            }
+        }
+    )
+    response = litellm.ModelResponse(
+        id="chatcmpl-cad7282f-7f68-41e7-a5ab-9eb33ae301dc",
+        choices=[
+            litellm.utils.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.utils.Message(
+                    content="I'm doing well, thanks for asking! I'm here to help you with any questions or tasks you may have. How can I assist you today?",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1714401369,
+        model="replicate/meta/meta-llama-3-8b-instruct",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=litellm.utils.Usage(
+            prompt_tokens=48, completion_tokens=31, total_tokens=79
+        ),
+    )
+    cost = litellm.completion_cost(
+        completion_response=response,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    print(f"cost: {cost}")
+    cost = round(cost, 5)
+    expected_cost = round(
+        litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"][
+            "input_cost_per_token"
+        ]
+        * 48
+        + litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"][
+            "output_cost_per_token"
+        ]
+        * 31,
+        5,
+    )
+    assert cost == expected_cost

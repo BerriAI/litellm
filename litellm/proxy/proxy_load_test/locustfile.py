@@ -1,4 +1,7 @@
-from locust import HttpUser, task, between
+from locust import HttpUser, task, between, events
+import json
+import time
+import uuid
 
 
 class MyUser(HttpUser):
@@ -14,9 +17,13 @@ class MyUser(HttpUser):
 
         # Customize the payload with "model" and "messages" keys
         payload = {
-            "model": "gpt-3.5-turbo",
+            "model": "fake-openai-endpoint",
             "messages": [
-                {"role": "system", "content": "You are a chat bot."},
+                {
+                    "role": "system",
+                    "content": f"{uuid.uuid4()} this is a very sweet test message from ishaan"
+                    * 100,
+                },
                 {"role": "user", "content": "Hello, how are you?"},
             ],
             # Add more data as necessary

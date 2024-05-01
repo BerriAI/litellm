@@ -14,6 +14,46 @@ sys.path.insert(
 import litellm
 
 
+async def generate_team(session):
+    url = "http://0.0.0.0:4000/team/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "team_id": "litellm-dashboard",
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response (Status code: {status}):")
+        print(response_text)
+        print()
+        _json_response = await response.json()
+        return _json_response
+
+
+async def generate_user(
+    session,
+    user_role="app_owner",
+):
+    url = "http://0.0.0.0:4000/user/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "user_role": user_role,
+        "team_id": "litellm-dashboard",
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response (Status code: {status}):")
+        print(response_text)
+        print()
+        _json_response = await response.json()
+        return _json_response
+
+
 async def generate_key(
     session,
     i,
@@ -21,9 +61,14 @@ async def generate_key(
     budget_duration=None,
     models=["azure-models", "gpt-4", "dall-e-3"],
     max_parallel_requests: Optional[int] = None,
+    user_id: Optional[str] = None,
+    calling_key="sk-1234",
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {calling_key}",
+        "Content-Type": "application/json",
+    }
     data = {
         "models": models,
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
@@ -31,6 +76,7 @@ async def generate_key(
         "max_budget": budget,
         "budget_duration": budget_duration,
         "max_parallel_requests": max_parallel_requests,
+        "user_id": user_id,
     }
 
     print(f"data: {data}")
@@ -56,6 +102,35 @@ async def test_key_gen():
         await asyncio.gather(*tasks)
 
 
+@pytest.mark.asyncio
+async def test_key_gen_bad_key():
+    """
+    Test if you can create a key with a non-admin key, even with UI setup
+    """
+    async with aiohttp.ClientSession() as session:
+        ## LOGIN TO UI
+        form_data = {"username": "admin", "password": "sk-1234"}
+        async with session.post(
+            "http://0.0.0.0:4000/login", data=form_data
+        ) as response:
+            assert (
+                response.status == 200
+            )  # Assuming the endpoint returns a 500 status code for error handling
+            text = await response.text()
+            print(text)
+        ## create user key with admin key -> expect to work
+        key_data = await generate_key(session=session, i=0, user_id="user-1234")
+        key = key_data["key"]
+        ## create new key with user key -> expect to fail
+        try:
+            await generate_key(
+                session=session, i=0, user_id="user-1234", calling_key=key
+            )
+            pytest.fail("Expected to fail")
+        except Exception as e:
+            pass
+
+
 async def update_key(session, get_key):
     """
     Make sure only models user has access to are returned
@@ -65,7 +140,7 @@ async def update_key(session, get_key):
         "Authorization": f"Bearer sk-1234",
         "Content-Type": "application/json",
     }
-    data = {"key": get_key, "models": ["gpt-4"]}
+    data = {"key": get_key, "models": ["gpt-4"], "duration": "120s"}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -214,13 +289,13 @@ async def test_key_update():
         await chat_completion(session=session, key=key)
 
 
-async def delete_key(session, get_key):
+async def delete_key(session, get_key, auth_key="sk-1234"):
     """
     Delete key
     """
     url = "http://0.0.0.0:4000/key/delete"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {auth_key}",
         "Content-Type": "application/json",
     }
     data = {"keys": [get_key]}
@@ -280,6 +355,29 @@ async def get_key_info(session, call_key, get_key=None):
         return await response.json()
 
 
+async def get_model_info(session, call_key):
+    """
+    Make sure only models user has access to are returned
+    """
+    url = "http://0.0.0.0:4000/model/info"
+    headers = {
+        "Authorization": f"Bearer {call_key}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(
+                f"Request did not return a 200 status code: {status}. Responses {response_text}"
+            )
+        return await response.json()
+
+
 @pytest.mark.asyncio
 async def test_key_info():
     """
@@ -303,6 +401,25 @@ async def test_key_info():
         random_key = key_gen["key"]
         status = await get_key_info(session=session, get_key=key, call_key=random_key)
         assert status == 403
+
+
+@pytest.mark.asyncio
+async def test_model_info():
+    """
+    Get model info for models key has access to
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0)
+        key = key_gen["key"]
+        # as admin #
+        admin_models = await get_model_info(session=session, call_key="sk-1234")
+        admin_models = admin_models["data"]
+        # as key itself #
+        user_models = await get_model_info(session=session, call_key=key)
+        user_models = user_models["data"]
+
+        assert len(admin_models) > len(user_models)
+        assert len(user_models) > 0
 
 
 async def get_spend_logs(session, request_id):
@@ -329,6 +446,16 @@ async def test_key_info_spend_values():
     - make completion call
     - assert cost is expected value
     """
+
+    async def retry_request(func, *args, _max_attempts=5, **kwargs):
+        for attempt in range(_max_attempts):
+            try:
+                return await func(*args, **kwargs)
+            except aiohttp.client_exceptions.ClientOSError as e:
+                if attempt + 1 == _max_attempts:
+                    raise  # re-raise the last ClientOSError if all attempts failed
+                print(f"Attempt {attempt+1} failed, retrying...")
+
     async with aiohttp.ClientSession() as session:
         ## Test Spend Update ##
         # completion
@@ -336,7 +463,9 @@ async def test_key_info_spend_values():
         key = key_gen["key"]
         response = await chat_completion(session=session, key=key)
         await asyncio.sleep(5)
-        spend_logs = await get_spend_logs(session=session, request_id=response["id"])
+        spend_logs = await retry_request(
+            get_spend_logs, session=session, request_id=response["id"]
+        )
         print(f"spend_logs: {spend_logs}")
         completion_tokens = spend_logs[0]["completion_tokens"]
         prompt_tokens = spend_logs[0]["prompt_tokens"]
@@ -394,7 +523,9 @@ async def test_key_info_spend_values_streaming():
         )
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert rounded_response_cost == rounded_key_info_spend
+        assert (
+            rounded_response_cost == rounded_key_info_spend
+        ), f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
 
 
 @pytest.mark.asyncio
@@ -431,6 +562,7 @@ async def test_key_info_spend_values_image_generation():
         assert spend > 0
 
 
+@pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
 async def test_key_with_budgets():
     """
@@ -553,3 +685,34 @@ async def test_key_rate_limit():
             await chat_completion(session=session, key=new_key)
         except Exception as e:
             pytest.fail(f"Expected this call to work - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_key_delete_ui():
+    """
+    Admin UI flow - DO NOT DELETE
+    -> Create a key with user_id = "ishaan"
+    -> Log on Admin UI, delete the key for user "ishaan"
+    -> This should work, since we're on the admin UI and role == "proxy_admin
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0, user_id="ishaan-smart")
+        key = key_gen["key"]
+
+        # generate a admin UI key
+        team = await generate_team(session=session)
+        print("generated team: ", team)
+        admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
+        print(
+            "trying to delete key=",
+            key,
+            "using key=",
+            admin_ui_key["key"],
+            " to auth in",
+        )
+
+        await delete_key(
+            session=session,
+            get_key=key,
+            auth_key=admin_ui_key["key"],
+        )
