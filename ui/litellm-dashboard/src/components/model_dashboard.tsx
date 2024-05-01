@@ -204,6 +204,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelMetrics, setModelMetrics] = useState<any[]>([]);
   const [modelExceptions, setModelExceptions] = useState<any[]>([]);
   const [allExceptions, setAllExceptions] = useState<any[]>([]);
+  const [failureTableData, setFailureTableData] = useState<any[]>([]);
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -473,6 +474,39 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
         setAllExceptions(modelExceptionsResponse.exception_types);
+
+        let successdeploymentToSuccess: Record<string, number> = {};
+        for  (let i = 0; i < modelMetricsResponse.length; i++) {
+          let element = modelMetricsResponse[i];
+          let _model_name = element.model;
+          let _num_requests = element.num_requests;
+          successdeploymentToSuccess[_model_name] = _num_requests
+        }
+        console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
+        
+        let failureTableData = [];
+        let _failureData = modelExceptionsResponse.data;
+        for (let i = 0; i < _failureData.length; i++) {
+          const model = _failureData[i];
+          let _model_name = model.model;
+          let total_exceptions = model.total_exceptions;
+          let total_Requests = successdeploymentToSuccess[_model_name];
+          if (total_Requests == null) {
+            total_Requests = 0
+          }
+          let _data = {
+            model: _model_name,
+            total_exceptions: total_exceptions,
+            total_Requests: total_Requests,
+            failure_rate: total_Requests / total_exceptions
+          }
+          failureTableData.push(_data);
+          // sort failureTableData by failure_rate
+          failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
+        
+          setFailureTableData(failureTableData);
+          console.log("failureTableData:", failureTableData);
+        }
 
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -1051,7 +1085,30 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               </Col>
             <Col>
             <Card className="ml-2">
-              <Title>Requests, Failures per Model</Title>
+              <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Model</TableHeaderCell>
+                  <TableHeaderCell>Success Requests</TableHeaderCell>
+                  <TableHeaderCell>Error Requests</TableHeaderCell>
+                  <TableHeaderCell>Failure %</TableHeaderCell>
+
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {failureTableData.map((metric, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell>{metric.model}</TableCell>
+                    <TableCell>{metric.total_Requests}</TableCell>
+                    <TableCell>{metric.total_exceptions}</TableCell>
+                    <TableCell>{metric.failure_rate}%</TableCell>
+                  </TableRow>
+
+                ))}
+              </TableBody>
+              </Table>
+
+
             </Card>
             </Col>
             </Grid>
@@ -1060,7 +1117,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         <BarChart
         className="h-72"
         data={modelExceptions}
-        index="model_group"
+        index="model"
         categories={allExceptions}
         stack={true}
         colors={['indigo-300', 'rose-200', '#ffcc33']}
