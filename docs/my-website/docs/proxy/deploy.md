@@ -11,40 +11,37 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 
 <TabItem value="basic" label="Basic">
 
-**Step 1. Create a file called `litellm_config.yaml`**
+### Step 1. CREATE config.yaml 
 
-  Example `litellm_config.yaml` (the `os.environ/` prefix means litellm will read `AZURE_API_BASE` from the env)
-  ```yaml
-  model_list:
-    - model_name: azure-gpt-3.5
-      litellm_params:
-        model: azure/<your-azure-model-deployment>
-        api_base: os.environ/AZURE_API_BASE
-        api_key: os.environ/AZURE_API_KEY
-        api_version: "2023-07-01-preview"
-  ```
+Example `litellm_config.yaml` 
 
-**Step 2. Run litellm docker image**
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/<your-azure-model-deployment>
+      api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
+      api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
+      api_version: "2023-07-01-preview"
+```
 
-  See the latest available ghcr docker image here:
-  https://github.com/berriai/litellm/pkgs/container/litellm
 
-  Your litellm config.yaml should be called `litellm_config.yaml` in the directory you run this command. 
-  The `-v` command will mount that file
 
-  Pass `AZURE_API_KEY` and `AZURE_API_BASE` since we set them in step 1
+### Step 2. RUN Docker Image
 
-  ```shell
-  docker run \
-      -v $(pwd)/litellm_config.yaml:/app/config.yaml \
-      -e AZURE_API_KEY=d6*********** \
-      -e AZURE_API_BASE=https://openai-***********/ \
-      -p 4000:4000 \
-      ghcr.io/berriai/litellm:main-latest \
-      --config /app/config.yaml --detailed_debug
-  ```
+```shell
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e AZURE_API_KEY=d6*********** \
+    -e AZURE_API_BASE=https://openai-***********/ \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
+```
 
-**Step 3. Send a Test Request**
+Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/litellm)
+
+### Step 3. TEST Request
 
   Pass `model=azure-gpt-3.5` this was set on step 1
 
