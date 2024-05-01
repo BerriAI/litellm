@@ -364,8 +364,6 @@ class ChatCompletionMessageToolCall(OpenAIObject):
 
 
 class Message(OpenAIObject):
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]] 
-    
     def __init__(
         self,
         content="default",
@@ -378,13 +376,16 @@ class Message(OpenAIObject):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
+        self.tool_calls = []
+        self.function_call = None
+
         if function_call is not None:
             self.function_call = FunctionCall(**function_call)
 
         if tool_calls is not None:
-            self.tool_calls = []
-            for tool_call in tool_calls:
-                self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
+            self.tool_calls = [
+                ChatCompletionMessageToolCall(**tool_call) for tool_call in tool_calls
+            ]
 
         if logprobs is not None:
             self._logprobs = ChoiceLogprobs(**logprobs)
@@ -407,8 +408,7 @@ class Message(OpenAIObject):
         except:
             # if using pydantic v1
             return self.dict()
-
-
+            
 class Delta(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
     
