@@ -18,8 +18,8 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall } from "./networking";
-import { BarChart } from "@tremor/react";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall } from "./networking";
+import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -192,7 +192,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers = Object.values(Providers).filter(key => isNaN(Number(key)));
-
   
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>('');
@@ -200,6 +199,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
+  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
+  const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>([]);
+  const [modelExceptions, setModelExceptions] = useState<any[]>([]);
+  const [allExceptions, setAllExceptions] = useState<any[]>([]);
+  const [failureTableData, setFailureTableData] = useState<any[]>([]);
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -445,12 +450,64 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         let _array_model_groups = Array.from(all_model_groups)
         setAvailableModelGroups(_array_model_groups);
 
-        // if userRole is Admin, show the pending requests
-        if (userRole === "Admin" && accessToken) {
-          const user_requests = await userGetRequesedtModelsCall(accessToken);
-          console.log("Pending Requests:", pendingRequests);
-          setPendingRequests(user_requests.requests || []);
-        }
+        const modelMetricsResponse = await modelMetricsCall(
+          accessToken,
+          userID,
+          userRole,
+          null
+        );
+
+        console.log("Model metrics response:", modelMetricsResponse);
+        // Sort by latency (avg_latency_per_token)
+
+
+        setModelMetrics(modelMetricsResponse.data);
+        setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+
+        const modelExceptionsResponse = await modelExceptionsCall(
+          accessToken,
+          userID,
+          userRole,
+          null
+        )
+        console.log("Model exceptions response:", modelExceptionsResponse);
+        setModelExceptions(modelExceptionsResponse.data);
+        setAllExceptions(modelExceptionsResponse.exception_types);
+
+        // let successdeploymentToSuccess: Record<string, number> = {};
+        // for  (let i = 0; i < modelMetricsResponse.length; i++) {
+        //   let element = modelMetricsResponse[i];
+        //   let _model_name = element.model;
+        //   let _num_requests = element.num_requests;
+        //   successdeploymentToSuccess[_model_name] = _num_requests
+        // }
+        // console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
+        
+        // let failureTableData = [];
+        // let _failureData = modelExceptionsResponse.data;
+        // for (let i = 0; i < _failureData.length; i++) {
+        //   const model = _failureData[i];
+        //   let _model_name = model.model;
+        //   let total_exceptions = model.total_exceptions;
+        //   let total_Requests = successdeploymentToSuccess[_model_name];
+        //   if (total_Requests == null) {
+        //     total_Requests = 0
+        //   }
+        //   let _data = {
+        //     model: _model_name,
+        //     total_exceptions: total_exceptions,
+        //     total_Requests: total_Requests,
+        //     failure_rate: total_Requests / total_exceptions
+        //   }
+        //   failureTableData.push(_data);
+        //   // sort failureTableData by failure_rate
+        //   failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
+        
+        //   setFailureTableData(failureTableData);
+        //   console.log("failureTableData:", failureTableData);
+        // }
+
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -603,6 +660,38 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   };
 
 
+  const updateModelMetrics = async (modelGroup: string | null) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole) {
+      return
+    }
+    setSelectedModelGroup(modelGroup);  // If you want to store the selected model group in state
+
+  
+    try {
+      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup);
+      console.log("Model metrics response:", modelMetricsResponse);
+  
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup
+      )
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
+
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  }
+
+
 
   const getPlaceholder = (selectedProvider: string): string => {
     if (selectedProvider === Providers.Vertex_AI) {
@@ -640,6 +729,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
           <Tab><pre>/health Models</pre></Tab>
+            <Tab>Model Analytics</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -955,6 +1045,105 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
         </Card>
       </TabPanel>
+      <TabPanel>
+              <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
+            <Select
+              className="mb-4 mt-2"
+              defaultValue="all"
+            >
+              <SelectItem 
+                  value={"all"}
+                  onClick={() => updateModelMetrics(null)}
+                >
+                  All Model Groups
+                </SelectItem>
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => updateModelMetrics(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+
+            <Grid numItems={2}>
+              <Col>
+              <Card className="mr-2">
+              { modelMetrics && modelMetricsCategories && (
+                <AreaChart
+                  className="h-72"
+                  data={modelMetrics}
+                  showLegend={false}
+                  index="date"
+                  categories={modelMetricsCategories}
+                  connectNulls={true}
+                />
+              )}
+
+                  
+              <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Model</TableHeaderCell>
+                  <TableHeaderCell>Median Latency/Token</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {modelLatencyMetrics.map((metric, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell>{metric.model}</TableCell>
+                    <TableCell>{metric.avg_latency_per_token.toFixed(4)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+              </Table>
+              </Card>
+              </Col>
+            <Col>
+            <Card className="ml-2">
+              <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Model</TableHeaderCell>
+                  <TableHeaderCell>Success Requests</TableHeaderCell>
+                  <TableHeaderCell>Error Requests</TableHeaderCell>
+                  <TableHeaderCell>Failure %</TableHeaderCell>
+
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {failureTableData.map((metric, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell>{metric.model}</TableCell>
+                    <TableCell>{metric.total_Requests}</TableCell>
+                    <TableCell>{metric.total_exceptions}</TableCell>
+                    <TableCell>{metric.failure_rate}%</TableCell>
+                  </TableRow>
+
+                ))}
+              </TableBody>
+              </Table>
+
+
+            </Card>
+            </Col>
+            </Grid>
+        <Card className="mt-4">
+        <Title>Exceptions per Model</Title>
+        <BarChart
+        className="h-72"
+        data={modelExceptions}
+        index="model"
+        categories={allExceptions}
+        stack={true}
+        colors={['indigo-300', 'rose-200', '#ffcc33']}
+        yAxisWidth={30}
+      />
+        </Card>
+            </TabPanel>
+      
       </TabPanels>
       </TabGroup>
       
