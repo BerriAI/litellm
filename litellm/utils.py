@@ -1236,7 +1236,10 @@ class Logging:
                             print_verbose=print_verbose,
                         )
                     elif callback == "sentry" and add_breadcrumb:
-                        details_to_log = copy.deepcopy(self.model_call_details)
+                        try:
+                            details_to_log = copy.deepcopy(self.model_call_details)
+                        except:
+                            details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
@@ -1327,8 +1330,10 @@ class Logging:
                         )
                     elif callback == "sentry" and add_breadcrumb:
                         print_verbose("reaches sentry breadcrumbing")
-
-                        details_to_log = copy.deepcopy(self.model_call_details)
+                        try:
+                            details_to_log = copy.deepcopy(self.model_call_details)
+                        except:
+                            details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
@@ -2635,7 +2640,11 @@ def function_setup(
             dynamic_success_callbacks = kwargs.pop("success_callback")
 
         if add_breadcrumb:
-            details_to_log = copy.deepcopy(kwargs)
+            try:
+                details_to_log = copy.deepcopy(kwargs)
+            except:
+                details_to_log = kwargs
+
             if litellm.turn_off_message_logging:
                 # make a copy of the _model_Call_details and log it
                 details_to_log.pop("messages", None)
