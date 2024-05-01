@@ -1108,6 +1108,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             <Grid numItems={2}>
               <Col>
               <Card className="mr-2">
+                <Title>Avg Latency per Token</Title><p className="text-gray-500 italic"> (seconds/token)</p>
+                <Text className="text-gray-500 italic mt-1 mb-1">average Latency for successfull requests divided by the total tokens</Text>
               { modelMetrics && modelMetricsCategories && (
                 <AreaChart
                   title="Model Latency"
@@ -1122,22 +1124,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               )}
 
                   
-              <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Median Latency/Token</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {modelLatencyMetrics.map((metric, idx) => (
-                  <TableRow key={idx}>
-                    <TableCell>{metric.model}</TableCell>
-                    <TableCell>{metric.avg_latency_per_token.toFixed(4)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-              </Table>
+              
               </Card>
               </Col>
             <Col>
