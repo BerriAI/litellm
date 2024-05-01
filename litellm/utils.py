@@ -364,6 +364,8 @@ class ChatCompletionMessageToolCall(OpenAIObject):
 
 
 class Message(OpenAIObject):
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]] 
+    
     def __init__(
         self,
         content="default",
@@ -408,6 +410,8 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
+    tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
+    
     def __init__(
         self,
         content=None,
