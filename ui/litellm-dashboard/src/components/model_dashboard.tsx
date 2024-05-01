@@ -1065,7 +1065,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             <Grid numItems={2}>
               <Col>
               <Card className="mr-2">
-              <Table>
+              {/* <Table>
               <TableHead>
                 <TableRow>
                   <TableHeaderCell>Model</TableHeaderCell>
@@ -1080,7 +1080,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   </TableRow>
                 ))}
               </TableBody>
-              </Table>
+              </Table> */}
               </Card>
               </Col>
             <Col>
