@@ -1258,6 +1258,7 @@ async def _PROXY_failure_handler(
             request_id=str(uuid.uuid4()),
             model_group=_model_group,
             model_id=_model_id,
+            litellm_model_name=kwargs.get("model"),
             request_kwargs=_optional_params,
             api_base=api_base,
             exception_type=_exception_type,
