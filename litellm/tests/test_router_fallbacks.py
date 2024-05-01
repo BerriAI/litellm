@@ -127,7 +127,7 @@ def test_sync_fallbacks():
         response = router.completion(**kwargs)
         print(f"response: {response}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4
 
         print("Passed ! Test router_fallbacks: test_sync_fallbacks()")
         router.reset()
@@ -209,12 +209,13 @@ async def test_async_fallbacks():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
+        kwargs["model"] = "azure/gpt-3.5-turbo"
         response = await router.acompletion(**kwargs)
         print(f"customHandler.previous_models: {customHandler.previous_models}")
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -258,7 +259,6 @@ def test_sync_fallbacks_embeddings():
         model_list=model_list,
         fallbacks=[{"bad-azure-embedding-model": ["good-azure-embedding-model"]}],
         set_verbose=False,
-        num_retries=0,
     )
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
@@ -269,7 +269,7 @@ def test_sync_fallbacks_embeddings():
         response = router.embedding(**kwargs)
         print(f"customHandler.previous_models: {customHandler.previous_models}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -323,7 +323,7 @@ async def test_async_fallbacks_embeddings():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -394,7 +394,7 @@ def test_dynamic_fallbacks_sync():
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, num_retries=0)
+        router = Router(model_list=model_list, set_verbose=True)
         kwargs = {}
         kwargs["model"] = "azure/gpt-3.5-turbo"
         kwargs["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
@@ -402,7 +402,7 @@ def test_dynamic_fallbacks_sync():
         response = router.completion(**kwargs)
         print(f"response: {response}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
@@ -488,7 +488,7 @@ async def test_dynamic_fallbacks_async():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
@@ -573,7 +573,7 @@ async def test_async_fallbacks_streaming():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 1  # 0 retries, 1 fallback
+        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -766,10 +766,10 @@ def test_usage_based_routing_fallbacks():
         load_dotenv()
 
         # Constants for TPM and RPM allocation
-        AZURE_FAST_TPM = 3
-        AZURE_BASIC_TPM = 4
-        OPENAI_TPM = 400
-        ANTHROPIC_TPM = 100000
+        AZURE_FAST_RPM = 3
+        AZURE_BASIC_RPM = 4
+        OPENAI_RPM = 10
+        ANTHROPIC_RPM = 100000
 
         def get_azure_params(deployment_name: str):
             params = {
@@ -798,22 +798,26 @@ def test_usage_based_routing_fallbacks():
             {
                 "model_name": "azure/gpt-4-fast",
                 "litellm_params": get_azure_params("chatgpt-v-2"),
-                "tpm": AZURE_FAST_TPM,
+                "model_info": {"id": 1},
+                "rpm": AZURE_FAST_RPM,
             },
             {
                 "model_name": "azure/gpt-4-basic",
                 "litellm_params": get_azure_params("chatgpt-v-2"),
-                "tpm": AZURE_BASIC_TPM,
+                "model_info": {"id": 2},
+                "rpm": AZURE_BASIC_RPM,
             },
             {
                 "model_name": "openai-gpt-4",
                 "litellm_params": get_openai_params("gpt-3.5-turbo"),
-                "tpm": OPENAI_TPM,
+                "model_info": {"id": 3},
+                "rpm": OPENAI_RPM,
             },
             {
                 "model_name": "anthropic-claude-instant-1.2",
                 "litellm_params": get_anthropic_params("claude-instant-1.2"),
-                "tpm": ANTHROPIC_TPM,
+                "model_info": {"id": 4},
+                "rpm": ANTHROPIC_RPM,
             },
         ]
         # litellm.set_verbose=True
@@ -844,10 +848,10 @@ def test_usage_based_routing_fallbacks():
             mock_response="very nice to meet you",
         )
         print("response: ", response)
-        print("response._hidden_params: ", response._hidden_params)
+        print(f"response._hidden_params: {response._hidden_params}")
         # in this test, we expect azure/gpt-4 fast to fail, then azure-gpt-4 basic to fail and then openai-gpt-4 to pass
         # the token count of this message is > AZURE_FAST_TPM, > AZURE_BASIC_TPM
-        assert response._hidden_params["custom_llm_provider"] == "openai"
+        assert response._hidden_params["model_id"] == "1"
 
         # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
         for i in range(20):
@@ -861,7 +865,7 @@ def test_usage_based_routing_fallbacks():
             print("response._hidden_params: ", response._hidden_params)
             if i == 19:
                 # by the 19th call we should have hit TPM LIMIT for OpenAI, it should fallback to anthropic-claude-instant-1.2
-                assert response._hidden_params["custom_llm_provider"] == "anthropic"
+                assert response._hidden_params["model_id"] == "4"
 
     except Exception as e:
         pytest.fail(f"An exception occurred {e}")
