@@ -1512,31 +1512,6 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    # if "No models available" in str(e):
-                    #     timeout = litellm._calculate_retry_after(
-                    #         remaining_retries=remaining_retries,
-                    #         max_retries=num_retries,
-                    #         min_timeout=self.retry_after,
-                    #     )
-                    #     await asyncio.sleep(timeout)
-                    # elif (
-                    #     hasattr(e, "status_code")
-                    #     and hasattr(e, "response")
-                    #     and litellm._should_retry(status_code=e.status_code)
-                    # ):
-                    #     if hasattr(e.response, "headers"):
-                    #         timeout = litellm._calculate_retry_after(
-                    #             remaining_retries=remaining_retries,
-                    #             max_retries=num_retries,
-                    #             response_headers=e.response.headers,
-                    #             min_timeout=self.retry_after,
-                    #         )
-                    #     else:
-                    #         timeout = litellm._calculate_retry_after(
-                    #             remaining_retries=remaining_retries,
-                    #             max_retries=num_retries,
-                    #             min_timeout=self.retry_after,
-                    #         )
                     _timeout = self._router_should_retry(
                         e=original_exception,
                         remaining_retries=remaining_retries,
