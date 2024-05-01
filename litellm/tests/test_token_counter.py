@@ -53,7 +53,7 @@ def test_tokenizers():
     try:
         ### test the openai, claude, cohere and llama2 tokenizers.
         ### The tokenizer value should be different for all
-        sample_text = "Hellö World, this is my input string!"
+        sample_text = "Hellö World, this is my input string! My name is ishaan CTO"
 
         # openai tokenizer
         openai_tokens = token_counter(model="gpt-3.5-turbo", text=sample_text)

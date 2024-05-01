@@ -99,9 +99,9 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"][
-                    "content"
-                ] = completion_response["choices"][0]["message"]["content"]
+                model_response["choices"][0]["message"]["content"] = (
+                    completion_response["choices"][0]["message"]["content"]
+                )
             except:
                 raise OobaboogaError(
                     message=json.dumps(completion_response),
@@ -115,7 +115,7 @@ def completion(
             completion_tokens=completion_response["usage"]["completion_tokens"],
             total_tokens=completion_response["usage"]["total_tokens"],
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
 
 

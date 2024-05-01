@@ -1,5 +1,8 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # OpenAI
-LiteLLM supports OpenAI Chat + Text completion and embedding calls.
+LiteLLM supports OpenAI Chat + Embedding calls.
 
 ### Required API Keys
 
@@ -22,6 +25,132 @@ response = completion(
 )
 ```
 
+### Usage - LiteLLM Proxy Server
+
+Here's how to call OpenAI models with the LiteLLM Proxy Server
+
+### 1. Save key in your environment
+
+```bash
+export OPENAI_API_KEY=""
+```
+
+### 2. Start the proxy 
+
+<Tabs>
+<TabItem value="config" label="config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo                          # The `openai/` prefix will call openai.chat.completions.create
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-3.5-turbo-instruct
+    litellm_params:
+      model: text-completion-openai/gpt-3.5-turbo-instruct # The `text-completion-openai/` prefix will call openai.completions.create
+      api_key: os.environ/OPENAI_API_KEY
+```
+</TabItem>
+<TabItem value="config-*" label="config.yaml - proxy all OpenAI models">
+
+Use this to add all openai models with one API Key. **WARNING: This will not do any load balancing**
+This means requests to `gpt-4`, `gpt-3.5-turbo` , `gpt-4-turbo-preview` will all go through this route 
+
+```yaml
+model_list:
+  - model_name: "*"             # all requests where model not in your config go to this deployment
+    litellm_params:
+      model: openai/*           # set `openai/` to use the openai route
+      api_key: os.environ/OPENAI_API_KEY
+```
+</TabItem>
+<TabItem value="cli" label="CLI">
+
+```bash
+$ litellm --model gpt-3.5-turbo
+
+# Server running on http://0.0.0.0:4000
+```
+</TabItem>
+
+</Tabs>
+
+### 3. Test it
+
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+
 ### Optional Keys - OpenAI Organization, OpenAI API Base
 
 ```python
@@ -34,6 +163,9 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4-turbo   | `response = completion(model="gpt-4-turbo", messages=messages)` |
+| gpt-4-turbo-preview   | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
+| gpt-4-0125-preview    | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
 | gpt-4-1106-preview    | `response = completion(model="gpt-4-1106-preview", messages=messages)` |
 | gpt-3.5-turbo-1106    | `response = completion(model="gpt-3.5-turbo-1106", messages=messages)` |
 | gpt-3.5-turbo         | `response = completion(model="gpt-3.5-turbo", messages=messages)` |
@@ -54,6 +186,7 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 ## OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4-turbo    | `response = completion(model="gpt-4-turbo", messages=messages)` |
 | gpt-4-vision-preview    | `response = completion(model="gpt-4-vision-preview", messages=messages)` |
 
 #### Usage
@@ -86,18 +219,6 @@ response = completion(
 )
 
 ```
-
-## OpenAI Text Completion Models / Instruct Models
-
-| Model Name          | Function Call                                      |
-|---------------------|----------------------------------------------------|
-| gpt-3.5-turbo-instruct | `response = completion(model="gpt-3.5-turbo-instruct", messages=messages)` |
-| text-davinci-003    | `response = completion(model="text-davinci-003", messages=messages)` |
-| ada-001             | `response = completion(model="ada-001", messages=messages)` |
-| curie-001           | `response = completion(model="curie-001", messages=messages)` |
-| babbage-001         | `response = completion(model="babbage-001", messages=messages)` |
-| babbage-002         | `response = completion(model="babbage-002", messages=messages)` |
-| davinci-002         | `response = completion(model="davinci-002", messages=messages)` |
 
 ## Advanced
 
@@ -155,6 +276,19 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 ```
 
+### Setting `extra_headers` for completion calls
+```python
+import os 
+from litellm import completion
+
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+response = completion(
+    model = "gpt-3.5-turbo", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}],
+    extra_headers={"AI-Resource Group": "ishaan-resource"}
+)
+```
 
 ### Setting Organization-ID for completion calls
 This can be set in one of the following ways:
@@ -173,6 +307,31 @@ response = completion(
     messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
+
+### Set `ssl_verify=False`
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.client_session=httpx.Client(verify=False)`
+- For `litellm.acompletion` set `litellm.aclient_session=AsyncClient.Client(verify=False)`
+```python
+import litellm, httpx
+
+# for completion
+litellm.client_session = httpx.Client(verify=False)
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+
+# for acompletion
+litellm.aclient_session = httpx.AsyncClient(verify=False)
+response = litellm.acompletion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+```
+
 ### Using Helicone Proxy with LiteLLM
 ```python
 import os 

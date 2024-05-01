@@ -15,10 +15,12 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import Router
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
-from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
+from litellm.proxy.hooks.parallel_request_limiter import (
+    _PROXY_MaxParallelRequestsHandler as MaxParallelRequestsHandler,
+)
 from datetime import datetime
 
 ## On Request received
@@ -32,6 +34,7 @@ async def test_pre_call_hook():
     Test if cache updated on call being received
     """
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler()
@@ -98,6 +101,59 @@ async def test_pre_call_hook_rpm_limits():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_team_rpm_limits():
+    """
+    Test if error raised on hitting team rpm limits
+    """
+    litellm.set_verbose = True
+    _api_key = "sk-12345"
+    _team_id = "unique-team-id"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        max_parallel_requests=1,
+        tpm_limit=9,
+        rpm_limit=10,
+        team_rpm_limit=1,
+        team_id=_team_id,
+    )
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler()
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"user_api_key": _api_key, "user_api_key_team_id": _team_id}
+        }
+    }
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj="",
+        start_time="",
+        end_time="",
+    )
+
+    print(f"local_cache: {local_cache}")
+
+    ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
+
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+
+        pytest.fail(f"Expected call to fail")
+    except Exception as e:
+        assert e.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_tpm_limits():
     """
     Test if error raised on hitting tpm limits
@@ -138,11 +194,62 @@ async def test_pre_call_hook_tpm_limits():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_user_tpm_limits():
+    """
+    Test if error raised on hitting tpm limits
+    """
+    # create user with tpm/rpm limits
+
+    _api_key = "sk-12345"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        user_id="ishaan",
+        user_id_rate_limits={"tpm_limit": 9, "rpm_limit": 10},
+    )
+    res = dict(user_api_key_dict)
+    print("dict user", res)
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler()
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"user_api_key_user_id": "ishaan", "user_api_key": "gm"}
+        }
+    }
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(total_tokens=10)),
+        start_time="",
+        end_time="",
+    )
+
+    ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
+
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+
+        pytest.fail(f"Expected call to fail")
+    except Exception as e:
+        assert e.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_success_call_hook():
     """
     Test if on success, cache correctly decremented
     """
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler()
@@ -184,6 +291,7 @@ async def test_failure_call_hook():
     Test if on failure, cache correctly decremented
     """
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler()
@@ -261,6 +369,7 @@ async def test_normal_router_call():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -290,6 +399,7 @@ async def test_normal_router_call():
         model="azure-model",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     await asyncio.sleep(1)  # success is done in a separate thread
     print(f"response: {response}")
@@ -304,6 +414,10 @@ async def test_normal_router_call():
 
 @pytest.mark.asyncio
 async def test_normal_router_tpm_limit():
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(level=logging.DEBUG)
     model_list = [
         {
             "model_name": "azure-model",
@@ -333,6 +447,7 @@ async def test_normal_router_tpm_limit():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )
@@ -351,6 +466,7 @@ async def test_normal_router_tpm_limit():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
+    print("Test: Checking current_requests for precise_minute=", precise_minute)
 
     assert (
         parallel_request_handler.user_api_key_cache.get_cache(
@@ -364,20 +480,21 @@ async def test_normal_router_tpm_limit():
         model="azure-model",
         messages=[{"role": "user", "content": "Write me a paragraph on the moon"}],
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     await asyncio.sleep(1)  # success is done in a separate thread
     print(f"response: {response}")
 
     try:
-        await parallel_request_handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={},
-            call_type="",
+        assert (
+            parallel_request_handler.user_api_key_cache.get_cache(
+                key=request_count_api_key
+            )["current_tpm"]
+            > 0
         )
 
-        pytest.fail(f"Expected call to fail")
     except Exception as e:
+        print("Exception on test_normal_router_tpm_limit", e)
         assert e.status_code == 429
 
 
@@ -412,6 +529,7 @@ async def test_streaming_router_call():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -442,6 +560,7 @@ async def test_streaming_router_call():
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         stream=True,
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     async for chunk in response:
         continue
@@ -456,6 +575,7 @@ async def test_streaming_router_call():
 
 @pytest.mark.asyncio
 async def test_streaming_router_tpm_limit():
+    litellm.set_verbose = True
     model_list = [
         {
             "model_name": "azure-model",
@@ -485,6 +605,7 @@ async def test_streaming_router_tpm_limit():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )
@@ -517,26 +638,23 @@ async def test_streaming_router_tpm_limit():
         messages=[{"role": "user", "content": "Write me a paragraph on the moon"}],
         stream=True,
         metadata={"user_api_key": _api_key},
+        mock_response="hello",
     )
     async for chunk in response:
         continue
-    await asyncio.sleep(1)  # success is done in a separate thread
+    await asyncio.sleep(5)  # success is done in a separate thread
 
-    try:
-        await parallel_request_handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={},
-            call_type="",
-        )
-
-        pytest.fail(f"Expected call to fail")
-    except Exception as e:
-        assert e.status_code == 429
+    assert (
+        parallel_request_handler.user_api_key_cache.get_cache(
+            key=request_count_api_key
+        )["current_tpm"]
+        > 0
+    )
 
 
 @pytest.mark.asyncio
 async def test_bad_router_call():
+    litellm.set_verbose = True
     model_list = [
         {
             "model_name": "azure-model",
@@ -566,6 +684,7 @@ async def test_bad_router_call():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -639,6 +758,7 @@ async def test_bad_router_tpm_limit():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )

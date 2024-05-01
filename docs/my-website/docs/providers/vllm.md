@@ -4,6 +4,13 @@ LiteLLM supports all models on VLLM.
 
 🚀[Code Tutorial](https://github.com/BerriAI/litellm/blob/main/cookbook/VLLM_Model_Testing.ipynb)
 
+
+:::info
+
+To call a HOSTED VLLM Endpoint use [these docs](./openai_compatible.md)
+
+:::
+
 ### Quick Start
 ```
 pip install litellm vllm
@@ -11,7 +18,7 @@ pip install litellm vllm
 ```python
 import litellm 
 
-response = completion(
+response = litellm.completion(
             model="vllm/facebook/opt-125m", # add a vllm prefix so litellm knows the custom_llm_provider==vllm
             messages=messages,
             temperature=0.2,
@@ -29,7 +36,7 @@ In order to use litellm to call a hosted vllm server add the following to your c
 ```python
 import litellm 
 
-response = completion(
+response = litellm.completion(
             model="openai/facebook/opt-125m", # pass the vllm model name
             messages=messages,
             api_base="https://hosted-vllm-api.co",

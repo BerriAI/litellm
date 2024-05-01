@@ -6,5 +6,6 @@ model_list:
 litellm_settings:
   cache: True
   cache_params:
+    type: "redis"
     supported_call_types: ["embedding", "aembedding"]
-    host: "localhost"
+    host: "os.environ/REDIS_HOST"

@@ -43,7 +43,7 @@ class AsyncCustomHTTPTransport(httpx.AsyncHTTPTransport):
                         request=request,
                     )
 
-                time.sleep(int(response.headers.get("retry-after")) or 10)
+                await asyncio.sleep(int(response.headers.get("retry-after") or 10))
                 response = await super().handle_async_request(request)
                 await response.aread()
 
@@ -95,7 +95,6 @@ class CustomHTTPTransport(httpx.HTTPTransport):
             request.method = "GET"
             response = super().handle_request(request)
             response.read()
-
             timeout_secs: int = 120
             start_time = time.time()
             while response.json()["status"] not in ["succeeded", "failed"]:
@@ -112,11 +111,9 @@ class CustomHTTPTransport(httpx.HTTPTransport):
                         content=json.dumps(timeout).encode("utf-8"),
                         request=request,
                     )
-
-                time.sleep(int(response.headers.get("retry-after")) or 10)
+                time.sleep(int(response.headers.get("retry-after", None) or 10))
                 response = super().handle_request(request)
                 response.read()
-
             if response.json()["status"] == "failed":
                 error_data = response.json()
                 return httpx.Response(

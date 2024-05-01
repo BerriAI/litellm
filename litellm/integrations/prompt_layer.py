@@ -2,11 +2,10 @@
 #    On success, logs events to Promptlayer
 import dotenv, os
 import requests
-import requests
+from pydantic import BaseModel
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
-
 
 class PromptLayerLogger:
     # Class variables or attributes
@@ -25,16 +24,30 @@ class PromptLayerLogger:
             for optional_param in kwargs["optional_params"]:
                 new_kwargs[optional_param] = kwargs["optional_params"][optional_param]
 
+            # Extract PromptLayer tags from metadata, if such exists
+            tags = []
+            metadata = {}
+            if "metadata" in kwargs["litellm_params"]:
+                if "pl_tags" in kwargs["litellm_params"]["metadata"]:
+                    tags = kwargs["litellm_params"]["metadata"]["pl_tags"]
+
+                # Remove "pl_tags" from metadata
+                metadata = {k:v for k, v in kwargs["litellm_params"]["metadata"].items() if k != "pl_tags"}
+
             print_verbose(
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"
             )
+
+            # python-openai >= 1.0.0 returns Pydantic objects instead of jsons
+            if isinstance(response_obj, BaseModel):
+                response_obj = response_obj.model_dump()
 
             request_response = requests.post(
                 "https://api.promptlayer.com/rest/track-request",
                 json={
                     "function_name": "openai.ChatCompletion.create",
                     "kwargs": new_kwargs,
-                    "tags": ["hello", "world"],
+                    "tags": tags,
                     "request_response": dict(response_obj),
                     "request_start_time": int(start_time.timestamp()),
                     "request_end_time": int(end_time.timestamp()),
@@ -45,22 +58,23 @@ class PromptLayerLogger:
                     # "prompt_version":1,
                 },
             )
+
+            response_json = request_response.json()
+            if not request_response.json().get("success", False):
+                raise Exception("Promptlayer did not successfully log the response!")
+
             print_verbose(
                 f"Prompt Layer Logging: success - final response object: {request_response.text}"
             )
-            response_json = request_response.json()
-            if "success" not in request_response.json():
-                raise Exception("Promptlayer did not successfully log the response!")
 
             if "request_id" in response_json:
-                print(kwargs["litellm_params"]["metadata"])
-                if kwargs["litellm_params"]["metadata"] is not None:
+                if metadata:
                     response = requests.post(
                         "https://api.promptlayer.com/rest/track-metadata",
                         json={
                             "request_id": response_json["request_id"],
                             "api_key": self.key,
-                            "metadata": kwargs["litellm_params"]["metadata"],
+                            "metadata": metadata,
                         },
                     )
                     print_verbose(

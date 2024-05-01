@@ -65,7 +65,7 @@ litellm --config proxy_config.yaml
 ```
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --data ' {
     "model": "gpt-3.5-turbo",

@@ -87,6 +87,7 @@
 | command-light | cohere | 0.00003 |
 | command-medium-beta | cohere | 0.00003 |
 | command-xlarge-beta | cohere | 0.00003 |
+| command-r-plus| cohere | 0.000018 |
 | j2-ultra | ai21 | 0.00003 |
 | ai21.j2-ultra-v1 | bedrock | 0.0000376 |
 | gpt-4-1106-preview | openai | 0.00004 |
