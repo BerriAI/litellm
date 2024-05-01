@@ -7620,39 +7620,57 @@ async def model_metrics_exceptions(
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
 
+    """
+    """
     sql_query = """
-        SELECT model_group, api_base, exception_type, COUNT(*) AS num_exceptions
-        FROM "LiteLLM_ErrorLogs"
-        WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-        GROUP BY model_group, api_base, exception_type
-        ORDER BY num_exceptions DESC
+        WITH cte AS (
+            SELECT 
+                CASE WHEN api_base = '' THEN litellm_model_name ELSE CONCAT(litellm_model_name, '-', api_base) END AS combined_model_api_base,
+                exception_type,
+                COUNT(*) AS num_exceptions
+            FROM "LiteLLM_ErrorLogs"
+            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
+            GROUP BY combined_model_api_base, exception_type
+        )
+        SELECT 
+            combined_model_api_base,
+            COUNT(*) AS total_exceptions,
+            json_object_agg(exception_type, num_exceptions) AS exception_counts
+        FROM cte
+        GROUP BY combined_model_api_base
+        ORDER BY total_exceptions DESC
         LIMIT 200;
     """
     db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
     response: List[dict] = []
     exception_types = set()
-    for model_data in db_response:
-        model = model_data.get("model_group", "")
-        api_base = model_data.get("api_base", "")
-        exception_type = model_data.get("exception_type", "")
-        num_exceptions = model_data.get("num_exceptions", 0)
-        exception_types.add(exception_type)
 
-        response.append(
-            {
-                "model_group": model + "-" + api_base,
-                exception_type: num_exceptions,
-                "num_exceptions": num_exceptions,
-            }
-        )
-
-    # sort all entries in descending order based on num_exceptions
-    response = sorted(response, key=lambda x: x["num_exceptions"], reverse=True)
-
-    return {
-        "data": response,
-        "exception_types": list(exception_types),
+    """
+    Return Data
+    {
+        "combined_model_api_base": "gpt-3.5-turbo-https://api.openai.com/v1/,
+        "total_exceptions": 5,
+        "BadRequestException": 5,
+        "TimeoutException": 2
     }
+    """
+
+    if db_response is not None:
+        # loop through all models
+        for model_data in db_response:
+            model = model_data.get("combined_model_api_base", "")
+            total_exceptions = model_data.get("total_exceptions", 0)
+            exception_counts = model_data.get("exception_counts", {})
+            curr_row = {
+                "model": model,
+                "total_exceptions": total_exceptions,
+            }
+            curr_row.update(exception_counts)
+            response.append(curr_row)
+            for k, v in exception_counts.items():
+                exception_types.add(k)
+
+    return {"data": response, "exception_types": list(exception_types)}
 
 
 @router.get(
