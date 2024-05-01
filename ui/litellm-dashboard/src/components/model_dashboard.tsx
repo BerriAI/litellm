@@ -19,7 +19,7 @@ import {
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall } from "./networking";
-import { BarChart } from "@tremor/react";
+import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -192,7 +192,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers = Object.values(Providers).filter(key => isNaN(Number(key)));
-
   
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>('');
@@ -202,6 +201,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
   const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
   const [modelMetrics, setModelMetrics] = useState<any[]>([]);
+  const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>([]);
   const [modelExceptions, setModelExceptions] = useState<any[]>([]);
   const [allExceptions, setAllExceptions] = useState<any[]>([]);
   const [failureTableData, setFailureTableData] = useState<any[]>([]);
@@ -459,11 +459,11 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
         console.log("Model metrics response:", modelMetricsResponse);
         // Sort by latency (avg_latency_per_token)
-        const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_per_token - a.avg_latency_per_token);
-        console.log("Sorted by latency:", sortedByLatency);
 
-        setModelMetrics(modelMetricsResponse);
-        setModelLatencyMetrics(sortedByLatency);
+
+        setModelMetrics(modelMetricsResponse.data);
+        setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
 
         const modelExceptionsResponse = await modelExceptionsCall(
           accessToken,
@@ -475,38 +475,38 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         setModelExceptions(modelExceptionsResponse.data);
         setAllExceptions(modelExceptionsResponse.exception_types);
 
-        let successdeploymentToSuccess: Record<string, number> = {};
-        for  (let i = 0; i < modelMetricsResponse.length; i++) {
-          let element = modelMetricsResponse[i];
-          let _model_name = element.model;
-          let _num_requests = element.num_requests;
-          successdeploymentToSuccess[_model_name] = _num_requests
-        }
-        console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
+        // let successdeploymentToSuccess: Record<string, number> = {};
+        // for  (let i = 0; i < modelMetricsResponse.length; i++) {
+        //   let element = modelMetricsResponse[i];
+        //   let _model_name = element.model;
+        //   let _num_requests = element.num_requests;
+        //   successdeploymentToSuccess[_model_name] = _num_requests
+        // }
+        // console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
         
-        let failureTableData = [];
-        let _failureData = modelExceptionsResponse.data;
-        for (let i = 0; i < _failureData.length; i++) {
-          const model = _failureData[i];
-          let _model_name = model.model;
-          let total_exceptions = model.total_exceptions;
-          let total_Requests = successdeploymentToSuccess[_model_name];
-          if (total_Requests == null) {
-            total_Requests = 0
-          }
-          let _data = {
-            model: _model_name,
-            total_exceptions: total_exceptions,
-            total_Requests: total_Requests,
-            failure_rate: total_Requests / total_exceptions
-          }
-          failureTableData.push(_data);
-          // sort failureTableData by failure_rate
-          failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
+        // let failureTableData = [];
+        // let _failureData = modelExceptionsResponse.data;
+        // for (let i = 0; i < _failureData.length; i++) {
+        //   const model = _failureData[i];
+        //   let _model_name = model.model;
+        //   let total_exceptions = model.total_exceptions;
+        //   let total_Requests = successdeploymentToSuccess[_model_name];
+        //   if (total_Requests == null) {
+        //     total_Requests = 0
+        //   }
+        //   let _data = {
+        //     model: _model_name,
+        //     total_exceptions: total_exceptions,
+        //     total_Requests: total_Requests,
+        //     failure_rate: total_Requests / total_exceptions
+        //   }
+        //   failureTableData.push(_data);
+        //   // sort failureTableData by failure_rate
+        //   failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
         
-          setFailureTableData(failureTableData);
-          console.log("failureTableData:", failureTableData);
-        }
+        //   setFailureTableData(failureTableData);
+        //   console.log("failureTableData:", failureTableData);
+        // }
 
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -673,11 +673,19 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       console.log("Model metrics response:", modelMetricsResponse);
   
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
-      console.log("Sorted by latency:", sortedByLatency);
-  
-      setModelMetrics(modelMetricsResponse);
-      setModelLatencyMetrics(sortedByLatency);
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup
+      )
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
+
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
     }
@@ -1039,9 +1047,6 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       </TabPanel>
       <TabPanel>
               <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
-              <p style={{fontSize: '0.85rem', color: '#808080', fontStyle: 'italic'}}>(Beta feature) only supported for Azure Model Groups</p>
-
-
             <Select
               className="mb-4 mt-2"
               defaultValue="all"
@@ -1062,10 +1067,23 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </SelectItem>
               ))}
             </Select>
+
             <Grid numItems={2}>
               <Col>
               <Card className="mr-2">
-              {/* <Table>
+              { modelMetrics && modelMetricsCategories && (
+                <AreaChart
+                  className="h-72"
+                  data={modelMetrics}
+                  showLegend={false}
+                  index="date"
+                  categories={modelMetricsCategories}
+                  connectNulls={true}
+                />
+              )}
+
+                  
+              <Table>
               <TableHead>
                 <TableRow>
                   <TableHeaderCell>Model</TableHeaderCell>
@@ -1080,7 +1098,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   </TableRow>
                 ))}
               </TableBody>
-              </Table> */}
+              </Table>
               </Card>
               </Col>
             <Col>
@@ -1123,10 +1141,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         colors={['indigo-300', 'rose-200', '#ffcc33']}
         yAxisWidth={30}
       />
-
         </Card>
-
-
             </TabPanel>
       
       </TabPanels>
