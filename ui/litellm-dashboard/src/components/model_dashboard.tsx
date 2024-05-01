@@ -457,8 +457,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         );
 
         console.log("Model metrics response:", modelMetricsResponse);
-        // Sort by latency (avg_latency_seconds)
-        const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
+        // Sort by latency (avg_latency_per_token)
+        const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_per_token - a.avg_latency_per_token);
         console.log("Sorted by latency:", sortedByLatency);
 
         setModelMetrics(modelMetricsResponse);
@@ -686,8 +686,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         <div className="flex">
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
-          <Tab>Model Analytics</Tab>
           <Tab><pre>/health Models</pre></Tab>
+            <Tab>Model Analytics</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -993,6 +993,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       </Card>
       </TabPanel>
       <TabPanel>
+        <Card>
+          <Text>`/health` will run a very small request through your models configured on litellm</Text>
+
+          <Button onClick={runHealthCheck}>Run `/health`</Button>
+          {healthCheckResponse && (
+                <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
+              )}
+
+        </Card>
+      </TabPanel>
+      <TabPanel>
               <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
               <p style={{fontSize: '0.85rem', color: '#808080', fontStyle: 'italic'}}>(Beta feature) only supported for Azure Model Groups</p>
 
@@ -1017,20 +1028,33 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </SelectItem>
               ))}
             </Select>
-            <Card>
-          <Title>Number Requests per Model</Title>
-              <BarChart
-                data={modelMetrics}
-                className="h-[50vh]"
-                index="model"
-                categories={["num_requests"]}
-                colors={["blue"]}
-                yAxisWidth={400}
-                layout="vertical"
-                tickGap={5}
-              />
-        </Card>
-
+            <Grid numItems={2}>
+              <Col>
+              <Card className="mr-2">
+              <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Model</TableHeaderCell>
+                  <TableHeaderCell>Median Latency/Token</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {modelLatencyMetrics.map((metric, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell>{metric.model}</TableCell>
+                    <TableCell>{metric.avg_latency_per_token.toFixed(4)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+              </Table>
+              </Card>
+              </Col>
+            <Col>
+            <Card className="ml-2">
+              <Title>Requests, Failures per Model</Title>
+            </Card>
+            </Col>
+            </Grid>
         <Card className="mt-4">
         <Title>Exceptions per Model</Title>
         <BarChart
@@ -1044,32 +1068,10 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       />
 
         </Card>
-        <Card className="mt-4">
-          <Title>Latency Per Model</Title>
-              <BarChart
-                data={modelLatencyMetrics}
-                className="h-[50vh]"
-                index="model"
-                categories={["avg_latency_seconds"]}
-                colors={["red"]}
-                yAxisWidth={400}
-                layout="vertical"
-                tickGap={5}
-              />
-        </Card>
+
 
             </TabPanel>
-      <TabPanel>
-        <Card>
-          <Text>`/health` will run a very small request through your models configured on litellm</Text>
-
-          <Button onClick={runHealthCheck}>Run `/health`</Button>
-          {healthCheckResponse && (
-                <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-              )}
-
-        </Card>
-      </TabPanel>
+      
       </TabPanels>
       </TabGroup>
       
