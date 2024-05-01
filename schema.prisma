@@ -190,6 +190,7 @@ model LiteLLM_ErrorLogs {
   endTime             DateTime // Assuming end_time is a DateTime field
   api_base            String   @default("") 
   model_group         String   @default("")      // public model_name / model_group
+  litellm_model_name  String   @default("")      // model passed to litellm
   model_id            String   @default("")      // ID of model in ProxyModelTable
   request_kwargs      Json     @default("{}")
   exception_type      String   @default("")

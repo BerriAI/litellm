@@ -348,6 +348,220 @@ def test_langfuse_logging_function_calling():
 # test_langfuse_logging_function_calling()
 
 
+def test_langfuse_existing_trace_id():
+    """
+    When existing trace id is passed, don't set trace params -> prevents overwriting the trace
+
+    Pass 1 logging object with a trace
+
+    Pass 2nd logging object with the trace id
+
+    Assert no changes to the trace
+    """
+    # Test - if the logs were sent to the correct team on langfuse
+    import litellm, datetime
+    from litellm.integrations.langfuse import LangFuseLogger
+
+    langfuse_Logger = LangFuseLogger(
+        langfuse_public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
+        langfuse_secret=os.getenv("LANGFUSE_PROJECT2_SECRET"),
+    )
+    litellm.success_callback = ["langfuse"]
+
+    # langfuse_args = {'kwargs': { 'start_time':  'end_time': datetime.datetime(2024, 5, 1, 7, 31, 29, 903685), 'user_id': None, 'print_verbose': <function print_verbose at 0x109d1f420>, 'level': 'DEFAULT', 'status_message': None}
+    response_obj = litellm.ModelResponse(
+        id="chatcmpl-9K5HUAbVRqFrMZKXL0WoC295xhguY",
+        choices=[
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(
+                    content="I'm sorry, I am an AI assistant and do not have real-time information. I recommend checking a reliable weather website or app for the most up-to-date weather information in Boston.",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1714573888,
+        model="gpt-3.5-turbo-0125",
+        object="chat.completion",
+        system_fingerprint="fp_3b956da36b",
+        usage=litellm.Usage(completion_tokens=37, prompt_tokens=14, total_tokens=51),
+    )
+
+    ### NEW TRACE ###
+    message = [{"role": "user", "content": "what's the weather in boston"}]
+    langfuse_args = {
+        "response_obj": response_obj,
+        "kwargs": {
+            "model": "gpt-3.5-turbo",
+            "litellm_params": {
+                "acompletion": False,
+                "api_key": None,
+                "force_timeout": 600,
+                "logger_fn": None,
+                "verbose": False,
+                "custom_llm_provider": "openai",
+                "api_base": "https://api.openai.com/v1/",
+                "litellm_call_id": "508113a1-c6f1-48ce-a3e1-01c6cce9330e",
+                "model_alias_map": {},
+                "completion_call_id": None,
+                "metadata": None,
+                "model_info": None,
+                "proxy_server_request": None,
+                "preset_cache_key": None,
+                "no-log": False,
+                "stream_response": {},
+            },
+            "messages": message,
+            "optional_params": {"temperature": 0.1, "extra_body": {}},
+            "start_time": "2024-05-01 07:31:27.986164",
+            "stream": False,
+            "user": None,
+            "call_type": "completion",
+            "litellm_call_id": "508113a1-c6f1-48ce-a3e1-01c6cce9330e",
+            "completion_start_time": "2024-05-01 07:31:29.903685",
+            "temperature": 0.1,
+            "extra_body": {},
+            "input": [{"role": "user", "content": "what's the weather in boston"}],
+            "api_key": "my-api-key",
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [
+                        {"role": "user", "content": "what's the weather in boston"}
+                    ],
+                    "temperature": 0.1,
+                    "extra_body": {},
+                }
+            },
+            "log_event_type": "successful_api_call",
+            "end_time": "2024-05-01 07:31:29.903685",
+            "cache_hit": None,
+            "response_cost": 6.25e-05,
+        },
+        "start_time": datetime.datetime(2024, 5, 1, 7, 31, 27, 986164),
+        "end_time": datetime.datetime(2024, 5, 1, 7, 31, 29, 903685),
+        "user_id": None,
+        "print_verbose": litellm.print_verbose,
+        "level": "DEFAULT",
+        "status_message": None,
+    }
+
+    langfuse_response_object = langfuse_Logger.log_event(**langfuse_args)
+
+    import langfuse
+
+    langfuse_client = langfuse.Langfuse(
+        public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
+        secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
+    )
+
+    trace_id = langfuse_response_object["trace_id"]
+
+    langfuse_client.flush()
+
+    time.sleep(2)
+
+    print(langfuse_client.get_trace(id=trace_id))
+
+    initial_langfuse_trace = langfuse_client.get_trace(id=trace_id)
+
+    ### EXISTING TRACE ###
+
+    new_metadata = {"existing_trace_id": trace_id}
+    new_messages = [{"role": "user", "content": "What do you know?"}]
+    new_response_obj = litellm.ModelResponse(
+        id="chatcmpl-9K5HUAbVRqFrMZKXL0WoC295xhguY",
+        choices=[
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(
+                    content="What do I know?",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1714573888,
+        model="gpt-3.5-turbo-0125",
+        object="chat.completion",
+        system_fingerprint="fp_3b956da36b",
+        usage=litellm.Usage(completion_tokens=37, prompt_tokens=14, total_tokens=51),
+    )
+    langfuse_args = {
+        "response_obj": new_response_obj,
+        "kwargs": {
+            "model": "gpt-3.5-turbo",
+            "litellm_params": {
+                "acompletion": False,
+                "api_key": None,
+                "force_timeout": 600,
+                "logger_fn": None,
+                "verbose": False,
+                "custom_llm_provider": "openai",
+                "api_base": "https://api.openai.com/v1/",
+                "litellm_call_id": "508113a1-c6f1-48ce-a3e1-01c6cce9330e",
+                "model_alias_map": {},
+                "completion_call_id": None,
+                "metadata": new_metadata,
+                "model_info": None,
+                "proxy_server_request": None,
+                "preset_cache_key": None,
+                "no-log": False,
+                "stream_response": {},
+            },
+            "messages": new_messages,
+            "optional_params": {"temperature": 0.1, "extra_body": {}},
+            "start_time": "2024-05-01 07:31:27.986164",
+            "stream": False,
+            "user": None,
+            "call_type": "completion",
+            "litellm_call_id": "508113a1-c6f1-48ce-a3e1-01c6cce9330e",
+            "completion_start_time": "2024-05-01 07:31:29.903685",
+            "temperature": 0.1,
+            "extra_body": {},
+            "input": [{"role": "user", "content": "what's the weather in boston"}],
+            "api_key": "my-api-key",
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [
+                        {"role": "user", "content": "what's the weather in boston"}
+                    ],
+                    "temperature": 0.1,
+                    "extra_body": {},
+                }
+            },
+            "log_event_type": "successful_api_call",
+            "end_time": "2024-05-01 07:31:29.903685",
+            "cache_hit": None,
+            "response_cost": 6.25e-05,
+        },
+        "start_time": datetime.datetime(2024, 5, 1, 7, 31, 27, 986164),
+        "end_time": datetime.datetime(2024, 5, 1, 7, 31, 29, 903685),
+        "user_id": None,
+        "print_verbose": litellm.print_verbose,
+        "level": "DEFAULT",
+        "status_message": None,
+    }
+
+    langfuse_response_object = langfuse_Logger.log_event(**langfuse_args)
+
+    new_trace_id = langfuse_response_object["trace_id"]
+
+    assert new_trace_id == trace_id
+
+    langfuse_client.flush()
+
+    time.sleep(2)
+
+    print(langfuse_client.get_trace(id=trace_id))
+
+    new_langfuse_trace = langfuse_client.get_trace(id=trace_id)
+
+    assert dict(initial_langfuse_trace) == dict(new_langfuse_trace)
+
+
 def test_langfuse_logging_tool_calling():
     litellm.set_verbose = True
 

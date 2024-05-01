@@ -106,7 +106,7 @@ try:
 except Exception as e:
     verbose_logger.debug(f"Exception import enterprise features {str(e)}")
 
-from typing import cast, List, Dict, Union, Optional, Literal, Any, BinaryIO
+from typing import cast, List, Dict, Union, Optional, Literal, Any, BinaryIO, Iterable
 from .caching import Cache
 from concurrent.futures import ThreadPoolExecutor
 
@@ -1236,7 +1236,10 @@ class Logging:
                             print_verbose=print_verbose,
                         )
                     elif callback == "sentry" and add_breadcrumb:
-                        details_to_log = copy.deepcopy(self.model_call_details)
+                        try:
+                            details_to_log = copy.deepcopy(self.model_call_details)
+                        except:
+                            details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
@@ -1327,8 +1330,10 @@ class Logging:
                         )
                     elif callback == "sentry" and add_breadcrumb:
                         print_verbose("reaches sentry breadcrumbing")
-
-                        details_to_log = copy.deepcopy(self.model_call_details)
+                        try:
+                            details_to_log = copy.deepcopy(self.model_call_details)
+                        except:
+                            details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
@@ -2635,7 +2640,11 @@ def function_setup(
             dynamic_success_callbacks = kwargs.pop("success_callback")
 
         if add_breadcrumb:
-            details_to_log = copy.deepcopy(kwargs)
+            try:
+                details_to_log = copy.deepcopy(kwargs)
+            except:
+                details_to_log = kwargs
+
             if litellm.turn_off_message_logging:
                 # make a copy of the _model_Call_details and log it
                 details_to_log.pop("messages", None)
@@ -7171,6 +7180,7 @@ def convert_to_model_response_object(
     end_time=None,
     hidden_params: Optional[dict] = None,
 ):
+    received_args = locals()
     try:
         if response_type == "completion" and (
             model_response_object is None
@@ -7182,6 +7192,11 @@ def convert_to_model_response_object(
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list = []
+
+            assert response_object["choices"] is not None and isinstance(
+                response_object["choices"], Iterable
+            )
+
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["message"].get("content", None),
@@ -7303,7 +7318,9 @@ def convert_to_model_response_object(
                 model_response_object._hidden_params = hidden_params
             return model_response_object
     except Exception as e:
-        raise Exception(f"Invalid response object {traceback.format_exc()}")
+        raise Exception(
+            f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
+        )
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
