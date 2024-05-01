@@ -752,7 +752,7 @@ async def test_async_fallbacks_max_retries_per_request():
         router.reset()
 
 
-def test_usage_based_routing_fallbacks():
+def test_ausage_based_routing_fallbacks():
     try:
         # [Prod Test]
         # IT tests Usage Based Routing with fallbacks
