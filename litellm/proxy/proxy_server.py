@@ -7540,15 +7540,24 @@ async def model_metrics(
     endTime = endTime or datetime.now()
 
     sql_query = """
-        SELECT api_base, model, DATE_TRUNC('day', "startTime")::DATE AS day,
-        CASE
-            WHEN SUM(total_tokens) = 0 THEN 0
-            ELSE AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) / SUM(total_tokens)
-        END AS avg_latency_per_token
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= NOW() - INTERVAL '30 days' AND "model" = $1
-        GROUP BY api_base, model, day
-        ORDER BY avg_latency_per_token DESC;
+        SELECT
+            api_base,
+            model,
+            DATE_TRUNC('day', "startTime")::DATE AS day,
+            AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) / SUM(total_tokens) AS avg_latency_per_token
+        FROM
+            "LiteLLM_SpendLogs"
+        WHERE
+            "startTime" >= NOW() - INTERVAL '30 days'
+            AND "model" = $1
+        GROUP BY
+            api_base,
+            model,
+            day
+        HAVING
+            SUM(total_tokens) > 0
+        ORDER BY
+            avg_latency_per_token DESC;
     """
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
@@ -7566,6 +7575,8 @@ async def model_metrics(
             _combined_model_name = str(_model)
             if "https://" in _api_base:
                 _combined_model_name = str(_api_base)
+            if "/openai/" in _combined_model_name:
+                _combined_model_name = _combined_model_name.split("/openai/")[0]
 
             _all_api_bases.add(_combined_model_name)
             _daily_entries[_day][_combined_model_name] = _avg_latency_per_token
@@ -7587,7 +7598,7 @@ async def model_metrics(
         for day in _daily_entries:
             entry = {"date": str(day)}
             for model_key, latency in _daily_entries[day].items():
-                entry[model_key] = latency.__round__(5)
+                entry[model_key] = round(latency, 8)
             response.append(entry)
 
         return {
