@@ -278,6 +278,36 @@ router_settings:
 	routing_strategy_args: {"ttl": 10}
 ```
 
+### Set Lowest Latency Buffer
+
+Set a buffer within which deployments are candidates for making calls to. 
+
+E.g. 
+
+if you have 5 deployments
+
+```
+https://litellm-prod-1.openai.azure.com/: 0.07s
+https://litellm-prod-2.openai.azure.com/: 0.1s
+https://litellm-prod-3.openai.azure.com/: 0.1s
+https://litellm-prod-4.openai.azure.com/: 0.1s
+https://litellm-prod-5.openai.azure.com/: 4.66s
+```
+
+to prevent initially overloading `prod-1`, with all requests - we can set a buffer of 50%, to consider deployments `prod-2, prod-3, prod-4`. 
+
+**In Router**
+```python 
+router = Router(..., routing_strategy_args={"lowest_latency_buffer": 0.5})
+```
+
+**In Proxy**
+
+```yaml
+router_settings:
+	routing_strategy_args: {"lowest_latency_buffer": 0.5}
+```
+
 </TabItem>
 <TabItem value="simple-shuffle" label="(Default) Weighted Pick (Async)">
 
