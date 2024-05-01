@@ -106,7 +106,7 @@ try:
 except Exception as e:
     verbose_logger.debug(f"Exception import enterprise features {str(e)}")
 
-from typing import cast, List, Dict, Union, Optional, Literal, Any, BinaryIO
+from typing import cast, List, Dict, Union, Optional, Literal, Any, BinaryIO, Iterable
 from .caching import Cache
 from concurrent.futures import ThreadPoolExecutor
 
@@ -7183,6 +7183,10 @@ def convert_to_model_response_object(
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list = []
+
+            assert response_object["choices"] is not None and isinstance(
+                response_object["choices"], Iterable
+            )
 
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
