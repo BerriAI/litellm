@@ -178,6 +178,7 @@ const sidebars = {
         "observability/traceloop_integration",
         "observability/athina_integration",
         "observability/lunary_integration",
+        "observability/greenscale_integration",
         "observability/helicone_integration",
         "observability/supabase_integration",
         `observability/telemetry`,
