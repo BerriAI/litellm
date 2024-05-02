@@ -17,6 +17,7 @@ class LangFuseLogger:
     ):
         try:
             from langfuse import Langfuse
+            import langfuse
         except Exception as e:
             raise Exception(
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
@@ -34,7 +35,7 @@ class LangFuseLogger:
             "host": self.langfuse_host,
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
-            "flush_interval": flush_interval, # flush interval in seconds
+            "flush_interval": flush_interval,  # flush interval in seconds
         }
 
         if Version(langfuse.version.__version__) >= Version("2.6.0"):
