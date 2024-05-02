@@ -73,10 +73,6 @@ class LangsmithLogger:
                 elif type(value) != dict and is_serializable(value=value):
                     new_kwargs[key] = value
 
-            print(f"type of response: {type(response_obj)}")
-            for k, v in new_kwargs.items():
-                print(f"key={k}, type of arg: {type(v)}, value={v}")
-
             if isinstance(response_obj, BaseModel):
                 try:
                     response_obj = response_obj.model_dump()

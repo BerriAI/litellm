@@ -50,7 +50,6 @@ class Router:
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
-    num_retries: int = 0
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
@@ -70,9 +69,11 @@ class Router:
         ] = None,  # if you want to cache across model groups
         client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
         ## RELIABILITY ##
-        num_retries: int = 0,
+        num_retries: Optional[int] = None,
         timeout: Optional[float] = None,
-        default_litellm_params={},  # default params for Router.chat.completion.create
+        default_litellm_params: Optional[
+            dict
+        ] = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: Optional[int] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
@@ -158,6 +159,7 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+
         if semaphore:
             self.semaphore = semaphore
         self.set_verbose = set_verbose
@@ -229,7 +231,14 @@ class Router:
         self.failed_calls = (
             InMemoryCache()
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
-        self.num_retries = num_retries or litellm.num_retries or 0
+
+        if num_retries is not None:
+            self.num_retries = num_retries
+        elif litellm.num_retries is not None:
+            self.num_retries = litellm.num_retries
+        else:
+            self.num_retries = openai.DEFAULT_MAX_RETRIES
+
         self.timeout = timeout or litellm.request_timeout
 
         self.retry_after = retry_after
@@ -255,6 +264,7 @@ class Router:
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
+        default_litellm_params = default_litellm_params or {}
         self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
         # default litellm args
@@ -280,6 +290,21 @@ class Router:
         }
         """
         ### ROUTING SETUP ###
+        self.routing_strategy_init(
+            routing_strategy=routing_strategy,
+            routing_strategy_args=routing_strategy_args,
+        )
+        ## COOLDOWNS ##
+        if isinstance(litellm.failure_callback, list):
+            litellm.failure_callback.append(self.deployment_callback_on_failure)
+        else:
+            litellm.failure_callback = [self.deployment_callback_on_failure]
+        print(  # noqa
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
+        )  # noqa
+        self.routing_strategy_args = routing_strategy_args
+
+    def routing_strategy_init(self, routing_strategy: str, routing_strategy_args: dict):
         if routing_strategy == "least-busy":
             self.leastbusy_logger = LeastBusyLoggingHandler(
                 router_cache=self.cache, model_list=self.model_list
@@ -311,15 +336,6 @@ class Router:
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowestlatency_logger)  # type: ignore
-        ## COOLDOWNS ##
-        if isinstance(litellm.failure_callback, list):
-            litellm.failure_callback.append(self.deployment_callback_on_failure)
-        else:
-            litellm.failure_callback = [self.deployment_callback_on_failure]
-        verbose_router_logger.info(
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
-        )
-        self.routing_strategy_args = routing_strategy_args
 
     def print_deployment(self, deployment: dict):
         """
@@ -428,6 +444,7 @@ class Router:
             kwargs["messages"] = messages
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
@@ -469,6 +486,7 @@ class Router:
             )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
+
             model_name = data["model"]
             for k, v in self.default_litellm_params.items():
                 if (
@@ -1415,10 +1433,12 @@ class Router:
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
-        verbose_router_logger.debug(
-            f"async function w/ retries: original_function - {original_function}"
-        )
+
         num_retries = kwargs.pop("num_retries")
+
+        verbose_router_logger.debug(
+            f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
+        )
         try:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await original_function(*args, **kwargs)
@@ -1436,37 +1456,47 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if "No models available" in str(e):
-                timeout = litellm._calculate_retry_after(
-                    remaining_retries=num_retries,
-                    max_retries=num_retries,
-                    min_timeout=self.retry_after,
-                )
-                await asyncio.sleep(timeout)
-            elif RouterErrors.user_defined_ratelimit_error.value in str(e):
-                raise e  # don't wait to retry if deployment hits user-defined rate-limit
-            elif hasattr(original_exception, "status_code") and litellm._should_retry(
-                status_code=original_exception.status_code
-            ):
-                if hasattr(original_exception, "response") and hasattr(
-                    original_exception.response, "headers"
-                ):
-                    timeout = litellm._calculate_retry_after(
-                        remaining_retries=num_retries,
-                        max_retries=num_retries,
-                        response_headers=original_exception.response.headers,
-                        min_timeout=self.retry_after,
-                    )
-                else:
-                    timeout = litellm._calculate_retry_after(
-                        remaining_retries=num_retries,
-                        max_retries=num_retries,
-                        min_timeout=self.retry_after,
-                    )
-                await asyncio.sleep(timeout)
-            else:
-                raise original_exception
+            # if "No models available" in str(
+            #     e
+            # ) or RouterErrors.no_deployments_available.value in str(e):
+            #     timeout = litellm._calculate_retry_after(
+            #         remaining_retries=num_retries,
+            #         max_retries=num_retries,
+            #         min_timeout=self.retry_after,
+            #     )
+            #     await asyncio.sleep(timeout)
+            # elif RouterErrors.user_defined_ratelimit_error.value in str(e):
+            #     raise e  # don't wait to retry if deployment hits user-defined rate-limit
 
+            # elif hasattr(original_exception, "status_code") and litellm._should_retry(
+            #     status_code=original_exception.status_code
+            # ):
+            #     if hasattr(original_exception, "response") and hasattr(
+            #         original_exception.response, "headers"
+            #     ):
+            #         timeout = litellm._calculate_retry_after(
+            #             remaining_retries=num_retries,
+            #             max_retries=num_retries,
+            #             response_headers=original_exception.response.headers,
+            #             min_timeout=self.retry_after,
+            #         )
+            #     else:
+            #         timeout = litellm._calculate_retry_after(
+            #             remaining_retries=num_retries,
+            #             max_retries=num_retries,
+            #             min_timeout=self.retry_after,
+            #         )
+            #     await asyncio.sleep(timeout)
+            # else:
+            #     raise original_exception
+
+            ### RETRY
+            _timeout = self._router_should_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+            )
+            await asyncio.sleep(_timeout)
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
@@ -1488,34 +1518,12 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    if "No models available" in str(e):
-                        timeout = litellm._calculate_retry_after(
-                            remaining_retries=remaining_retries,
-                            max_retries=num_retries,
-                            min_timeout=self.retry_after,
-                        )
-                        await asyncio.sleep(timeout)
-                    elif (
-                        hasattr(e, "status_code")
-                        and hasattr(e, "response")
-                        and litellm._should_retry(status_code=e.status_code)
-                    ):
-                        if hasattr(e.response, "headers"):
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                response_headers=e.response.headers,
-                                min_timeout=self.retry_after,
-                            )
-                        else:
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                min_timeout=self.retry_after,
-                            )
-                        await asyncio.sleep(timeout)
-                    else:
-                        raise e
+                    _timeout = self._router_should_retry(
+                        e=original_exception,
+                        remaining_retries=remaining_retries,
+                        num_retries=num_retries,
+                    )
+                    await asyncio.sleep(_timeout)
             raise original_exception
 
     def function_with_fallbacks(self, *args, **kwargs):
@@ -1606,6 +1614,27 @@ class Router:
                 raise e
             raise original_exception
 
+    def _router_should_retry(
+        self, e: Exception, remaining_retries: int, num_retries: int
+    ) -> Union[int, float]:
+        """
+        Calculate back-off, then retry
+        """
+        if hasattr(e, "response") and hasattr(e.response, "headers"):
+            timeout = litellm._calculate_retry_after(
+                remaining_retries=remaining_retries,
+                max_retries=num_retries,
+                response_headers=e.response.headers,
+                min_timeout=self.retry_after,
+            )
+        else:
+            timeout = litellm._calculate_retry_after(
+                remaining_retries=remaining_retries,
+                max_retries=num_retries,
+                min_timeout=self.retry_after,
+            )
+        return timeout
+
     def function_with_retries(self, *args, **kwargs):
         """
         Try calling the model 3 times. Shuffle between available deployments.
@@ -1619,15 +1648,13 @@ class Router:
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
+
         try:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = original_function(*args, **kwargs)
             return response
         except Exception as e:
             original_exception = e
-            verbose_router_logger.debug(
-                f"num retries in function with retries: {num_retries}"
-            )
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
@@ -1641,6 +1668,12 @@ class Router:
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             ### RETRY
+            _timeout = self._router_should_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+            )
+            time.sleep(_timeout)
             for current_attempt in range(num_retries):
                 verbose_router_logger.debug(
                     f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}"
@@ -1654,34 +1687,12 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    if "No models available" in str(e):
-                        timeout = litellm._calculate_retry_after(
-                            remaining_retries=remaining_retries,
-                            max_retries=num_retries,
-                            min_timeout=self.retry_after,
-                        )
-                        time.sleep(timeout)
-                    elif (
-                        hasattr(e, "status_code")
-                        and hasattr(e, "response")
-                        and litellm._should_retry(status_code=e.status_code)
-                    ):
-                        if hasattr(e.response, "headers"):
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                response_headers=e.response.headers,
-                                min_timeout=self.retry_after,
-                            )
-                        else:
-                            timeout = litellm._calculate_retry_after(
-                                remaining_retries=remaining_retries,
-                                max_retries=num_retries,
-                                min_timeout=self.retry_after,
-                            )
-                        time.sleep(timeout)
-                    else:
-                        raise e
+                    _timeout = self._router_should_retry(
+                        e=e,
+                        remaining_retries=remaining_retries,
+                        num_retries=num_retries,
+                    )
+                    time.sleep(_timeout)
             raise original_exception
 
     ### HELPER FUNCTIONS
@@ -1715,10 +1726,11 @@ class Router:
             )  # i.e. azure
             metadata = kwargs.get("litellm_params", {}).get("metadata", None)
             _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
+
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
                 self._set_cooldown_deployments(
-                    deployment_id
+                    exception_status=exception_status, deployment=deployment_id
                 )  # setting deployment_id in cooldown deployments
             if custom_llm_provider:
                 model_name = f"{custom_llm_provider}/{model_name}"
@@ -1778,9 +1790,15 @@ class Router:
                 key=rpm_key, value=request_count, local_only=True
             )  # don't change existing ttl
 
-    def _set_cooldown_deployments(self, deployment: Optional[str] = None):
+    def _set_cooldown_deployments(
+        self, exception_status: Union[str, int], deployment: Optional[str] = None
+    ):
         """
         Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
+
+        or
+
+        the exception is not one that should be immediately retried (e.g. 401)
         """
         if deployment is None:
             return
@@ -1797,7 +1815,20 @@ class Router:
             f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
         )
         cooldown_time = self.cooldown_time or 1
-        if updated_fails > self.allowed_fails:
+
+        if isinstance(exception_status, str):
+            try:
+                exception_status = int(exception_status)
+            except Exception as e:
+                verbose_router_logger.debug(
+                    "Unable to cast exception status to int {}. Defaulting to status=500.".format(
+                        exception_status
+                    )
+                )
+                exception_status = 500
+        _should_retry = litellm._should_retry(status_code=exception_status)
+
+        if updated_fails > self.allowed_fails or _should_retry == False:
             # get the current cooldown list for that minute
             cooldown_key = f"{current_minute}:cooldown_models"  # group cooldown models by minute to reduce number of redis calls
             cached_value = self.cache.get_cache(key=cooldown_key)
@@ -1929,6 +1960,7 @@ class Router:
             )
             default_api_base = api_base
             default_api_key = api_key
+
         if (
             model_name in litellm.open_ai_chat_completion_models
             or custom_llm_provider in litellm.openai_compatible_providers
@@ -1940,8 +1972,10 @@ class Router:
             or "ft:gpt-3.5-turbo" in model_name
             or model_name in litellm.open_ai_embedding_models
         ):
+            is_azure_ai_studio_model: bool = False
             if custom_llm_provider == "azure":
                 if litellm.utils._is_non_openai_azure_model(model_name):
+                    is_azure_ai_studio_model = True
                     custom_llm_provider = "openai"
                     # remove azure prefx from model_name
                     model_name = model_name.replace("azure/", "")
@@ -1963,6 +1997,25 @@ class Router:
                 api_base_env_name = api_base.replace("os.environ/", "")
                 api_base = litellm.get_secret(api_base_env_name)
                 litellm_params["api_base"] = api_base
+
+            ## AZURE AI STUDIO MISTRAL CHECK ##
+            """
+            Make sure api base ends in /v1/
+
+            if not, add it - https://github.com/BerriAI/litellm/issues/2279
+            """
+            if (
+                is_azure_ai_studio_model == True
+                and api_base is not None
+                and not api_base.endswith("/v1/")
+            ):
+                # check if it ends with a trailing slash
+                if api_base.endswith("/"):
+                    api_base += "v1/"
+                elif api_base.endswith("/v1"):
+                    api_base += "/"
+                else:
+                    api_base += "/v1/"
 
             api_version = litellm_params.get("api_version")
             if api_version and api_version.startswith("os.environ/"):
@@ -1986,7 +2039,9 @@ class Router:
                 stream_timeout = litellm.get_secret(stream_timeout_env_name)
                 litellm_params["stream_timeout"] = stream_timeout
 
-            max_retries = litellm_params.pop("max_retries", 2)
+            max_retries = litellm_params.pop(
+                "max_retries", 0
+            )  # router handles retry logic
             if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
                 max_retries_env_name = max_retries.replace("os.environ/", "")
                 max_retries = litellm.get_secret(max_retries_env_name)
@@ -2052,9 +2107,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
@@ -2074,9 +2131,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
@@ -2096,9 +2155,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
@@ -2118,9 +2179,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
@@ -2158,9 +2221,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
@@ -2178,9 +2243,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                verify=litellm.ssl_verify,
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
                             ),
                             mounts=sync_proxy_mounts,
                         ),  # type: ignore
@@ -2199,9 +2266,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=AsyncCustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
                         ),
@@ -2219,9 +2288,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(),
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
+                            transport=CustomHTTPTransport(
+                                limits=httpx.Limits(
+                                    max_connections=1000, max_keepalive_connections=100
+                                ),
+                                verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
                         ),
@@ -2249,9 +2320,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=AsyncCustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
@@ -2271,9 +2344,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=CustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=sync_proxy_mounts,
                     ),  # type: ignore
@@ -2294,9 +2369,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=AsyncCustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
@@ -2317,9 +2394,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(),
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
+                        transport=CustomHTTPTransport(
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                         mounts=sync_proxy_mounts,
                     ),  # type: ignore
@@ -2550,6 +2629,11 @@ class Router:
         for var in vars_to_include:
             if var in _all_vars:
                 _settings_to_return[var] = _all_vars[var]
+            if (
+                var == "routing_strategy_args"
+                and self.routing_strategy == "latency-based-routing"
+            ):
+                _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
         return _settings_to_return
 
     def update_settings(self, **kwargs):
@@ -2581,6 +2665,13 @@ class Router:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
                 else:
+                    if var == "routing_strategy":
+                        self.routing_strategy_init(
+                            routing_strategy=kwargs[var],
+                            routing_strategy_args=kwargs.get(
+                                "routing_strategy_args", {}
+                            ),
+                        )
                     setattr(self, var, kwargs[var])
             else:
                 verbose_router_logger.debug("Setting {} is not allowed".format(var))
@@ -2717,7 +2808,10 @@ class Router:
                 self.cache.get_cache(key=model_id, local_only=True) or 0
             )
             ### get usage based cache ###
-            if isinstance(model_group_cache, dict):
+            if (
+                isinstance(model_group_cache, dict)
+                and self.routing_strategy != "usage-based-routing-v2"
+            ):
                 model_group_cache[model_id] = model_group_cache.get(model_id, 0)
 
                 current_request = max(
@@ -2745,7 +2839,7 @@ class Router:
 
             if _rate_limit_error == True:  # allow generic fallback logic to take place
                 raise ValueError(
-                    f"No deployments available for selected model, passed model={model}"
+                    f"{RouterErrors.no_deployments_available.value}, passed model={model}"
                 )
             elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(
@@ -2883,6 +2977,11 @@ class Router:
                 model=model, healthy_deployments=healthy_deployments, messages=messages
             )
 
+        if len(healthy_deployments) == 0:
+            raise ValueError(
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+            )
+
         if (
             self.routing_strategy == "usage-based-routing-v2"
             and self.lowesttpm_logger_v2 is not None
@@ -2938,7 +3037,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -3068,7 +3167,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"No deployments available for selected model, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
