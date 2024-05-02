@@ -2130,7 +2130,6 @@ class Logging:
 
         self.redact_message_input_output_from_logging(result=result)
 
-        print_verbose(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})

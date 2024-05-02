@@ -2693,9 +2693,10 @@ class ProxyConfig:
         environment_variables = config_data.get("environment_variables", {})
         for k, v in environment_variables.items():
             try:
-                decoded_b64 = base64.b64decode(v)
-                value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
-                os.environ[k] = value
+                if v is not None:
+                    decoded_b64 = base64.b64decode(v)
+                    value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
+                    os.environ[k] = value
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error setting env variable: %s - %s", k, str(e)
@@ -8644,6 +8645,13 @@ async def update_config(config_info: ConfigYAML):
             _existing_settings = config["general_settings"]
             for k, v in updated_general_settings.items():
                 # overwrite existing settings with updated values
+                if k == "alert_to_webhook_url":
+                    # check if slack is already enabled. if not, enable it
+                    if "slack" not in _existing_settings:
+                        if "alerting" not in _existing_settings:
+                            _existing_settings["alerting"] = ["slack"]
+                        elif isinstance(_existing_settings["alerting"], list):
+                            _existing_settings["alerting"].append("slack")
                 _existing_settings[k] = v
             config["general_settings"] = _existing_settings
 
@@ -8758,7 +8766,25 @@ async def get_config():
         
         """
         for _callback in _success_callbacks:
-            if _callback == "langfuse":
+            if _callback == "openmeter":
+                env_vars = [
+                    "OPENMETER_API_KEY",
+                ]
+                env_vars_dict = {}
+                for _var in env_vars:
+                    env_variable = environment_variables.get(_var, None)
+                    if env_variable is None:
+                        env_vars_dict[_var] = None
+                    else:
+                        # decode + decrypt the value
+                        decoded_b64 = base64.b64decode(env_variable)
+                        _decrypted_value = decrypt_value(
+                            value=decoded_b64, master_key=master_key
+                        )
+                        env_vars_dict[_var] = _decrypted_value
+
+                _data_to_return.append({"name": _callback, "variables": env_vars_dict})
+            elif _callback == "langfuse":
                 _langfuse_vars = [
                     "LANGFUSE_PUBLIC_KEY",
                     "LANGFUSE_SECRET_KEY",
@@ -8898,9 +8924,9 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal["slack_budget_alerts", "langfuse", "slack"] = fastapi.Query(
-        description="Specify the service being hit."
-    ),
+    service: Literal[
+        "slack_budget_alerts", "langfuse", "slack", "openmeter"
+    ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
     Hidden endpoint.
@@ -8914,13 +8940,25 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
-        if service not in ["slack_budget_alerts", "langfuse", "slack"]:
+        if service not in ["slack_budget_alerts", "langfuse", "slack", "openmeter"]:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
                 },
             )
+
+        if service == "openmeter":
+            _ = await litellm.acompletion(
+                model="openai/litellm-mock-response-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                user="litellm:/health/services",
+                mock_response="This is a mock response",
+            )
+            return {
+                "status": "success",
+                "message": "Mock LLM request made - check openmeter.",
+            }
 
         if service == "langfuse":
             from litellm.integrations.langfuse import LangFuseLogger
@@ -8938,63 +8976,66 @@ async def health_services_endpoint(
                 "message": "Mock LLM request made - check langfuse.",
             }
 
-        if "slack" in general_settings.get("alerting", []):
-            # test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
-            # check if user has opted into unique_alert_webhooks
-            if (
-                proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
-                is not None
-            ):
-                for (
-                    alert_type
-                ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
-                    """
-                    "llm_exceptions",
-                    "llm_too_slow",
-                    "llm_requests_hanging",
-                    "budget_alerts",
-                    "db_exceptions",
-                    """
-                    # only test alert if it's in active alert types
-                    if (
-                        proxy_logging_obj.slack_alerting_instance.alert_types
-                        is not None
-                        and alert_type
-                        not in proxy_logging_obj.slack_alerting_instance.alert_types
-                    ):
-                        continue
-                    test_message = "default test message"
-                    if alert_type == "llm_exceptions":
-                        test_message = f"LLM Exception test alert"
-                    elif alert_type == "llm_too_slow":
-                        test_message = f"LLM Too Slow test alert"
-                    elif alert_type == "llm_requests_hanging":
-                        test_message = f"LLM Requests Hanging test alert"
-                    elif alert_type == "budget_alerts":
-                        test_message = f"Budget Alert test alert"
-                    elif alert_type == "db_exceptions":
-                        test_message = f"DB Exception test alert"
+        if service == "slack" or service == "slack_budget_alerts":
+            if "slack" in general_settings.get("alerting", []):
+                # test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
+                # check if user has opted into unique_alert_webhooks
+                if (
+                    proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+                    is not None
+                ):
+                    for (
+                        alert_type
+                    ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
+                        """
+                        "llm_exceptions",
+                        "llm_too_slow",
+                        "llm_requests_hanging",
+                        "budget_alerts",
+                        "db_exceptions",
+                        """
+                        # only test alert if it's in active alert types
+                        if (
+                            proxy_logging_obj.slack_alerting_instance.alert_types
+                            is not None
+                            and alert_type
+                            not in proxy_logging_obj.slack_alerting_instance.alert_types
+                        ):
+                            continue
+                        test_message = "default test message"
+                        if alert_type == "llm_exceptions":
+                            test_message = f"LLM Exception test alert"
+                        elif alert_type == "llm_too_slow":
+                            test_message = f"LLM Too Slow test alert"
+                        elif alert_type == "llm_requests_hanging":
+                            test_message = f"LLM Requests Hanging test alert"
+                        elif alert_type == "budget_alerts":
+                            test_message = f"Budget Alert test alert"
+                        elif alert_type == "db_exceptions":
+                            test_message = f"DB Exception test alert"
 
+                        await proxy_logging_obj.alerting_handler(
+                            message=test_message, level="Low", alert_type=alert_type
+                        )
+                else:
                     await proxy_logging_obj.alerting_handler(
-                        message=test_message, level="Low", alert_type=alert_type
+                        message="This is a test slack alert message",
+                        level="Low",
+                        alert_type="budget_alerts",
                     )
+                return {
+                    "status": "success",
+                    "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
+                }
             else:
-                await proxy_logging_obj.alerting_handler(
-                    message="This is a test slack alert message",
-                    level="Low",
-                    alert_type="budget_alerts",
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": '"{}" not in proxy config: general_settings. Unable to test this.'.format(
+                            service
+                        )
+                    },
                 )
-            return {
-                "status": "success",
-                "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
-            }
-        else:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": '"slack" not in proxy config: general_settings. Unable to test this.'
-                },
-            )
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
