@@ -4,6 +4,7 @@ from pydantic import BaseModel, Extra, Field, root_validator
 import dotenv, os, requests, random
 from typing import Optional, Union, List, Dict
 from datetime import datetime, timedelta
+import random
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -29,6 +30,7 @@ class LiteLLMBase(BaseModel):
 
 class RoutingArgs(LiteLLMBase):
     ttl: int = 1 * 60 * 60  # 1 hour
+    lowest_latency_buffer: float = 0
 
 
 class LowestLatencyLoggingHandler(CustomLogger):
@@ -312,6 +314,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
         except:
             input_tokens = 0
 
+        # randomly sample from all_deployments, incase all deployments have latency=0.0
+        _items = all_deployments.items()
+
+        all_deployments = random.sample(list(_items), len(_items))
+        all_deployments = dict(all_deployments)
+        ### GET AVAILABLE DEPLOYMENTS ### filter out any deployments > tpm/rpm limits
+
+        potential_deployments = []
         for item, item_map in all_deployments.items():
             ## get the item from model list
             _deployment = None
@@ -345,23 +355,48 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if isinstance(_call_latency, float):
                     total += _call_latency
             item_latency = total / len(item_latency)
-            if item_latency == 0:
-                deployment = _deployment
-                break
-            elif (
+
+            # -------------- #
+            # Debugging Logic
+            # -------------- #
+            # We use _latency_per_deployment to log to langfuse, slack - this is not used to make a decision on routing
+            # this helps a user to debug why the router picked a specfic deployment      #
+            _deployment_api_base = _deployment.get("litellm_params", {}).get(
+                "api_base", ""
+            )
+            if _deployment_api_base is not None:
+                _latency_per_deployment[_deployment_api_base] = item_latency
+            # -------------- #
+            # End of Debugging Logic
+            # -------------- #
+
+            if (
                 item_tpm + input_tokens > _deployment_tpm
                 or item_rpm + 1 > _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
                 continue
-            elif item_latency < lowest_latency:
-                lowest_latency = item_latency
-                deployment = _deployment
+            else:
+                potential_deployments.append((_deployment, item_latency))
 
-            # _latency_per_deployment is used for debuggig
-            _deployment_api_base = _deployment.get("litellm_params", {}).get(
-                "api_base", ""
-            )
-            _latency_per_deployment[_deployment_api_base] = item_latency
+        if len(potential_deployments) == 0:
+            return None
+
+        # Sort potential deployments by latency
+        sorted_deployments = sorted(potential_deployments, key=lambda x: x[1])
+
+        # Find lowest latency deployment
+        lowest_latency = sorted_deployments[0][1]
+
+        # Find deployments within buffer of lowest latency
+        buffer = self.routing_args.lowest_latency_buffer * lowest_latency
+        valid_deployments = [
+            x for x in sorted_deployments if x[1] <= lowest_latency + buffer
+        ]
+
+        # Pick a random deployment from valid deployments
+        random_valid_deployment = random.choice(valid_deployments)
+        deployment = random_valid_deployment[0]
+
         if request_kwargs is not None and "metadata" in request_kwargs:
             request_kwargs["metadata"][
                 "_latency_per_deployment"
