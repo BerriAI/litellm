@@ -3696,7 +3696,7 @@ def _select_tokenizer(model: str):
         return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
-def encode(model: str, custom_tokenizer: Optional[dict] = None, text: str):
+def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     """
     Encodes the given text using the specified model.
 
@@ -3713,7 +3713,7 @@ def encode(model: str, custom_tokenizer: Optional[dict] = None, text: str):
     return enc
 
 
-def decode(model: str, custom_tokenizer: Optional[dict] = None, tokens: List[int]):
+def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
