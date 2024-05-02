@@ -17,6 +17,7 @@ class LangFuseLogger:
     ):
         try:
             from langfuse import Langfuse
+            import langfuse
         except Exception as e:
             raise Exception(
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
@@ -27,14 +28,20 @@ class LangFuseLogger:
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.Langfuse = Langfuse(
-            public_key=self.public_key,
-            secret_key=self.secret_key,
-            host=self.langfuse_host,
-            release=self.langfuse_release,
-            debug=self.langfuse_debug,
-            flush_interval=flush_interval,  # flush interval in seconds
-        )
+
+        parameters = {
+            "public_key": self.public_key,
+            "secret_key": self.secret_key,
+            "host": self.langfuse_host,
+            "release": self.langfuse_release,
+            "debug": self.langfuse_debug,
+            "flush_interval": flush_interval,  # flush interval in seconds
+        }
+
+        if Version(langfuse.version.__version__) >= Version("2.6.0"):
+            parameters["sdk_integration"] = "litellm"
+
+        self.Langfuse = Langfuse(**parameters)
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
@@ -369,8 +376,6 @@ class LangFuseLogger:
                     "headers": clean_headers,
                 }
 
-            print_verbose(f"trace_params: {trace_params}")
-
             trace = self.Langfuse.trace(**trace_params)
 
             generation_id = None
@@ -420,10 +425,8 @@ class LangFuseLogger:
                     "completion_start_time", None
                 )
 
-            print_verbose(f"generation_params: {generation_params}")
-
             generation_client = trace.generation(**generation_params)
-
+            
             return generation_client.trace_id, generation_id
         except Exception as e:
             verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
