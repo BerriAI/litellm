@@ -1777,7 +1777,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     usage = response_obj["usage"]
     if type(usage) == litellm.Usage:
         usage = dict(usage)
-    id = response_obj.get("id", str(uuid.uuid4()))
+    id = response_obj.get("id", kwargs.get("litellm_call_id"))
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key

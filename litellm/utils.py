@@ -70,6 +70,7 @@ from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
+from .integrations.openmeter import OpenMeterLogger
 from .integrations.datadog import DataDogLogger
 from .integrations.prometheus import PrometheusLogger
 from .integrations.prometheus_services import PrometheusServicesLogger
@@ -130,6 +131,7 @@ langsmithLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
+openMeterLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
@@ -1923,6 +1925,51 @@ class Logging:
                                 print_verbose=print_verbose,
                             )
                     if (
+                        callback == "openmeter"
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        == False
+                    ):
+                        global openMeterLogger
+                        if openMeterLogger is None:
+                            print_verbose("Instantiates openmeter client")
+                            openMeterLogger = OpenMeterLogger()
+                        if self.stream and complete_streaming_response is None:
+                            openMeterLogger.log_stream_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                        else:
+                            if self.stream and complete_streaming_response:
+                                self.model_call_details["complete_response"] = (
+                                    self.model_call_details.get(
+                                        "complete_streaming_response", {}
+                                    )
+                                )
+                                result = self.model_call_details["complete_response"]
+                            openMeterLogger.log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+
+                    if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
@@ -2083,7 +2130,6 @@ class Logging:
 
         self.redact_message_input_output_from_logging(result=result)
 
-        print_verbose(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -2121,6 +2167,35 @@ class Logging:
                                 await litellm.cache.async_add_cache(result, **kwargs)
                             else:
                                 litellm.cache.add_cache(result, **kwargs)
+                if callback == "openmeter":
+                    global openMeterLogger
+                    if self.stream == True:
+                        if (
+                            "async_complete_streaming_response"
+                            in self.model_call_details
+                        ):
+                            await openMeterLogger.async_log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=self.model_call_details[
+                                    "async_complete_streaming_response"
+                                ],
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                        else:
+                            await openMeterLogger.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                    else:
+                        await openMeterLogger.async_log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     if self.stream == True:
                         if (
@@ -2594,7 +2669,7 @@ def function_setup(
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback == "dynamodb":
+                elif callback == "dynamodb" or callback == "openmeter":
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
@@ -6777,11 +6852,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
 
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
-            print_verbose(f"callback: {callback}")
+            print_verbose(f"init callback list: {callback}")
             if callback == "sentry":
                 try:
                     import sentry_sdk
@@ -6844,6 +6919,8 @@ def set_callbacks(callback_list, function_id=None):
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
                 langFuseLogger = LangFuseLogger()
+            elif callback == "openmeter":
+                openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
             elif callback == "prometheus":
