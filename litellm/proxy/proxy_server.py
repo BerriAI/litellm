@@ -2235,6 +2235,23 @@ class ProxyConfig:
 
                                 batch_redis_obj = _PROXY_BatchRedisRequests()
                                 imported_list.append(batch_redis_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "azure_content_safety"
+                            ):
+                                from litellm.proxy.hooks.azure_content_safety import (
+                                    _PROXY_AzureContentSafety,
+                                )
+
+                                azure_content_safety_params = litellm_settings["azure_content_safety_params"]
+                                for k, v in azure_content_safety_params.items():
+                                    if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
+                                        azure_content_safety_params[k] = litellm.get_secret(v)
+
+                                azure_content_safety_obj = _PROXY_AzureContentSafety(
+                                    **azure_content_safety_params,
+                                )
+                                imported_list.append(azure_content_safety_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
