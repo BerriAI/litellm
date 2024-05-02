@@ -7639,18 +7639,20 @@ async def model_metrics_slow_responses(
     sql_query = """
 SELECT
     api_base,
-    COUNT(*) AS count
+    COUNT(*) AS total_count,
+    SUM(CASE
+        WHEN ("endTime" - "startTime") >= (INTERVAL '1 SECOND' * CAST($1 AS INTEGER)) THEN 1
+        ELSE 0
+    END) AS slow_count
 FROM
     "LiteLLM_SpendLogs"
 WHERE
-    ("endTime" - "startTime") >= (INTERVAL '1 SECOND' * CAST($1 AS INTEGER))
-    AND "model" = $2
+    "model" = $2
     AND "cache_hit" != 'True'
 GROUP BY
     api_base
 ORDER BY
-    count DESC;
-
+    slow_count DESC;
     """
 
     db_response = await prisma_client.db.query_raw(
