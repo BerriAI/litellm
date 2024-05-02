@@ -3899,6 +3899,9 @@ def create_pretrained_tokenizer(
     identifier (str): The identifier of a Model on the Hugging Face Hub, that contains a tokenizer.json file
     revision (str, defaults to main): A branch or commit id
     auth_token (str, optional, defaults to None): An optional auth token used to access private repositories on the Hugging Face Hub
+
+    Returns:
+    dict: A dictionary with the tokenizer and its type.
     """
 
     tokenizer = Tokenizer.from_pretrained(identifier, revision=revision, auth_token=auth_token)
@@ -3911,6 +3914,9 @@ def create_tokenizer(json: str):
 
     Args:
     json (str): A valid JSON string representing a previously serialized tokenizer
+
+    Returns:
+    dict: A dictionary with the tokenizer and its type.
     """
 
     tokenizer = Tokenizer.from_str(json)
@@ -3929,7 +3935,7 @@ def token_counter(
 
     Args:
     model (str): The name of the model to use for tokenization. Default is an empty string.
-    tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
+    custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
     text (str): The raw text string to be passed to the model. Default is None.
     messages (Optional[List[Dict[str, str]]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
 
