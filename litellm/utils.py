@@ -1695,10 +1695,17 @@ class Logging:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
                         if langFuseLogger is None or (
-                            self.langfuse_public_key != langFuseLogger.public_key
-                            and self.langfuse_secret != langFuseLogger.secret_key
+                            (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
+                            and (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
                         ):
-                            print_verbose("Instantiates langfuse client")
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
