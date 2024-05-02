@@ -1916,7 +1916,7 @@ async def generate_key_fn(
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def update_key_fn(request: Request, data: UpdateKeyRequest):
+async def update_key_fn(request: Request, data):
     """
     Update an existing key
     """
@@ -1944,7 +1944,7 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
 @router.post(
     "/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def delete_key_fn(request: Request, data: DeleteKeyRequest):
+async def delete_key_fn(request: Request, data):
     try:
         keys = data.keys
 
