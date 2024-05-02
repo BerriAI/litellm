@@ -613,6 +613,8 @@ from .utils import (
     get_optional_params,
     modify_integration,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
     cost_per_token,
     completion_cost,
     supports_function_calling,
