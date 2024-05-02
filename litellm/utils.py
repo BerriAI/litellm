@@ -378,7 +378,7 @@ class Message(OpenAIObject):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
-        self.tool_calls = []
+        self.tool_calls = None
         self.function_call = None
 
         if function_call is not None:
@@ -2531,13 +2531,19 @@ class Logging:
                     "complete_streaming_response"
                 ]
                 for choice in _streaming_response.choices:
-                    choice.message.content = "redacted-by-litellm"
+                    if isinstance(choice, litellm.Choices):
+                        choice.message.content = "redacted-by-litellm"
+                    elif isinstance(choice, litellm.utils.StreamingChoices):
+                        choice.delta.content = "redacted-by-litellm"
             else:
                 if result is not None:
                     if isinstance(result, litellm.ModelResponse):
-                        if hasattr(result, "choices"):
+                        if hasattr(result, "choices") and result.choices is not None:
                             for choice in result.choices:
-                                choice.message.content = "redacted-by-litellm"
+                                if isinstance(choice, litellm.Choices):
+                                    choice.message.content = "redacted-by-litellm"
+                                elif isinstance(choice, litellm.utils.StreamingChoices):
+                                    choice.delta.content = "redacted-by-litellm"
 
 
 def exception_logging(
