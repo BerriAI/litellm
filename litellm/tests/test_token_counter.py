@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import time
-from litellm import token_counter, encode, decode
+from litellm import token_counter, create_pretrained_tokenizer, encode, decode
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -69,14 +69,22 @@ def test_tokenizers():
             model="meta-llama/Llama-2-7b-chat", text=sample_text
         )
 
+        # llama3 tokenizer (also testing custom tokenizer)
+        llama3_tokens_1 = token_counter(model="meta-llama/llama-3-70b-instruct", text=sample_text)
+
+        llama3_tokenizer = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
+        llama3_tokens_2 = token_counter(custom_tokenizer=llama3_tokenizer, text=sample_text)
+
         print(
-            f"openai tokens: {openai_tokens}; claude tokens: {claude_tokens}; cohere tokens: {cohere_tokens}; llama2 tokens: {llama2_tokens}"
+            f"openai tokens: {openai_tokens}; claude tokens: {claude_tokens}; cohere tokens: {cohere_tokens}; llama2 tokens: {llama2_tokens}; llama3 tokens: {llama3_tokens_1}"
         )
 
         # assert that all token values are different
         assert (
-            openai_tokens != cohere_tokens != llama2_tokens
+            openai_tokens != cohere_tokens != llama2_tokens != llama3_tokens_1
         ), "Token values are not different."
+
+        assert llama3_tokens_1 == llama3_tokens_2, "Custom tokenizer is not being used! It has been configured to use the same tokenizer as the built in llama3 tokenizer and the results should be the same."
 
         print("test tokenizer: It worked!")
     except Exception as e:
