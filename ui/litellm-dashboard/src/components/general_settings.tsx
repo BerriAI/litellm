@@ -15,7 +15,13 @@ import {
   Grid,
   Button,
   TextInput,
+  Select as Select2,
+  SelectItem,
   Col,
+  Accordion,
+  AccordionBody,
+  AccordionHeader,
+  AccordionList,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
@@ -24,6 +30,7 @@ import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, Tra
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 import AddFallbacks from "./add_fallbacks"
 import openai from "openai";
+import Paragraph from "antd/es/skeleton/Paragraph";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -72,6 +79,62 @@ async function testFallbackModelResponse(
   }
 }
 
+interface AccordionHeroProps {
+  selectedStrategy: string | null;
+  strategyArgs: routingStrategyArgs;
+  paramExplanation: { [key: string]: string }
+}
+
+interface routingStrategyArgs {
+    ttl?: number;
+    lowest_latency_buffer?: number;
+}
+
+const defaultLowestLatencyArgs: routingStrategyArgs = {
+  "ttl": 3600, 
+  "lowest_latency_buffer": 0
+}
+
+export const AccordionHero: React.FC<AccordionHeroProps> = ({ selectedStrategy, strategyArgs, paramExplanation }) => (
+  <Accordion>
+      <AccordionHeader className="text-sm font-medium text-tremor-content-strong dark:text-dark-tremor-content-strong">Routing Strategy Specific Args</AccordionHeader>
+      <AccordionBody>
+      {
+          selectedStrategy == "latency-based-routing" ? 
+          <Card>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell>Setting</TableHeaderCell>
+                <TableHeaderCell>Value</TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {Object.entries(strategyArgs).map(([param, value]) => (
+                <TableRow key={param}>
+                  <TableCell>
+                    <Text>{param}</Text>
+                    <p style={{fontSize: '0.65rem', color: '#808080', fontStyle: 'italic'}} className="mt-1">{paramExplanation[param]}</p>
+                  </TableCell>
+                  <TableCell>
+                    <TextInput
+                        name={param}
+                        defaultValue={
+                          typeof value === 'object' ? JSON.stringify(value, null, 2) : value.toString()
+                        }
+                      />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          </Card>
+          : <Text>No specific settings</Text>
+        }
+        </AccordionBody>
+    </Accordion>
+);
+
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   accessToken,
   userRole,
@@ -82,6 +145,8 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
+  const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null)
+  const [strategySettings, setStrategySettings] = useState<routingStrategyArgs | null>(null); 
 
   let paramExplanation: { [key: string]: string } = {
     "routing_strategy_args": "(dict) Arguments to pass to the routing strategy",
@@ -91,6 +156,8 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     "num_retries": "(int) Number of retries for failed requests. Defaults to 0.",
     "timeout": "(float) Timeout for requests. Defaults to None.",
     "retry_after": "(int) Minimum time to wait before retrying a failed request",
+    "ttl": "(int) Sliding window to look back over when calculating the average latency of a deployment. Default - 1 hour (in seconds).",
+    "lowest_latency_buffer": "(float) Shuffle between deployments within this % of the lowest latency. Default - 0 (i.e. always pick lowest latency)."
   }
 
   useEffect(() => {
@@ -141,6 +208,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     try {
       await setCallbacksCall(accessToken, payload);
       setRouterSettings({ ...routerSettings });
+      setSelectedStrategy(routerSettings["routing_strategy"])
       message.success("Router settings updated successfully");
     } catch (error) {
       message.error("Failed to update router settings: " + error, 20);
@@ -156,11 +224,33 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
 
     const updatedVariables = Object.fromEntries(
       Object.entries(router_settings).map(([key, value]) => {
-        if (key !== 'routing_strategy_args') {
+        if (key !== 'routing_strategy_args' && key !== "routing_strategy") {
           return [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value];
         }
+        else if (key == "routing_strategy") {
+          return [key, selectedStrategy]
+        }
+        else if (key == "routing_strategy_args" && selectedStrategy == "latency-based-routing") {
+          let setRoutingStrategyArgs: routingStrategyArgs = {}
+
+          const lowestLatencyBufferElement = document.querySelector(`input[name="lowest_latency_buffer"]`) as HTMLInputElement;
+          const ttlElement = document.querySelector(`input[name="ttl"]`) as HTMLInputElement;
+
+          if (lowestLatencyBufferElement?.value) {
+                setRoutingStrategyArgs["lowest_latency_buffer"] = Number(lowestLatencyBufferElement.value)
+          }
+
+          if (ttlElement?.value) {
+            setRoutingStrategyArgs["ttl"] = Number(ttlElement.value)
+          }
+
+          console.log(`setRoutingStrategyArgs: ${setRoutingStrategyArgs}`)
+          return [
+            "routing_strategy_args", setRoutingStrategyArgs
+          ]
+        }
         return null;
-      }).filter(entry => entry !== null) as Iterable<[string, unknown]>
+      }).filter(entry => entry !== null && entry !== undefined) as Iterable<[string, unknown]>
     );
     console.log("updatedVariables", updatedVariables);
 
@@ -183,6 +273,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     return null;
   }
 
+  
   return (
     <div className="w-full mx-4">
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -203,24 +294,41 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
               </TableRow>
             </TableHead>
             <TableBody>
-              {Object.entries(routerSettings).filter(([param, value]) => param != "fallbacks" && param != "context_window_fallbacks").map(([param, value]) => (
+              {Object.entries(routerSettings).filter(([param, value]) => param != "fallbacks" && param != "context_window_fallbacks" && param != "routing_strategy_args").map(([param, value]) => (
                 <TableRow key={param}>
                   <TableCell>
                     <Text>{param}</Text>
                     <p style={{fontSize: '0.65rem', color: '#808080', fontStyle: 'italic'}} className="mt-1">{paramExplanation[param]}</p>
                   </TableCell>
                   <TableCell>
-                    <TextInput
-                      name={param}
-                      defaultValue={
-                        typeof value === 'object' ? JSON.stringify(value, null, 2) : value.toString()
-                      }
-                    />
+                    {
+                      param == "routing_strategy" ?
+                      <Select2 defaultValue={value} className="w-full max-w-md" onValueChange={setSelectedStrategy}>
+                        <SelectItem value="usage-based-routing">usage-based-routing</SelectItem>
+                        <SelectItem value="latency-based-routing">latency-based-routing</SelectItem>
+                        <SelectItem value="simple-shuffle">simple-shuffle</SelectItem>
+                      </Select2> :
+                      <TextInput
+                        name={param}
+                        defaultValue={
+                          typeof value === 'object' ? JSON.stringify(value, null, 2) : value.toString()
+                        }
+                      />
+                    }
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
         </Table>
+        <AccordionHero
+          selectedStrategy={selectedStrategy}
+          strategyArgs={
+            routerSettings && routerSettings['routing_strategy_args'] && Object.keys(routerSettings['routing_strategy_args']).length > 0
+              ? routerSettings['routing_strategy_args']
+              : defaultLowestLatencyArgs // default value when keys length is 0
+          }
+          paramExplanation={paramExplanation}
+        />
         </Card>
         <Col>
             <Button className="mt-2" onClick={() => handleSaveChanges(routerSettings)}>

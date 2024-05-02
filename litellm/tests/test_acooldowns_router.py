@@ -119,7 +119,9 @@ def test_multiple_deployments_parallel():
 
 
 # test_multiple_deployments_parallel()
-def test_cooldown_same_model_name():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_cooldown_same_model_name(sync_mode):
     # users could have the same model with different api_base
     # example
     # azure/chatgpt, api_base: 1234
@@ -161,22 +163,40 @@ def test_cooldown_same_model_name():
             num_retries=3,
         )  # type: ignore
 
-        response = router.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hello this request will pass"}],
-        )
-        print(router.model_list)
-        model_ids = []
-        for model in router.model_list:
-            model_ids.append(model["model_info"]["id"])
-        print("\n litellm model ids ", model_ids)
+        if sync_mode:
+            response = router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hello this request will pass"}],
+            )
+            print(router.model_list)
+            model_ids = []
+            for model in router.model_list:
+                model_ids.append(model["model_info"]["id"])
+            print("\n litellm model ids ", model_ids)
 
-        # example litellm_model_names ['azure/chatgpt-v-2-ModelID-64321', 'azure/chatgpt-v-2-ModelID-63960']
-        assert (
-            model_ids[0] != model_ids[1]
-        )  # ensure both models have a uuid added, and they have different names
+            # example litellm_model_names ['azure/chatgpt-v-2-ModelID-64321', 'azure/chatgpt-v-2-ModelID-63960']
+            assert (
+                model_ids[0] != model_ids[1]
+            )  # ensure both models have a uuid added, and they have different names
 
-        print("\ngot response\n", response)
+            print("\ngot response\n", response)
+        else:
+            response = await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hello this request will pass"}],
+            )
+            print(router.model_list)
+            model_ids = []
+            for model in router.model_list:
+                model_ids.append(model["model_info"]["id"])
+            print("\n litellm model ids ", model_ids)
+
+            # example litellm_model_names ['azure/chatgpt-v-2-ModelID-64321', 'azure/chatgpt-v-2-ModelID-63960']
+            assert (
+                model_ids[0] != model_ids[1]
+            )  # ensure both models have a uuid added, and they have different names
+
+            print("\ngot response\n", response)
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
