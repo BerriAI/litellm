@@ -24,7 +24,7 @@ const CreateKeyPage = () => {
   const [keys, setKeys] = useState<null | any[]>(null);
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams();
-
+  const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
   const token = searchParams.get("token");
 
@@ -132,6 +132,8 @@ const CreateKeyPage = () => {
               userRole={userRole}
               token={token}
               accessToken={accessToken}
+              modelData={modelData}
+              setModelData={setModelData}
             />
           ) : page == "llm-playground" ? (
             <ChatUI
@@ -179,6 +181,7 @@ const CreateKeyPage = () => {
                 userID={userID}
                 userRole={userRole}
                 accessToken={accessToken}
+                modelData={modelData}
               />
           ) : (
             <Usage

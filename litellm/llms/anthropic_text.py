@@ -137,7 +137,8 @@ class AnthropicTextCompletion(BaseLLM):
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+
+        setattr(model_response, "usage", usage)
 
         return model_response
 

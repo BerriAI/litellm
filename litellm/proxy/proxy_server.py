@@ -106,7 +106,7 @@ import pydantic
 from litellm.proxy._types import *
 from litellm.caching import DualCache, RedisCache
 from litellm.proxy.health_check import perform_health_check
-from litellm.router import LiteLLM_Params, Deployment
+from litellm.router import LiteLLM_Params, Deployment, updateDeployment
 from litellm.router import ModelInfo as RouterModelInfo
 from litellm._logging import verbose_router_logger, verbose_proxy_logger
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -1059,8 +1059,18 @@ async def user_api_key_auth(
                 ):
                     pass
                 else:
+                    user_role = "unknown"
+                    user_id = "unknown"
+                    if user_id_information is not None and isinstance(
+                        user_id_information, list
+                    ):
+                        _user = user_id_information[0]
+                        user_role = _user.get("user_role", {}).get(
+                            "user_role", "unknown"
+                        )
+                        user_id = _user.get("user_id", "unknown")
                     raise Exception(
-                        f"Only master key can be used to generate, delete, update info for new keys/users/teams. Route={route}"
+                        f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
                     )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
@@ -1207,6 +1217,68 @@ def cost_tracking():
                 litellm.success_callback.append(_PROXY_track_cost_callback)  # type: ignore
 
 
+async def _PROXY_failure_handler(
+    kwargs,  # kwargs to completion
+    completion_response: litellm.ModelResponse,  # response from completion
+    start_time=None,
+    end_time=None,  # start/end time for completion
+):
+    global prisma_client
+    if prisma_client is not None:
+        verbose_proxy_logger.debug(
+            "inside _PROXY_failure_handler kwargs=", extra=kwargs
+        )
+
+        _exception = kwargs.get("exception")
+        _exception_type = _exception.__class__.__name__
+        _model = kwargs.get("model", None)
+
+        _optional_params = kwargs.get("optional_params", {})
+        _optional_params = copy.deepcopy(_optional_params)
+
+        for k, v in _optional_params.items():
+            v = str(v)
+            v = v[:100]
+
+        _status_code = "500"
+        try:
+            _status_code = str(_exception.status_code)
+        except:
+            # Don't let this fail logging the exception to the dB
+            pass
+
+        _litellm_params = kwargs.get("litellm_params", {}) or {}
+        _metadata = _litellm_params.get("metadata", {}) or {}
+        _model_id = _metadata.get("model_info", {}).get("id", "")
+        _model_group = _metadata.get("model_group", "")
+        api_base = litellm.get_api_base(model=_model, optional_params=_litellm_params)
+        _exception_string = str(_exception)[:500]
+
+        error_log = LiteLLM_ErrorLogs(
+            request_id=str(uuid.uuid4()),
+            model_group=_model_group,
+            model_id=_model_id,
+            litellm_model_name=kwargs.get("model"),
+            request_kwargs=_optional_params,
+            api_base=api_base,
+            exception_type=_exception_type,
+            status_code=_status_code,
+            exception_string=_exception_string,
+            startTime=kwargs.get("start_time"),
+            endTime=kwargs.get("end_time"),
+        )
+
+        # helper function to convert to dict on pydantic v2 & v1
+        error_log_dict = _get_pydantic_json_dict(error_log)
+        error_log_dict["request_kwargs"] = json.dumps(error_log_dict["request_kwargs"])
+
+        await prisma_client.db.litellm_errorlogs.create(
+            data=error_log_dict  # type: ignore
+        )
+
+    pass
+
+
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion
@@ -1290,6 +1362,15 @@ async def _PROXY_track_cost_callback(
             )
         )
         verbose_proxy_logger.debug("error in tracking cost callback - %s", e)
+
+
+def error_tracking():
+    global prisma_client, custom_db_client
+    if prisma_client is not None or custom_db_client is not None:
+        if isinstance(litellm.failure_callback, list):
+            verbose_proxy_logger.debug("setting litellm failure callback to track cost")
+            if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
+                litellm.failure_callback.append(_PROXY_failure_handler)  # type: ignore
 
 
 def _set_spend_logs_payload(
@@ -2521,9 +2602,10 @@ class ProxyConfig:
                         # decode base64
                         decoded_b64 = base64.b64decode(v)
                         # decrypt value
-                        _litellm_params[k] = decrypt_value(
-                            value=decoded_b64, master_key=master_key
-                        )
+                        _value = decrypt_value(value=decoded_b64, master_key=master_key)
+                        # sanity check if string > size 0
+                        if len(_value) > 0:
+                            _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
@@ -2611,9 +2693,10 @@ class ProxyConfig:
         environment_variables = config_data.get("environment_variables", {})
         for k, v in environment_variables.items():
             try:
-                decoded_b64 = base64.b64decode(v)
-                value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
-                os.environ[k] = value
+                if v is not None:
+                    decoded_b64 = base64.b64decode(v)
+                    value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
+                    os.environ[k] = value
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error setting env variable: %s - %s", k, str(e)
@@ -2631,14 +2714,29 @@ class ProxyConfig:
         if "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
             proxy_logging_obj.alert_types = general_settings["alert_types"]
-            proxy_logging_obj.slack_alerting_instance.alert_types = general_settings[
-                "alert_types"
+            proxy_logging_obj.slack_alerting_instance.update_values(
+                alert_types=general_settings["alert_types"]
+            )
+
+        if "alert_to_webhook_url" in _general_settings:
+            general_settings["alert_to_webhook_url"] = _general_settings[
+                "alert_to_webhook_url"
             ]
+            proxy_logging_obj.slack_alerting_instance.update_values(
+                alert_to_webhook_url=general_settings["alert_to_webhook_url"]
+            )
 
         # router settings
-        if llm_router is not None:
-            _router_settings = config_data.get("router_settings", {})
-            llm_router.update_settings(**_router_settings)
+        if llm_router is not None and prisma_client is not None:
+            db_router_settings = await prisma_client.db.litellm_config.find_first(
+                where={"param_name": "router_settings"}
+            )
+            if (
+                db_router_settings is not None
+                and db_router_settings.param_value is not None
+            ):
+                _router_settings = db_router_settings.param_value
+                llm_router.update_settings(**_router_settings)
 
     async def add_deployment(
         self,
@@ -3168,6 +3266,9 @@ async def startup_event():
     ## COST TRACKING ##
     cost_tracking()
 
+    ## Error Tracking ##
+    error_tracking()
+
     db_writer_client = HTTPHandler()
 
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
@@ -3646,6 +3747,17 @@ async def chat_completion(
         # get the actual model name
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
+
+        ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
+        data["litellm_call_id"] = str(uuid.uuid4())
+        logging_obj, data = litellm.utils.function_setup(
+            original_function="acompletion",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),
+            **data,
+        )
+
+        data["litellm_logging_obj"] = logging_obj
 
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(
@@ -7243,6 +7355,89 @@ async def add_new_model(
         )
 
 
+#### MODEL MANAGEMENT ####
+@router.post(
+    "/model/update",
+    description="Edit existing model params",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_model(
+    model_params: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db, proxy_logging_obj
+    try:
+        import base64
+
+        global prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
+                },
+            )
+        # update DB
+        if store_model_in_db == True:
+            _model_id = None
+            _model_info = getattr(model_params, "model_info", None)
+            if _model_info is None:
+                raise Exception("model_info not provided")
+
+            _model_id = _model_info.id
+            if _model_id is None:
+                raise Exception("model_info.id not provided")
+            _existing_litellm_params = (
+                await prisma_client.db.litellm_proxymodeltable.find_unique(
+                    where={"model_id": _model_id}
+                )
+            )
+            if _existing_litellm_params is None:
+                raise Exception("model not found")
+            _existing_litellm_params_dict = dict(
+                _existing_litellm_params.litellm_params
+            )
+
+            if model_params.litellm_params is None:
+                raise Exception("litellm_params not provided")
+
+            _new_litellm_params_dict = model_params.litellm_params.dict(
+                exclude_none=True
+            )
+
+            for key, value in _existing_litellm_params_dict.items():
+                if key in _new_litellm_params_dict:
+                    _existing_litellm_params_dict[key] = _new_litellm_params_dict[key]
+
+            _data: dict = {
+                "litellm_params": json.dumps(_existing_litellm_params_dict),  # type: ignore
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }
+            model_response = await prisma_client.db.litellm_proxymodeltable.update(
+                where={"model_id": _model_id},
+                data=_data,  # type: ignore
+            )
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns all the models set on the config.yaml, shows 'user_access' = True if the user has access to the model. Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
@@ -7330,9 +7525,9 @@ async def model_info_v2(
 )
 async def model_metrics(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    _selected_model_group: Optional[str] = None,
-    startTime: Optional[datetime] = datetime.now() - timedelta(days=30),
-    endTime: Optional[datetime] = datetime.now(),
+    _selected_model_group: Optional[str] = "gpt-4-32k",
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -7342,65 +7537,214 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    if _selected_model_group and llm_router is not None:
-        _model_list = llm_router.get_model_list()
-        _relevant_api_bases = []
-        for model in _model_list:
-            if model["model_name"] == _selected_model_group:
-                _litellm_params = model["litellm_params"]
-                _api_base = _litellm_params.get("api_base", "")
-                _relevant_api_bases.append(_api_base)
-                _relevant_api_bases.append(_api_base + "/openai/")
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
 
-        sql_query = """
-            SELECT
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-                COUNT(*) AS num_requests,
-                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
-            FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-            AND api_base = ANY($3)
-            GROUP BY CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-            ORDER BY num_requests DESC
-            LIMIT 50;
+    sql_query = """
+        SELECT
+            api_base,
+            model,
+            DATE_TRUNC('day', "startTime")::DATE AS day,
+            AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) / SUM(total_tokens) AS avg_latency_per_token
+        FROM
+            "LiteLLM_SpendLogs"
+        WHERE
+            "startTime" >= NOW() - INTERVAL '30 days'
+            AND "model" = $1 AND "cache_hit" != 'True'
+        GROUP BY
+            api_base,
+            model,
+            day
+        HAVING
+            SUM(total_tokens) > 0
+        ORDER BY
+            avg_latency_per_token DESC;
+    """
+    _all_api_bases = set()
+    db_response = await prisma_client.db.query_raw(
+        sql_query, _selected_model_group, startTime, endTime
+    )
+    _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
+    if db_response is not None:
+        for model_data in db_response:
+            _api_base = model_data["api_base"]
+            _model = model_data["model"]
+            _day = model_data["day"]
+            _avg_latency_per_token = model_data["avg_latency_per_token"]
+            if _day not in _daily_entries:
+                _daily_entries[_day] = {}
+            _combined_model_name = str(_model)
+            if "https://" in _api_base:
+                _combined_model_name = str(_api_base)
+            if "/openai/" in _combined_model_name:
+                _combined_model_name = _combined_model_name.split("/openai/")[0]
+
+            _all_api_bases.add(_combined_model_name)
+            _daily_entries[_day][_combined_model_name] = _avg_latency_per_token
+
         """
+        each entry needs to be like this:
+        {
+            date: 'Jun 23',
+            'gpt-4-https://api.openai.com/v1/': 0.002,
+            'gpt-43-https://api.openai.com-12/v1/': 0.002,
+        }
+        """
+        # convert daily entries to list of dicts
 
-        db_response = await prisma_client.db.query_raw(
-            sql_query, startTime, endTime, _relevant_api_bases
+        response: List[dict] = []
+
+        # sort daily entries by date
+        _daily_entries = dict(sorted(_daily_entries.items(), key=lambda item: item[0]))
+        for day in _daily_entries:
+            entry = {"date": str(day)}
+            for model_key, latency in _daily_entries[day].items():
+                entry[model_key] = latency
+            response.append(entry)
+
+        return {
+            "data": response,
+            "all_api_bases": list(_all_api_bases),
+        }
+
+
+@router.get(
+    "/model/metrics/slow_responses",
+    description="View number of hanging requests per model_group",
+    tags=["model management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_metrics_slow_responses(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = "gpt-4-32k",
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
+):
+    global prisma_client, llm_router, proxy_logging_obj
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    else:
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
 
-        sql_query = """
-            SELECT
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END AS combined_model_api_base,
-                COUNT(*) AS num_requests,
-                AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) AS avg_latency_seconds
-            FROM
-                "LiteLLM_SpendLogs"
+    alerting_threshold = (
+        proxy_logging_obj.slack_alerting_instance.alerting_threshold or 300
+    )
+    alerting_threshold = int(alerting_threshold)
+
+    sql_query = """
+SELECT
+    api_base,
+    COUNT(*) AS total_count,
+    SUM(CASE
+        WHEN ("endTime" - "startTime") >= (INTERVAL '1 SECOND' * CAST($1 AS INTEGER)) THEN 1
+        ELSE 0
+    END) AS slow_count
+FROM
+    "LiteLLM_SpendLogs"
+WHERE
+    "model" = $2
+    AND "cache_hit" != 'True'
+GROUP BY
+    api_base
+ORDER BY
+    slow_count DESC;
+    """
+
+    db_response = await prisma_client.db.query_raw(
+        sql_query, alerting_threshold, _selected_model_group
+    )
+
+    if db_response is not None:
+        for row in db_response:
+            _api_base = row.get("api_base") or ""
+            if "/openai/" in _api_base:
+                _api_base = _api_base.split("/openai/")[0]
+            row["api_base"] = _api_base
+    return db_response
+
+
+@router.get(
+    "/model/metrics/exceptions",
+    description="View number of failed requests per model on config.yaml",
+    tags=["model management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_metrics_exceptions(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = None,
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
+):
+    global prisma_client, llm_router
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
+
+    """
+    """
+    sql_query = """
+        WITH cte AS (
+            SELECT 
+                CASE WHEN api_base = '' THEN litellm_model_name ELSE CONCAT(litellm_model_name, '-', api_base) END AS combined_model_api_base,
+                exception_type,
+                COUNT(*) AS num_exceptions
+            FROM "LiteLLM_ErrorLogs"
             WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
-            GROUP BY
-                CASE WHEN api_base = '' THEN model ELSE CONCAT(model, '-', api_base) END
-            ORDER BY
-                num_requests DESC
-            LIMIT 50;
-        """
-
-        db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
+            GROUP BY combined_model_api_base, exception_type
+        )
+        SELECT 
+            combined_model_api_base,
+            COUNT(*) AS total_exceptions,
+            json_object_agg(exception_type, num_exceptions) AS exception_counts
+        FROM cte
+        GROUP BY combined_model_api_base
+        ORDER BY total_exceptions DESC
+        LIMIT 200;
+    """
+    db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
     response: List[dict] = []
-    if response is not None:
+    exception_types = set()
+
+    """
+    Return Data
+    {
+        "combined_model_api_base": "gpt-3.5-turbo-https://api.openai.com/v1/,
+        "total_exceptions": 5,
+        "BadRequestException": 5,
+        "TimeoutException": 2
+    }
+    """
+
+    if db_response is not None:
         # loop through all models
         for model_data in db_response:
             model = model_data.get("combined_model_api_base", "")
-            num_requests = model_data.get("num_requests", 0)
-            avg_latency_seconds = model_data.get("avg_latency_seconds", 0)
-            response.append(
-                {
-                    "model": model,
-                    "num_requests": num_requests,
-                    "avg_latency_seconds": avg_latency_seconds,
-                }
-            )
-    return response
+            total_exceptions = model_data.get("total_exceptions", 0)
+            exception_counts = model_data.get("exception_counts", {})
+            curr_row = {
+                "model": model,
+                "total_exceptions": total_exceptions,
+            }
+            curr_row.update(exception_counts)
+            response.append(curr_row)
+            for k, v in exception_counts.items():
+                exception_types.add(k)
+
+    return {"data": response, "exception_types": list(exception_types)}
 
 
 @router.get(
@@ -8325,6 +8669,29 @@ async def update_config(config_info: ConfigYAML):
     try:
         import base64
 
+        """
+        - Update the ConfigTable DB
+        - Run 'add_deployment'
+        """
+        if prisma_client is None:
+            raise Exception("No DB Connected")
+
+        updated_settings = config_info.json(exclude_none=True)
+        updated_settings = prisma_client.jsonify_object(updated_settings)
+        for k, v in updated_settings.items():
+            if k == "router_settings":
+                await prisma_client.db.litellm_config.upsert(
+                    where={"param_name": k},
+                    data={
+                        "create": {"param_name": k, "param_value": v},
+                        "update": {"param_value": v},
+                    },
+                )
+
+        ### OLD LOGIC [TODO] MOVE TO DB ###
+
+        import base64
+
         # Load existing config
         config = await proxy_config.get_config()
         verbose_proxy_logger.debug("Loaded config: %s", config)
@@ -8339,6 +8706,13 @@ async def update_config(config_info: ConfigYAML):
             _existing_settings = config["general_settings"]
             for k, v in updated_general_settings.items():
                 # overwrite existing settings with updated values
+                if k == "alert_to_webhook_url":
+                    # check if slack is already enabled. if not, enable it
+                    if "slack" not in _existing_settings:
+                        if "alerting" not in _existing_settings:
+                            _existing_settings["alerting"] = ["slack"]
+                        elif isinstance(_existing_settings["alerting"], list):
+                            _existing_settings["alerting"].append("slack")
                 _existing_settings[k] = v
             config["general_settings"] = _existing_settings
 
@@ -8388,31 +8762,13 @@ async def update_config(config_info: ConfigYAML):
                         "success_callback"
                     ] = combined_success_callback
 
-        # router settings
-        if config_info.router_settings is not None:
-            config.setdefault("router_settings", {})
-            _updated_router_settings = config_info.router_settings
-
-            config["router_settings"] = {
-                **config["router_settings"],
-                **_updated_router_settings,
-            }
-
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
-        # make sure the change is instantly rolled out for langfuse
-        if prisma_client is not None:
-            await proxy_config.add_deployment(
-                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-            )
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+        )
 
-        # Test new connections
-        ## Slack
-        if "slack" in config.get("general_settings", {}).get("alerting", []):
-            await proxy_logging_obj.alerting_handler(
-                message="This is a test", level="Low"
-            )
         return {"message": "Config updated successfully"}
     except Exception as e:
         traceback.print_exc()
@@ -8471,7 +8827,25 @@ async def get_config():
         
         """
         for _callback in _success_callbacks:
-            if _callback == "langfuse":
+            if _callback == "openmeter":
+                env_vars = [
+                    "OPENMETER_API_KEY",
+                ]
+                env_vars_dict = {}
+                for _var in env_vars:
+                    env_variable = environment_variables.get(_var, None)
+                    if env_variable is None:
+                        env_vars_dict[_var] = None
+                    else:
+                        # decode + decrypt the value
+                        decoded_b64 = base64.b64decode(env_variable)
+                        _decrypted_value = decrypt_value(
+                            value=decoded_b64, master_key=master_key
+                        )
+                        env_vars_dict[_var] = _decrypted_value
+
+                _data_to_return.append({"name": _callback, "variables": env_vars_dict})
+            elif _callback == "langfuse":
                 _langfuse_vars = [
                     "LANGFUSE_PUBLIC_KEY",
                     "LANGFUSE_SECRET_KEY",
@@ -8496,6 +8870,7 @@ async def get_config():
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
+        alerting_data = []
         if "slack" in _alerting:
             _slack_vars = [
                 "SLACK_WEBHOOK_URL",
@@ -8504,7 +8879,8 @@ async def get_config():
             for _var in _slack_vars:
                 env_variable = environment_variables.get(_var, None)
                 if env_variable is None:
-                    _slack_env_vars[_var] = None
+                    _value = os.getenv("SLACK_WEBHOOK_URL", None)
+                    _slack_env_vars[_var] = _value
                 else:
                     # decode + decrypt the value
                     decoded_b64 = base64.b64decode(env_variable)
@@ -8517,19 +8893,23 @@ async def get_config():
             _all_alert_types = (
                 proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
             )
-            _data_to_return.append(
+            _alerts_to_webhook = (
+                proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+            )
+            alerting_data.append(
                 {
                     "name": "slack",
                     "variables": _slack_env_vars,
-                    "alerting_types": _alerting_types,
-                    "all_alert_types": _all_alert_types,
+                    "active_alerts": _alerting_types,
+                    "alerts_to_webhook": _alerts_to_webhook,
                 }
             )
 
         _router_settings = llm_router.get_settings()
         return {
             "status": "success",
-            "data": _data_to_return,
+            "callbacks": _data_to_return,
+            "alerts": alerting_data,
             "router_settings": _router_settings,
         }
     except Exception as e:
@@ -8605,9 +8985,9 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal["slack_budget_alerts", "langfuse", "slack"] = fastapi.Query(
-        description="Specify the service being hit."
-    ),
+    service: Literal[
+        "slack_budget_alerts", "langfuse", "slack", "openmeter"
+    ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
     Hidden endpoint.
@@ -8621,13 +9001,25 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
-        if service not in ["slack_budget_alerts", "langfuse", "slack"]:
+        if service not in ["slack_budget_alerts", "langfuse", "slack", "openmeter"]:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
                 },
             )
+
+        if service == "openmeter":
+            _ = await litellm.acompletion(
+                model="openai/litellm-mock-response-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                user="litellm:/health/services",
+                mock_response="This is a mock response",
+            )
+            return {
+                "status": "success",
+                "message": "Mock LLM request made - check openmeter.",
+            }
 
         if service == "langfuse":
             from litellm.integrations.langfuse import LangFuseLogger
@@ -8645,27 +9037,73 @@ async def health_services_endpoint(
                 "message": "Mock LLM request made - check langfuse.",
             }
 
-        if "slack" in general_settings.get("alerting", []):
-            test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
-            await proxy_logging_obj.alerting_handler(message=test_message, level="Low")
-            return {
-                "status": "success",
-                "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
-            }
-        else:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": '"slack" not in proxy config: general_settings. Unable to test this.'
-                },
-            )
+        if service == "slack" or service == "slack_budget_alerts":
+            if "slack" in general_settings.get("alerting", []):
+                # test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
+                # check if user has opted into unique_alert_webhooks
+                if (
+                    proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+                    is not None
+                ):
+                    for (
+                        alert_type
+                    ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
+                        """
+                        "llm_exceptions",
+                        "llm_too_slow",
+                        "llm_requests_hanging",
+                        "budget_alerts",
+                        "db_exceptions",
+                        """
+                        # only test alert if it's in active alert types
+                        if (
+                            proxy_logging_obj.slack_alerting_instance.alert_types
+                            is not None
+                            and alert_type
+                            not in proxy_logging_obj.slack_alerting_instance.alert_types
+                        ):
+                            continue
+                        test_message = "default test message"
+                        if alert_type == "llm_exceptions":
+                            test_message = f"LLM Exception test alert"
+                        elif alert_type == "llm_too_slow":
+                            test_message = f"LLM Too Slow test alert"
+                        elif alert_type == "llm_requests_hanging":
+                            test_message = f"LLM Requests Hanging test alert"
+                        elif alert_type == "budget_alerts":
+                            test_message = f"Budget Alert test alert"
+                        elif alert_type == "db_exceptions":
+                            test_message = f"DB Exception test alert"
+
+                        await proxy_logging_obj.alerting_handler(
+                            message=test_message, level="Low", alert_type=alert_type
+                        )
+                else:
+                    await proxy_logging_obj.alerting_handler(
+                        message="This is a test slack alert message",
+                        level="Low",
+                        alert_type="budget_alerts",
+                    )
+                return {
+                    "status": "success",
+                    "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
+                }
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": '"{}" not in proxy config: general_settings. Unable to test this.'.format(
+                            service
+                        )
+                    },
+                )
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
                 type="auth_error",
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
             raise e
@@ -8673,7 +9111,7 @@ async def health_services_endpoint(
             message="Authentication Error, " + str(e),
             type="auth_error",
             param=getattr(e, "param", "None"),
-            code=status.HTTP_401_UNAUTHORIZED,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 

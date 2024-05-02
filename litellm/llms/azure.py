@@ -96,6 +96,15 @@ class AzureOpenAIConfig(OpenAIConfig):
             top_p,
         )
 
+    def get_mapped_special_auth_params(self) -> dict:
+        return {"token": "azure_ad_token"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "token":
+                optional_params["azure_ad_token"] = value
+        return optional_params
+
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
     # azure_client_params = {

@@ -223,7 +223,7 @@ class OpenAITextCompletionConfig:
             model_response_object.choices = choice_list
 
             if "usage" in response_object:
-                model_response_object.usage = response_object["usage"]
+                setattr(model_response_object, "usage", response_object["usage"])
 
             if "id" in response_object:
                 model_response_object.id = response_object["id"]
@@ -447,6 +447,7 @@ class OpenAIChatCompletion(BaseLLM):
                 )
             else:
                 openai_aclient = client
+
             ## LOGGING
             logging_obj.pre_call(
                 input=data["messages"],
