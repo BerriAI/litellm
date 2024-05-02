@@ -14,6 +14,7 @@ import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
+
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
@@ -62,6 +63,7 @@ from .llms import (
     vertex_ai,
     vertex_ai_anthropic,
     maritalk,
+    watsonx,
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
@@ -359,7 +361,7 @@ def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
-    mock_response: str = "This is a mock request",
+    mock_response: Union[str, Exception] = "This is a mock request",
     logging=None,
     **kwargs,
 ):
@@ -386,6 +388,20 @@ def mock_completion(
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
     """
     try:
+        ## LOGGING
+        if logging is not None:
+            logging.pre_call(
+                input=messages,
+                api_key="mock-key",
+            )
+        if isinstance(mock_response, Exception):
+            raise litellm.APIError(
+                status_code=500,  # type: ignore
+                message=str(mock_response),
+                llm_provider="openai",  # type: ignore
+                model=model,  # type: ignore
+                request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            )
         model_response = ModelResponse(stream=stream)
         if stream is True:
             # don't try to access stream object,
@@ -407,8 +423,10 @@ def mock_completion(
         model_response["created"] = int(time.time())
         model_response["model"] = model
 
-        model_response.usage = Usage(
-            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        setattr(
+            model_response,
+            "usage",
+            Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
         )
 
         try:
@@ -652,6 +670,7 @@ def completion(
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
+        setattr(model_response, "usage", litellm.Usage())
         if (
             kwargs.get("azure", False) == True
         ):  # don't remove flag check, to remain backwards compatible for repos like Codium
@@ -1859,6 +1878,43 @@ def completion(
 
             ## RESPONSE OBJECT
             response = response
+        elif custom_llm_provider == "watsonx":
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            response = watsonx.IBMWatsonXAI().completion(
+                model=model,
+                messages=messages,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,  # type: ignore
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging,
+                timeout=timeout,
+            )
+            if (
+                "stream" in optional_params
+                and optional_params["stream"] == True
+                and not isinstance(response, CustomStreamWrapper)
+            ):
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    iter(response),
+                    model,
+                    custom_llm_provider="watsonx",
+                    logging_obj=logging,
+                )
+
+            if optional_params.get("stream", False):
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=None,
+                    original_response=response,
+                )
+            ## RESPONSE OBJECT
+            response = response
         elif custom_llm_provider == "vllm":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             model_response = vllm.completion(
@@ -2937,6 +2993,15 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider == "watsonx":
+            response = watsonx.IBMWatsonXAI().embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
             )
         else:
             args = locals()

@@ -1,6 +1,6 @@
 from typing import Optional, List, Any, Literal, Union
 import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx, time
-import litellm, backoff
+import litellm, backoff, traceback
 from litellm.proxy._types import (
     UserAPIKeyAuth,
     DynamoDBArgs,
@@ -199,6 +199,33 @@ class ProxyLogging:
             print_verbose(f"final data being sent to {call_type} call: {data}")
             return data
         except Exception as e:
+            if "litellm_logging_obj" in data:
+                logging_obj: litellm.utils.Logging = data["litellm_logging_obj"]
+
+                ## ASYNC FAILURE HANDLER ##
+                error_message = ""
+                if isinstance(e, HTTPException):
+                    if isinstance(e.detail, str):
+                        error_message = e.detail
+                    elif isinstance(e.detail, dict):
+                        error_message = json.dumps(e.detail)
+                    else:
+                        error_message = str(e)
+                else:
+                    error_message = str(e)
+                error_raised = Exception(f"{error_message}")
+                await logging_obj.async_failure_handler(
+                    exception=error_raised,
+                    traceback_exception=traceback.format_exc(),
+                )
+
+                ## SYNC FAILURE HANDLER ##
+                try:
+                    logging_obj.failure_handler(
+                        error_raised, traceback.format_exc()
+                    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
+                except Exception as error_val:
+                    pass
             raise e
 
     async def during_call_hook(
@@ -256,7 +283,16 @@ class ProxyLogging:
         )
 
     async def alerting_handler(
-        self, message: str, level: Literal["Low", "Medium", "High"]
+        self,
+        message: str,
+        level: Literal["Low", "Medium", "High"],
+        alert_type: Literal[
+            "llm_exceptions",
+            "llm_too_slow",
+            "llm_requests_hanging",
+            "budget_alerts",
+            "db_exceptions",
+        ],
     ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
@@ -289,7 +325,7 @@ class ProxyLogging:
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
-                    message=message, level=level
+                    message=message, level=level, alert_type=alert_type
                 )
             elif client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:
@@ -323,6 +359,7 @@ class ProxyLogging:
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
                 level="High",
+                alert_type="db_exceptions",
             )
         )
 
@@ -354,7 +391,9 @@ class ProxyLogging:
             return
         asyncio.create_task(
             self.alerting_handler(
-                message=f"LLM API call failed: {str(original_exception)}", level="High"
+                message=f"LLM API call failed: {str(original_exception)}",
+                level="High",
+                alert_type="llm_exceptions",
             )
         )
 
@@ -1738,7 +1777,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     usage = response_obj["usage"]
     if type(usage) == litellm.Usage:
         usage = dict(usage)
-    id = response_obj.get("id", str(uuid.uuid4()))
+    id = response_obj.get("id", kwargs.get("litellm_call_id"))
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
@@ -2010,6 +2049,11 @@ async def update_spend(
                 raise e
 
     ### UPDATE KEY TABLE ###
+    verbose_proxy_logger.debug(
+        "KEY Spend transactions: {}".format(
+            len(prisma_client.key_list_transactons.keys())
+        )
+    )
     if len(prisma_client.key_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
             start_time = time.time()
