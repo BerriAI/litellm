@@ -3696,24 +3696,25 @@ def _select_tokenizer(model: str):
         return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
-def encode(model: str, text: str):
+def encode(model: str, custom_tokenizer: Optional[dict] = None, text: str):
     """
     Encodes the given text using the specified model.
 
     Args:
         model (str): The name of the model to use for tokenization.
+        custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
         text (str): The text to be encoded.
 
     Returns:
         enc: The encoded text.
     """
-    tokenizer_json = _select_tokenizer(model=model)
+    tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     enc = tokenizer_json["tokenizer"].encode(text)
     return enc
 
 
-def decode(model: str, tokens: List[int]):
-    tokenizer_json = _select_tokenizer(model=model)
+def decode(model: str, custom_tokenizer: Optional[dict] = None, tokens: List[int]):
+    tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
 
