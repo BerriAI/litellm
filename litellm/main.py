@@ -2303,6 +2303,7 @@ def batch_completion(
         user (str, optional): The user string for generating completions. Defaults to "".
         deployment_id (optional): The deployment ID for generating completions. Defaults to None.
         request_timeout (int, optional): The request timeout for generating completions. Defaults to None.
+        return_exceptions (bool): Whether to return exceptions and partial results when exceptions occur. Defaults to False.
 
     Returns:
         list: A list of completion results.
@@ -2361,7 +2362,17 @@ def batch_completion(
                     completions.append(future)
 
         # Retrieve the results from the futures
-        results = [future.result() for future in completions]
+        # results = [future.result() for future in completions]
+        if return_exceptions:
+            results = []
+            for future in completions:
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    results.append(exc)
+        else:
+            results = [future.result() for future in completions]
+
     return results
 
 
