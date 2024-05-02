@@ -518,7 +518,7 @@ async def test_acompletion_gemini_stream():
         litellm.set_verbose = True
         print("Streaming gemini response")
         messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
+            # {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
                 "content": "What do you know?",
@@ -1296,6 +1296,7 @@ def test_completion_watsonx_stream():
             raise Exception("Empty response received")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # test_completion_sagemaker_stream()
 
