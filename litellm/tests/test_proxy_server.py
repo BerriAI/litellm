@@ -1,5 +1,6 @@
 import sys, os
 import traceback
+from unittest import mock
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,6 +35,25 @@ from litellm.proxy.proxy_server import (
 token = "sk-1234"
 
 headers = {"Authorization": f"Bearer {token}"}
+
+
+def mock_patch_acompletion():
+    async def side_effect(*args, **kwargs):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Whispers of the wind carry dreams to me.",
+                        "role": "assistant"
+                    }
+                }
+            ],
+        }
+
+    return mock.patch(
+        "litellm.proxy.proxy_server.llm_router.acompletion",
+        side_effect=side_effect,
+    )
 
 
 @pytest.fixture(scope="function")
@@ -104,7 +124,8 @@ def test_chat_completion_azure(client_no_auth):
 # test_chat_completion_azure()
 
 
-def test_openai_deployments_model_chat_completions_azure(client_no_auth):
+@mock_patch_acompletion()
+def test_openai_deployments_model_chat_completions_azure(_mock_acompletion, client_no_auth):
     global headers
     try:
         # Your test data
