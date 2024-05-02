@@ -1,5 +1,5 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
-
+import httpx
 from pydantic import BaseModel, validator
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -48,6 +48,23 @@ class RouterConfig(BaseModel):
         protected_namespaces = ()
 
 
+class UpdateRouterConfig(BaseModel):
+    """
+    Set of params that you can modify via `router.update_settings()`.
+    """
+
+    routing_strategy_args: Optional[dict] = None
+    routing_strategy: Optional[str] = None
+    allowed_fails: Optional[int] = None
+    cooldown_time: Optional[float] = None
+    num_retries: Optional[int] = None
+    timeout: Optional[float] = None
+    max_retries: Optional[int] = None
+    retry_after: Optional[float] = None
+    fallbacks: Optional[List[dict]] = None
+    context_window_fallbacks: Optional[List[dict]] = None
+
+
 class ModelInfo(BaseModel):
     id: Optional[
         str
@@ -87,11 +104,13 @@ class LiteLLM_Params(BaseModel):
     api_key: Optional[str] = None
     api_base: Optional[str] = None
     api_version: Optional[str] = None
-    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
+    timeout: Optional[Union[float, str, httpx.Timeout]] = (
+        None  # if str, pass in as os.environ/
+    )
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
-    max_retries: int = 2  # follows openai default of 2
+    max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
@@ -129,14 +148,13 @@ class LiteLLM_Params(BaseModel):
         args.pop("self", None)
         args.pop("params", None)
         args.pop("__class__", None)
-        if max_retries is None:
-            max_retries = 2
-        elif isinstance(max_retries, str):
+        if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
     class Config:
         extra = "allow"
+        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -153,6 +171,39 @@ class LiteLLM_Params(BaseModel):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class updateLiteLLMParams(BaseModel):
+    # This class is used to update the LiteLLM_Params
+    # only differece is model is optional
+    model: Optional[str] = None
+    tpm: Optional[int] = None
+    rpm: Optional[int] = None
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+    api_version: Optional[str] = None
+    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
+    stream_timeout: Optional[Union[float, str]] = (
+        None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    )
+    max_retries: int = 2  # follows openai default of 2
+    organization: Optional[str] = None  # for openai orgs
+    ## VERTEX AI ##
+    vertex_project: Optional[str] = None
+    vertex_location: Optional[str] = None
+    ## AWS BEDROCK / SAGEMAKER ##
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region_name: Optional[str] = None
+
+
+class updateDeployment(BaseModel):
+    model_name: Optional[str] = None
+    litellm_params: Optional[updateLiteLLMParams] = None
+    model_info: Optional[ModelInfo] = None
+
+    class Config:
+        protected_namespaces = ()
 
 
 class Deployment(BaseModel):
@@ -212,3 +263,4 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    no_deployments_available = "No deployments available for selected model"

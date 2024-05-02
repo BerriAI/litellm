@@ -3,8 +3,14 @@ import requests, traceback
 import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, meta, BaseLoader
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from typing import Optional, Any
-from typing import List
+from typing import (
+    Any,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+)
 import litellm
 
 
@@ -232,7 +238,15 @@ known_tokenizer_config = {
             "eos_token": "</s>",
         },
         "status": "success",
-    }
+    },
+    "meta-llama/Meta-Llama-3-8B-Instruct": {
+        "tokenizer": {
+            "chat_template": "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}",
+            "bos_token": "<|begin_of_text|>",
+            "eos_token": "",
+        },
+        "status": "success",
+    },
 }
 
 
@@ -421,6 +435,35 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
     else:
         prompt = default_pt(messages)
     return prompt
+
+
+### IBM Granite
+
+
+def ibm_granite_pt(messages: list):
+    """
+    IBM's Granite models uses the template:
+    <|system|> {system_message} <|user|> {user_message} <|assistant|> {assistant_message}
+
+    See: https://www.ibm.com/docs/en/watsonx-as-a-service?topic=solutions-supported-foundation-models
+    """
+    return custom_prompt(
+        messages=messages,
+        role_dict={
+            "system": {
+                "pre_message": "<|system|>\n",
+                "post_message": "\n",
+            },
+            "user": {
+                "pre_message": "<|user|>\n",
+                "post_message": "\n",
+            },
+            "assistant": {
+                "pre_message": "<|assistant|>\n",
+                "post_message": "\n",
+            },
+        },
+    ).strip()
 
 
 ### ANTHROPIC ###
@@ -640,7 +683,7 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         if get_attribute_or_key(tool, "type") != "function":
             continue
 
-        tool_function =  get_attribute_or_key(tool,"function")
+        tool_function = get_attribute_or_key(tool, "function")
         tool_name = get_attribute_or_key(tool_function, "name")
         tool_arguments = get_attribute_or_key(tool_function, "arguments")
         parameters = "".join(
@@ -833,8 +876,14 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
         {
             "type": "tool_use",
             "id": get_attribute_or_key(tool, "id"),
-            "name": get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
-            "input": json.loads(get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments")),
+            "name": get_attribute_or_key(
+                get_attribute_or_key(tool, "function"), "name"
+            ),
+            "input": json.loads(
+                get_attribute_or_key(
+                    get_attribute_or_key(tool, "function"), "arguments"
+                )
+            ),
         }
         for tool in tool_calls
         if get_attribute_or_key(tool, "type") == "function"
@@ -1003,6 +1052,30 @@ def get_system_prompt(messages):
     return system_prompt, messages
 
 
+def convert_to_documents(
+    observations: Any,
+) -> List[MutableMapping]:
+    """Converts observations into a 'document' dict"""
+    documents: List[MutableMapping] = []
+    if isinstance(observations, str):
+        # strings are turned into a key/value pair and a key of 'output' is added.
+        observations = [{"output": observations}]
+    elif isinstance(observations, Mapping):
+        # single mappings are transformed into a list to simplify the rest of the code.
+        observations = [observations]
+    elif not isinstance(observations, Sequence):
+        # all other types are turned into a key/value pair within a list
+        observations = [{"output": observations}]
+
+    for doc in observations:
+        if not isinstance(doc, Mapping):
+            # types that aren't Mapping are turned into a key/value pair.
+            doc = {"output": doc}
+        documents.append(doc)
+
+    return documents
+
+
 def convert_openai_message_to_cohere_tool_result(message):
     """
     OpenAI message with a tool result looks like:
@@ -1044,7 +1117,7 @@ def convert_openai_message_to_cohere_tool_result(message):
             "parameters": {"location": "San Francisco, CA"},
             "generation_id": tool_call_id,
         },
-        "outputs": [content],
+        "outputs": convert_to_documents(content),
     }
     return cohere_tool_result
 
@@ -1057,7 +1130,7 @@ def cohere_message_pt(messages: list):
         if message["role"] == "tool":
             tool_result = convert_openai_message_to_cohere_tool_result(message)
             tool_results.append(tool_result)
-        else:
+        elif message.get("content"):
             prompt += message["content"] + "\n\n"
     prompt = prompt.rstrip()
     return prompt, tool_results
@@ -1332,15 +1405,57 @@ def prompt_factory(
                 return anthropic_pt(messages=messages)
         elif "mistral." in model:
             return mistral_instruct_pt(messages=messages)
+        elif "llama2" in model and "chat" in model:
+            return llama_2_chat_pt(messages=messages)
+        elif "llama3" in model and "instruct" in model:
+            return hf_chat_template(
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
+                messages=messages,
+            )
     elif custom_llm_provider == "perplexity":
         for message in messages:
             message.pop("name", None)
         return messages
     elif custom_llm_provider == "azure_text":
         return azure_text_pt(messages=messages)
+    elif custom_llm_provider == "watsonx":
+        if "granite" in model and "chat" in model:
+            # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
+            return ibm_granite_pt(messages=messages)
+        elif "ibm-mistral" in model and "instruct" in model:
+            # models like ibm-mistral/mixtral-8x7b-instruct-v01-q use the mistral instruct prompt template
+            return mistral_instruct_pt(messages=messages)
+        elif "meta-llama/llama-3" in model and "instruct" in model:
+            # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
+            return custom_prompt(
+                role_dict={
+                    "system": {
+                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "user": {
+                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                },
+                messages=messages,
+                initial_prompt_value="<|begin_of_text|>",
+                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
+            )
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
+        elif (
+            "meta-llama/llama-3" in model or "meta-llama-3" in model
+        ) and "instruct" in model:
+            return hf_chat_template(
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
+                messages=messages,
+            )
         elif (
             "tiiuae/falcon" in model
         ):  # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
@@ -1381,6 +1496,7 @@ def prompt_factory(
         return default_pt(
             messages=messages
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
+
 
 def get_attribute_or_key(tool_or_function, attribute, default=None):
     if hasattr(tool_or_function, attribute):
