@@ -26,6 +26,8 @@ fastapi-sso==0.10.0 # admin UI, SSO
 pyjwt[crypto]==2.8.0
 python-multipart==0.0.9 # admin UI
 Pillow==10.3.0
+azure-ai-contentsafety==1.0.0 # for azure content safety
+azure-identity==1.15.0 # for azure content safety
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
