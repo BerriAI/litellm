@@ -104,6 +104,34 @@ def test_chat_completion_azure(client_no_auth):
 # test_chat_completion_azure()
 
 
+def test_openai_deployments_model_chat_completions_azure(client_no_auth):
+    global headers
+    try:
+        # Your test data
+        test_data = {
+            "model": "azure/chatgpt-v-2",
+            "messages": [
+                {"role": "user", "content": "write 1 sentence poem"},
+            ],
+            "max_tokens": 10,
+        }
+
+        url = "/openai/deployments/azure/chatgpt-v-2/chat/completions"
+        print(f"testing proxy server with Azure Request {url}")
+        response = client_no_auth.post(url, json=test_data)
+
+        assert response.status_code == 200
+        result = response.json()
+        print(f"Received response: {result}")
+        assert len(result["choices"][0]["message"]["content"]) > 0
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
+# Run the test
+# test_openai_deployments_model_chat_completions_azure()
+
+
 ### EMBEDDING
 def test_embedding(client_no_auth):
     global headers
