@@ -7608,6 +7608,65 @@ async def model_metrics(
 
 
 @router.get(
+    "/model/metrics/slow_responses",
+    description="View number of hanging requests per model_group",
+    tags=["model management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_metrics_slow_responses(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = "gpt-4-32k",
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
+):
+    global prisma_client, llm_router, proxy_logging_obj
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
+
+    alerting_threshold = (
+        proxy_logging_obj.slack_alerting_instance.alerting_threshold or 300
+    )
+    alerting_threshold = int(alerting_threshold)
+
+    sql_query = """
+SELECT
+    api_base,
+    COUNT(*) AS count
+FROM
+    "LiteLLM_SpendLogs"
+WHERE
+    ("endTime" - "startTime") >= (INTERVAL '1 SECOND' * CAST($1 AS INTEGER))
+    AND "model" = $2
+    AND "cache_hit" != 'True'
+GROUP BY
+    api_base
+ORDER BY
+    count DESC;
+
+    """
+
+    db_response = await prisma_client.db.query_raw(
+        sql_query, alerting_threshold, _selected_model_group
+    )
+
+    if db_response is not None:
+        for row in db_response:
+            _api_base = row.get("api_base") or ""
+            if "/openai/" in _api_base:
+                _api_base = _api_base.split("/openai/")[0]
+            row["api_base"] = _api_base
+    return db_response
+
+
+@router.get(
     "/model/metrics/exceptions",
     description="View number of failed requests per model on config.yaml",
     tags=["model management"],
