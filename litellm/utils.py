@@ -410,10 +410,11 @@ class Message(OpenAIObject):
         except:
             # if using pydantic v1
             return self.dict()
-            
+
+
 class Delta(OpenAIObject):
-    tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
-    
+    tool_calls: Optional[List[ChatCompletionDeltaToolCall]] = None
+
     def __init__(
         self,
         content=None,
@@ -475,7 +476,7 @@ class Choices(OpenAIObject):
         )  # set finish_reason for all responses
         self.index = index
         if message is None:
-            self.message = Message(content=None)
+            self.message = Message()
         else:
             if isinstance(message, Message):
                 self.message = message
