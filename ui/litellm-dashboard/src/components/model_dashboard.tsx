@@ -704,6 +704,18 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       setModelExceptions(modelExceptionsResponse.data);
       setAllExceptions(modelExceptionsResponse.exception_types);
 
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup
+      )
+
+      console.log("slowResponses:", slowResponses)
+
+      setSlowResponsesData(slowResponses);
+
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
     }
