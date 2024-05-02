@@ -111,7 +111,7 @@ class LangFuseLogger:
                         pass
 
             # end of processing langfuse ########################
-            print(f"response obj type: {type(response_obj)}")
+            print_verbose(f"response obj type: {type(response_obj)}")
             if (
                 level == "ERROR"
                 and status_message is not None
@@ -144,7 +144,7 @@ class LangFuseLogger:
             trace_id = None
             generation_id = None
             if self._is_langfuse_v2():
-                print("INSIDE V2 LANGFUSE")
+                print_verbose("INSIDE V2 LANGFUSE")
                 trace_id, generation_id = self._log_langfuse_v2(
                     user_id,
                     metadata,
@@ -373,7 +373,7 @@ class LangFuseLogger:
 
             print_verbose(f"trace_params: {trace_params}")
 
-            print(f"trace_params: {trace_params}")
+            print_verbose(f"trace_params: {trace_params}")
             trace = self.Langfuse.trace(**trace_params)
 
             generation_id = None
@@ -427,7 +427,7 @@ class LangFuseLogger:
 
             generation_client = trace.generation(**generation_params)
 
-            print(f"LANGFUSE TRACE ID - {generation_client.trace_id}")
+            print_verbose(f"LANGFUSE TRACE ID - {generation_client.trace_id}")
             return generation_client.trace_id, generation_id
         except Exception as e:
             verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
