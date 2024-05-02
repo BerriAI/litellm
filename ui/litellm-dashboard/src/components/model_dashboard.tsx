@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -205,6 +205,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelExceptions, setModelExceptions] = useState<any[]>([]);
   const [allExceptions, setAllExceptions] = useState<any[]>([]);
   const [failureTableData, setFailureTableData] = useState<any[]>([]);
+  const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -479,39 +480,51 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         setAllExceptions(modelExceptionsResponse.exception_types);
 
 
-        let modelMetricsData = modelMetricsResponse.data;
-        let successdeploymentToSuccess: Record<string, number> = {};
-        for  (let i = 0; i < modelMetricsData.length; i++) {
-          let element = modelMetricsData[i];
-          let _model_name = element.model;
-          let _num_requests = element.num_requests;
-          successdeploymentToSuccess[_model_name] = _num_requests
-        }
-        console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
+        const slowResponses = await modelMetricsSlowResponsesCall(
+          accessToken,
+          userID,
+          userRole,
+          null
+        )
+
+        console.log("slowResponses:", slowResponses)
+
+        setSlowResponsesData(slowResponses);
+
+
+        // let modelMetricsData = modelMetricsResponse.data;
+        // let successdeploymentToSuccess: Record<string, number> = {};
+        // for  (let i = 0; i < modelMetricsData.length; i++) {
+        //   let element = modelMetricsData[i];
+        //   let _model_name = element.model;
+        //   let _num_requests = element.num_requests;
+        //   successdeploymentToSuccess[_model_name] = _num_requests
+        // }
+        // console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
         
-        let failureTableData = [];
-        let _failureData = modelExceptionsResponse.data;
-        for (let i = 0; i < _failureData.length; i++) {
-          const model = _failureData[i];
-          let _model_name = model.model;
-          let total_exceptions = model.total_exceptions;
-          let total_Requests = successdeploymentToSuccess[_model_name];
-          if (total_Requests == null) {
-            total_Requests = 0
-          }
-          let _data = {
-            model: _model_name,
-            total_exceptions: total_exceptions,
-            total_Requests: total_Requests,
-            failure_rate: total_Requests / total_exceptions
-          }
-          failureTableData.push(_data);
-          // sort failureTableData by failure_rate
-          failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
+        // let failureTableData = [];
+        // let _failureData = modelExceptionsResponse.data;
+        // for (let i = 0; i < _failureData.length; i++) {
+        //   const model = _failureData[i];
+        //   let _model_name = model.model;
+        //   let total_exceptions = model.total_exceptions;
+        //   let total_Requests = successdeploymentToSuccess[_model_name];
+        //   if (total_Requests == null) {
+        //     total_Requests = 0
+        //   }
+        //   let _data = {
+        //     model: _model_name,
+        //     total_exceptions: total_exceptions,
+        //     total_Requests: total_Requests,
+        //     failure_rate: total_Requests / total_exceptions
+        //   }
+        //   failureTableData.push(_data);
+        //   // sort failureTableData by failure_rate
+        //   failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
         
-          setFailureTableData(failureTableData);
-          console.log("failureTableData:", failureTableData);
-        }
+        //   setFailureTableData(failureTableData);
+        //   console.log("failureTableData:", failureTableData);
+        // }
 
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -690,6 +703,18 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       console.log("Model exceptions response:", modelExceptionsResponse);
       setModelExceptions(modelExceptionsResponse.data);
       setAllExceptions(modelExceptionsResponse.exception_types);
+
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup
+      )
+
+      console.log("slowResponses:", slowResponses)
+
+      setSlowResponsesData(slowResponses);
 
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
@@ -1110,7 +1135,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
             <Grid numItems={2}>
               <Col>
-              <Card className="mr-2">
+              <Card className="mr-2 max-h-[400px] min-h-[400px]">
                 <Title>Avg Latency per Token</Title><p className="text-gray-500 italic"> (seconds/token)</p>
                 <Text className="text-gray-500 italic mt-1 mb-1">average Latency for successfull requests divided by the total tokens</Text>
               { modelMetrics && modelMetricsCategories && (
@@ -1126,29 +1151,26 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 />
               )}
 
-                  
-              
               </Card>
               </Col>
             <Col>
-            <Card className="ml-2">
+            <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
               <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Success Requests</TableHeaderCell>
-                  <TableHeaderCell>Error Requests</TableHeaderCell>
-                  <TableHeaderCell>Failure %</TableHeaderCell>
+                  <TableHeaderCell>Deployment</TableHeaderCell>
+                  <TableHeaderCell>Success Responses</TableHeaderCell>
+                  <TableHeaderCell>Slow Responses <p>Success Responses taking 600+s</p></TableHeaderCell>
 
                 </TableRow>
               </TableHead>
               <TableBody>
-                {failureTableData.map((metric, idx) => (
+                {slowResponsesData.map((metric, idx) => (
                   <TableRow key={idx}>
-                    <TableCell>{metric.model}</TableCell>
-                    <TableCell>{metric.total_Requests}</TableCell>
-                    <TableCell>{metric.total_exceptions}</TableCell>
-                    <TableCell>{metric.failure_rate}%</TableCell>
+                    <TableCell>{metric.api_base}</TableCell>
+                    <TableCell>{metric.total_count}</TableCell>
+                    <TableCell>{metric.slow_count}</TableCell>
+
                   </TableRow>
 
                 ))}
