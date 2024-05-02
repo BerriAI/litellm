@@ -3644,7 +3644,7 @@ async def chat_completion(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "chat_completion: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -3833,7 +3833,7 @@ async def completion(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "completion: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -4041,7 +4041,7 @@ async def embeddings(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "embeddings: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -4197,7 +4197,7 @@ async def image_generation(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "image_generation: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -4372,7 +4372,7 @@ async def audio_transcriptions(
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
-                            "error": "Invalid model name passed in model="
+                            "error": "audio_transcriptions: Invalid model name passed in model="
                             + data.get("model", "")
                         },
                     )
@@ -4538,7 +4538,7 @@ async def moderations(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "moderations: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
