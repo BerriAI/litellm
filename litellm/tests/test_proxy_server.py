@@ -37,24 +37,23 @@ token = "sk-1234"
 
 headers = {"Authorization": f"Bearer {token}"}
 
+example_completion_result = {
+    "choices": [
+        {
+            "message": {
+                "content": "Whispers of the wind carry dreams to me.",
+                "role": "assistant"
+            }
+        }
+    ],
+}
+
 
 @contextlib.contextmanager
 def mock_patch_acompletion():
-    async def side_effect(*args, **kwargs):
-        return {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Whispers of the wind carry dreams to me.",
-                        "role": "assistant"
-                    }
-                }
-            ],
-        }
-
     with mock.patch(
         "litellm.proxy.proxy_server.llm_router.acompletion",
-        side_effect=side_effect,
+        return_value=example_completion_result,
     ):
         yield
 
