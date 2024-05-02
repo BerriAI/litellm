@@ -1135,7 +1135,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
             <Grid numItems={2}>
               <Col>
-              <Card className="mr-2">
+              <Card className="mr-2 max-h-[400px] min-h-[400px]">
                 <Title>Avg Latency per Token</Title><p className="text-gray-500 italic"> (seconds/token)</p>
                 <Text className="text-gray-500 italic mt-1 mb-1">average Latency for successfull requests divided by the total tokens</Text>
               { modelMetrics && modelMetricsCategories && (
@@ -1154,13 +1154,13 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               </Card>
               </Col>
             <Col>
-            <Card className="ml-2">
+            <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
               <Table>
               <TableHead>
                 <TableRow>
                   <TableHeaderCell>Deployment</TableHeaderCell>
                   <TableHeaderCell>Success Responses</TableHeaderCell>
-                  <TableHeaderCell>Slow Responses</TableHeaderCell>
+                  <TableHeaderCell>Slow Responses <p>Success Responses taking 600+s</p></TableHeaderCell>
 
                 </TableRow>
               </TableHead>
