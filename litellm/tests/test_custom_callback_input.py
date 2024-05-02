@@ -529,6 +529,7 @@ def test_chat_bedrock_stream():
 @pytest.mark.asyncio
 async def test_async_chat_bedrock_stream():
     try:
+        litellm.set_verbose = True
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = await litellm.acompletion(
