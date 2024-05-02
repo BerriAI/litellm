@@ -679,8 +679,8 @@ class PrismaClient:
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff
-        max_tries=3,  # maximum number of retries
-        max_time=10,  # maximum total time to retry for
+        max_tries=1,  # maximum number of retries
+        max_time=2,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def get_generic_data(
@@ -718,7 +718,8 @@ class PrismaClient:
             import traceback
 
             error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {str(e)}"
-            print_verbose(error_msg)
+            verbose_proxy_logger.error(error_msg)
+            error_msg = error_msg + "\nException Type: {}".format(type(e))
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
