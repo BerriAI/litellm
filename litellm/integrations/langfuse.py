@@ -27,14 +27,20 @@ class LangFuseLogger:
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.Langfuse = Langfuse(
-            public_key=self.public_key,
-            secret_key=self.secret_key,
-            host=self.langfuse_host,
-            release=self.langfuse_release,
-            debug=self.langfuse_debug,
-            flush_interval=flush_interval,  # flush interval in seconds
-        )
+
+        parameters = {
+            "public_key": self.public_key,
+            "secret_key": self.secret_key,
+            "host": self.langfuse_host,
+            "release": self.langfuse_release,
+            "debug": self.langfuse_debug,
+            "flush_interval": flush_interval, # flush interval in seconds
+        }
+
+        if Version(langfuse.version.__version__) >= Version("2.6.0"):
+            parameters["sdk_integration"] = "litellm"
+
+        self.Langfuse = Langfuse(**parameters)
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
