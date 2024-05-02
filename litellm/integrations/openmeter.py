@@ -38,9 +38,6 @@ class OpenMeterLogger(CustomLogger):
         in the environment
         """
         missing_keys = []
-        if litellm.get_secret("OPENMETER_API_ENDPOINT", None) is None:
-            missing_keys.append("OPENMETER_API_ENDPOINT")
-
         if litellm.get_secret("OPENMETER_API_KEY", None) is None:
             missing_keys.append("OPENMETER_API_KEY")
 
@@ -74,7 +71,9 @@ class OpenMeterLogger(CustomLogger):
         }
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        _url = litellm.get_secret("OPENMETER_API_ENDPOINT")
+        _url = litellm.get_secret(
+            "OPENMETER_API_ENDPOINT", default_value="https://openmeter.cloud"
+        )
         if _url.endswith("/"):
             _url += "api/v1/events"
         else:
@@ -93,7 +92,9 @@ class OpenMeterLogger(CustomLogger):
         )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        _url = litellm.get_secret("OPENMETER_API_ENDPOINT")
+        _url = litellm.get_secret(
+            "OPENMETER_API_ENDPOINT", default_value="https://openmeter.cloud"
+        )
         if _url.endswith("/"):
             _url += "api/v1/events"
         else:

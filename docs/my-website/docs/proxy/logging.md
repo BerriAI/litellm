@@ -600,7 +600,7 @@ Bill customers according to their LLM API usage with [OpenMeter](../observabilit
 
 ```bash
 # from https://openmeter.cloud
-export OPENMETER_API_ENDPOINT=""
+export OPENMETER_API_ENDPOINT="" # defaults to https://openmeter.cloud
 export OPENMETER_API_KEY=""
 ```
 
