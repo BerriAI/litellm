@@ -378,16 +378,13 @@ class Message(OpenAIObject):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
-        self.tool_calls = None
-        self.function_call = None
-
         if function_call is not None:
             self.function_call = FunctionCall(**function_call)
 
         if tool_calls is not None:
-            self.tool_calls = [
-                ChatCompletionMessageToolCall(**tool_call) for tool_call in tool_calls
-            ]
+            self.tool_calls = []
+            for tool_call in tool_calls:
+                self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
 
         if logprobs is not None:
             self._logprobs = ChoiceLogprobs(**logprobs)
@@ -413,8 +410,6 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
-    tool_calls: Optional[List[ChatCompletionDeltaToolCall]] = None
-
     def __init__(
         self,
         content=None,
