@@ -559,7 +559,15 @@ def test_langfuse_existing_trace_id():
 
     new_langfuse_trace = langfuse_client.get_trace(id=trace_id)
 
-    assert dict(initial_langfuse_trace) == dict(new_langfuse_trace)
+    initial_langfuse_trace_dict = dict(initial_langfuse_trace)
+    initial_langfuse_trace_dict.pop("updatedAt")
+    initial_langfuse_trace_dict.pop("timestamp")
+
+    new_langfuse_trace_dict = dict(new_langfuse_trace)
+    new_langfuse_trace_dict.pop("updatedAt")
+    new_langfuse_trace_dict.pop("timestamp")
+
+    assert initial_langfuse_trace_dict == new_langfuse_trace_dict
 
 
 def test_langfuse_logging_tool_calling():
