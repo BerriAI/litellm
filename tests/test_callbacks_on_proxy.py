@@ -42,6 +42,7 @@ async def get_active_callbacks(session):
     url = "http://0.0.0.0:4000/active/callbacks"
     headers = {
         "Content-Type": "application/json",
+        "Authorization": "Bearer sk-1234",
     }
 
     async with session.get(url, headers=headers) as response:
