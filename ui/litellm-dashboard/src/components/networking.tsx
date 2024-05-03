@@ -526,7 +526,9 @@ export const modelExceptionsCall = async (
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/exceptions` : `/model/metrics/exceptions`;
-
+    if (modelGroup) {
+      url = `${url}?_selected_model_group=${modelGroup}`
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
