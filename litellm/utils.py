@@ -4442,7 +4442,19 @@ def completion_cost(
         raise e
 
 
-def supports_function_calling(model: str):
+def supports_httpx_timeout(custom_llm_provider: str) -> bool:
+    """
+    Helper function to know if a provider implementation supports httpx timeout
+    """
+    supported_providers = ["openai", "azure", "bedrock"]
+
+    if custom_llm_provider in supported_providers:
+        return True
+
+    return False
+
+
+def supports_function_calling(model: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
