@@ -148,10 +148,10 @@ class _PROXY_AzureContentSafety(
                 content=response.choices[0].message.content, source="output"
             )
 
-    async def async_post_call_streaming_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: str,
-    ):
-        self.print_verbose(f"Inside Azure Content-Safety Call-Stream Hook")
-        await self.test_violation(content=response, source="output")
+    #async def async_post_call_streaming_hook(
+    #    self,
+    #    user_api_key_dict: UserAPIKeyAuth,
+    #    response: str,
+    #):
+    #    self.print_verbose(f"Inside Azure Content-Safety Call-Stream Hook")
+    #    await self.test_violation(content=response, source="output")
