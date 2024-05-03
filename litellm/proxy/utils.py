@@ -387,15 +387,21 @@ class ProxyLogging:
         """
 
         ### ALERTING ###
-        if "llm_exceptions" not in self.alert_types:
-            return
-        asyncio.create_task(
-            self.alerting_handler(
-                message=f"LLM API call failed: {str(original_exception)}",
-                level="High",
-                alert_type="llm_exceptions",
+        if "llm_exceptions" in self.alert_types and not isinstance(
+            original_exception, HTTPException
+        ):
+            """
+            Just alert on LLM API exceptions. Do not alert on user errors
+
+            Related issue - https://github.com/BerriAI/litellm/issues/3395
+            """
+            asyncio.create_task(
+                self.alerting_handler(
+                    message=f"LLM API call failed: {str(original_exception)}",
+                    level="High",
+                    alert_type="llm_exceptions",
+                )
             )
-        )
 
         for callback in litellm.callbacks:
             try:
