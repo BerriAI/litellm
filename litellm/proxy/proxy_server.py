@@ -9208,7 +9208,19 @@ async def health_readiness():
     """
     try:
         # get success callback
+        _num_callbacks = 0
+        try:
+            _num_callbacks = (
+                len(litellm.callbacks)
+                + len(litellm.input_callback)
+                + len(litellm.failure_callback)
+                + len(litellm.success_callback)
+            )
+        except:
+            _num_callbacks = 0
+
         success_callback_names = []
+
         try:
             # this was returning a JSON of the values in some of the callbacks
             # all we need is the callback name, hence we do str(callback)
@@ -9236,13 +9248,13 @@ async def health_readiness():
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = _db_health_readiness_check()
-
             return {
                 "status": "healthy",
                 "db": "connected",
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
+                "num_callbacks": _num_callbacks,
                 **db_health_status,
             }
         else:
@@ -9252,6 +9264,7 @@ async def health_readiness():
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
+                "num_callbacks": _num_callbacks,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
