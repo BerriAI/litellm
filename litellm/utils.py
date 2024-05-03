@@ -3974,12 +3974,10 @@ def calculage_img_tokens(
         tile_tokens = (base_tokens * 2) * tiles_needed_high_res
         total_tokens = base_tokens + tile_tokens
         return total_tokens
-    
+
 
 def create_pretrained_tokenizer(
-    identifier: str, 
-    revision="main", 
-    auth_token: Optional[str] = None
+    identifier: str, revision="main", auth_token: Optional[str] = None
 ):
     """
     Creates a tokenizer from an existing file on a HuggingFace repository to be used with `token_counter`.
@@ -3993,7 +3991,9 @@ def create_pretrained_tokenizer(
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer = Tokenizer.from_pretrained(identifier, revision=revision, auth_token=auth_token)
+    tokenizer = Tokenizer.from_pretrained(
+        identifier, revision=revision, auth_token=auth_token
+    )
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -9001,7 +9001,16 @@ def exception_type(
                             request=original_exception.request,
                         )
             elif custom_llm_provider == "azure":
-                if "This model's maximum context length is" in error_str:
+                if "Internal server error" in error_str:
+                    exception_mapping_worked = True
+                    raise APIError(
+                        status_code=500,
+                        message=f"AzureException - {original_exception.message}",
+                        llm_provider="azure",
+                        model=model,
+                        request=httpx.Request(method="POST", url="https://openai.com/"),
+                    )
+                elif "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"AzureException - {original_exception.message}",
