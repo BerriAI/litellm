@@ -79,10 +79,12 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                     model=deployment.get("litellm_params", {}).get("model"),
                     response=httpx.Response(
                         status_code=429,
-                        content="{} rpm limit={}. current usage={}".format(
+                        content="{} rpm limit={}. current usage={}. id={}, model_group={}. Get the model info by calling 'router.get_model_info(id)".format(
                             RouterErrors.user_defined_ratelimit_error.value,
                             deployment_rpm,
                             local_result,
+                            model_id,
+                            deployment.get("model_name", ""),
                         ),
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
