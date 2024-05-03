@@ -100,6 +100,9 @@ async def test_check_num_callbacks():
 
     async with aiohttp.ClientSession() as session:
         num_callbacks_1 = await get_active_callbacks(session=session)
+        assert (
+            num_callbacks_1 > 0
+        )  # /health/readiness returns 0 when some calculation goes wrong
 
         await asyncio.sleep(30)
 
@@ -134,6 +137,9 @@ async def test_check_num_callbacks_on_lowest_latency():
         await config_update(session=session, routing_strategy="latency-based-routing")
 
         num_callbacks_1 = await get_active_callbacks(session=session)
+        assert (
+            num_callbacks_1 > 0
+        )  # /health/readiness returns 0 when some calculation goes wrong
 
         await asyncio.sleep(30)
 
