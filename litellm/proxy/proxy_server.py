@@ -9235,13 +9235,19 @@ async def active_callbacks():
 
     return {
         "alerting": _alerting,
-        "litellm.callbacks": litellm.callbacks,
-        "litellm.input_callback": litellm.input_callback,
-        "litellm.failure_callback": litellm.failure_callback,
-        "litellm.success_callback": success_callback_names,
-        "litellm._async_success_callback": litellm._async_success_callback,
-        "litellm._async_failure_callback": litellm._async_failure_callback,
-        "litellm._async_input_callback": litellm._async_input_callback,
+        "litellm.callbacks": [str(x) for x in litellm.callbacks],
+        "litellm.input_callback": [str(x) for x in litellm.input_callback],
+        "litellm.failure_callback": [str(x) for x in litellm.failure_callback],
+        "litellm.success_callback": [str(x) for x in litellm.success_callback],
+        "litellm._async_success_callback": [
+            str(x) for x in litellm._async_success_callback
+        ],
+        "litellm._async_failure_callback": [
+            str(x) for x in litellm._async_failure_callback
+        ],
+        "litellm._async_input_callback": [
+            str(x) for x in litellm._async_input_callback
+        ],
         "num_callbacks": _num_callbacks,
         "num_alerting": _num_alerting,
     }
