@@ -36,10 +36,10 @@ class _PROXY_AzureContentSafety(
 
     def _configure_thresholds(self, thresholds=None):
         default_thresholds = {
-            self.text_category.HATE: 6,
-            self.text_category.SELF_HARM: 6,
-            self.text_category.SEXUAL: 6,
-            self.text_category.VIOLENCE: 6,
+            self.text_category.HATE: 4,
+            self.text_category.SELF_HARM: 4,
+            self.text_category.SEXUAL: 4,
+            self.text_category.VIOLENCE: 4,
         }
 
         if thresholds is None:
