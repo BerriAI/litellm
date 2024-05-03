@@ -38,6 +38,7 @@ interface AlertingVariables {
   LANGFUSE_PUBLIC_KEY: string | null, 
   LANGFUSE_SECRET_KEY: string | null, 
   LANGFUSE_HOST: string | null
+  OPENMETER_API_KEY: string | null
 }
 
 interface AlertingObject {
@@ -45,12 +46,45 @@ interface AlertingObject {
   variables: AlertingVariables
 }
 
+const defaultLoggingObject: AlertingObject[] = [
+  {
+    "name": "slack",
+    "variables": {
+      "LANGFUSE_HOST": null,
+      "LANGFUSE_PUBLIC_KEY": null,
+      "LANGFUSE_SECRET_KEY": null,
+      "OPENMETER_API_KEY": null, 
+      "SLACK_WEBHOOK_URL": null
+    }
+  },
+  {
+    "name": "langfuse",
+    "variables": {
+      "LANGFUSE_HOST": null,
+      "LANGFUSE_PUBLIC_KEY": null,
+      "LANGFUSE_SECRET_KEY": null,
+      "OPENMETER_API_KEY": null, 
+      "SLACK_WEBHOOK_URL": null
+    }
+  },
+  {
+    "name": "openmeter",
+    "variables": {
+      "LANGFUSE_HOST": null,
+      "LANGFUSE_PUBLIC_KEY": null,
+      "LANGFUSE_SECRET_KEY": null,
+      "OPENMETER_API_KEY": null, 
+      "SLACK_WEBHOOK_URL": null
+    }
+  }
+]
+
 const Settings: React.FC<SettingsPageProps> = ({
   accessToken,
   userRole,
   userID,
 }) => {
-  const [callbacks, setCallbacks] = useState<any[]>([]);
+  const [callbacks, setCallbacks] = useState<AlertingObject[]>(defaultLoggingObject);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
@@ -81,8 +115,19 @@ const Settings: React.FC<SettingsPageProps> = ({
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
       console.log("callbacks", data);
-      let callbacks_data = data.callbacks;
-      setCallbacks(callbacks_data);
+      let updatedCallbacks: any[] = defaultLoggingObject;
+
+      updatedCallbacks = updatedCallbacks.map((item: any) => {
+        const callback = data.callbacks.find((cb: any) => cb.name === item.name);
+        if (callback) {
+          return { ...item, variables: { ...item.variables, ...callback.variables } };
+        } else {
+          return item;
+        }
+      });
+
+      setCallbacks(updatedCallbacks)
+      // setCallbacks(callbacks_data);
 
       let alerts_data = data.alerts;
       console.log("alerts_data", alerts_data);
@@ -175,6 +220,9 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     const payload = {
       environment_variables: updatedVariables,
+      litellm_settings: {
+        "success_callback": [callback.name]
+      }
     };
 
     try {
@@ -212,7 +260,8 @@ const Settings: React.FC<SettingsPageProps> = ({
             "SLACK_WEBHOOK_URL": null,
             "LANGFUSE_HOST": null, 
             "LANGFUSE_PUBLIC_KEY": values.langfusePublicKey, 
-            "LANGFUSE_SECRET_KEY": values.langfusePrivateKey
+            "LANGFUSE_SECRET_KEY": values.langfusePrivateKey,
+            OPENMETER_API_KEY: null
           }
         }
         // add langfuse to callbacks
@@ -239,9 +288,33 @@ const Settings: React.FC<SettingsPageProps> = ({
             "SLACK_WEBHOOK_URL": values.slackWebhookUrl,
             "LANGFUSE_HOST": null, 
             "LANGFUSE_PUBLIC_KEY": null, 
-            "LANGFUSE_SECRET_KEY": null
+            "LANGFUSE_SECRET_KEY": null, 
+            "OPENMETER_API_KEY": null
           }
         }
+        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
+      } else if (values.callback == "openmeter") {
+        console.log(`values.openMeterApiKey: ${values.openMeterApiKey}`)
+        payload = {
+          environment_variables: {
+            OPENMETER_API_KEY: values.openMeterApiKey,
+          },
+          litellm_settings: {
+            success_callback: [values.callback]
+          }
+        };
+        setCallbacksCall(accessToken, payload);
+        let newCallback: AlertingObject = {
+          "name": values.callback,
+          "variables": {
+            "SLACK_WEBHOOK_URL": null,
+            "LANGFUSE_HOST": null, 
+            "LANGFUSE_PUBLIC_KEY": null,
+            "LANGFUSE_SECRET_KEY": null,
+            OPENMETER_API_KEY: values.openMeterAPIKey
+          }
+        }
+        // add langfuse to callbacks
         setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
       } else {
         payload = {
@@ -282,24 +355,24 @@ const Settings: React.FC<SettingsPageProps> = ({
                 </TableRow>
               </TableHead>
               <TableBody>
-    {callbacks.map((callback, index) => (
+    {callbacks.filter((callback) => callback.name !== "slack").map((callback, index) => (
       <TableRow key={index}>
         <TableCell>
           <Badge color="emerald">{callback.name}</Badge>
         </TableCell>
         <TableCell>
           <ul>
-          {Object.entries(callback.variables ?? {}).filter(([key, value]) => value !== null).map(([key, value]) => (
-    <li key={key}>
-      <Text className="mt-2">{key}</Text>
-      {key === "LANGFUSE_HOST" ? (
-        <p>default value=https://cloud.langfuse.com</p>
-      ) : (
-        <div></div>
-      )}
-      <TextInput name={key} defaultValue={value as string} type="password" />
-    </li>
-  ))}
+            {Object.entries(callback.variables ?? {}).filter(([key, value]) => key.toLowerCase().includes(callback.name)).map(([key, value]) => (
+            <li key={key}>
+              <Text className="mt-2">{key}</Text>
+              {key === "LANGFUSE_HOST" ? (
+                <p>default value=https://cloud.langfuse.com</p>
+              ) : (
+                <div></div>
+              )}
+              <TextInput name={key} defaultValue={value as string} type="password" />
+            </li>
+          ))}
           </ul>
           <Button className="mt-2" onClick={() => handleSaveChanges(callback)}>
             Save Changes
@@ -312,9 +385,6 @@ const Settings: React.FC<SettingsPageProps> = ({
     ))}
   </TableBody>
             </Table>
-              <Button size="xs" className="mt-2" onClick={handleAddCallback}>
-                Add Callback
-              </Button>
               
           </Card>
           </TabPanel>
@@ -392,9 +462,10 @@ const Settings: React.FC<SettingsPageProps> = ({
           >
             <Select onChange={handleCallbackChange}>
               <Select.Option value="langfuse">langfuse</Select.Option>
+              <Select.Option value="openmeter">openmeter</Select.Option>
             </Select>
           </Form.Item>
-
+          
           {selectedCallback === 'langfuse' && (
             <>
               <Form.Item
@@ -418,6 +489,20 @@ const Settings: React.FC<SettingsPageProps> = ({
               </Form.Item>
             </>
           )}
+
+          {
+            selectedCallback == "openmeter" && <>
+            <Form.Item
+              label="OPENMETER_API_KEY"
+              name="openMeterApiKey"
+              rules={[
+                { required: true, message: "Please enter the openmeter api key" },
+              ]}
+            >
+              <TextInput type="password"/>
+            </Form.Item>
+          </>
+          }
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Save</Button2>

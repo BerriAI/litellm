@@ -14,6 +14,7 @@ import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
+
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
@@ -33,6 +34,8 @@ from litellm.utils import (
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
     Usage,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
