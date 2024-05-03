@@ -10,6 +10,7 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
+- [Logging to OpenMeter](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
@@ -590,6 +591,59 @@ litellm_settings:
 ```
 
 
+
+## Logging Proxy Cost + Usage - OpenMeter
+
+Bill customers according to their LLM API usage with [OpenMeter](../observability/openmeter.md)
+
+**Required Env Variables**
+
+```bash
+# from https://openmeter.cloud
+export OPENMETER_API_ENDPOINT="" # defaults to https://openmeter.cloud
+export OPENMETER_API_KEY=""
+```
+
+### Quick Start 
+
+1. Add to Config.yaml
+```yaml
+model_list:
+- litellm_params:
+    api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
+litellm_settings:
+  success_callback: ["openmeter"] # 👈 KEY CHANGE
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+<Image img={require('../../img/openmeter_img_2.png')} />
 
 ## Logging Proxy Input/Output - DataDog
 We will use the `--config` to set `litellm.success_callback = ["datadog"]` this will log all successfull LLM calls to DataDog

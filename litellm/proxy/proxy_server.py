@@ -2693,9 +2693,10 @@ class ProxyConfig:
         environment_variables = config_data.get("environment_variables", {})
         for k, v in environment_variables.items():
             try:
-                decoded_b64 = base64.b64decode(v)
-                value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
-                os.environ[k] = value
+                if v is not None:
+                    decoded_b64 = base64.b64decode(v)
+                    value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
+                    os.environ[k] = value
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error setting env variable: %s - %s", k, str(e)
@@ -3446,172 +3447,6 @@ def model_list(
 
 
 @router.post(
-    "/v1/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"]
-)
-@router.post(
-    "/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"]
-)
-@router.post(
-    "/engines/{model:path}/completions",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["completions"],
-)
-@router.post(
-    "/openai/deployments/{model:path}/completions",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["completions"],
-)
-async def completion(
-    request: Request,
-    fastapi_response: Response,
-    model: Optional[str] = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    try:
-        body = await request.body()
-        body_str = body.decode()
-        try:
-            data = ast.literal_eval(body_str)
-        except:
-            data = json.loads(body_str)
-
-        data["user"] = data.get("user", user_api_key_dict.user_id)
-        data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or model  # for azure deployments
-            or data["model"]  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
-        )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["endpoint"] = str(request.url)
-
-        # override with user settings, these are params passed via cli
-        if user_temperature:
-            data["temperature"] = user_temperature
-        if user_request_timeout:
-            data["request_timeout"] = user_request_timeout
-        if user_max_tokens:
-            data["max_tokens"] = user_max_tokens
-        if user_api_base:
-            data["api_base"] = user_api_base
-
-        ### MODEL ALIAS MAPPING ###
-        # check if model name in model alias map
-        # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
-
-        ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
-        )
-
-        ### ROUTE THE REQUESTs ###
-        router_model_names = llm_router.model_names if llm_router is not None else []
-        # skip router if user passed their key
-        if "api_key" in data:
-            response = await litellm.atext_completion(**data)
-        elif (
-            llm_router is not None and data["model"] in router_model_names
-        ):  # model in router model list
-            response = await llm_router.atext_completion(**data)
-        elif (
-            llm_router is not None
-            and llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):  # model set in model_group_alias
-            response = await llm_router.atext_completion(**data)
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.atext_completion(
-                **data, specific_deployment=True
-            )
-        elif (
-            llm_router is not None
-            and data["model"] not in router_model_names
-            and llm_router.default_deployment is not None
-        ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.atext_completion(**data)
-        elif user_model is not None:  # `litellm --model <your-model-name>`
-            response = await litellm.atext_completion(**data)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "Invalid model name passed in model="
-                    + data.get("model", "")
-                },
-            )
-
-        if hasattr(response, "_hidden_params"):
-            model_id = response._hidden_params.get("model_id", None) or ""
-            original_response = (
-                response._hidden_params.get("original_response", None) or ""
-            )
-        else:
-            model_id = ""
-            original_response = ""
-
-        verbose_proxy_logger.debug("final response: %s", response)
-        if (
-            "stream" in data and data["stream"] == True
-        ):  # use generate_responses to stream responses
-            custom_headers = {
-                "x-litellm-model-id": model_id,
-            }
-            selected_data_generator = select_data_generator(
-                response=response, user_api_key_dict=user_api_key_dict
-            )
-
-            return StreamingResponse(
-                selected_data_generator,
-                media_type="text/event-stream",
-                headers=custom_headers,
-            )
-
-        fastapi_response.headers["x-litellm-model-id"] = model_id
-        return response
-    except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
-        verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
-        verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
-            e,
-        )
-        traceback.print_exc()
-        error_traceback = traceback.format_exc()
-        error_msg = f"{str(e)}"
-        raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-
-
-@router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
@@ -3809,7 +3644,7 @@ async def chat_completion(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "chat_completion: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -3874,6 +3709,172 @@ async def chat_completion(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
+        error_msg = f"{str(e)}"
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
+
+
+@router.post(
+    "/v1/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"]
+)
+@router.post(
+    "/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"]
+)
+@router.post(
+    "/engines/{model:path}/completions",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["completions"],
+)
+@router.post(
+    "/openai/deployments/{model:path}/completions",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["completions"],
+)
+async def completion(
+    request: Request,
+    fastapi_response: Response,
+    model: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+    try:
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except:
+            data = json.loads(body_str)
+
+        data["user"] = data.get("user", user_api_key_dict.user_id)
+        data["model"] = (
+            general_settings.get("completion_model", None)  # server default
+            or user_model  # model name passed via cli args
+            or model  # for azure deployments
+            or data["model"]  # default passed in http request
+        )
+        if user_model:
+            data["model"] = user_model
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["user_api_key_alias"] = getattr(
+            user_api_key_dict, "key_alias", None
+        )
+        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_team_id"] = getattr(
+            user_api_key_dict, "team_id", None
+        )
+        data["metadata"]["user_api_key_team_alias"] = getattr(
+            user_api_key_dict, "team_alias", None
+        )
+        _headers = dict(request.headers)
+        _headers.pop(
+            "authorization", None
+        )  # do not store the original `sk-..` api key in the db
+        data["metadata"]["headers"] = _headers
+        data["metadata"]["endpoint"] = str(request.url)
+
+        # override with user settings, these are params passed via cli
+        if user_temperature:
+            data["temperature"] = user_temperature
+        if user_request_timeout:
+            data["request_timeout"] = user_request_timeout
+        if user_max_tokens:
+            data["max_tokens"] = user_max_tokens
+        if user_api_base:
+            data["api_base"] = user_api_base
+
+        ### MODEL ALIAS MAPPING ###
+        # check if model name in model alias map
+        # get the actual model name
+        if data["model"] in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[data["model"]]
+
+        ### CALL HOOKS ### - modify incoming data before calling the model
+        data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
+        )
+
+        ### ROUTE THE REQUESTs ###
+        router_model_names = llm_router.model_names if llm_router is not None else []
+        # skip router if user passed their key
+        if "api_key" in data:
+            response = await litellm.atext_completion(**data)
+        elif (
+            llm_router is not None and data["model"] in router_model_names
+        ):  # model in router model list
+            response = await llm_router.atext_completion(**data)
+        elif (
+            llm_router is not None
+            and llm_router.model_group_alias is not None
+            and data["model"] in llm_router.model_group_alias
+        ):  # model set in model_group_alias
+            response = await llm_router.atext_completion(**data)
+        elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.atext_completion(
+                **data, specific_deployment=True
+            )
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.default_deployment is not None
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.atext_completion(**data)
+        elif user_model is not None:  # `litellm --model <your-model-name>`
+            response = await litellm.atext_completion(**data)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "completion: Invalid model name passed in model="
+                    + data.get("model", "")
+                },
+            )
+
+        if hasattr(response, "_hidden_params"):
+            model_id = response._hidden_params.get("model_id", None) or ""
+            original_response = (
+                response._hidden_params.get("original_response", None) or ""
+            )
+        else:
+            model_id = ""
+            original_response = ""
+
+        verbose_proxy_logger.debug("final response: %s", response)
+        if (
+            "stream" in data and data["stream"] == True
+        ):  # use generate_responses to stream responses
+            custom_headers = {
+                "x-litellm-model-id": model_id,
+            }
+            selected_data_generator = select_data_generator(
+                response=response, user_api_key_dict=user_api_key_dict
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                headers=custom_headers,
+            )
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        return response
+    except Exception as e:
+        data["litellm_status"] = "fail"  # used for alerting
+        verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
+        verbose_proxy_logger.debug(
+            "\033[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            e,
+        )
+        traceback.print_exc()
+        error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
@@ -4040,7 +4041,7 @@ async def embeddings(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "embeddings: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -4196,7 +4197,7 @@ async def image_generation(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "image_generation: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -4371,7 +4372,7 @@ async def audio_transcriptions(
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
-                            "error": "Invalid model name passed in model="
+                            "error": "audio_transcriptions: Invalid model name passed in model="
                             + data.get("model", "")
                         },
                     )
@@ -4537,7 +4538,7 @@ async def moderations(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "Invalid model name passed in model="
+                    "error": "moderations: Invalid model name passed in model="
                     + data.get("model", "")
                 },
             )
@@ -7549,7 +7550,7 @@ async def model_metrics(
             "LiteLLM_SpendLogs"
         WHERE
             "startTime" >= NOW() - INTERVAL '30 days'
-            AND "model" = $1
+            AND "model" = $1 AND "cache_hit" != 'True'
         GROUP BY
             api_base,
             model,
@@ -7598,13 +7599,74 @@ async def model_metrics(
         for day in _daily_entries:
             entry = {"date": str(day)}
             for model_key, latency in _daily_entries[day].items():
-                entry[model_key] = round(latency, 8)
+                entry[model_key] = latency
             response.append(entry)
 
         return {
             "data": response,
             "all_api_bases": list(_all_api_bases),
         }
+
+
+@router.get(
+    "/model/metrics/slow_responses",
+    description="View number of hanging requests per model_group",
+    tags=["model management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_metrics_slow_responses(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = "gpt-4-32k",
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
+):
+    global prisma_client, llm_router, proxy_logging_obj
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
+
+    alerting_threshold = (
+        proxy_logging_obj.slack_alerting_instance.alerting_threshold or 300
+    )
+    alerting_threshold = int(alerting_threshold)
+
+    sql_query = """
+SELECT
+    api_base,
+    COUNT(*) AS total_count,
+    SUM(CASE
+        WHEN ("endTime" - "startTime") >= (INTERVAL '1 SECOND' * CAST($1 AS INTEGER)) THEN 1
+        ELSE 0
+    END) AS slow_count
+FROM
+    "LiteLLM_SpendLogs"
+WHERE
+    "model" = $2
+    AND "cache_hit" != 'True'
+GROUP BY
+    api_base
+ORDER BY
+    slow_count DESC;
+    """
+
+    db_response = await prisma_client.db.query_raw(
+        sql_query, alerting_threshold, _selected_model_group
+    )
+
+    if db_response is not None:
+        for row in db_response:
+            _api_base = row.get("api_base") or ""
+            if "/openai/" in _api_base:
+                _api_base = _api_base.split("/openai/")[0]
+            row["api_base"] = _api_base
+    return db_response
 
 
 @router.get(
@@ -8644,6 +8706,13 @@ async def update_config(config_info: ConfigYAML):
             _existing_settings = config["general_settings"]
             for k, v in updated_general_settings.items():
                 # overwrite existing settings with updated values
+                if k == "alert_to_webhook_url":
+                    # check if slack is already enabled. if not, enable it
+                    if "slack" not in _existing_settings:
+                        if "alerting" not in _existing_settings:
+                            _existing_settings["alerting"] = ["slack"]
+                        elif isinstance(_existing_settings["alerting"], list):
+                            _existing_settings["alerting"].append("slack")
                 _existing_settings[k] = v
             config["general_settings"] = _existing_settings
 
@@ -8758,7 +8827,25 @@ async def get_config():
         
         """
         for _callback in _success_callbacks:
-            if _callback == "langfuse":
+            if _callback == "openmeter":
+                env_vars = [
+                    "OPENMETER_API_KEY",
+                ]
+                env_vars_dict = {}
+                for _var in env_vars:
+                    env_variable = environment_variables.get(_var, None)
+                    if env_variable is None:
+                        env_vars_dict[_var] = None
+                    else:
+                        # decode + decrypt the value
+                        decoded_b64 = base64.b64decode(env_variable)
+                        _decrypted_value = decrypt_value(
+                            value=decoded_b64, master_key=master_key
+                        )
+                        env_vars_dict[_var] = _decrypted_value
+
+                _data_to_return.append({"name": _callback, "variables": env_vars_dict})
+            elif _callback == "langfuse":
                 _langfuse_vars = [
                     "LANGFUSE_PUBLIC_KEY",
                     "LANGFUSE_SECRET_KEY",
@@ -8898,9 +8985,9 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal["slack_budget_alerts", "langfuse", "slack"] = fastapi.Query(
-        description="Specify the service being hit."
-    ),
+    service: Literal[
+        "slack_budget_alerts", "langfuse", "slack", "openmeter"
+    ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
     Hidden endpoint.
@@ -8914,13 +9001,25 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
-        if service not in ["slack_budget_alerts", "langfuse", "slack"]:
+        if service not in ["slack_budget_alerts", "langfuse", "slack", "openmeter"]:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
                 },
             )
+
+        if service == "openmeter":
+            _ = await litellm.acompletion(
+                model="openai/litellm-mock-response-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                user="litellm:/health/services",
+                mock_response="This is a mock response",
+            )
+            return {
+                "status": "success",
+                "message": "Mock LLM request made - check openmeter.",
+            }
 
         if service == "langfuse":
             from litellm.integrations.langfuse import LangFuseLogger
@@ -8938,63 +9037,66 @@ async def health_services_endpoint(
                 "message": "Mock LLM request made - check langfuse.",
             }
 
-        if "slack" in general_settings.get("alerting", []):
-            # test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
-            # check if user has opted into unique_alert_webhooks
-            if (
-                proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
-                is not None
-            ):
-                for (
-                    alert_type
-                ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
-                    """
-                    "llm_exceptions",
-                    "llm_too_slow",
-                    "llm_requests_hanging",
-                    "budget_alerts",
-                    "db_exceptions",
-                    """
-                    # only test alert if it's in active alert types
-                    if (
-                        proxy_logging_obj.slack_alerting_instance.alert_types
-                        is not None
-                        and alert_type
-                        not in proxy_logging_obj.slack_alerting_instance.alert_types
-                    ):
-                        continue
-                    test_message = "default test message"
-                    if alert_type == "llm_exceptions":
-                        test_message = f"LLM Exception test alert"
-                    elif alert_type == "llm_too_slow":
-                        test_message = f"LLM Too Slow test alert"
-                    elif alert_type == "llm_requests_hanging":
-                        test_message = f"LLM Requests Hanging test alert"
-                    elif alert_type == "budget_alerts":
-                        test_message = f"Budget Alert test alert"
-                    elif alert_type == "db_exceptions":
-                        test_message = f"DB Exception test alert"
+        if service == "slack" or service == "slack_budget_alerts":
+            if "slack" in general_settings.get("alerting", []):
+                # test_message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` litellm-ui-test-alert \n`Expected Day of Error`: 28th March \n`Current Spend`: $100.00 \n`Projected Spend at end of month`: $1000.00 \n`Soft Limit`: $700"""
+                # check if user has opted into unique_alert_webhooks
+                if (
+                    proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+                    is not None
+                ):
+                    for (
+                        alert_type
+                    ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
+                        """
+                        "llm_exceptions",
+                        "llm_too_slow",
+                        "llm_requests_hanging",
+                        "budget_alerts",
+                        "db_exceptions",
+                        """
+                        # only test alert if it's in active alert types
+                        if (
+                            proxy_logging_obj.slack_alerting_instance.alert_types
+                            is not None
+                            and alert_type
+                            not in proxy_logging_obj.slack_alerting_instance.alert_types
+                        ):
+                            continue
+                        test_message = "default test message"
+                        if alert_type == "llm_exceptions":
+                            test_message = f"LLM Exception test alert"
+                        elif alert_type == "llm_too_slow":
+                            test_message = f"LLM Too Slow test alert"
+                        elif alert_type == "llm_requests_hanging":
+                            test_message = f"LLM Requests Hanging test alert"
+                        elif alert_type == "budget_alerts":
+                            test_message = f"Budget Alert test alert"
+                        elif alert_type == "db_exceptions":
+                            test_message = f"DB Exception test alert"
 
+                        await proxy_logging_obj.alerting_handler(
+                            message=test_message, level="Low", alert_type=alert_type
+                        )
+                else:
                     await proxy_logging_obj.alerting_handler(
-                        message=test_message, level="Low", alert_type=alert_type
+                        message="This is a test slack alert message",
+                        level="Low",
+                        alert_type="budget_alerts",
                     )
+                return {
+                    "status": "success",
+                    "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
+                }
             else:
-                await proxy_logging_obj.alerting_handler(
-                    message="This is a test slack alert message",
-                    level="Low",
-                    alert_type="budget_alerts",
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": '"{}" not in proxy config: general_settings. Unable to test this.'.format(
+                            service
+                        )
+                    },
                 )
-            return {
-                "status": "success",
-                "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
-            }
-        else:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": '"slack" not in proxy config: general_settings. Unable to test this.'
-                },
-            )
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
