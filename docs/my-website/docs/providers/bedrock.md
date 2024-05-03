@@ -535,7 +535,8 @@ print(response)
 
 | Model Name           | Function Call                               |
 |----------------------|---------------------------------------------|
-| Titan Embeddings - G1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` |
+| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` |
+| Titan Embeddings - V1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` |
 | Cohere Embeddings - English | `embedding(model="bedrock/cohere.embed-english-v3", input=input)` |
 | Cohere Embeddings - Multilingual | `embedding(model="bedrock/cohere.embed-multilingual-v3", input=input)` |
 
