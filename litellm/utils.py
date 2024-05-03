@@ -4754,6 +4754,27 @@ def get_optional_params_embeddings(
                 status_code=500,
                 message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
             )
+    if custom_llm_provider == "bedrock":
+        # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
+        if (
+            "dimensions" in non_default_params.keys()
+            and "amazon.titan-embed-text-v2" in model
+        ):
+            kwargs["dimensions"] = non_default_params["dimensions"]
+            non_default_params.pop("dimensions", None)
+
+        if len(non_default_params.keys()) > 0:
+            if litellm.drop_params is True:  # drop the unsupported non-default values
+                keys = list(non_default_params.keys())
+                for k in keys:
+                    non_default_params.pop(k, None)
+                final_params = {**non_default_params, **kwargs}
+                return final_params
+            raise UnsupportedParamsError(
+                status_code=500,
+                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+            )
+        return {**non_default_params, **kwargs}
 
     if (
         custom_llm_provider != "openai"
