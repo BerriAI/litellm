@@ -3658,6 +3658,7 @@ async def chat_completion(
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
 
         # Post Call Processing
         if llm_router is not None:
@@ -3670,6 +3671,7 @@ async def chat_completion(
             custom_headers = {
                 "x-litellm-model-id": model_id,
                 "x-litellm-cache-key": cache_key,
+                "x-litellm-model-api-base": api_base,
             }
             selected_data_generator = select_data_generator(
                 response=response, user_api_key_dict=user_api_key_dict
@@ -3682,6 +3684,7 @@ async def chat_completion(
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
