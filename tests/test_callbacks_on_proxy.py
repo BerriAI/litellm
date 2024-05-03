@@ -39,7 +39,7 @@ async def config_update(session, routing_strategy=None):
 
 
 async def get_active_callbacks(session):
-    url = "http://0.0.0.0:4000/health/readiness"
+    url = "http://0.0.0.0:4000/active/callbacks"
     headers = {
         "Content-Type": "application/json",
     }
@@ -47,7 +47,7 @@ async def get_active_callbacks(session):
     async with session.get(url, headers=headers) as response:
         status = response.status
         response_text = await response.text()
-        print("response from /health/readiness")
+        print("response from /active/callbacks")
         print(response_text)
         print()
 
