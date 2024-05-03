@@ -8708,11 +8708,11 @@ async def update_config(config_info: ConfigYAML):
                 # overwrite existing settings with updated values
                 if k == "alert_to_webhook_url":
                     # check if slack is already enabled. if not, enable it
-                    if "slack" not in _existing_settings:
-                        if "alerting" not in _existing_settings:
+                    if "alerting" not in _existing_settings:
+                        _existing_settings["alerting"] = ["slack"]
+                    elif isinstance(_existing_settings["alerting"], list):
+                        if "slack" not in _existing_settings["alerting"]:
                             _existing_settings["alerting"] = ["slack"]
-                        elif isinstance(_existing_settings["alerting"], list):
-                            _existing_settings["alerting"].append("slack")
                 _existing_settings[k] = v
             config["general_settings"] = _existing_settings
 
@@ -9198,6 +9198,37 @@ def _db_health_readiness_check():
 
 
 @router.get(
+    "/active/callbacks",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def active_callbacks():
+    _alerting = str(general_settings.get("alerting"))
+    # get success callback
+    success_callback_names = []
+    try:
+        # this was returning a JSON of the values in some of the callbacks
+        # all we need is the callback name, hence we do str(callback)
+        success_callback_names = [str(x) for x in litellm.success_callback]
+    except:
+        # don't let this block the /health/readiness response, if we can't convert to str -> return litellm.success_callback
+        success_callback_names = litellm.success_callback
+
+    _num_callbacks = (
+        len(litellm.callbacks)
+        + len(litellm.input_callback)
+        + len(litellm.failure_callback)
+        + len(litellm.success_callback)
+    )
+
+    return {
+        "alerting": _alerting,
+        "success_callbacks": success_callback_names,
+        "num_callbacks": _num_callbacks,
+    }
+
+
+@router.get(
     "/health/readiness",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
@@ -9206,6 +9237,7 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
+    global general_settings
     try:
         # get success callback
         _num_callbacks = 0
