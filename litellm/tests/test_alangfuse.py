@@ -205,8 +205,6 @@ async def test_langfuse_logging_without_request_response(stream):
         assert _trace_data[0].output == {
             "role": "assistant",
             "content": "redacted-by-litellm",
-            "function_call": None,
-            "tool_calls": None,
         }
 
     except Exception as e:

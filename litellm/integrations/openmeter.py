@@ -38,7 +38,7 @@ class OpenMeterLogger(CustomLogger):
         in the environment
         """
         missing_keys = []
-        if litellm.get_secret("OPENMETER_API_KEY", None) is None:
+        if os.getenv("OPENMETER_API_KEY", None) is None:
             missing_keys.append("OPENMETER_API_KEY")
 
         if len(missing_keys) > 0:
@@ -71,15 +71,13 @@ class OpenMeterLogger(CustomLogger):
         }
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        _url = litellm.get_secret(
-            "OPENMETER_API_ENDPOINT", default_value="https://openmeter.cloud"
-        )
+        _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"
         else:
             _url += "/api/v1/events"
 
-        api_key = litellm.get_secret("OPENMETER_API_KEY")
+        api_key = os.getenv("OPENMETER_API_KEY")
 
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
         self.sync_http_handler.post(
@@ -92,15 +90,13 @@ class OpenMeterLogger(CustomLogger):
         )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        _url = litellm.get_secret(
-            "OPENMETER_API_ENDPOINT", default_value="https://openmeter.cloud"
-        )
+        _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"
         else:
             _url += "/api/v1/events"
 
-        api_key = litellm.get_secret("OPENMETER_API_KEY")
+        api_key = os.getenv("OPENMETER_API_KEY")
 
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
         _headers = {
@@ -117,7 +113,6 @@ class OpenMeterLogger(CustomLogger):
 
             response.raise_for_status()
         except Exception as e:
-            print(f"\nAn Exception Occurred - {str(e)}")
             if hasattr(response, "text"):
-                print(f"\nError Message: {response.text}")
+                litellm.print_verbose(f"\nError Message: {response.text}")
             raise e
