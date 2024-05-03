@@ -1,0 +1,88 @@
+int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+Traceback (most recent call last):
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/client.py", line 778, in generation
+    "usage": _convert_usage_input(usage) if usage is not None else None,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 77, in _convert_usage_input
+    "totalCost": extract_by_priority(usage, ["totalCost", "total_cost"]),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 32, in extract_by_priority
+    return int(usage[key])
+           ^^^^^^^^^^^^^^^
+TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+Traceback (most recent call last):
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/client.py", line 778, in generation
+    "usage": _convert_usage_input(usage) if usage is not None else None,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 77, in _convert_usage_input
+    "totalCost": extract_by_priority(usage, ["totalCost", "total_cost"]),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 32, in extract_by_priority
+    return int(usage[key])
+           ^^^^^^^^^^^^^^^
+TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+Traceback (most recent call last):
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/client.py", line 778, in generation
+    "usage": _convert_usage_input(usage) if usage is not None else None,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 77, in _convert_usage_input
+    "totalCost": extract_by_priority(usage, ["totalCost", "total_cost"]),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 32, in extract_by_priority
+    return int(usage[key])
+           ^^^^^^^^^^^^^^^
+TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+Traceback (most recent call last):
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/client.py", line 778, in generation
+    "usage": _convert_usage_input(usage) if usage is not None else None,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 77, in _convert_usage_input
+    "totalCost": extract_by_priority(usage, ["totalCost", "total_cost"]),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 32, in extract_by_priority
+    return int(usage[key])
+           ^^^^^^^^^^^^^^^
+TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+Traceback (most recent call last):
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/client.py", line 778, in generation
+    "usage": _convert_usage_input(usage) if usage is not None else None,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 77, in _convert_usage_input
+    "totalCost": extract_by_priority(usage, ["totalCost", "total_cost"]),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.11/site-packages/langfuse/utils.py", line 32, in extract_by_priority
+    return int(usage[key])
+           ^^^^^^^^^^^^^^^
+TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+consumer is running...
+Getting observations... None, None, None, None, litellm-test-98e1cc75-bef8-4280-a2b9-e08633b81acd, None, GENERATION
+consumer is running...
+Getting observations... None, None, None, None, litellm-test-532d2bc8-f8d6-42fd-8f78-416bae79925d, None, GENERATION
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined
+joining 1 consumer threads
+consumer thread 0 joined

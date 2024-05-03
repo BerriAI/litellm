@@ -2590,6 +2590,16 @@ class Router:
                     return model
         return None
 
+    def get_model_info(self, id: str) -> Optional[dict]:
+        """
+        For a given model id, return the model info
+        """
+        for model in self.model_list:
+            if "model_info" in model and "id" in model["model_info"]:
+                if id == model["model_info"]["id"]:
+                    return model
+        return None
+
     def get_model_ids(self):
         ids = []
         for model in self.model_list:
@@ -2659,13 +2669,18 @@ class Router:
             "cooldown_time",
         ]
 
+        _existing_router_settings = self.get_settings()
         for var in kwargs:
             if var in _allowed_settings:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
                 else:
-                    if var == "routing_strategy":
+                    # only run routing strategy init if it has changed
+                    if (
+                        var == "routing_strategy"
+                        and _existing_router_settings["routing_strategy"] != kwargs[var]
+                    ):
                         self.routing_strategy_init(
                             routing_strategy=kwargs[var],
                             routing_strategy_args=kwargs.get(
@@ -2904,15 +2919,10 @@ class Router:
                 m for m in self.model_list if m["litellm_params"]["model"] == model
             ]
 
-        verbose_router_logger.debug(
-            f"initial list of deployments: {healthy_deployments}"
-        )
+        litellm.print_verbose(f"initial list of deployments: {healthy_deployments}")
 
-        verbose_router_logger.debug(
-            f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}"
-        )
         if len(healthy_deployments) == 0:
-            raise ValueError(f"No healthy deployment available, passed model={model}")
+            raise ValueError(f"No healthy deployment available, passed model={model}. ")
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model

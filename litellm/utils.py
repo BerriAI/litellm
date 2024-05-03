@@ -70,6 +70,7 @@ from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
+from .integrations.openmeter import OpenMeterLogger
 from .integrations.datadog import DataDogLogger
 from .integrations.prometheus import PrometheusLogger
 from .integrations.prometheus_services import PrometheusServicesLogger
@@ -130,6 +131,7 @@ langsmithLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
+openMeterLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
@@ -469,7 +471,7 @@ class Choices(OpenAIObject):
         )  # set finish_reason for all responses
         self.index = index
         if message is None:
-            self.message = Message(content=None)
+            self.message = Message()
         else:
             if isinstance(message, Message):
                 self.message = message
@@ -1693,10 +1695,17 @@ class Logging:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
                         if langFuseLogger is None or (
-                            self.langfuse_public_key != langFuseLogger.public_key
-                            and self.langfuse_secret != langFuseLogger.secret_key
+                            (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
+                            and (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
                         ):
-                            print_verbose("Instantiates langfuse client")
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
@@ -1923,6 +1932,51 @@ class Logging:
                                 print_verbose=print_verbose,
                             )
                     if (
+                        callback == "openmeter"
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        == False
+                    ):
+                        global openMeterLogger
+                        if openMeterLogger is None:
+                            print_verbose("Instantiates openmeter client")
+                            openMeterLogger = OpenMeterLogger()
+                        if self.stream and complete_streaming_response is None:
+                            openMeterLogger.log_stream_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                        else:
+                            if self.stream and complete_streaming_response:
+                                self.model_call_details["complete_response"] = (
+                                    self.model_call_details.get(
+                                        "complete_streaming_response", {}
+                                    )
+                                )
+                                result = self.model_call_details["complete_response"]
+                            openMeterLogger.log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+
+                    if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
@@ -2083,7 +2137,6 @@ class Logging:
 
         self.redact_message_input_output_from_logging(result=result)
 
-        print_verbose(f"Async success callbacks: {callbacks}")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -2121,6 +2174,35 @@ class Logging:
                                 await litellm.cache.async_add_cache(result, **kwargs)
                             else:
                                 litellm.cache.add_cache(result, **kwargs)
+                if callback == "openmeter":
+                    global openMeterLogger
+                    if self.stream == True:
+                        if (
+                            "async_complete_streaming_response"
+                            in self.model_call_details
+                        ):
+                            await openMeterLogger.async_log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=self.model_call_details[
+                                    "async_complete_streaming_response"
+                                ],
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                        else:
+                            await openMeterLogger.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                    else:
+                        await openMeterLogger.async_log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     if self.stream == True:
                         if (
@@ -2451,13 +2533,19 @@ class Logging:
                     "complete_streaming_response"
                 ]
                 for choice in _streaming_response.choices:
-                    choice.message.content = "redacted-by-litellm"
+                    if isinstance(choice, litellm.Choices):
+                        choice.message.content = "redacted-by-litellm"
+                    elif isinstance(choice, litellm.utils.StreamingChoices):
+                        choice.delta.content = "redacted-by-litellm"
             else:
                 if result is not None:
                     if isinstance(result, litellm.ModelResponse):
-                        if hasattr(result, "choices"):
+                        if hasattr(result, "choices") and result.choices is not None:
                             for choice in result.choices:
-                                choice.message.content = "redacted-by-litellm"
+                                if isinstance(choice, litellm.Choices):
+                                    choice.message.content = "redacted-by-litellm"
+                                elif isinstance(choice, litellm.utils.StreamingChoices):
+                                    choice.delta.content = "redacted-by-litellm"
 
 
 def exception_logging(
@@ -2594,7 +2682,7 @@ def function_setup(
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback == "dynamodb":
+                elif callback == "dynamodb" or callback == "openmeter":
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
@@ -3687,29 +3775,34 @@ def _select_tokenizer(model: str):
     elif "llama-2" in model.lower() or "replicate" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    # llama3
+    elif "llama-3" in model.lower():
+        tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # default - tiktoken
     else:
         return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
-def encode(model: str, text: str):
+def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     """
     Encodes the given text using the specified model.
 
     Args:
         model (str): The name of the model to use for tokenization.
+        custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
         text (str): The text to be encoded.
 
     Returns:
         enc: The encoded text.
     """
-    tokenizer_json = _select_tokenizer(model=model)
+    tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     enc = tokenizer_json["tokenizer"].encode(text)
     return enc
 
 
-def decode(model: str, tokens: List[int]):
-    tokenizer_json = _select_tokenizer(model=model)
+def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
+    tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
 
@@ -3883,8 +3976,45 @@ def calculage_img_tokens(
         return total_tokens
 
 
+def create_pretrained_tokenizer(
+    identifier: str, revision="main", auth_token: Optional[str] = None
+):
+    """
+    Creates a tokenizer from an existing file on a HuggingFace repository to be used with `token_counter`.
+
+    Args:
+    identifier (str): The identifier of a Model on the Hugging Face Hub, that contains a tokenizer.json file
+    revision (str, defaults to main): A branch or commit id
+    auth_token (str, optional, defaults to None): An optional auth token used to access private repositories on the Hugging Face Hub
+
+    Returns:
+    dict: A dictionary with the tokenizer and its type.
+    """
+
+    tokenizer = Tokenizer.from_pretrained(
+        identifier, revision=revision, auth_token=auth_token
+    )
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+
+
+def create_tokenizer(json: str):
+    """
+    Creates a tokenizer from a valid JSON string for use with `token_counter`.
+
+    Args:
+    json (str): A valid JSON string representing a previously serialized tokenizer
+
+    Returns:
+    dict: A dictionary with the tokenizer and its type.
+    """
+
+    tokenizer = Tokenizer.from_str(json)
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+
+
 def token_counter(
     model="",
+    custom_tokenizer: Optional[dict] = None,
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,
@@ -3894,13 +4024,14 @@ def token_counter(
 
     Args:
     model (str): The name of the model to use for tokenization. Default is an empty string.
+    custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
     text (str): The raw text string to be passed to the model. Default is None.
     messages (Optional[List[Dict[str, str]]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
 
     Returns:
     int: The number of tokens in the text.
     """
-    # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
+    # use tiktoken, anthropic, cohere, llama2, or llama3's tokenizer depending on the model
     is_tool_call = False
     num_tokens = 0
     if text == None:
@@ -3942,8 +4073,8 @@ def token_counter(
     elif isinstance(text, str):
         count_response_tokens = True  # user just trying to count tokens for a text. don't add the chat_ml +3 tokens to this
 
-    if model is not None:
-        tokenizer_json = _select_tokenizer(model=model)
+    if model is not None or custom_tokenizer is not None:
+        tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
             print_verbose(
                 f"Token Counter - using hugging face token counter, for model={model}"
@@ -6682,7 +6813,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
-        elif custom_llm_provider == "bedrock":
+        elif custom_llm_provider == "bedrock" or custom_llm_provider == "sagemaker":
             if (
                 "AWS_ACCESS_KEY_ID" in os.environ
                 and "AWS_SECRET_ACCESS_KEY" in os.environ
@@ -6696,11 +6827,72 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("OLLAMA_API_BASE")
+        elif custom_llm_provider == "anyscale":
+            if "ANYSCALE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ANYSCALE_API_KEY")
+        elif custom_llm_provider == "deepinfra":
+            if "DEEPINFRA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DEEPINFRA_API_KEY")
+        elif custom_llm_provider == "gemini":
+            if "GEMINI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("GEMINI_API_KEY")
+        elif custom_llm_provider == "groq":
+            if "GROQ_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("GROQ_API_KEY")
+        elif custom_llm_provider == "mistral":
+            if "MISTRAL_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MISTRAL_API_KEY")
+        elif custom_llm_provider == "palm":
+            if "PALM_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("PALM_API_KEY")
+        elif custom_llm_provider == "perplexity":
+            if "PERPLEXITYAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("PERPLEXITYAI_API_KEY")
+        elif custom_llm_provider == "voyage":
+            if "VOYAGE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("VOYAGE_API_KEY")
+        elif custom_llm_provider == "fireworks_ai":
+            if (
+                "FIREWORKS_AI_API_KEY" in os.environ
+                or "FIREWORKS_API_KEY" in os.environ
+                or "FIREWORKSAI_API_KEY" in os.environ
+                or "FIREWORKS_AI_TOKEN" in os.environ
+            ):
+                keys_in_environment = True
+            else:
+                missing_keys.append("FIREWORKS_AI_API_KEY")
+        elif custom_llm_provider == "cloudflare":
+            if "CLOUDFLARE_API_KEY" in os.environ and (
+                "CLOUDFLARE_ACCOUNT_ID" in os.environ
+                or "CLOUDFLARE_API_BASE" in os.environ
+            ):
+                keys_in_environment = True
+            else:
+                missing_keys.append("CLOUDFLARE_API_KEY")
+                missing_keys.append("CLOUDFLARE_API_BASE")
     else:
         ## openai - chatcompletion + text completion
         if (
             model in litellm.open_ai_chat_completion_models
             or model in litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_embedding_models
+            or model in litellm.openai_image_generation_models
         ):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6731,7 +6923,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
         ## vertex - text + chat models
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_text_models:
+        elif (
+            model in litellm.vertex_chat_models
+            or model in litellm.vertex_text_models
+            or model in litellm.models_by_provider["vertex_ai"]
+        ):
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
             else:
@@ -6777,11 +6973,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
 
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
-            print_verbose(f"callback: {callback}")
+            print_verbose(f"init callback list: {callback}")
             if callback == "sentry":
                 try:
                     import sentry_sdk
@@ -6844,6 +7040,8 @@ def set_callbacks(callback_list, function_id=None):
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
                 langFuseLogger = LangFuseLogger()
+            elif callback == "openmeter":
+                openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
             elif callback == "prometheus":
@@ -8803,7 +9001,16 @@ def exception_type(
                             request=original_exception.request,
                         )
             elif custom_llm_provider == "azure":
-                if "This model's maximum context length is" in error_str:
+                if "Internal server error" in error_str:
+                    exception_mapping_worked = True
+                    raise APIError(
+                        status_code=500,
+                        message=f"AzureException - {original_exception.message}",
+                        llm_provider="azure",
+                        model=model,
+                        request=httpx.Request(method="POST", url="https://openai.com/"),
+                    )
+                elif "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"AzureException - {original_exception.message}",
@@ -9603,9 +9810,14 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
                     if finish_reason == "content_filter":
-                        error_message = json.dumps(
-                            str_line.choices[0].content_filter_result
-                        )
+                        if hasattr(str_line.choices[0], "content_filter_result"):
+                            error_message = json.dumps(
+                                str_line.choices[0].content_filter_result
+                            )
+                        else:
+                            error_message = "Azure Response={}".format(
+                                str(dict(str_line))
+                            )
                         raise litellm.AzureOpenAIError(
                             status_code=400, message=error_message
                         )

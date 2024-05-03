@@ -1,7 +1,7 @@
 # Completion Token Usage & Cost
 By default LiteLLM returns token usage in all completion requests ([See here](https://litellm.readthedocs.io/en/latest/output/))
 
-However, we also expose 5 helper functions + **[NEW]** an API to calculate token usage across providers:
+However, we also expose some helper functions + **[NEW]** an API to calculate token usage across providers:
 
 - `encode`: This encodes the text passed in, using the model-specific tokenizer. [**Jump to code**](#1-encode)
 
@@ -9,17 +9,19 @@ However, we also expose 5 helper functions + **[NEW]** an API to calculate token
 
 - `token_counter`: This returns the number of tokens for a given input - it uses the tokenizer based on the model, and defaults to tiktoken if no model-specific tokenizer is available. [**Jump to code**](#3-token_counter)
 
-- `cost_per_token`: This returns the cost (in USD) for prompt (input) and completion (output) tokens. Uses the live list from `api.litellm.ai`. [**Jump to code**](#4-cost_per_token)
+- `create_pretrained_tokenizer` and `create_tokenizer`: LiteLLM provides default tokenizer support for OpenAI, Cohere, Anthropic, Llama2, and Llama3 models. If you are using a different model, you can create a custom tokenizer and pass it as `custom_tokenizer` to the `encode`, `decode`, and `token_counter` methods. [**Jump to code**](#4-create_pretrained_tokenizer-and-create_tokenizer)
 
-- `completion_cost`: This returns the overall cost (in USD) for a given LLM API Call. It combines `token_counter` and `cost_per_token` to return the cost for that query (counting both cost of input and output). [**Jump to code**](#5-completion_cost)
+- `cost_per_token`: This returns the cost (in USD) for prompt (input) and completion (output) tokens. Uses the live list from `api.litellm.ai`. [**Jump to code**](#5-cost_per_token)
 
-- `get_max_tokens`: This returns the maximum number of tokens allowed for the given model. [**Jump to code**](#6-get_max_tokens)
+- `completion_cost`: This returns the overall cost (in USD) for a given LLM API Call. It combines `token_counter` and `cost_per_token` to return the cost for that query (counting both cost of input and output). [**Jump to code**](#6-completion_cost)
 
-- `model_cost`: This returns a dictionary for all models, with their max_tokens, input_cost_per_token and output_cost_per_token. It uses the `api.litellm.ai` call shown below. [**Jump to code**](#7-model_cost)
+- `get_max_tokens`: This returns the maximum number of tokens allowed for the given model. [**Jump to code**](#7-get_max_tokens)
 
-- `register_model`: This registers new / overrides existing models (and their pricing details) in the model cost dictionary. [**Jump to code**](#8-register_model)
+- `model_cost`: This returns a dictionary for all models, with their max_tokens, input_cost_per_token and output_cost_per_token. It uses the `api.litellm.ai` call shown below. [**Jump to code**](#8-model_cost)
 
-- `api.litellm.ai`: Live token + price count across [all supported models](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). [**Jump to code**](#9-apilitellmai)
+- `register_model`: This registers new / overrides existing models (and their pricing details) in the model cost dictionary. [**Jump to code**](#9-register_model)
+
+- `api.litellm.ai`: Live token + price count across [all supported models](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). [**Jump to code**](#10-apilitellmai)
 
 📣 This is a community maintained list. Contributions are welcome! ❤️
 
@@ -60,7 +62,24 @@ messages = [{"user": "role", "content": "Hey, how's it going"}]
 print(token_counter(model="gpt-3.5-turbo", messages=messages))
 ```
 
-### 4. `cost_per_token`
+### 4. `create_pretrained_tokenizer` and `create_tokenizer`
+
+```python
+from litellm import create_pretrained_tokenizer, create_tokenizer
+
+# get tokenizer from huggingface repo
+custom_tokenizer_1 = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
+
+# use tokenizer from json file
+with open("tokenizer.json") as f:
+    json_data = json.load(f)
+
+json_str = json.dumps(json_data)
+
+custom_tokenizer_2 = create_tokenizer(json_str)
+```
+
+### 5. `cost_per_token`
 
 ```python
 from litellm import cost_per_token
@@ -72,7 +91,7 @@ prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_toke
 print(prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar)
 ```
 
-### 5. `completion_cost`
+### 6. `completion_cost`
 
 * Input: Accepts a `litellm.completion()` response **OR** prompt + completion strings
 * Output: Returns a `float` of cost for the `completion` call 
@@ -99,7 +118,7 @@ cost = completion_cost(model="bedrock/anthropic.claude-v2", prompt="Hey!", compl
 formatted_string = f"${float(cost):.10f}"
 print(formatted_string)
 ```
-### 6. `get_max_tokens`
+### 7. `get_max_tokens`
 
 Input: Accepts a model name - e.g., gpt-3.5-turbo (to get a complete list, call litellm.model_list).
 Output: Returns the maximum number of tokens allowed for the given model
@@ -112,7 +131,7 @@ model = "gpt-3.5-turbo"
 print(get_max_tokens(model)) # Output: 4097
 ```
 
-### 7. `model_cost`
+### 8. `model_cost`
 
 * Output: Returns a dict object containing the max_tokens, input_cost_per_token, output_cost_per_token for all models on [community-maintained list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
@@ -122,7 +141,7 @@ from litellm import model_cost
 print(model_cost) # {'gpt-3.5-turbo': {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}, ...}
 ```
 
-### 8. `register_model`
+### 9. `register_model`
 
 * Input: Provide EITHER a model cost dictionary or a url to a hosted json blob
 * Output: Returns updated model_cost dictionary + updates litellm.model_cost with model details.  
@@ -157,5 +176,3 @@ export LITELLM_LOCAL_MODEL_COST_MAP="True"
 ```
 
 Note: this means you will need to upgrade to get updated pricing, and newer models. 
-
-
