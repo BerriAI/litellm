@@ -1185,6 +1185,7 @@ def completion(
                 print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                acompletion=acompletion,
                 logger_fn=logger_fn,
                 encoding=encoding,  # for calculating input/output tokens
                 api_key=clarifai_key,
@@ -1194,8 +1195,12 @@ def completion(
             
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-
-                model_response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="replicate")
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=model_response,
+                )
             
             if optional_params.get("stream", False) or acompletion == True:
                 ## LOGGING

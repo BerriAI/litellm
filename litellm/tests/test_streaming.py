@@ -391,8 +391,7 @@ def test_completion_claude_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
+    
 # test_completion_claude_stream()
 def test_completion_claude_2_stream():
     litellm.set_verbose = True

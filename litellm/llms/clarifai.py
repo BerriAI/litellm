@@ -3,9 +3,10 @@ import json
 import requests
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage, Choices, Message
+from litellm.utils import ModelResponse, Usage, Choices, Message, CustomStreamWrapper
 import litellm
 import httpx
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
 
@@ -84,6 +85,63 @@ def completions_to_model(payload):
             "inputs": [{"data": {"text": {"raw": payload["prompt"]}}}],
             "model": {"output_info": {"params": params}},
 }
+          
+def process_response(
+                     model,
+                     prompt,
+                     response,
+                     model_response,
+                     api_key,
+                     data,
+                     encoding, 
+                     logging_obj
+                     ):
+    logging_obj.post_call(
+            input=prompt,
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+        ## RESPONSE OBJECT
+    try:
+      completion_response = response.json()
+    except Exception:
+        raise ClarifaiError(
+            message=response.text, status_code=response.status_code, url=model
+        )
+    # print(completion_response)
+    try:
+        choices_list = []
+        for idx, item in enumerate(completion_response["outputs"]):
+            if len(item["data"]["text"]["raw"]) > 0:
+                message_obj = Message(content=item["data"]["text"]["raw"])
+            else:
+                message_obj = Message(content=None)
+            choice_obj = Choices(
+                finish_reason="stop",
+                index=idx + 1, #check
+                message=message_obj,
+            )
+            choices_list.append(choice_obj)
+        model_response["choices"] = choices_list
+
+    except Exception as e:
+        raise ClarifaiError(
+            message=traceback.format_exc(), status_code=response.status_code, url=model
+        )
+
+    # Calculate Usage
+    prompt_tokens = len(encoding.encode(prompt))
+    completion_tokens = len(
+        encoding.encode(model_response["choices"][0]["message"].get("content"))
+    )
+    model_response["model"] = model
+    model_response["usage"] = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    return model_response
 
 def convert_model_to_url(model: str, api_base: str):
     user_id, app_id, model_id = model.split(".")
@@ -98,6 +156,40 @@ def get_prompt_model_name(url: str):
     else:
         return "", clarifai_model_name
 
+async def async_completion(
+        model: str,
+        prompt: str,
+        api_base: str,
+        custom_prompt_dict: dict,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        api_key,
+        logging_obj,
+        data=None,
+        optional_params=None,
+        litellm_params=None,
+        logger_fn=None,
+        headers={}):
+    
+    async_handler = AsyncHTTPHandler(
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        )
+    response = await async_handler.post(
+            api_base, headers=headers, data=json.dumps(data)
+        )
+    
+    return process_response(
+            model=model,
+            prompt=prompt,
+            response=response,
+            model_response=model_response,
+            api_key=api_key,
+            data=data,
+            encoding=encoding,
+            logging_obj=logging_obj,
+    )
+
 def completion(
     model: str,
     messages: list,
@@ -108,6 +200,7 @@ def completion(
     api_key,
     logging_obj,
     custom_prompt_dict={},
+    acompletion=False,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
@@ -158,59 +251,78 @@ def completion(
             "api_base": api_base,
         },
     )
-    
-    ## COMPLETION CALL
-    response = requests.post(
+    if acompletion==True:
+        return async_completion(
+            model=model,
+            prompt=prompt,
+            api_base=api_base,
+            custom_prompt_dict=custom_prompt_dict,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            api_key=api_key,
+            logging_obj=logging_obj,
+            data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logger_fn=logger_fn,
+            headers=headers,
+        )
+    else:
+        ## COMPLETION CALL
+        response = requests.post(
         model,
         headers=headers,
         data=json.dumps(data),
     )
     # print(response.content); exit()
-    """
-    {"status":{"code":10000,"description":"Ok","req_id":"d914cf7e097487997910650cde954a37"},"outputs":[{"id":"c2baa668174b4547bd4d2e9f8996198d","status":{"code":10000,"description":"Ok"},"created_at":"2024-02-07T10:57:52.917990493Z","model":{"id":"GPT-4","name":"GPT-4","created_at":"2023-06-08T17:40:07.964967Z","modified_at":"2023-12-04T11:39:54.587604Z","app_id":"chat-completion","model_version":{"id":"5d7a50b44aec4a01a9c492c5a5fcf387","created_at":"2023-11-09T19:57:56.961259Z","status":{"code":21100,"description":"Model is trained and ready"},"completed_at":"2023-11-09T20:00:48.933172Z","visibility":{"gettable":50},"app_id":"chat-completion","user_id":"openai","metadata":{}},"user_id":"openai","model_type_id":"text-to-text","visibility":{"gettable":50},"toolkits":[],"use_cases":[],"languages":[],"languages_full":[],"check_consents":[],"workflow_recommended":false,"image":{"url":"https://data.clarifai.com/small/users/openai/apps/chat-completion/inputs/image/34326a9914d361bb93ae8e5381689755","hosted":{"prefix":"https://data.clarifai.com","suffix":"users/openai/apps/chat-completion/inputs/image/34326a9914d361bb93ae8e5381689755","sizes":["small"],"crossorigin":"use-credentials"}}},"input":{"id":"fba1f22a332743f083ddae0a7eb443ae","data":{"text":{"raw":"what\'s the weather in SF","url":"https://samples.clarifai.com/placeholder.gif"}}},"data":{"text":{"raw":"As an AI, I\'m unable to provide real-time information or updates. Please check a reliable weather website or app for the current weather in San Francisco.","text_info":{"encoding":"UnknownTextEnc"}}}}]}
-    """
+
     if response.status_code != 200:
         raise ClarifaiError(status_code=response.status_code, message=response.text, url=model)
+    
     if "stream" in optional_params and optional_params["stream"] == True:
-        return response.iter_lines()
-    else:
-        logging_obj.post_call(
-            input=prompt,
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-        ## RESPONSE OBJECT
-        completion_response = response.json()
-        # print(completion_response)
-        try:
-            choices_list = []
-            for idx, item in enumerate(completion_response["outputs"]):
-                if len(item["data"]["text"]["raw"]) > 0:
-                    message_obj = Message(content=item["data"]["text"]["raw"])
-                else:
-                    message_obj = Message(content=None)
-                choice_obj = Choices(
-                    finish_reason="stop",
-                    index=idx + 1, #check
-                    message=message_obj,
-                )
-                choices_list.append(choice_obj)
-            model_response["choices"] = choices_list
-        except Exception as e:
-            raise ClarifaiError(
-                message=traceback.format_exc(), status_code=response.status_code, url=model
+        completion_stream = response.iter_lines()
+        stream_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="clarifai",
+            logging_obj=logging_obj,
             )
+        return stream_response
+    
+    else:
+       return process_response(
+            model=model,
+            prompt=prompt,
+            response=response,
+            model_response=model_response,
+            api_key=api_key,
+            data=data,
+            encoding=encoding,
+            logging_obj=logging_obj)
+    
 
-        # Calculate Usage
-        prompt_tokens = len(encoding.encode(prompt))
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content"))
-        )
-        model_response["model"] = model
-        model_response["usage"] = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        )
-        return model_response
+class ModelResponseIterator:
+    def __init__(self, model_response):
+        self.model_response = model_response
+        self.is_done = False
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.is_done:
+            raise StopIteration
+        self.is_done = True
+        return self.model_response
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.is_done:
+            raise StopAsyncIteration
+        self.is_done = True
+        return self.model_response
