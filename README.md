@@ -247,7 +247,7 @@ Step 2: Navigate into the project, and install dependencies:
 
 ```
 cd litellm
-poetry install
+poetry install -E extra_proxy -E proxy
 ```
 
 Step 3: Test your change:

@@ -23,6 +23,7 @@ class LangFuseLogger:
     ) -> None:
         try:
             from langfuse import Langfuse
+            import langfuse
         except Exception as e:
             raise Exception(
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
@@ -33,14 +34,20 @@ class LangFuseLogger:
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.Langfuse = Langfuse(
-            public_key=self.public_key,
-            secret_key=self.secret_key,
-            host=self.langfuse_host,
-            release=self.langfuse_release,
-            debug=self.langfuse_debug,
-            flush_interval=flush_interval,  # flush interval in seconds
-        )
+
+        parameters = {
+            "public_key": self.public_key,
+            "secret_key": self.secret_key,
+            "host": self.langfuse_host,
+            "release": self.langfuse_release,
+            "debug": self.langfuse_debug,
+            "flush_interval": flush_interval,  # flush interval in seconds
+        }
+
+        if Version(langfuse.version.__version__) >= Version("2.6.0"):
+            parameters["sdk_integration"] = "litellm"
+
+        self.Langfuse = Langfuse(**parameters)
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
@@ -85,7 +92,7 @@ class LangFuseLogger:
         print_verbose: Callable[[str, *Any], None],
         level: str = "DEFAULT",
         status_message=None,
-    ) -> None:
+    ) -> dict:
         # Method definition
 
         try:
@@ -146,8 +153,10 @@ class LangFuseLogger:
                 input = prompt
                 output = response_obj["data"]
             print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
+            trace_id = None
+            generation_id = None
             if self._is_langfuse_v2():
-                self._log_langfuse_v2(
+                trace_id, generation_id = self._log_langfuse_v2(
                     user_id,
                     metadata,
                     litellm_params,
@@ -177,10 +186,12 @@ class LangFuseLogger:
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
             verbose_logger.info(f"Langfuse Layer Logging - logging success")
+
+            return {"trace_id": trace_id, "generation_id": generation_id}
         except:
             traceback.print_exc()
             verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
-            pass
+            return {"trace_id": None, "generation_id": None}
 
     async def _async_log_event(
         self,
@@ -258,7 +269,7 @@ class LangFuseLogger:
         response_obj: dict[str, Any],
         level: str,
         print_verbose: Callable[[str, *Any], None],
-    ) -> None:
+    ) -> tuple:
         import langfuse
 
         try:
@@ -277,22 +288,28 @@ class LangFuseLogger:
                 tags = metadata_tags
 
             trace_name = metadata.get("trace_name", None)
-            if trace_name is None:
+            trace_id = metadata.get("trace_id", None)
+            existing_trace_id = metadata.get("existing_trace_id", None)
+            if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name
+                ## DO NOT SET TRACE_NAME if trace-id set. this can lead to overwriting of past traces.
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
-            trace_params = {
-                "name": trace_name,
-                "input": input,
-                "user_id": metadata.get("trace_user_id", user_id),
-                "id": metadata.get("trace_id", None),
-                "session_id": metadata.get("session_id", None),
-            }
+            if existing_trace_id is not None:
+                trace_params = {"id": existing_trace_id}
+            else:  # don't overwrite an existing trace
+                trace_params = {
+                    "name": trace_name,
+                    "input": input,
+                    "user_id": metadata.get("trace_user_id", user_id),
+                    "id": trace_id,
+                    "session_id": metadata.get("session_id", None),
+                }
 
-            if level == "ERROR":
-                trace_params["status_message"] = output
-            else:
-                trace_params["output"] = output
+                if level == "ERROR":
+                    trace_params["status_message"] = output
+                else:
+                    trace_params["output"] = output
 
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
@@ -350,7 +367,8 @@ class LangFuseLogger:
                         kwargs["cache_hit"] = False
                     tags.append(f"cache_hit:{kwargs['cache_hit']}")
                     clean_metadata["cache_hit"] = kwargs["cache_hit"]
-                trace_params.update({"tags": tags})
+                if existing_trace_id is None:
+                    trace_params.update({"tags": tags})
 
             proxy_server_request = litellm_params.get("proxy_server_request", None)
             if proxy_server_request:
@@ -369,8 +387,6 @@ class LangFuseLogger:
                     "url": url,
                     "headers": clean_headers,
                 }
-
-            print_verbose(f"trace_params: {trace_params}")
 
             trace = self.Langfuse.trace(**trace_params)
 
@@ -421,8 +437,9 @@ class LangFuseLogger:
                     "completion_start_time", None
                 )
 
-            print_verbose(f"generation_params: {generation_params}")
+            generation_client = trace.generation(**generation_params)
 
-            trace.generation(**generation_params)
+            return generation_client.trace_id, generation_id
         except Exception as e:
             verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
+            return None, None

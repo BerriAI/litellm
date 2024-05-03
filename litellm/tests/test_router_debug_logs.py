@@ -46,6 +46,7 @@ def test_async_fallbacks(caplog):
     router = Router(
         model_list=model_list,
         fallbacks=[{"gpt-3.5-turbo": ["azure/gpt-3.5-turbo"]}],
+        num_retries=1,
     )
 
     user_message = "Hello, how are you?"
@@ -81,8 +82,8 @@ def test_async_fallbacks(caplog):
     # Define the expected log messages
     # - error request, falling back notice, success notice
     expected_logs = [
-        "Intialized router with Routing strategy: simple-shuffle\n\nRouting fallbacks: [{'gpt-3.5-turbo': ['azure/gpt-3.5-turbo']}]\n\nRouting context window fallbacks: None\n\nRouter Redis Caching=None",
         "litellm.acompletion(model=gpt-3.5-turbo)\x1b[31m Exception OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}\x1b[0m",
+        "litellm.acompletion(model=None)\x1b[31m Exception No deployments available for selected model, passed model=gpt-3.5-turbo\x1b[0m",
         "Falling back to model_group = azure/gpt-3.5-turbo",
         "litellm.acompletion(model=azure/chatgpt-v-2)\x1b[32m 200 OK\x1b[0m",
     ]

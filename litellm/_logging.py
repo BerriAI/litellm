@@ -1,7 +1,7 @@
 import logging
 
 set_verbose = False
-
+json_logs = False
 # Create a handler for the logger (you may need to adapt this based on your needs)
 handler = logging.StreamHandler()
 handler.setLevel(logging.DEBUG)

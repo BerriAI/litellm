@@ -930,7 +930,7 @@ def completion(
             original_response=json.dumps(response_body),
             additional_args={"complete_input_dict": data},
         )
-        print_verbose(f"raw model_response: {response}")
+        print_verbose(f"raw model_response: {response_body}")
         ## RESPONSE OBJECT
         outputText = "default"
         if provider == "ai21":
@@ -1043,6 +1043,7 @@ def completion(
             outputText = response_body.get("results")[0].get("outputText")
 
         response_metadata = response.get("ResponseMetadata", {})
+
         if response_metadata.get("HTTPStatusCode", 500) >= 400:
             raise BedrockError(
                 message=outputText,
@@ -1078,11 +1079,13 @@ def completion(
             prompt_tokens = response_metadata.get(
                 "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
             )
+            _text_response = model_response["choices"][0]["message"].get("content", "")
             completion_tokens = response_metadata.get(
                 "x-amzn-bedrock-output-token-count",
                 len(
                     encoding.encode(
-                        model_response["choices"][0]["message"].get("content", "")
+                        _text_response,
+                        disallowed_special=(),
                     )
                 ),
             )

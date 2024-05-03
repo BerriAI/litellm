@@ -2,7 +2,7 @@
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
+from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -22,6 +22,7 @@ success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+_custom_logger_compatible_callbacks: list = ["openmeter"]
 _langfuse_default_tags: Optional[
     List[
         Literal[
@@ -529,7 +530,11 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
-    "vertex_ai": vertex_chat_models + vertex_text_models,
+    "vertex_ai": vertex_chat_models
+    + vertex_text_models
+    + vertex_anthropic_models
+    + vertex_vision_models
+    + vertex_language_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models,
     "petals": petals_models,
@@ -595,6 +600,8 @@ from .utils import (
     get_optional_params,
     modify_integration,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
     cost_per_token,
     completion_cost,
     supports_function_calling,

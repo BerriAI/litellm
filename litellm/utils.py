@@ -19,6 +19,7 @@ from functools import wraps
 import datetime, time
 import tiktoken
 import uuid
+from pydantic import BaseModel
 import aiohttp
 import textwrap
 import logging
@@ -69,6 +70,7 @@ from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
+from .integrations.openmeter import OpenMeterLogger
 from .integrations.datadog import DataDogLogger
 from .integrations.prometheus import PrometheusLogger
 from .integrations.prometheus_services import PrometheusServicesLogger
@@ -105,7 +107,7 @@ try:
 except Exception as e:
     verbose_logger.debug(f"Exception import enterprise features {str(e)}")
 
-from typing import cast, List, Dict, Union, Optional, Literal, Any, BinaryIO
+from typing import cast, List, Dict, Union, Optional, Literal, Any, BinaryIO, Iterable
 from .caching import Cache
 from concurrent.futures import ThreadPoolExecutor
 
@@ -129,6 +131,7 @@ langsmithLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
+openMeterLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
@@ -217,6 +220,61 @@ def map_finish_reason(
     elif finish_reason == "tool_use":  # anthropic
         return "tool_calls"
     return finish_reason
+
+
+class TopLogprob(OpenAIObject):
+    token: str
+    """The token."""
+
+    bytes: Optional[List[int]] = None
+    """A list of integers representing the UTF-8 bytes representation of the token.
+
+    Useful in instances where characters are represented by multiple tokens and
+    their byte representations must be combined to generate the correct text
+    representation. Can be `null` if there is no bytes representation for the token.
+    """
+
+    logprob: float
+    """The log probability of this token, if it is within the top 20 most likely
+    tokens.
+
+    Otherwise, the value `-9999.0` is used to signify that the token is very
+    unlikely.
+    """
+
+
+class ChatCompletionTokenLogprob(OpenAIObject):
+    token: str
+    """The token."""
+
+    bytes: Optional[List[int]] = None
+    """A list of integers representing the UTF-8 bytes representation of the token.
+
+    Useful in instances where characters are represented by multiple tokens and
+    their byte representations must be combined to generate the correct text
+    representation. Can be `null` if there is no bytes representation for the token.
+    """
+
+    logprob: float
+    """The log probability of this token, if it is within the top 20 most likely
+    tokens.
+
+    Otherwise, the value `-9999.0` is used to signify that the token is very
+    unlikely.
+    """
+
+    top_logprobs: List[TopLogprob]
+    """List of the most likely tokens and their log probability, at this token
+    position.
+
+    In rare cases, there may be fewer than the number of requested `top_logprobs`
+    returned.
+    """
+
+
+class ChoiceLogprobs(OpenAIObject):
+    content: Optional[List[ChatCompletionTokenLogprob]] = None
+    """A list of message content tokens with log probability information."""
 
 
 class FunctionCall(OpenAIObject):
@@ -329,7 +387,7 @@ class Message(OpenAIObject):
                 self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
 
         if logprobs is not None:
-            self._logprobs = logprobs
+            self._logprobs = ChoiceLogprobs(**logprobs)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -353,11 +411,17 @@ class Message(OpenAIObject):
 
 class Delta(OpenAIObject):
     def __init__(
-        self, content=None, role=None, function_call=None, tool_calls=None, **params
+        self,
+        content=None,
+        role=None,
+        function_call=None,
+        tool_calls=None,
+        **params,
     ):
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
+
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
         else:
@@ -407,7 +471,7 @@ class Choices(OpenAIObject):
         )  # set finish_reason for all responses
         self.index = index
         if message is None:
-            self.message = Message(content=None)
+            self.message = Message()
         else:
             if isinstance(message, Message):
                 self.message = message
@@ -489,7 +553,11 @@ class StreamingChoices(OpenAIObject):
             self.delta = Delta()
         if enhancements is not None:
             self.enhancements = enhancements
-        self.logprobs = logprobs
+
+        if logprobs is not None and isinstance(logprobs, dict):
+            self.logprobs = ChoiceLogprobs(**logprobs)
+        else:
+            self.logprobs = logprobs  # type: ignore
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1136,7 +1204,14 @@ class Logging:
             if verbose_logger.level == 0:
                 # this means verbose logger was not switched on - user is in litellm.set_verbose=True
                 print_verbose(f"\033[92m{curl_command}\033[0m\n")
-            verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
+
+            if litellm.json_logs:
+                verbose_logger.info(
+                    "POST Request Sent from LiteLLM",
+                    extra={"api_base": {api_base}, **masked_headers},
+                )
+            else:
+                verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1146,7 +1221,6 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
             for callback in callbacks:
@@ -1163,29 +1237,20 @@ class Logging:
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
-
-                    elif callback == "lite_debugger":
-                        print_verbose(
-                            f"reaches litedebugger for logging! - model_call_details {self.model_call_details}"
-                        )
-                        model = self.model_call_details["model"]
-                        messages = self.model_call_details["input"]
-                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                        liteDebuggerClient.input_log_event(
-                            model=model,
-                            messages=messages,
-                            end_user=self.model_call_details.get("user", "default"),
-                            litellm_call_id=self.litellm_params["litellm_call_id"],
-                            litellm_params=self.model_call_details["litellm_params"],
-                            optional_params=self.model_call_details["optional_params"],
-                            print_verbose=print_verbose,
-                            call_type=self.call_type,
-                        )
                     elif callback == "sentry" and add_breadcrumb:
-                        print_verbose("reaches sentry breadcrumbing")
+                        try:
+                            details_to_log = copy.deepcopy(self.model_call_details)
+                        except:
+                            details_to_log = self.model_call_details
+                        if litellm.turn_off_message_logging:
+                            # make a copy of the _model_Call_details and log it
+                            details_to_log.pop("messages", None)
+                            details_to_log.pop("input", None)
+                            details_to_log.pop("prompt", None)
+
                         add_breadcrumb(
                             category="litellm.llm_call",
-                            message=f"Model Call Details pre-call: {self.model_call_details}",
+                            message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -1249,7 +1314,7 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-
+            self.redact_message_input_output_from_logging(result=original_response)
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
@@ -1267,9 +1332,19 @@ class Logging:
                         )
                     elif callback == "sentry" and add_breadcrumb:
                         print_verbose("reaches sentry breadcrumbing")
+                        try:
+                            details_to_log = copy.deepcopy(self.model_call_details)
+                        except:
+                            details_to_log = self.model_call_details
+                        if litellm.turn_off_message_logging:
+                            # make a copy of the _model_Call_details and log it
+                            details_to_log.pop("messages", None)
+                            details_to_log.pop("input", None)
+                            details_to_log.pop("prompt", None)
+
                         add_breadcrumb(
                             category="litellm.llm_call",
-                            message=f"Model Call Details post-call: {self.model_call_details}",
+                            message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -1461,6 +1536,8 @@ class Logging:
             else:
                 callbacks = litellm.success_callback
 
+            self.redact_message_input_output_from_logging(result=result)
+
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
@@ -1618,10 +1695,17 @@ class Logging:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
                         if langFuseLogger is None or (
-                            self.langfuse_public_key != langFuseLogger.public_key
-                            and self.langfuse_secret != langFuseLogger.secret_key
+                            (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
+                            and (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
                         ):
-                            print_verbose("Instantiates langfuse client")
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
@@ -1848,6 +1932,51 @@ class Logging:
                                 print_verbose=print_verbose,
                             )
                     if (
+                        callback == "openmeter"
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        == False
+                    ):
+                        global openMeterLogger
+                        if openMeterLogger is None:
+                            print_verbose("Instantiates openmeter client")
+                            openMeterLogger = OpenMeterLogger()
+                        if self.stream and complete_streaming_response is None:
+                            openMeterLogger.log_stream_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                        else:
+                            if self.stream and complete_streaming_response:
+                                self.model_call_details["complete_response"] = (
+                                    self.model_call_details.get(
+                                        "complete_streaming_response", {}
+                                    )
+                                )
+                                result = self.model_call_details["complete_response"]
+                            openMeterLogger.log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+
+                    if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
@@ -2005,7 +2134,9 @@ class Logging:
                     callbacks.append(callback)
         else:
             callbacks = litellm._async_success_callback
-        print_verbose(f"Async success callbacks: {callbacks}")
+
+        self.redact_message_input_output_from_logging(result=result)
+
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -2043,6 +2174,35 @@ class Logging:
                                 await litellm.cache.async_add_cache(result, **kwargs)
                             else:
                                 litellm.cache.add_cache(result, **kwargs)
+                if callback == "openmeter":
+                    global openMeterLogger
+                    if self.stream == True:
+                        if (
+                            "async_complete_streaming_response"
+                            in self.model_call_details
+                        ):
+                            await openMeterLogger.async_log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=self.model_call_details[
+                                    "async_complete_streaming_response"
+                                ],
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                        else:
+                            await openMeterLogger.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                    else:
+                        await openMeterLogger.async_log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     if self.stream == True:
                         if (
@@ -2166,7 +2326,10 @@ class Logging:
                 start_time=start_time,
                 end_time=end_time,
             )
+
             result = None  # result sent to all loggers, init this to None incase it's not created
+
+            self.redact_message_input_output_from_logging(result=result)
             for callback in litellm.failure_callback:
                 try:
                     if callback == "lite_debugger":
@@ -2351,6 +2514,39 @@ class Logging:
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
 
+    def redact_message_input_output_from_logging(self, result):
+        """
+        Removes messages, prompts, input, response from logging. This modifies the data in-place
+        only redacts when litellm.turn_off_message_logging == True
+        """
+        # check if user opted out of logging message/response to callbacks
+        if litellm.turn_off_message_logging == True:
+            # remove messages, prompts, input, response from logging
+            self.model_call_details["messages"] = "redacted-by-litellm"
+            self.model_call_details["prompt"] = ""
+            self.model_call_details["input"] = ""
+
+            # response cleaning
+            # ChatCompletion Responses
+            if self.stream and "complete_streaming_response" in self.model_call_details:
+                _streaming_response = self.model_call_details[
+                    "complete_streaming_response"
+                ]
+                for choice in _streaming_response.choices:
+                    if isinstance(choice, litellm.Choices):
+                        choice.message.content = "redacted-by-litellm"
+                    elif isinstance(choice, litellm.utils.StreamingChoices):
+                        choice.delta.content = "redacted-by-litellm"
+            else:
+                if result is not None:
+                    if isinstance(result, litellm.ModelResponse):
+                        if hasattr(result, "choices") and result.choices is not None:
+                            for choice in result.choices:
+                                if isinstance(choice, litellm.Choices):
+                                    choice.message.content = "redacted-by-litellm"
+                                elif isinstance(choice, litellm.utils.StreamingChoices):
+                                    choice.delta.content = "redacted-by-litellm"
+
 
 def exception_logging(
     additional_args={},
@@ -2433,7 +2629,7 @@ class Rules:
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def function_setup(
-    original_function, rules_obj, start_time, *args, **kwargs
+    original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
@@ -2457,10 +2653,12 @@ def function_setup(
             len(litellm.input_callback) > 0
             or len(litellm.success_callback) > 0
             or len(litellm.failure_callback) > 0
-        ) and len(callback_list) == 0:
+        ) and len(
+            callback_list  # type: ignore
+        ) == 0:  # type: ignore
             callback_list = list(
                 set(
-                    litellm.input_callback
+                    litellm.input_callback  # type: ignore
                     + litellm.success_callback
                     + litellm.failure_callback
                 )
@@ -2469,7 +2667,7 @@ def function_setup(
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.input_callback):
+            for index, callback in enumerate(litellm.input_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
@@ -2480,11 +2678,11 @@ def function_setup(
 
         if len(litellm.success_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.success_callback):
+            for index, callback in enumerate(litellm.success_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback == "dynamodb":
+                elif callback == "dynamodb" or callback == "openmeter":
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
@@ -2496,7 +2694,7 @@ def function_setup(
 
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.failure_callback):
+            for index, callback in enumerate(litellm.failure_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_failure_callback.append(callback)
                     removed_async_items.append(index)
@@ -2530,16 +2728,26 @@ def function_setup(
             dynamic_success_callbacks = kwargs.pop("success_callback")
 
         if add_breadcrumb:
+            try:
+                details_to_log = copy.deepcopy(kwargs)
+            except:
+                details_to_log = kwargs
+
+            if litellm.turn_off_message_logging:
+                # make a copy of the _model_Call_details and log it
+                details_to_log.pop("messages", None)
+                details_to_log.pop("input", None)
+                details_to_log.pop("prompt", None)
             add_breadcrumb(
                 category="litellm.llm_call",
-                message=f"Positional Args: {args}, Keyword Args: {kwargs}",
+                message=f"Positional Args: {args}, Keyword Args: {details_to_log}",
                 level="info",
             )
         if "logger_fn" in kwargs:
             user_logger_fn = kwargs["logger_fn"]
         # INIT LOGGER - for user-specified integrations
         model = args[0] if len(args) > 0 else kwargs.get("model", None)
-        call_type = original_function.__name__
+        call_type = original_function
         if (
             call_type == CallTypes.completion.value
             or call_type == CallTypes.acompletion.value
@@ -2721,7 +2929,7 @@ def client(original_function):
         try:
             if logging_obj is None:
                 logging_obj, kwargs = function_setup(
-                    original_function, rules_obj, start_time, *args, **kwargs
+                    original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
 
@@ -3030,7 +3238,7 @@ def client(original_function):
         try:
             if logging_obj is None:
                 logging_obj, kwargs = function_setup(
-                    original_function, rules_obj, start_time, *args, **kwargs
+                    original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
 
@@ -3537,12 +3745,12 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     a100_80gb_price_per_second_public = (
         0.001400  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:
+    if total_time == 0.0:  # total time is in ms
         start_time = completion_response["created"]
         end_time = completion_response["ended"]
         total_time = end_time - start_time
 
-    return a100_80gb_price_per_second_public * total_time
+    return a100_80gb_price_per_second_public * total_time / 1000
 
 
 def _select_tokenizer(model: str):
@@ -3564,32 +3772,37 @@ def _select_tokenizer(model: str):
         tokenizer = Tokenizer.from_str(json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # llama2
-    elif "llama-2" in model.lower():
+    elif "llama-2" in model.lower() or "replicate" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    # llama3
+    elif "llama-3" in model.lower():
+        tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # default - tiktoken
     else:
         return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
-def encode(model: str, text: str):
+def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     """
     Encodes the given text using the specified model.
 
     Args:
         model (str): The name of the model to use for tokenization.
+        custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
         text (str): The text to be encoded.
 
     Returns:
         enc: The encoded text.
     """
-    tokenizer_json = _select_tokenizer(model=model)
+    tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     enc = tokenizer_json["tokenizer"].encode(text)
     return enc
 
 
-def decode(model: str, tokens: List[int]):
-    tokenizer_json = _select_tokenizer(model=model)
+def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
+    tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
 
@@ -3763,8 +3976,45 @@ def calculage_img_tokens(
         return total_tokens
 
 
+def create_pretrained_tokenizer(
+    identifier: str,
+    revision="main",
+    auth_token: Optional[str] = None
+):
+    """
+    Creates a tokenizer from an existing file on a HuggingFace repository to be used with `token_counter`.
+
+    Args:
+    identifier (str): The identifier of a Model on the Hugging Face Hub, that contains a tokenizer.json file
+    revision (str, defaults to main): A branch or commit id
+    auth_token (str, optional, defaults to None): An optional auth token used to access private repositories on the Hugging Face Hub
+
+    Returns:
+    dict: A dictionary with the tokenizer and its type.
+    """
+
+    tokenizer = Tokenizer.from_pretrained(identifier, revision=revision, auth_token=auth_token)
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+
+
+def create_tokenizer(json: str):
+    """
+    Creates a tokenizer from a valid JSON string for use with `token_counter`.
+
+    Args:
+    json (str): A valid JSON string representing a previously serialized tokenizer
+
+    Returns:
+    dict: A dictionary with the tokenizer and its type.
+    """
+
+    tokenizer = Tokenizer.from_str(json)
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+
+
 def token_counter(
     model="",
+    custom_tokenizer: Optional[dict] = None,
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,
@@ -3774,13 +4024,14 @@ def token_counter(
 
     Args:
     model (str): The name of the model to use for tokenization. Default is an empty string.
+    custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
     text (str): The raw text string to be passed to the model. Default is None.
     messages (Optional[List[Dict[str, str]]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
 
     Returns:
     int: The number of tokens in the text.
     """
-    # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
+    # use tiktoken, anthropic, cohere, llama2, or llama3's tokenizer depending on the model
     is_tool_call = False
     num_tokens = 0
     if text == None:
@@ -3822,8 +4073,8 @@ def token_counter(
     elif isinstance(text, str):
         count_response_tokens = True  # user just trying to count tokens for a text. don't add the chat_ml +3 tokens to this
 
-    if model is not None:
-        tokenizer_json = _select_tokenizer(model=model)
+    if model is not None or custom_tokenizer is not None:
+        tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
             print_verbose(
                 f"Token Counter - using hugging face token counter, for model={model}"
@@ -4165,7 +4416,10 @@ def completion_cost(
             model = get_model_params_and_category(model)
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
-        elif model in litellm.replicate_models or "replicate" in model:
+        elif (
+            model in litellm.replicate_models or "replicate" in model
+        ) and model not in litellm.model_cost:
+            # for unmapped replicate model, default to replicate's time tracking logic
             return get_replicate_completion_pricing(completion_response, total_time)
 
         (
@@ -4551,7 +4805,36 @@ def get_optional_params(
             k.startswith("vertex_") and custom_llm_provider != "vertex_ai"
         ):  # allow dynamically setting vertex ai init logic
             continue
+
         passed_params[k] = v
+
+    optional_params = {}
+
+    common_auth_dict = litellm.common_cloud_provider_auth_params
+    if custom_llm_provider in common_auth_dict["providers"]:
+        """
+        Check if params = ["project", "region_name", "token"]
+        and correctly translate for = ["azure", "vertex_ai", "watsonx", "aws"]
+        """
+        if custom_llm_provider == "azure":
+            optional_params = litellm.AzureOpenAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "bedrock":
+            optional_params = (
+                litellm.AmazonBedrockGlobalConfig().map_special_auth_params(
+                    non_default_params=passed_params, optional_params=optional_params
+                )
+            )
+        elif custom_llm_provider == "vertex_ai":
+            optional_params = litellm.VertexAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "watsonx":
+            optional_params = litellm.IBMWatsonXAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+
     default_params = {
         "functions": None,
         "function_call": None,
@@ -4587,7 +4870,7 @@ def get_optional_params(
             and v != default_params[k]
         )
     }
-    optional_params = {}
+
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
         "functions" in non_default_params
@@ -5265,7 +5548,8 @@ def get_optional_params(
             optional_params["tools"] = tools
         if tool_choice is not None:
             optional_params["tool_choice"] = tool_choice
-
+        if response_format is not None:
+            optional_params["response_format"] = response_format
         # check safe_mode, random_seed: https://docs.mistral.ai/api/#operation/createChatCompletion
         safe_mode = passed_params.pop("safe_mode", None)
         random_seed = passed_params.pop("random_seed", None)
@@ -5277,6 +5561,7 @@ def get_optional_params(
         optional_params["extra_body"] = (
             extra_body  # openai client supports `extra_body` param
         )
+
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -5354,6 +5639,49 @@ def get_optional_params(
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
+        optional_params["extra_body"] = (
+            extra_body  # openai client supports `extra_body` param
+        )
+    elif custom_llm_provider == "watsonx":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        if max_tokens is not None:
+            optional_params["max_new_tokens"] = max_tokens
+        if stream:
+            optional_params["stream"] = stream
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if frequency_penalty is not None:
+            optional_params["repetition_penalty"] = frequency_penalty
+        if seed is not None:
+            optional_params["random_seed"] = seed
+        if stop is not None:
+            optional_params["stop_sequences"] = stop
+
+        # WatsonX-only parameters
+        extra_body = {}
+        if "decoding_method" in passed_params:
+            extra_body["decoding_method"] = passed_params.pop("decoding_method")
+        if "min_tokens" in passed_params or "min_new_tokens" in passed_params:
+            extra_body["min_new_tokens"] = passed_params.pop(
+                "min_tokens", passed_params.pop("min_new_tokens")
+            )
+        if "top_k" in passed_params:
+            extra_body["top_k"] = passed_params.pop("top_k")
+        if "truncate_input_tokens" in passed_params:
+            extra_body["truncate_input_tokens"] = passed_params.pop(
+                "truncate_input_tokens"
+            )
+        if "length_penalty" in passed_params:
+            extra_body["length_penalty"] = passed_params.pop("length_penalty")
+        if "time_limit" in passed_params:
+            extra_body["time_limit"] = passed_params.pop("time_limit")
+        if "return_options" in passed_params:
+            extra_body["return_options"] = passed_params.pop("return_options")
         optional_params["extra_body"] = (
             extra_body  # openai client supports `extra_body` param
         )
@@ -5759,6 +6087,8 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "frequency_penalty",
             "presence_penalty",
         ]
+    elif custom_llm_provider == "watsonx":
+        return litellm.IBMWatsonXAIConfig().get_supported_openai_params()
 
 
 def get_formatted_prompt(
@@ -5986,6 +6316,8 @@ def get_llm_provider(
             model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
         ):
             custom_llm_provider = "bedrock"
+        elif model in litellm.watsonx_models:
+            custom_llm_provider = "watsonx"
         # openai embeddings
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
@@ -6450,7 +6782,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_PROJECT"])
+                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"])
         elif custom_llm_provider == "huggingface":
             if "HUGGINGFACE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6481,7 +6813,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
-        elif custom_llm_provider == "bedrock":
+        elif custom_llm_provider == "bedrock" or custom_llm_provider == "sagemaker":
             if (
                 "AWS_ACCESS_KEY_ID" in os.environ
                 and "AWS_SECRET_ACCESS_KEY" in os.environ
@@ -6495,11 +6827,72 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("OLLAMA_API_BASE")
+        elif custom_llm_provider == "anyscale":
+            if "ANYSCALE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ANYSCALE_API_KEY")
+        elif custom_llm_provider == "deepinfra":
+            if "DEEPINFRA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DEEPINFRA_API_KEY")
+        elif custom_llm_provider == "gemini":
+            if "GEMINI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("GEMINI_API_KEY")
+        elif custom_llm_provider == "groq":
+            if "GROQ_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("GROQ_API_KEY")
+        elif custom_llm_provider == "mistral":
+            if "MISTRAL_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MISTRAL_API_KEY")
+        elif custom_llm_provider == "palm":
+            if "PALM_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("PALM_API_KEY")
+        elif custom_llm_provider == "perplexity":
+            if "PERPLEXITYAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("PERPLEXITYAI_API_KEY")
+        elif custom_llm_provider == "voyage":
+            if "VOYAGE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("VOYAGE_API_KEY")
+        elif custom_llm_provider == "fireworks_ai":
+            if (
+                "FIREWORKS_AI_API_KEY" in os.environ
+                or "FIREWORKS_API_KEY" in os.environ
+                or "FIREWORKSAI_API_KEY" in os.environ
+                or "FIREWORKS_AI_TOKEN" in os.environ
+            ):
+                keys_in_environment = True
+            else:
+                missing_keys.append("FIREWORKS_AI_API_KEY")
+        elif custom_llm_provider == "cloudflare":
+            if "CLOUDFLARE_API_KEY" in os.environ and (
+                "CLOUDFLARE_ACCOUNT_ID" in os.environ
+                or "CLOUDFLARE_API_BASE" in os.environ
+            ):
+                keys_in_environment = True
+            else:
+                missing_keys.append("CLOUDFLARE_API_KEY")
+                missing_keys.append("CLOUDFLARE_API_BASE")
     else:
         ## openai - chatcompletion + text completion
         if (
             model in litellm.open_ai_chat_completion_models
             or model in litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_embedding_models
+            or model in litellm.openai_image_generation_models
         ):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6530,7 +6923,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
         ## vertex - text + chat models
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_text_models:
+        elif (
+            model in litellm.vertex_chat_models
+            or model in litellm.vertex_text_models
+            or model in litellm.models_by_provider["vertex_ai"]
+        ):
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
             else:
@@ -6576,11 +6973,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
 
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
-            print_verbose(f"callback: {callback}")
+            print_verbose(f"init callback list: {callback}")
             if callback == "sentry":
                 try:
                     import sentry_sdk
@@ -6643,6 +7040,8 @@ def set_callbacks(callback_list, function_id=None):
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
                 langFuseLogger = LangFuseLogger()
+            elif callback == "openmeter":
+                openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
             elif callback == "prometheus":
@@ -6979,6 +7378,7 @@ def convert_to_model_response_object(
     end_time=None,
     hidden_params: Optional[dict] = None,
 ):
+    received_args = locals()
     try:
         if response_type == "completion" and (
             model_response_object is None
@@ -6990,6 +7390,11 @@ def convert_to_model_response_object(
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list = []
+
+            assert response_object["choices"] is not None and isinstance(
+                response_object["choices"], Iterable
+            )
+
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["message"].get("content", None),
@@ -7033,9 +7438,10 @@ def convert_to_model_response_object(
                 model_response_object.model = response_object["model"]
 
             if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (  # type: ignore
-                    end_time - start_time
-                ).total_seconds() * 1000
+                if isinstance(start_time, type(end_time)):
+                    model_response_object._response_ms = (  # type: ignore
+                        end_time - start_time
+                    ).total_seconds() * 1000
 
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
@@ -7110,7 +7516,9 @@ def convert_to_model_response_object(
                 model_response_object._hidden_params = hidden_params
             return model_response_object
     except Exception as e:
-        raise Exception(f"Invalid response object {traceback.format_exc()}")
+        raise Exception(
+            f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
+        )
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
@@ -7937,7 +8345,10 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response,
                     )
-                elif "None Unknown Error." in error_str:
+                elif (
+                    "None Unknown Error." in error_str
+                    or "Content has no parts." in error_str
+                ):
                     exception_mapping_worked = True
                     raise APIError(
                         message=f"VertexAIException - {error_str}",
@@ -9390,9 +9801,14 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
                     if finish_reason == "content_filter":
-                        error_message = json.dumps(
-                            str_line.choices[0].content_filter_result
-                        )
+                        if hasattr(str_line.choices[0], "content_filter_result"):
+                            error_message = json.dumps(
+                                str_line.choices[0].content_filter_result
+                            )
+                        else:
+                            error_message = "Azure Response={}".format(
+                                str(dict(str_line))
+                            )
                         raise litellm.AzureOpenAIError(
                             status_code=400, message=error_message
                         )
@@ -9680,6 +10096,39 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
 
+    def handle_watsonx_stream(self, chunk):
+        try:
+            if isinstance(chunk, dict):
+                parsed_response = chunk
+            elif isinstance(chunk, (str, bytes)):
+                if isinstance(chunk, bytes):
+                    chunk = chunk.decode("utf-8")
+                if "generated_text" in chunk:
+                    response = chunk.replace("data: ", "").strip()
+                    parsed_response = json.loads(response)
+                else:
+                    return {"text": "", "is_finished": False}
+            else:
+                print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
+                raise ValueError(
+                    f"Unable to parse response. Original response: {chunk}"
+                )
+            results = parsed_response.get("results", [])
+            if len(results) > 0:
+                text = results[0].get("generated_text", "")
+                finish_reason = results[0].get("stop_reason")
+                is_finished = finish_reason != "not_finished"
+                return {
+                    "text": text,
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                    "prompt_tokens": results[0].get("input_token_count", None),
+                    "completion_tokens": results[0].get("generated_token_count", None),
+                }
+            return {"text": "", "is_finished": False}
+        except Exception as e:
+            raise e
+
     def model_response_creator(self):
         model_response = ModelResponse(stream=True, model=self.model)
         if self.response_id is not None:
@@ -9935,6 +10384,11 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+            elif self.custom_llm_provider == "watsonx":
+                response_obj = self.handle_watsonx_stream(chunk)
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
                 response_obj = self.handle_openai_text_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -10120,12 +10574,23 @@ class CustomStreamWrapper:
                         model_response.id = original_chunk.id
                         self.response_id = original_chunk.id
                         if len(original_chunk.choices) > 0:
-                            try:
-                                delta = dict(original_chunk.choices[0].delta)
-                                print_verbose(f"original delta: {delta}")
-                                model_response.choices[0].delta = Delta(**delta)
-                            except Exception as e:
-                                model_response.choices[0].delta = Delta()
+                            choices = []
+                            for idx, choice in enumerate(original_chunk.choices):
+                                try:
+                                    if isinstance(choice, BaseModel):
+                                        try:
+                                            choice_json = choice.model_dump()
+                                        except Exception as e:
+                                            choice_json = choice.dict()
+                                        choice_json.pop(
+                                            "finish_reason", None
+                                        )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
+                                        print_verbose(f"choice_json: {choice_json}")
+                                        choices.append(StreamingChoices(**choice_json))
+                                except Exception as e:
+                                    choices.append(StreamingChoices())
+                            print_verbose(f"choices in streaming: {choices}")
+                            model_response.choices = choices
                         else:
                             return
                         model_response.system_fingerprint = (
@@ -10170,11 +10635,11 @@ class CustomStreamWrapper:
                         )
                     self.holding_chunk = ""
                 # if delta is None
-                is_delta_empty = self.is_delta_empty(
+                _is_delta_empty = self.is_delta_empty(
                     delta=model_response.choices[0].delta
                 )
 
-                if is_delta_empty:
+                if _is_delta_empty:
                     # get any function call arguments
                     model_response.choices[0].finish_reason = map_finish_reason(
                         finish_reason=self.received_finish_reason

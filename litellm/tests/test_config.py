@@ -26,6 +26,9 @@ class DBModel(BaseModel):
     model_info: dict
     litellm_params: dict
 
+    class Config:
+        protected_namespaces = ()
+
 
 @pytest.mark.asyncio
 async def test_delete_deployment():
