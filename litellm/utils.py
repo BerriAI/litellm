@@ -70,6 +70,7 @@ from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
+from .integrations.async_langfuse import AsyncLangFuseLogger
 from .integrations.openmeter import OpenMeterLogger
 from .integrations.datadog import DataDogLogger
 from .integrations.prometheus import PrometheusLogger
@@ -131,6 +132,7 @@ langsmithLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
+asyncLangFuseLogger = None
 openMeterLogger = None
 dataDogLogger = None
 prometheusLogger = None
@@ -2203,6 +2205,37 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                         )
+                if callback == "async_langfuse":
+                    global asyncLangFuseLogger
+                    if self.stream == True:
+                        if (
+                            "async_complete_streaming_response"
+                            in self.model_call_details
+                        ):
+                            kwargs = self.model_call_details
+                            await asyncLangFuseLogger.async_log_success_event(
+                                kwargs=kwargs,
+                                response_obj=self.model_call_details[
+                                    "async_complete_streaming_response"
+                                ],
+                                start_time=start_time,
+                                end_time=end_time,
+                                user_id=kwargs.get("user", None),
+                                print_verbose=print_verbose,
+                            )
+                        else:
+                            # do nothing when there is no complete streamed response
+                            continue
+                    else:
+                        kwargs = self.model_call_details
+                        await asyncLangFuseLogger.async_log_success_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     if self.stream == True:
                         if (
@@ -2682,7 +2715,11 @@ def function_setup(
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback == "dynamodb" or callback == "openmeter":
+                elif (
+                    callback == "dynamodb"
+                    or callback == "openmeter"
+                    or callback == "async_langfuse"
+                ):
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
@@ -6930,7 +6967,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
 
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, asyncLangFuseLogger
 
     try:
         for callback in callback_list:
@@ -6997,6 +7034,8 @@ def set_callbacks(callback_list, function_id=None):
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
                 langFuseLogger = LangFuseLogger()
+            elif callback == "async_langfuse":
+                asyncLangFuseLogger = AsyncLangFuseLogger()
             elif callback == "openmeter":
                 openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
