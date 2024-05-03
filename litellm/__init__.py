@@ -542,7 +542,11 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
-    "vertex_ai": vertex_chat_models + vertex_text_models,
+    "vertex_ai": vertex_chat_models
+    + vertex_text_models
+    + vertex_anthropic_models
+    + vertex_vision_models
+    + vertex_language_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models,
     "petals": petals_models,
@@ -609,6 +613,8 @@ from .utils import (
     get_optional_params,
     modify_integration,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
     cost_per_token,
     completion_cost,
     supports_function_calling,

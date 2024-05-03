@@ -3,7 +3,7 @@
 
 import sys
 import os
-import io, asyncio
+import io, asyncio, httpx
 from datetime import datetime, timedelta
 
 # import logging
@@ -17,6 +17,61 @@ import asyncio
 from unittest.mock import patch, MagicMock
 from litellm.caching import DualCache
 from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.proxy_server import HTTPException
+
+
+@pytest.mark.parametrize("exception_type", ["llm-exception", "non-llm-exception"])
+@pytest.mark.asyncio
+async def test_slack_alerting_llm_exceptions(exception_type, monkeypatch):
+    """
+    Test if non-llm exception -> No request
+    Test if llm exception -> Request triggered
+    """
+    _pl = ProxyLogging(user_api_key_cache=DualCache())
+    _pl.update_values(
+        alerting=["slack"],
+        alerting_threshold=100,
+        redis_cache=None,
+        alert_types=["llm_exceptions"],
+    )
+
+    async def mock_alerting_handler(message, level, alert_type):
+        global exception_type
+
+        if exception_type == "llm-exception":
+            pass
+        elif exception_type == "non-llm-exception":
+            pytest.fail("Function should not have been called")
+
+    monkeypatch.setattr(_pl, "alerting_handler", mock_alerting_handler)
+
+    if exception_type == "llm-exception":
+        await _pl.post_call_failure_hook(
+            original_exception=litellm.APIError(
+                status_code=500,
+                message="This is a test exception",
+                llm_provider="openai",
+                model="gpt-3.5-turbo",
+                request=httpx.Request(
+                    method="completion", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        await asyncio.sleep(2)
+
+    elif exception_type == "non-llm-exception":
+        await _pl.post_call_failure_hook(
+            original_exception=HTTPException(
+                status_code=400,
+                detail={"error": "this is a test exception"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        await asyncio.sleep(2)
 
 
 @pytest.mark.asyncio
