@@ -8480,7 +8480,7 @@ def exception_type(
                     # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"PalmException - Invalid api key",
+                        message=f"GeminiException - Invalid api key",
                         model=model,
                         llm_provider="palm",
                         response=original_exception.response,
@@ -8491,23 +8491,26 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise Timeout(
-                        message=f"PalmException - {original_exception.message}",
+                        message=f"GeminiException - {original_exception.message}",
                         model=model,
                         llm_provider="palm",
                     )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"PalmException - {error_str}",
+                        message=f"GeminiException - {error_str}",
                         model=model,
                         llm_provider="palm",
                         response=original_exception.response,
                     )
-                if "500 An internal error has occurred." in error_str:
+                if (
+                    "500 An internal error has occurred." in error_str
+                    or "list index out of range" in error_str
+                ):
                     exception_mapping_worked = True
                     raise APIError(
                         status_code=getattr(original_exception, "status_code", 500),
-                        message=f"PalmException - {original_exception.message}",
+                        message=f"GeminiException - {original_exception.message}",
                         llm_provider="palm",
                         model=model,
                         request=original_exception.request,
@@ -8516,7 +8519,7 @@ def exception_type(
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"PalmException - {error_str}",
+                            message=f"GeminiException - {error_str}",
                             model=model,
                             llm_provider="palm",
                             response=original_exception.response,
