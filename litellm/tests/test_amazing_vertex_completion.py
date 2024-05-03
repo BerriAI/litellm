@@ -548,42 +548,6 @@ def test_gemini_pro_vision_base64():
 
 
 def test_gemini_pro_function_calling():
-    load_vertex_ai_credentials()
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in fahrenheit?",
-        }
-    ]
-    completion = litellm.completion(
-        model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
-    )
-    print(f"completion: {completion}")
-    if hasattr(completion.choices[0].message, "tool_calls") and isinstance(
-        completion.choices[0].message.tool_calls, list
-    ):
-        assert len(completion.choices[0].message.tool_calls) == 1
     try:
         load_vertex_ai_credentials()
         tools = [
