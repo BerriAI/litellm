@@ -24,6 +24,12 @@ async def config_update(session, routing_strategy=None):
         "router_settings": {
             "routing_strategy": routing_strategy,
         },
+        "general_settings": {
+            "alert_to_webhook_url": {
+                "llm_exceptions": "https://hooks.slack.com/services/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"
+            },
+            "alert_types": ["llm_exceptions", "db_exceptions"],
+        },
     }
 
     async with session.post(url, headers=headers, json=data) as response:
@@ -39,15 +45,16 @@ async def config_update(session, routing_strategy=None):
 
 
 async def get_active_callbacks(session):
-    url = "http://0.0.0.0:4000/health/readiness"
+    url = "http://0.0.0.0:4000/active/callbacks"
     headers = {
         "Content-Type": "application/json",
+        "Authorization": "Bearer sk-1234",
     }
 
     async with session.get(url, headers=headers) as response:
         status = response.status
         response_text = await response.text()
-        print("response from /health/readiness")
+        print("response from /active/callbacks")
         print(response_text)
         print()
 
@@ -57,8 +64,10 @@ async def get_active_callbacks(session):
         _json_response = await response.json()
 
         _num_callbacks = _json_response["num_callbacks"]
+        _num_alerts = _json_response["num_alerting"]
         print("current number of callbacks: ", _num_callbacks)
-        return _num_callbacks
+        print("current number of alerts: ", _num_alerts)
+        return _num_callbacks, _num_alerts
 
 
 async def get_current_routing_strategy(session):
@@ -99,20 +108,20 @@ async def test_check_num_callbacks():
     import uuid
 
     async with aiohttp.ClientSession() as session:
-        num_callbacks_1 = await get_active_callbacks(session=session)
+        num_callbacks_1, _ = await get_active_callbacks(session=session)
         assert (
             num_callbacks_1 > 0
         )  # /health/readiness returns 0 when some calculation goes wrong
 
         await asyncio.sleep(30)
 
-        num_callbacks_2 = await get_active_callbacks(session=session)
+        num_callbacks_2, _ = await get_active_callbacks(session=session)
 
         assert num_callbacks_1 == num_callbacks_2
 
         await asyncio.sleep(30)
 
-        num_callbacks_3 = await get_active_callbacks(session=session)
+        num_callbacks_3, _ = await get_active_callbacks(session=session)
 
         assert num_callbacks_1 == num_callbacks_2 == num_callbacks_3
 
@@ -136,21 +145,23 @@ async def test_check_num_callbacks_on_lowest_latency():
         original_routing_strategy = await get_current_routing_strategy(session=session)
         await config_update(session=session, routing_strategy="latency-based-routing")
 
-        num_callbacks_1 = await get_active_callbacks(session=session)
+        num_callbacks_1, num_alerts_1 = await get_active_callbacks(session=session)
         assert (
             num_callbacks_1 > 0
         )  # /health/readiness returns 0 when some calculation goes wrong
 
         await asyncio.sleep(30)
 
-        num_callbacks_2 = await get_active_callbacks(session=session)
+        num_callbacks_2, num_alerts_2 = await get_active_callbacks(session=session)
 
         assert num_callbacks_1 == num_callbacks_2
 
         await asyncio.sleep(30)
 
-        num_callbacks_3 = await get_active_callbacks(session=session)
+        num_callbacks_3, num_alerts_3 = await get_active_callbacks(session=session)
 
         assert num_callbacks_1 == num_callbacks_2 == num_callbacks_3
+
+        assert num_alerts_1 == num_alerts_2 == num_alerts_3
 
         await config_update(session=session, routing_strategy=original_routing_strategy)
