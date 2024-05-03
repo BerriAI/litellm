@@ -2669,13 +2669,18 @@ class Router:
             "cooldown_time",
         ]
 
+        _existing_router_settings = self.get_settings()
         for var in kwargs:
             if var in _allowed_settings:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
                 else:
-                    if var == "routing_strategy":
+                    # only run routing strategy init if it has changed
+                    if (
+                        var == "routing_strategy"
+                        and _existing_router_settings["routing_strategy"] != kwargs[var]
+                    ):
                         self.routing_strategy_init(
                             routing_strategy=kwargs[var],
                             routing_strategy_args=kwargs.get(
