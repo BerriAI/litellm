@@ -9206,6 +9206,10 @@ def _db_health_readiness_check():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def active_callbacks():
+    """
+    Returns a list of active callbacks on litellm.callbacks, litellm.input_callback, litellm.failure_callback, litellm.success_callback
+    """
+    global proxy_logging_obj
     _alerting = str(general_settings.get("alerting"))
     # get success callback
     success_callback_names = []
@@ -9222,12 +9226,33 @@ async def active_callbacks():
         + len(litellm.input_callback)
         + len(litellm.failure_callback)
         + len(litellm.success_callback)
+        + len(litellm._async_failure_callback)
+        + len(litellm._async_success_callback)
+        + len(litellm._async_input_callback)
     )
+
+    alerting = proxy_logging_obj.alerting
+    _num_alerting = 0
+    if alerting and isinstance(alerting, list):
+        _num_alerting = len(alerting)
 
     return {
         "alerting": _alerting,
-        "success_callbacks": success_callback_names,
+        "litellm.callbacks": [str(x) for x in litellm.callbacks],
+        "litellm.input_callback": [str(x) for x in litellm.input_callback],
+        "litellm.failure_callback": [str(x) for x in litellm.failure_callback],
+        "litellm.success_callback": [str(x) for x in litellm.success_callback],
+        "litellm._async_success_callback": [
+            str(x) for x in litellm._async_success_callback
+        ],
+        "litellm._async_failure_callback": [
+            str(x) for x in litellm._async_failure_callback
+        ],
+        "litellm._async_input_callback": [
+            str(x) for x in litellm._async_input_callback
+        ],
         "num_callbacks": _num_callbacks,
+        "num_alerting": _num_alerting,
     }
 
 
@@ -9243,17 +9268,6 @@ async def health_readiness():
     global general_settings
     try:
         # get success callback
-        _num_callbacks = 0
-        try:
-            _num_callbacks = (
-                len(litellm.callbacks)
-                + len(litellm.input_callback)
-                + len(litellm.failure_callback)
-                + len(litellm.success_callback)
-            )
-        except:
-            _num_callbacks = 0
-
         success_callback_names = []
 
         try:
@@ -9289,7 +9303,6 @@ async def health_readiness():
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "num_callbacks": _num_callbacks,
                 **db_health_status,
             }
         else:
@@ -9299,7 +9312,6 @@ async def health_readiness():
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "num_callbacks": _num_callbacks,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
