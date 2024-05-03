@@ -59,13 +59,13 @@ class LowestTPMLoggingHandler(CustomLogger):
                 request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(key=tpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=tpm_key, value=request_count_dict, ttl= 60)
 
                 ## RPM
                 request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(key=rpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=rpm_key, value=request_count_dict, ttl= 60)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -110,13 +110,13 @@ class LowestTPMLoggingHandler(CustomLogger):
                 request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(key=tpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=tpm_key, value=request_count_dict, ttl= 60)
 
                 ## RPM
                 request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(key=rpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=rpm_key, value=request_count_dict, ttl= 60)
 
                 ### TESTING ###
                 if self.test_flag:
