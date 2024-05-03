@@ -85,3 +85,7 @@ version_files = [
     "pyproject.toml:^version"
 ]
 
+[tool.pytest.ini_options]
+filterwarnings = [
+    'ignore:pkg_resources is deprecated as an API.',
+]
