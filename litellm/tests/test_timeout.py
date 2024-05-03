@@ -78,7 +78,8 @@ def test_hanging_request_azure():
                     "model_name": "openai-gpt",
                     "litellm_params": {"model": "gpt-3.5-turbo"},
                 },
-            ]
+            ],
+            num_retries=0,
         )
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
@@ -131,7 +132,8 @@ def test_hanging_request_openai():
                     "model_name": "openai-gpt",
                     "litellm_params": {"model": "gpt-3.5-turbo"},
                 },
-            ]
+            ],
+            num_retries=0,
         )
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
@@ -189,6 +191,7 @@ def test_timeout_streaming():
 # test_timeout_streaming()
 
 
+@pytest.mark.skip(reason="local test")
 def test_timeout_ollama():
     # this Will Raise a timeout
     import litellm

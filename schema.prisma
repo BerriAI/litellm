@@ -183,6 +183,21 @@ model LiteLLM_SpendLogs {
   end_user            String?
 }
 
+// View spend, model, api_key per request
+model LiteLLM_ErrorLogs {
+  request_id          String   @id @default(uuid())
+  startTime           DateTime // Assuming start_time is a DateTime field
+  endTime             DateTime // Assuming end_time is a DateTime field
+  api_base            String   @default("") 
+  model_group         String   @default("")      // public model_name / model_group
+  litellm_model_name  String   @default("")      // model passed to litellm
+  model_id            String   @default("")      // ID of model in ProxyModelTable
+  request_kwargs      Json     @default("{}")
+  exception_type      String   @default("")
+  exception_string    String   @default("")
+  status_code         String   @default("")
+}
+
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
   request_id          String @id

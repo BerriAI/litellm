@@ -11,40 +11,37 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 
 <TabItem value="basic" label="Basic">
 
-**Step 1. Create a file called `litellm_config.yaml`**
+### Step 1. CREATE config.yaml 
 
-  Example `litellm_config.yaml` (the `os.environ/` prefix means litellm will read `AZURE_API_BASE` from the env)
-  ```yaml
-  model_list:
-    - model_name: azure-gpt-3.5
-      litellm_params:
-        model: azure/<your-azure-model-deployment>
-        api_base: os.environ/AZURE_API_BASE
-        api_key: os.environ/AZURE_API_KEY
-        api_version: "2023-07-01-preview"
-  ```
+Example `litellm_config.yaml` 
 
-**Step 2. Run litellm docker image**
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/<your-azure-model-deployment>
+      api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
+      api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
+      api_version: "2023-07-01-preview"
+```
 
-  See the latest available ghcr docker image here:
-  https://github.com/berriai/litellm/pkgs/container/litellm
 
-  Your litellm config.yaml should be called `litellm_config.yaml` in the directory you run this command. 
-  The `-v` command will mount that file
 
-  Pass `AZURE_API_KEY` and `AZURE_API_BASE` since we set them in step 1
+### Step 2. RUN Docker Image
 
-  ```shell
-  docker run \
-      -v $(pwd)/litellm_config.yaml:/app/config.yaml \
-      -e AZURE_API_KEY=d6*********** \
-      -e AZURE_API_BASE=https://openai-***********/ \
-      -p 4000:4000 \
-      ghcr.io/berriai/litellm:main-latest \
-      --config /app/config.yaml --detailed_debug
-  ```
+```shell
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e AZURE_API_KEY=d6*********** \
+    -e AZURE_API_BASE=https://openai-***********/ \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
+```
 
-**Step 3. Send a Test Request**
+Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/litellm)
+
+### Step 3. TEST Request
 
   Pass `model=azure-gpt-3.5` this was set on step 1
 
@@ -231,13 +228,16 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 | Docs | When to Use |
 | --- | --- |
 | [Quick Start](#quick-start) | call 100+ LLMs + Load Balancing |
-| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend |
+| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend (Note: When deploying with a database providing a `DATABASE_URL` and `LITELLM_MASTER_KEY` are required in your env ) |
 | [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
 | [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
 
 ## Deploy with Database
 ### Docker, Kubernetes, Helm Chart
 
+Requirements:
+- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
+- Set a `LITELLM_MASTER_KEY`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`)
 
 <Tabs>
 
@@ -252,6 +252,8 @@ docker pull ghcr.io/berriai/litellm-database:main-latest
 ```shell
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e LITELLM_MASTER_KEY=sk-1234 \
+    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
@@ -267,26 +269,63 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 #### Step 1. Create deployment.yaml
 
 ```yaml
-   apiVersion: apps/v1
-   kind: Deployment
-   metadata:
-     name: litellm-deployment
-   spec:
-     replicas: 1
-     selector:
-       matchLabels:
-         app: litellm
-     template:
-       metadata:
-         labels:
-           app: litellm
-       spec:
-         containers:
-           - name: litellm-container
-             image: ghcr.io/berriai/litellm-database:main-latest
-             env:
-              - name: DATABASE_URL
-                value: postgresql://<user>:<password>@<host>:<port>/<dbname>
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      containers:
+        - name: litellm-container
+          image: ghcr.io/berriai/litellm:main-latest
+          imagePullPolicy: Always
+          env:
+            - name: AZURE_API_KEY
+              value: "d6******"
+            - name: AZURE_API_BASE
+              value: "https://ope******"
+            - name: LITELLM_MASTER_KEY
+              value: "sk-1234"
+            - name: DATABASE_URL
+              value: "po**********"
+          args:
+            - "--config"
+            - "/app/proxy_config.yaml"  # Update the path to mount the config file
+          volumeMounts:                 # Define volume mount for proxy_config.yaml
+            - name: config-volume
+              mountPath: /app
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            successThreshold: 1
+            failureThreshold: 3
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            successThreshold: 1
+            failureThreshold: 3
+            timeoutSeconds: 10
+      volumes:  # Define volume to mount proxy_config.yaml
+        - name: config-volume
+          configMap:
+            name: litellm-config  
+
 ```
 
 ```bash

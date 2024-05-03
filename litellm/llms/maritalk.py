@@ -152,9 +152,9 @@ def completion(
         else:
             try:
                 if len(completion_response["answer"]) > 0:
-                    model_response["choices"][0]["message"][
-                        "content"
-                    ] = completion_response["answer"]
+                    model_response["choices"][0]["message"]["content"] = (
+                        completion_response["answer"]
+                    )
             except Exception as e:
                 raise MaritalkError(
                     message=response.text, status_code=response.status_code
@@ -174,7 +174,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
 
 
