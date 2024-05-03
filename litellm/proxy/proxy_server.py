@@ -3577,6 +3577,10 @@ async def chat_completion(
         if "api-version" in query_params:
             data["api_version"] = query_params["api-version"]
 
+        # Reading API KEY From header
+        if req_header_api_key := request.headers.get('X-API-KEY'):
+            data["api_key"] = req_header_api_key
+
         # Include original request and headers in the data
         data["proxy_server_request"] = {
             "url": str(request.url),
@@ -6911,7 +6915,7 @@ async def update_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Use `/team/member_add` AND `/team/member/delete` to add/remove new team members  
+    Use `/team/member_add` AND `/team/member/delete` to add/remove new team members
 
     You can now update team budget / rate limits via /team/update
 
