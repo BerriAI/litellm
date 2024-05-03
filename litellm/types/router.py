@@ -99,6 +99,7 @@ class ModelInfo(BaseModel):
 
 class LiteLLM_Params(BaseModel):
     model: str
+    custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
     api_key: Optional[str] = None
@@ -123,6 +124,7 @@ class LiteLLM_Params(BaseModel):
     def __init__(
         self,
         model: str,
+        custom_llm_provider: Optional[str] = None,
         max_retries: Optional[Union[int, str]] = None,
         tpm: Optional[int] = None,
         rpm: Optional[int] = None,
