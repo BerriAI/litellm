@@ -15,6 +15,7 @@ import litellm
 import pytest
 import asyncio
 from unittest.mock import patch, MagicMock
+from litellm.utils import get_api_base
 from litellm.caching import DualCache
 from litellm.integrations.slack_alerting import SlackAlerting
 from litellm.proxy._types import UserAPIKeyAuth
@@ -72,6 +73,19 @@ async def test_slack_alerting_llm_exceptions(exception_type, monkeypatch):
         )
 
         await asyncio.sleep(2)
+
+
+@pytest.mark.parametrize(
+    "model, optional_params, expected_api_base",
+    [
+        ("openai/my-fake-model", {"api_base": "my-fake-api-base"}, "my-fake-api-base"),
+        ("gpt-3.5-turbo", {}, "https://api.openai.com"),
+    ],
+)
+def test_get_api_base_unit_test(model, optional_params, expected_api_base):
+    api_base = get_api_base(model=model, optional_params=optional_params)
+
+    assert api_base == expected_api_base
 
 
 @pytest.mark.asyncio
