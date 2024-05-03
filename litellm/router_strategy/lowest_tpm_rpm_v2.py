@@ -91,7 +91,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
-                result = self.router_cache.increment_cache(key=rpm_key, value=1)
+                result = self.router_cache.increment_cache(key=rpm_key, value=1, ttl = 60)
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message="Deployment over defined rpm limit={}. current usage={}".format(
@@ -170,7 +170,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
                 result = await self.router_cache.async_increment_cache(
-                    key=rpm_key, value=1
+                    key=rpm_key, value=1, ttl = 60
                 )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
@@ -231,7 +231,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # update cache
 
                 ## TPM
-                self.router_cache.increment_cache(key=tpm_key, value=total_tokens)
+                self.router_cache.increment_cache(key=tpm_key, value=total_tokens, ttl = 60)
                 ### TESTING ###
                 if self.test_flag:
                     self.logged_success += 1
@@ -275,7 +275,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
                 ## TPM
                 await self.router_cache.async_increment_cache(
-                    key=tpm_key, value=total_tokens
+                    key=tpm_key, value=total_tokens, ttl = 60
                 )
 
                 ### TESTING ###
