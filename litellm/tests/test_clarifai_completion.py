@@ -1,6 +1,7 @@
 import sys, os
 import traceback
 from dotenv import load_dotenv
+import asyncio, logging
 
 load_dotenv()
 import os, io
@@ -10,7 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
+from litellm import embedding, completion, acompletion, acreate, completion_cost, Timeout, ModelResponse
 from litellm import RateLimitError
 
 # litellm.num_retries = 3
@@ -65,3 +66,28 @@ def test_completion_clarifai_mistral_large():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+        
+@pytest.mark.asyncio
+def test_async_completion_clarifai():
+    import asyncio
+
+    litellm.set_verbose = True
+
+    async def test_get_response():
+        user_message = "Hello, how are you?"
+        messages = [{"content": user_message, "role": "user"}]
+        try:
+            response = await acompletion(
+                model="clarifai/openai.chat-completion.GPT-4",
+                messages=messages,
+                timeout=10,
+                api_key=os.getenv("CLARIFAI_API_KEY"),
+            )
+            print(f"response: {response}")
+        except litellm.Timeout as e:
+            pass
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
+            
+
+    asyncio.run(test_get_response())
