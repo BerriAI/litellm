@@ -153,7 +153,6 @@ class LogfireLogger:
                 "metadata": clean_metadata,
             }
             logfire_openai = logfire.with_settings(custom_scope_suffix="openai")
-
             message_template, span_data = self._get_span_config(payload)
             if level == LogfireLevel.INFO:
                 logfire_openai.info(
@@ -164,7 +163,7 @@ class LogfireLogger:
                 logfire_openai.error(
                     message_template,
                     **span_data,
-                    exc_info=str(kwargs.get("exception", None)),
+                    _exc_info=True,
                 )
             print_verbose(f"\ndd Logger - Logging payload = {payload}")
 
