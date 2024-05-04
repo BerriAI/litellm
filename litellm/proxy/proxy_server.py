@@ -3457,6 +3457,11 @@ def model_list(
     tags=["chat/completions"],
 )
 @router.post(
+    "/engines/{model:path}/chat/completions",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["chat/completions"],
+)
+@router.post(
     "/openai/deployments/{model:path}/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
