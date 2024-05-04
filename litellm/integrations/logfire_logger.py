@@ -8,6 +8,7 @@ import traceback
 import uuid
 from litellm._logging import print_verbose, verbose_logger
 
+from enum import Enum
 from typing import Any, Dict, NamedTuple
 from typing_extensions import LiteralString
 
@@ -15,6 +16,11 @@ from typing_extensions import LiteralString
 class SpanConfig(NamedTuple):
     message_template: LiteralString
     span_data: Dict[str, Any]
+
+
+class LogfireLevel(str, Enum):
+    INFO = "info"
+    ERROR = "error"
 
 
 class LogfireLogger:
@@ -63,12 +69,31 @@ class LogfireLogger:
             )
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, user_id
+        self,
+        kwargs,
+        response_obj,
+        start_time,
+        end_time,
+        print_verbose,
+        level: LogfireLevel,
     ):
-        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+        self.log_event(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+            print_verbose=print_verbose,
+            level=level,
+        )
 
     def log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
+        self,
+        kwargs,
+        start_time,
+        end_time,
+        print_verbose,
+        level: LogfireLevel,
+        response_obj,
     ):
         try:
             import logfire
@@ -76,6 +101,9 @@ class LogfireLogger:
             verbose_logger.debug(
                 f"logfire Logging - Enters logging function for model {kwargs}"
             )
+
+            if not response_obj:
+                response_obj = {}
             litellm_params = kwargs.get("litellm_params", {})
             metadata = (
                 litellm_params.get("metadata", {}) or {}
@@ -127,11 +155,17 @@ class LogfireLogger:
             logfire_openai = logfire.with_settings(custom_scope_suffix="openai")
 
             message_template, span_data = self._get_span_config(payload)
-            with logfire_openai.span(
-                message_template,
-                **span_data,
-            ):
-                pass
+            if level == LogfireLevel.INFO:
+                logfire_openai.info(
+                    message_template,
+                    **span_data,
+                )
+            elif level == LogfireLevel.ERROR:
+                logfire_openai.error(
+                    message_template,
+                    **span_data,
+                    exc_info=str(kwargs.get("exception", None)),
+                )
             print_verbose(f"\ndd Logger - Logging payload = {payload}")
 
             print_verbose(
