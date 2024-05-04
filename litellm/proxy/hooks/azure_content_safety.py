@@ -15,8 +15,11 @@ class _PROXY_AzureContentSafety(
         try:
             from azure.ai.contentsafety.aio import ContentSafetyClient
             from azure.core.credentials import AzureKeyCredential
-            from azure.ai.contentsafety.models import TextCategory
-            from azure.ai.contentsafety.models import AnalyzeTextOptions
+            from azure.ai.contentsafety.models import (
+                TextCategory,
+                AnalyzeTextOptions,
+                AnalyzeTextOutputType,
+            )
             from azure.core.exceptions import HttpResponseError
         except Exception as e:
             raise Exception(
@@ -26,6 +29,7 @@ class _PROXY_AzureContentSafety(
         self.api_key = api_key
         self.text_category = TextCategory
         self.analyze_text_options = AnalyzeTextOptions
+        self.analyze_text_output_type = AnalyzeTextOutputType
         self.azure_http_error = HttpResponseError
 
         self.thresholds = self._configure_thresholds(thresholds)
@@ -79,7 +83,10 @@ class _PROXY_AzureContentSafety(
         self.print_verbose(f"Testing Azure Content-Safety for: {content}")
 
         # Construct a request
-        request = self.analyze_text_options(text=content)
+        request = self.analyze_text_options(
+            text=content,
+            output_type=self.analyze_text_output_type.EIGHT_SEVERITY_LEVELS,
+        )
 
         # Analyze text
         try:
