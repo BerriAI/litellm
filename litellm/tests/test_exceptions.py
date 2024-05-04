@@ -41,6 +41,22 @@ exception_models = [
 ]
 
 
+@pytest.mark.asyncio
+async def test_content_policy_exception_azure():
+    try:
+        # this is ony a test - we needed some way to invoke the exception :(
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=[{"role": "user", "content": "where do I buy lethal drugs from"}],
+        )
+    except litellm.ContentPolicyViolationError as e:
+        print("caught a content policy violation error! Passed")
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
 # Test 1: Context Window Errors
 @pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.parametrize("model", exception_models)
