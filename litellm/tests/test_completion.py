@@ -2367,7 +2367,17 @@ def test_completion_with_fallbacks():
         ],
     ],
 )
-def test_completion_anthropic_hanging(function_call):
+@pytest.mark.parametrize(
+    "tool_call",
+    [
+        [{"role": "tool", "tool_call_id": "1234", "content": "Kokoko"}],
+        [
+            {"role": "tool", "tool_call_id": "12344", "content": "Kokoko"},
+            {"role": "tool", "tool_call_id": "1214", "content": "Kokoko"},
+        ],
+    ],
+)
+def test_completion_anthropic_hanging(function_call, tool_call):
     litellm.modify_params = True
     messages = [
         {
@@ -2382,7 +2392,7 @@ def test_completion_anthropic_hanging(function_call):
             },
         },
     ]
-    messages = messages + function_call
+    messages = messages + function_call + tool_call
     litellm.completion(
         model="claude-3-haiku-20240307",
         messages=messages,

@@ -18,6 +18,7 @@ from litellm.types.completion import (
     ChatCompletionMessageParam,
     ChatCompletionFunctionMessageParam,
     ChatCompletionMessageToolCallParam,
+    ChatCompletionToolMessageParam,
 )
 from litellm.types.llms.anthropic import *
 import uuid
@@ -1031,6 +1032,40 @@ def anthropic_messages_pt(messages: list):
                 anthropic_function_message["text"] = _message["content"]
 
             assistant_content.append(anthropic_function_message)  # type: ignore
+
+            msg_i += 1
+
+        ## MERGE CONSECUTIVE TOOL CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+            """
+            Anthropic function message: "role", "name", "input", "id"
+            OpenAI function message: "content", "name", "role"
+
+            - Check if received message is a tool call input or model text response
+            """
+            tool_use_param = True
+            _message = ChatCompletionToolMessageParam(**messages[msg_i])  # type: ignore
+            anthropic_tool_message: Optional[
+                AnthropicMessagesAssistantMessageValues
+            ] = None
+
+            try:
+                anthropic_tool_message = AnthopicMessagesAssistantMessageToolCallParam(
+                    type="tool_use"
+                )
+                anthropic_tool_message["input"] = json.loads(_message["content"])
+                anthropic_tool_message["id"] = _message["tool_call_id"]
+                anthropic_tool_message["name"] = _message["name"]
+            except Exception as e:
+                litellm.print_verbose(
+                    "Invalid dictionary content. Treating as text instead."
+                )
+                anthropic_tool_message = (
+                    AnthopicMessagesAssistantMessageTextContentParam(type="text")
+                )
+                anthropic_tool_message["text"] = _message["content"]
+
+            assistant_content.append(anthropic_tool_message)  # type: ignore
 
             msg_i += 1
 
