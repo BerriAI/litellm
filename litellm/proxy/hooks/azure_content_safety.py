@@ -59,16 +59,6 @@ class _PROXY_AzureContentSafety(
         except:
             pass
 
-    def _severity(self, severity):
-        if severity >= 6:
-            return "high"
-        elif severity >= 4:
-            return "medium"
-        elif severity >= 2:
-            return "low"
-        else:
-            return "safe"
-
     def _compute_result(self, response):
         result = {}
 
@@ -80,7 +70,7 @@ class _PROXY_AzureContentSafety(
             if severity is not None:
                 result[category] = {
                     "filtered": severity >= self.thresholds[category],
-                    "severity": self._severity(severity),
+                    "severity": severity,
                 }
 
         return result
@@ -148,10 +138,10 @@ class _PROXY_AzureContentSafety(
                 content=response.choices[0].message.content, source="output"
             )
 
-    #async def async_post_call_streaming_hook(
+    # async def async_post_call_streaming_hook(
     #    self,
     #    user_api_key_dict: UserAPIKeyAuth,
     #    response: str,
-    #):
+    # ):
     #    self.print_verbose(f"Inside Azure Content-Safety Call-Stream Hook")
     #    await self.test_violation(content=response, source="output")
