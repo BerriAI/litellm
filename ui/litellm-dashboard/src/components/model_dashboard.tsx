@@ -17,7 +17,7 @@ import {
   AccordionBody,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
-import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
+import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
 import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -206,6 +206,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [allExceptions, setAllExceptions] = useState<any[]>([]);
   const [failureTableData, setFailureTableData] = useState<any[]>([]);
   const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(),
+    to: new Date(),
+  });
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -492,40 +496,6 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         setSlowResponsesData(slowResponses);
 
 
-        // let modelMetricsData = modelMetricsResponse.data;
-        // let successdeploymentToSuccess: Record<string, number> = {};
-        // for  (let i = 0; i < modelMetricsData.length; i++) {
-        //   let element = modelMetricsData[i];
-        //   let _model_name = element.model;
-        //   let _num_requests = element.num_requests;
-        //   successdeploymentToSuccess[_model_name] = _num_requests
-        // }
-        // console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
-        
-        // let failureTableData = [];
-        // let _failureData = modelExceptionsResponse.data;
-        // for (let i = 0; i < _failureData.length; i++) {
-        //   const model = _failureData[i];
-        //   let _model_name = model.model;
-        //   let total_exceptions = model.total_exceptions;
-        //   let total_Requests = successdeploymentToSuccess[_model_name];
-        //   if (total_Requests == null) {
-        //     total_Requests = 0
-        //   }
-        //   let _data = {
-        //     model: _model_name,
-        //     total_exceptions: total_exceptions,
-        //     total_Requests: total_Requests,
-        //     failure_rate: total_Requests / total_exceptions
-        //   }
-        //   failureTableData.push(_data);
-        //   // sort failureTableData by failure_rate
-        //   failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
-        
-        //   setFailureTableData(failureTableData);
-        //   console.log("failureTableData:", failureTableData);
-        // }
-
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -678,16 +648,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   };
 
 
-  const updateModelMetrics = async (modelGroup: string | null) => {
+  const updateModelMetrics = async (modelGroup: string | null, startTime: Date, endTime: Date) => {
     console.log("Updating model metrics for group:", modelGroup);
     if (!accessToken || !userID || !userRole) {
       return
     }
+    console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime)
     setSelectedModelGroup(modelGroup);  // If you want to store the selected model group in state
 
   
     try {
-      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup);
+      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup, startTime.toISOString(), endTime.toISOString());
       console.log("Model metrics response:", modelMetricsResponse);
   
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
@@ -698,7 +669,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         accessToken,
         userID,
         userRole,
-        modelGroup
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
       )
       console.log("Model exceptions response:", modelExceptionsResponse);
       setModelExceptions(modelExceptionsResponse.data);
@@ -709,7 +682,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         accessToken,
         userID,
         userRole,
-        modelGroup
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
       )
 
       console.log("slowResponses:", slowResponses)
@@ -1122,7 +1097,14 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             
             <Grid numItems={2}>
               <Col>
-                <DateRangePicker enableSelect={true} />
+                <DateRangePicker 
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateModelMetrics(selectedModelGroup, value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+                />
               </Col>
               <Col>
                 <Select
@@ -1132,7 +1114,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   <SelectItem 
                     key={idx} 
                     value={group}
-                    onClick={() => updateModelMetrics(group)}
+                    onClick={() => updateModelMetrics(group, dateValue.from, dateValue.to)}
                   >
                     {group}
                   </SelectItem>
