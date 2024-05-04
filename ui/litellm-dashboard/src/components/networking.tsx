@@ -483,8 +483,8 @@ export const modelMetricsSlowResponsesCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
-  startTime: String | null,
-  endTime: String | null
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
@@ -525,8 +525,8 @@ export const modelExceptionsCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
-  startTime: String | null,
-  endTime: String | null
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
