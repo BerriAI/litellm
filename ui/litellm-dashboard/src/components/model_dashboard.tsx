@@ -474,7 +474,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          null,
+          selectedModelGroup,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         );
@@ -491,7 +491,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          null,
+          selectedModelGroup,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         )
@@ -504,7 +504,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          null,
+          selectedModelGroup,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         )
@@ -666,9 +666,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   };
 
 
-  const updateModelMetrics = async (modelGroup: string | null, startTime: Date, endTime: Date) => {
+  const updateModelMetrics = async (modelGroup: string | null, startTime: Date | undefined, endTime: Date | undefined) => {
     console.log("Updating model metrics for group:", modelGroup);
-    if (!accessToken || !userID || !userRole) {
+    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
       return
     }
     console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime)
@@ -1127,8 +1127,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <Col>
                 <Select
                 className="mb-4 mt-2"
-                defaultValue={selectedModelGroup}
-                value={selectedModelGroup}
+                defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
+                value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
               >
                 {availableModelGroups.map((group, idx) => (
                   <SelectItem 
