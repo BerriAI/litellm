@@ -850,6 +850,13 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
         "name": "get_current_weather",
         "content": "function result goes here",
     },
+
+    OpenAI message with a function call result looks like:
+    {
+        "role": "function",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    }
     """
 
     """
@@ -866,18 +873,42 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
         ]
     }
     """
-    tool_call_id = message.get("tool_call_id")
-    content = message.get("content")
+    if message["role"] == "tool":
+        tool_call_id = message.get("tool_call_id")
+        content = message.get("content")
 
-    # We can't determine from openai message format whether it's a successful or
-    # error call result so default to the successful result template
-    anthropic_tool_result = {
-        "type": "tool_result",
-        "tool_use_id": tool_call_id,
-        "content": content,
-    }
+        # We can't determine from openai message format whether it's a successful or
+        # error call result so default to the successful result template
+        anthropic_tool_result = {
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": content,
+        }
+        return anthropic_tool_result
+    elif message["role"] == "function":
+        content = message.get("content")
+        anthropic_tool_result = {
+            "type": "tool_result",
+            "tool_use_id": str(uuid.uuid4()),
+            "content": content,
+        }
+        return anthropic_tool_result
+    return {}
 
-    return anthropic_tool_result
+
+def convert_function_to_anthropic_tool_invoke(function_call):
+    try:
+        anthropic_tool_invoke = [
+            {
+                "type": "tool_use",
+                "id": str(uuid.uuid4()),
+                "name": get_attribute_or_key(function_call, "name"),
+                "input": json.loads(get_attribute_or_key(function_call, "arguments")),
+            }
+        ]
+        return anthropic_tool_invoke
+    except Exception as e:
+        raise e
 
 
 def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
@@ -940,7 +971,7 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
 def anthropic_messages_pt(messages: list):
     """
     format messages for anthropic
-    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
+    1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately)
     2. The first message always needs to be of role "user"
     3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
     4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
@@ -948,7 +979,7 @@ def anthropic_messages_pt(messages: list):
     6. Ensure we only accept role, content. (message.name is not supported)
     """
     # add role=tool support to allow function call result/error submission
-    user_message_types = {"user", "tool"}
+    user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
     new_messages = []
     msg_i = 0
@@ -971,7 +1002,10 @@ def anthropic_messages_pt(messages: list):
                         )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
-            elif messages[msg_i]["role"] == "tool":
+            elif (
+                messages[msg_i]["role"] == "tool"
+                or messages[msg_i]["role"] == "function"
+            ):
                 # OpenAI's tool message content will always be a string
                 user_content.append(convert_to_anthropic_tool_result(messages[msg_i]))
             else:
@@ -1000,72 +1034,12 @@ def anthropic_messages_pt(messages: list):
                     convert_to_anthropic_tool_invoke(messages[msg_i]["tool_calls"])
                 )
 
-            msg_i += 1
-
-        ## MERGE CONSECUTIVE FUNCTION CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "function":
-            """
-            Anthropic function message: "role", "name", "input", "id"
-            OpenAI function message: "content", "name", "role"
-
-            - Check if received message is a tool call input or model text response
-            """
-            tool_use_param = True
-            _message = ChatCompletionFunctionMessageParam(**messages[msg_i])  # type: ignore
-            anthropic_function_message: Optional[
-                AnthropicMessagesAssistantMessageValues
-            ] = None
-            try:
-                anthropic_function_message = (
-                    AnthopicMessagesAssistantMessageToolCallParam(type="tool_use")
+            if messages[msg_i].get("function_call"):
+                assistant_content.extend(
+                    convert_function_to_anthropic_tool_invoke(
+                        messages[msg_i]["function_call"]
+                    )
                 )
-                anthropic_function_message["input"] = json.loads(_message["content"])
-                anthropic_function_message["id"] = str(uuid.uuid4())
-                anthropic_function_message["name"] = _message["name"]
-            except Exception as e:
-                litellm.print_verbose(
-                    "Invalid dictionary content. Treating as text instead."
-                )
-                anthropic_function_message = (
-                    AnthopicMessagesAssistantMessageTextContentParam(type="text")
-                )
-                anthropic_function_message["text"] = _message["content"]
-
-            assistant_content.append(anthropic_function_message)  # type: ignore
-
-            msg_i += 1
-
-        ## MERGE CONSECUTIVE TOOL CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            """
-            Anthropic function message: "role", "name", "input", "id"
-            OpenAI function message: "content", "name", "role"
-
-            - Check if received message is a tool call input or model text response
-            """
-            tool_use_param = True
-            _message = ChatCompletionToolMessageParam(**messages[msg_i])  # type: ignore
-            anthropic_tool_message: Optional[
-                AnthropicMessagesAssistantMessageValues
-            ] = None
-
-            try:
-                anthropic_tool_message = AnthopicMessagesAssistantMessageToolCallParam(
-                    type="tool_use"
-                )
-                anthropic_tool_message["input"] = json.loads(_message["content"])
-                anthropic_tool_message["id"] = _message["tool_call_id"]
-                anthropic_tool_message["name"] = _message["name"]
-            except Exception as e:
-                litellm.print_verbose(
-                    "Invalid dictionary content. Treating as text instead."
-                )
-                anthropic_tool_message = (
-                    AnthopicMessagesAssistantMessageTextContentParam(type="text")
-                )
-                anthropic_tool_message["text"] = _message["content"]
-
-            assistant_content.append(anthropic_tool_message)  # type: ignore
 
             msg_i += 1
 
@@ -1089,18 +1063,6 @@ def anthropic_messages_pt(messages: list):
             )
 
     if new_messages[-1]["role"] == "assistant":
-        if tool_use_param == True:
-            """
-            Final assistant message cannot be a tool use param.
-            """
-            if litellm.modify_params:
-                new_messages.append(
-                    {"role": "user", "content": [{"type": "text", "text": "."}]}
-                )
-            else:
-                raise Exception(
-                    "AnthropicError: Invalid last message. Your API request included an `assistant` message in the final position, which would pre-fill the `assistant` response. When using tools, pre-filling the `assistant` response is not supported. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the last message, "
-                )
         if isinstance(new_messages[-1]["content"], str):
             new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
         elif isinstance(new_messages[-1]["content"], list):
@@ -1109,6 +1071,7 @@ def anthropic_messages_pt(messages: list):
                     content["text"] = content[
                         "text"
                     ].rstrip()  # no trailing whitespace for final assistant message
+
     return new_messages
 
 
