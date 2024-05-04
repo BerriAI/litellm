@@ -55,14 +55,6 @@ class _PROXY_AzureContentSafety(
 
         return thresholds
 
-    def print_verbose(self, print_statement):
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa
-        except:
-            pass
-
     def _compute_result(self, response):
         result = {}
 
@@ -80,7 +72,7 @@ class _PROXY_AzureContentSafety(
         return result
 
     async def test_violation(self, content: str, source: str = None):
-        self.print_verbose(f"Testing Azure Content-Safety for: {content}")
+        verbose_proxy_logger.debug("Testing Azure Content-Safety for: %s", content)
 
         # Construct a request
         request = self.analyze_text_options(
@@ -92,14 +84,14 @@ class _PROXY_AzureContentSafety(
         try:
             response = await self.client.analyze_text(request)
         except self.azure_http_error as e:
-            self.print_verbose(
-                f"Error in Azure Content-Safety: {traceback.format_exc()}"
+            verbose_proxy_logger.debug(
+                "Error in Azure Content-Safety: %s", traceback.format_exc()
             )
             traceback.print_exc()
             raise
 
         result = self._compute_result(response)
-        self.print_verbose(f"Azure Content-Safety Result: {result}")
+        verbose_proxy_logger.debug("Azure Content-Safety Result: %s", result)
 
         for key, value in result.items():
             if value["filtered"]:
@@ -120,7 +112,7 @@ class _PROXY_AzureContentSafety(
         data: dict,
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
     ):
-        self.print_verbose(f"Inside Azure Content-Safety Pre-Call Hook")
+        verbose_proxy_logger.debug("Inside Azure Content-Safety Pre-Call Hook")
         try:
             if call_type == "completion" and "messages" in data:
                 for m in data["messages"]:
@@ -137,7 +129,7 @@ class _PROXY_AzureContentSafety(
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
-        self.print_verbose(f"Inside Azure Content-Safety Post-Call Hook")
+        verbose_proxy_logger.debug("Inside Azure Content-Safety Post-Call Hook")
         if isinstance(response, litellm.ModelResponse) and isinstance(
             response.choices[0], litellm.utils.Choices
         ):
@@ -150,5 +142,5 @@ class _PROXY_AzureContentSafety(
     #    user_api_key_dict: UserAPIKeyAuth,
     #    response: str,
     # ):
-    #    self.print_verbose(f"Inside Azure Content-Safety Call-Stream Hook")
+    #    verbose_proxy_logger.debug("Inside Azure Content-Safety Call-Stream Hook")
     #    await self.test_violation(content=response, source="output")
