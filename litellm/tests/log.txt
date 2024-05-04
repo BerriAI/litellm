@@ -5,8 +5,48 @@ plugins: timeout-2.2.0, asyncio-0.23.2, anyio-3.7.1, xdist-3.3.1
 asyncio: mode=Mode.STRICT
 collected 1 item
 
-test_image_generation.py .                                               [100%]
+test_completion.py F                                                     [100%]
 
+=================================== FAILURES ===================================
+______________________ test_completion_anthropic_hanging _______________________
+
+    def test_completion_anthropic_hanging():
+        litellm.set_verbose = True
+        litellm.modify_params = True
+        messages = [
+            {
+                "role": "user",
+                "content": "What's the capital of fictional country Ubabababababaaba? Use your tools.",
+            },
+            {
+                "role": "assistant",
+                "function_call": {
+                    "name": "get_capital",
+                    "arguments": '{"country": "Ubabababababaaba"}',
+                },
+            },
+            {"role": "function", "name": "get_capital", "content": "Kokoko"},
+        ]
+    
+        converted_messages = anthropic_messages_pt(messages)
+    
+        print(f"converted_messages: {converted_messages}")
+    
+        ## ENSURE USER / ASSISTANT ALTERNATING
+        for i, msg in enumerate(converted_messages):
+            if i < len(converted_messages) - 1:
+>               assert msg["role"] != converted_messages[i + 1]["role"]
+E               AssertionError: assert 'user' != 'user'
+
+test_completion.py:2406: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+<module 'litellm' from '/Users/krrishdholakia/Documents/litellm/litellm/__init__.py'>
+
+pytest fixture - resetting callbacks
+----------------------------- Captured stdout call -----------------------------
+message: {'role': 'user', 'content': "What's the capital of fictional country Ubabababababaaba? Use your tools."}
+message: {'role': 'function', 'name': 'get_capital', 'content': 'Kokoko'}
+converted_messages: [{'role': 'user', 'content': [{'type': 'text', 'text': "What's the capital of fictional country Ubabababababaaba? Use your tools."}]}, {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': '10e9f4d4-bdc9-4514-8b7a-c10bc555d67c', 'content': 'Kokoko'}]}]
 =============================== warnings summary ===============================
 ../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: 23 warnings
   /opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
@@ -111,33 +151,7 @@ test_image_generation.py .                                               [100%]
   Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
     declare_namespace(pkg)
 
-test_image_generation.py::test_aimage_generation_bedrock_with_optional_params
-  /opt/homebrew/lib/python3.11/site-packages/_pytest/threadexception.py:73: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-1 (success_handler)
-  
-  Traceback (most recent call last):
-    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 1412, in _success_handler_helper_fn
-      litellm.completion_cost(
-    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 4442, in completion_cost
-      raise e
-    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 4405, in completion_cost
-      raise Exception(
-  Exception: Model=1024-x-1024/stability.stable-diffusion-xl-v1 not found in completion cost model map
-  
-  During handling of the above exception, another exception occurred:
-  
-  Traceback (most recent call last):
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-      self.run()
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 982, in run
-      self._target(*self._args, **self._kwargs)
-    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 1465, in success_handler
-      start_time, end_time, result = self._success_handler_helper_fn(
-                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 1459, in _success_handler_helper_fn
-      raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
-  Exception: [Non-Blocking] LiteLLM.Success_Call Error: Model=1024-x-1024/stability.stable-diffusion-xl-v1 not found in completion cost model map
-  
-    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
-
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 1 passed, 61 warnings in 3.00s ========================
+=========================== short test summary info ============================
+FAILED test_completion.py::test_completion_anthropic_hanging - AssertionError...
+======================== 1 failed, 60 warnings in 0.15s ========================

@@ -4,7 +4,13 @@ from enum import Enum
 import time, uuid
 from typing import Callable, Optional, Any, Union, List
 import litellm
-from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse
+from litellm.utils import (
+    ModelResponse,
+    get_secret,
+    Usage,
+    ImageResponse,
+    map_finish_reason,
+)
 from .prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -1050,7 +1056,9 @@ def completion(
                             logging_obj=logging_obj,
                         )
 
-                model_response["finish_reason"] = response_body["stop_reason"]
+                model_response["finish_reason"] = map_finish_reason(
+                    response_body["stop_reason"]
+                )
                 _usage = litellm.Usage(
                     prompt_tokens=response_body["usage"]["input_tokens"],
                     completion_tokens=response_body["usage"]["output_tokens"],
