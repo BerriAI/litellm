@@ -2294,7 +2294,7 @@ def batch_completion(
     n: Optional[int] = None,
     stream: Optional[bool] = None,
     stop=None,
-    max_tokens: Optional[float] = None,
+    max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
