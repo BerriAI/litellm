@@ -246,7 +246,7 @@ class OpenAIChatCompletion(BaseLLM):
     def completion(
         self,
         model_response: ModelResponse,
-        timeout: float,
+        timeout: Union[float, httpx.Timeout],
         model: Optional[str] = None,
         messages: Optional[list] = None,
         print_verbose: Optional[Callable] = None,
@@ -271,9 +271,12 @@ class OpenAIChatCompletion(BaseLLM):
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message=f"Missing model or messages")
 
-            if not isinstance(timeout, float):
+            if not isinstance(timeout, float) and not isinstance(
+                timeout, httpx.Timeout
+            ):
                 raise OpenAIError(
-                    status_code=422, message=f"Timeout needs to be a float"
+                    status_code=422,
+                    message=f"Timeout needs to be a float or httpx.Timeout",
                 )
 
             if custom_llm_provider != "openai":
@@ -425,7 +428,7 @@ class OpenAIChatCompletion(BaseLLM):
         self,
         data: dict,
         model_response: ModelResponse,
-        timeout: float,
+        timeout: Union[float, httpx.Timeout],
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         organization: Optional[str] = None,
@@ -480,7 +483,7 @@ class OpenAIChatCompletion(BaseLLM):
     def streaming(
         self,
         logging_obj,
-        timeout: float,
+        timeout: Union[float, httpx.Timeout],
         data: dict,
         model: str,
         api_key: Optional[str] = None,
@@ -524,7 +527,7 @@ class OpenAIChatCompletion(BaseLLM):
     async def async_streaming(
         self,
         logging_obj,
-        timeout: float,
+        timeout: Union[float, httpx.Timeout],
         data: dict,
         model: str,
         api_key: Optional[str] = None,

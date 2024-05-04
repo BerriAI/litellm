@@ -375,7 +375,9 @@ class Router:
         except Exception as e:
             raise e
 
-    def _completion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+    def _completion(
+        self, model: str, messages: List[Dict[str, str]], **kwargs
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         model_name = None
         try:
             # pick the one that is available (lowest TPM/RPM)
@@ -438,7 +440,9 @@ class Router:
             )
             raise e
 
-    async def acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+    async def acompletion(
+        self, model: str, messages: List[Dict[str, str]], **kwargs
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -454,7 +458,9 @@ class Router:
         except Exception as e:
             raise e
 
-    async def _acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+    async def _acompletion(
+        self, model: str, messages: List[Dict[str, str]], **kwargs
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         """
         - Get an available deployment
         - call it with a semaphore over the call

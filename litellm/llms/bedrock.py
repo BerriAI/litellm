@@ -533,7 +533,7 @@ def init_bedrock_client(
     aws_session_name: Optional[str] = None,
     aws_profile_name: Optional[str] = None,
     aws_role_name: Optional[str] = None,
-    timeout: Optional[int] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
@@ -592,7 +592,14 @@ def init_bedrock_client(
 
     import boto3
 
-    config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+    if isinstance(timeout, float):
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+    elif isinstance(timeout, httpx.Timeout):
+        config = boto3.session.Config(
+            connect_timeout=timeout.connect, read_timeout=timeout.read
+        )
+    else:
+        config = boto3.session.Config()
 
     ### CHECK STS ###
     if aws_role_name is not None and aws_session_name is not None:
