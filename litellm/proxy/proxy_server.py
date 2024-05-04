@@ -7706,7 +7706,7 @@ async def model_metrics_exceptions(
                 exception_type,
                 COUNT(*) AS num_exceptions
             FROM "LiteLLM_ErrorLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
+            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
         )
         SELECT 
@@ -7718,7 +7718,9 @@ async def model_metrics_exceptions(
         ORDER BY total_exceptions DESC
         LIMIT 200;
     """
-    db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
+    db_response = await prisma_client.db.query_raw(
+        sql_query, startTime, endTime, _selected_model_group
+    )
     response: List[dict] = []
     exception_types = set()
 
