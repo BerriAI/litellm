@@ -1113,8 +1113,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       <TabPanel>
               {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
             
-            <Grid numItems={2}>
+            <Grid numItems={2} className="mt-2">
               <Col>
+              <Text>Select Time Range</Text>
                 <DateRangePicker 
                   enableSelect={true} 
                   value={dateValue} 
@@ -1125,6 +1126,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 />
               </Col>
               <Col>
+              <Text>Select Model Group</Text>
                 <Select
                 className="mb-4 mt-2"
                 defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
