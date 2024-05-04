@@ -605,8 +605,7 @@ def test_litellm_completion_vertex_exception():
     except Exception as e:
         print("exception: ", e)
         assert "model: vertex_ai/gemini-pro" in str(e)
-        assert "model_group" not in str(e)
-        assert "deployment" not in str(e)
+        assert "vertex_project: bad-project" in str(e)
 
 
 # # test_invalid_request_error(model="command-nightly")
