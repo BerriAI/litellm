@@ -854,7 +854,7 @@ def test_ausage_based_routing_fallbacks():
         assert response._hidden_params["model_id"] == "1"
 
         # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
-        for i in range(20):
+        for i in range(21):
             response = router.completion(
                 model="azure/gpt-4-fast",
                 messages=messages,
@@ -863,7 +863,7 @@ def test_ausage_based_routing_fallbacks():
             )
             print("response: ", response)
             print("response._hidden_params: ", response._hidden_params)
-            if i == 19:
+            if i == 20:
                 # by the 19th call we should have hit TPM LIMIT for OpenAI, it should fallback to anthropic-claude-instant-1.2
                 assert response._hidden_params["model_id"] == "4"
 
