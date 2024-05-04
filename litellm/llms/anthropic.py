@@ -101,13 +101,13 @@ class AnthropicConfig:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
-            if param == "stream":
+            if param == "stream" and value == True:
                 optional_params["stream"] = value
             if param == "stop":
                 if isinstance(value, str):
                     if (
                         value == "\n"
-                    ):  # anthropic doesn't allow whitespace characters as stop-sequences
+                    ) and litellm.drop_params == True:  # anthropic doesn't allow whitespace characters as stop-sequences
                         continue
                     value = [value]
                 elif isinstance(value, list):
@@ -115,10 +115,13 @@ class AnthropicConfig:
                     for v in value:
                         if (
                             v == "\n"
-                        ):  # anthropic doesn't allow whitespace characters as stop-sequences
+                        ) and litellm.drop_params == True:  # anthropic doesn't allow whitespace characters as stop-sequences
                             continue
                         new_v.append(v)
-                    value = new_v
+                    if len(new_v) > 0:
+                        value = new_v
+                    else:
+                        continue
                 optional_params["stop_sequences"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
