@@ -16,7 +16,12 @@ from litellm.types.completion import (
     ChatCompletionUserMessageParam,
     ChatCompletionSystemMessageParam,
     ChatCompletionMessageParam,
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageToolCallParam,
+    ChatCompletionToolMessageParam,
 )
+from litellm.types.llms.anthropic import *
+import uuid
 
 
 def default_pt(messages):
@@ -845,6 +850,13 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
         "name": "get_current_weather",
         "content": "function result goes here",
     },
+
+    OpenAI message with a function call result looks like:
+    {
+        "role": "function",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    }
     """
 
     """
@@ -861,18 +873,42 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
         ]
     }
     """
-    tool_call_id = message.get("tool_call_id")
-    content = message.get("content")
+    if message["role"] == "tool":
+        tool_call_id = message.get("tool_call_id")
+        content = message.get("content")
 
-    # We can't determine from openai message format whether it's a successful or
-    # error call result so default to the successful result template
-    anthropic_tool_result = {
-        "type": "tool_result",
-        "tool_use_id": tool_call_id,
-        "content": content,
-    }
+        # We can't determine from openai message format whether it's a successful or
+        # error call result so default to the successful result template
+        anthropic_tool_result = {
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": content,
+        }
+        return anthropic_tool_result
+    elif message["role"] == "function":
+        content = message.get("content")
+        anthropic_tool_result = {
+            "type": "tool_result",
+            "tool_use_id": str(uuid.uuid4()),
+            "content": content,
+        }
+        return anthropic_tool_result
+    return {}
 
-    return anthropic_tool_result
+
+def convert_function_to_anthropic_tool_invoke(function_call):
+    try:
+        anthropic_tool_invoke = [
+            {
+                "type": "tool_use",
+                "id": str(uuid.uuid4()),
+                "name": get_attribute_or_key(function_call, "name"),
+                "input": json.loads(get_attribute_or_key(function_call, "arguments")),
+            }
+        ]
+        return anthropic_tool_invoke
+    except Exception as e:
+        raise e
 
 
 def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
@@ -935,7 +971,7 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
 def anthropic_messages_pt(messages: list):
     """
     format messages for anthropic
-    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
+    1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately)
     2. The first message always needs to be of role "user"
     3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
     4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
@@ -943,12 +979,14 @@ def anthropic_messages_pt(messages: list):
     6. Ensure we only accept role, content. (message.name is not supported)
     """
     # add role=tool support to allow function call result/error submission
-    user_message_types = {"user", "tool"}
+    user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
     new_messages = []
     msg_i = 0
+    tool_use_param = False
     while msg_i < len(messages):
         user_content = []
+        init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
             if isinstance(messages[msg_i]["content"], list):
@@ -964,7 +1002,10 @@ def anthropic_messages_pt(messages: list):
                         )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
-            elif messages[msg_i]["role"] == "tool":
+            elif (
+                messages[msg_i]["role"] == "tool"
+                or messages[msg_i]["role"] == "function"
+            ):
                 # OpenAI's tool message content will always be a string
                 user_content.append(convert_to_anthropic_tool_result(messages[msg_i]))
             else:
@@ -993,11 +1034,24 @@ def anthropic_messages_pt(messages: list):
                     convert_to_anthropic_tool_invoke(messages[msg_i]["tool_calls"])
                 )
 
+            if messages[msg_i].get("function_call"):
+                assistant_content.extend(
+                    convert_function_to_anthropic_tool_invoke(
+                        messages[msg_i]["function_call"]
+                    )
+                )
+
             msg_i += 1
 
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
+        if msg_i == init_msg_i:  # prevent infinite loops
+            raise Exception(
+                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
+                    messages[msg_i]
+                )
+            )
     if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
@@ -1009,11 +1063,14 @@ def anthropic_messages_pt(messages: list):
             )
 
     if new_messages[-1]["role"] == "assistant":
-        for content in new_messages[-1]["content"]:
-            if isinstance(content, dict) and content["type"] == "text":
-                content["text"] = content[
-                    "text"
-                ].rstrip()  # no trailing whitespace for final assistant message
+        if isinstance(new_messages[-1]["content"], str):
+            new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
+        elif isinstance(new_messages[-1]["content"], list):
+            for content in new_messages[-1]["content"]:
+                if isinstance(content, dict) and content["type"] == "text":
+                    content["text"] = content[
+                        "text"
+                    ].rstrip()  # no trailing whitespace for final assistant message
 
     return new_messages
 

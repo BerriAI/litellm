@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
+from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
 # litellm.num_retries=3
 litellm.cache = None
@@ -2355,6 +2356,56 @@ def test_completion_with_fallbacks():
 
 
 # test_completion_with_fallbacks()
+
+
+# @pytest.mark.parametrize(
+#     "function_call",
+#     [
+#         [{"role": "function", "name": "get_capital", "content": "Kokoko"}],
+#         [
+#             {"role": "function", "name": "get_capital", "content": "Kokoko"},
+#             {"role": "function", "name": "get_capital", "content": "Kokoko"},
+#         ],
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "tool_call",
+#     [
+#         [{"role": "tool", "tool_call_id": "1234", "content": "Kokoko"}],
+#         [
+#             {"role": "tool", "tool_call_id": "12344", "content": "Kokoko"},
+#             {"role": "tool", "tool_call_id": "1214", "content": "Kokoko"},
+#         ],
+#     ],
+# )
+def test_completion_anthropic_hanging():
+    litellm.set_verbose = True
+    litellm.modify_params = True
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the capital of fictional country Ubabababababaaba? Use your tools.",
+        },
+        {
+            "role": "assistant",
+            "function_call": {
+                "name": "get_capital",
+                "arguments": '{"country": "Ubabababababaaba"}',
+            },
+        },
+        {"role": "function", "name": "get_capital", "content": "Kokoko"},
+    ]
+
+    converted_messages = anthropic_messages_pt(messages)
+
+    print(f"converted_messages: {converted_messages}")
+
+    ## ENSURE USER / ASSISTANT ALTERNATING
+    for i, msg in enumerate(converted_messages):
+        if i < len(converted_messages) - 1:
+            assert msg["role"] != converted_messages[i + 1]["role"]
+
+
 def test_completion_anyscale_api():
     try:
         # litellm.set_verbose=True
