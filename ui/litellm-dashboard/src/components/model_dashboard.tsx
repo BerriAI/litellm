@@ -207,7 +207,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [failureTableData, setFailureTableData] = useState<any[]>([]);
   const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(),
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
   });
 
@@ -458,11 +458,25 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
         setAvailableModelGroups(_array_model_groups);
 
+        console.log("array_model_groups:", _array_model_groups)
+
+        if (_array_model_groups.length > 0) {
+          // set selectedModelGroup to the last model group
+          let _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
+          console.log("_initial_model_group:", _initial_model_group)
+          setSelectedModelGroup(_initial_model_group);
+        }
+
+        console.log("selectedModelGroup:", selectedModelGroup)
+        
+
         const modelMetricsResponse = await modelMetricsCall(
           accessToken,
           userID,
           userRole,
-          null
+          null,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
         );
 
         console.log("Model metrics response:", modelMetricsResponse);
@@ -477,7 +491,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          null
+          null,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
         )
         console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
@@ -488,7 +504,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          null
+          null,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
         )
 
         console.log("slowResponses:", slowResponses)
@@ -1109,6 +1127,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <Col>
                 <Select
                 className="mb-4 mt-2"
+                defaultValue={selectedModelGroup}
+                value={selectedModelGroup}
               >
                 {availableModelGroups.map((group, idx) => (
                   <SelectItem 
