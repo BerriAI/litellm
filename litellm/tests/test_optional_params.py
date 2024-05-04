@@ -5,11 +5,25 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
-from litellm.utils import get_optional_params_embeddings
+from litellm.utils import get_optional_params_embeddings, get_optional_params
 
 ## get_optional_params_embeddings
 ### Models: OpenAI, Azure, Bedrock
 ### Scenarios: w/ optional params + litellm.drop_params = True
+
+
+@pytest.mark.parametrize(
+    "stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)]
+)
+def test_anthropic_optional_params(stop_sequence, expected_count):
+    """
+    Test if whitespace character optional param is dropped by anthropic
+    """
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model="claude-3", custom_llm_provider="anthropic", stop=stop_sequence
+    )
+    assert len(optional_params) == expected_count
 
 
 def test_bedrock_optional_params_embeddings():
