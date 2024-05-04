@@ -598,6 +598,8 @@ def init_bedrock_client(
         config = boto3.session.Config(
             connect_timeout=timeout.connect, read_timeout=timeout.read
         )
+    else:
+        config = boto3.session.Config()
 
     ### CHECK STS ###
     if aws_role_name is not None and aws_session_name is not None:

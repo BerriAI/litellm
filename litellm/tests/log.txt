@@ -5,74 +5,59 @@ plugins: timeout-2.2.0, asyncio-0.23.2, anyio-3.7.1, xdist-3.3.1
 asyncio: mode=Mode.STRICT
 collected 1 item
 
-test_custom_logger.py Chunks have a created at hidden param
-Chunks sorted
-token_counter messages received: [{'role': 'user', 'content': 'write a one sentence poem about: 73348'}]
-Token Counter - using OpenAI token counter, for model=gpt-3.5-turbo
-LiteLLM: Utils - Counting tokens for OpenAI model=gpt-3.5-turbo
-Logging Details LiteLLM-Success Call: None
-success callbacks: []
-Token Counter - using OpenAI token counter, for model=gpt-3.5-turbo
-LiteLLM: Utils - Counting tokens for OpenAI model=gpt-3.5-turbo
-Logging Details LiteLLM-Success Call streaming complete
-Looking up model=gpt-3.5-turbo in model_cost_map
-Success: model=gpt-3.5-turbo in model_cost_map
-prompt_tokens=17; completion_tokens=0
-Returned custom cost for model=gpt-3.5-turbo - prompt_tokens_cost_usd_dollar: 2.55e-05, completion_tokens_cost_usd_dollar: 0.0
-final cost: 2.55e-05; prompt_tokens_cost_usd_dollar: 2.55e-05; completion_tokens_cost_usd_dollar: 0.0
-.                                                  [100%]
+test_image_generation.py .                                               [100%]
 
 =============================== warnings summary ===============================
-../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: 18 warnings
+../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: 23 warnings
   /opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
 
-../proxy/_types.py:218
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:218: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:219
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:219: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:305
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:305: PydanticDeprecatedSince20: `pydantic.config.Extra` is deprecated, use literal values instead (e.g. `extra='allow'`). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:306
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:306: PydanticDeprecatedSince20: `pydantic.config.Extra` is deprecated, use literal values instead (e.g. `extra='allow'`). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     extra = Extra.allow  # Allow extra fields
 
-../proxy/_types.py:308
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:308: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:309
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:309: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:337
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:337: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:338
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:338: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:384
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:384: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:385
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:385: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:450
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:450: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:454
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:454: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:462
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:462: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:466
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:466: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:502
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:502: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:509
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:509: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:536
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:536: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:546
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:546: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:823
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:823: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:840
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:840: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:850
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:850: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:867
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:867: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
-../proxy/_types.py:869
-  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:869: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+../proxy/_types.py:886
+  /Users/krrishdholakia/Documents/litellm/litellm/proxy/_types.py:886: PydanticDeprecatedSince20: Pydantic V1 style `@root_validator` validators are deprecated. You should migrate to Pydantic V2 style `@model_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
     @root_validator(pre=True)
 
 ../../../../../../opt/homebrew/lib/python3.11/site-packages/pkg_resources/__init__.py:121
@@ -126,30 +111,33 @@ final cost: 2.55e-05; prompt_tokens_cost_usd_dollar: 2.55e-05; completion_tokens
   Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
     declare_namespace(pkg)
 
-test_custom_logger.py::test_redis_cache_completion_stream
-  /opt/homebrew/lib/python3.11/site-packages/_pytest/unraisableexception.py:78: PytestUnraisableExceptionWarning: Exception ignored in: <function StreamWriter.__del__ at 0x1019c28e0>
+test_image_generation.py::test_aimage_generation_bedrock_with_optional_params
+  /opt/homebrew/lib/python3.11/site-packages/_pytest/threadexception.py:73: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-1 (success_handler)
   
   Traceback (most recent call last):
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/streams.py", line 395, in __del__
-      self.close()
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/streams.py", line 343, in close
-      return self._transport.close()
-             ^^^^^^^^^^^^^^^^^^^^^^^
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/sslproto.py", line 112, in close
-      self._ssl_protocol._start_shutdown()
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/sslproto.py", line 620, in _start_shutdown
-      self._shutdown_timeout_handle = self._loop.call_later(
-                                      ^^^^^^^^^^^^^^^^^^^^^^
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py", line 727, in call_later
-      timer = self.call_at(self.time() + delay, callback, *args,
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py", line 740, in call_at
-      self._check_closed()
-    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
-      raise RuntimeError('Event loop is closed')
-  RuntimeError: Event loop is closed
+    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 1412, in _success_handler_helper_fn
+      litellm.completion_cost(
+    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 4442, in completion_cost
+      raise e
+    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 4405, in completion_cost
+      raise Exception(
+  Exception: Model=1024-x-1024/stability.stable-diffusion-xl-v1 not found in completion cost model map
   
-    warnings.warn(pytest.PytestUnraisableExceptionWarning(msg))
+  During handling of the above exception, another exception occurred:
+  
+  Traceback (most recent call last):
+    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
+      self.run()
+    File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 982, in run
+      self._target(*self._args, **self._kwargs)
+    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 1465, in success_handler
+      start_time, end_time, result = self._success_handler_helper_fn(
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/Users/krrishdholakia/Documents/litellm/litellm/utils.py", line 1459, in _success_handler_helper_fn
+      raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
+  Exception: [Non-Blocking] LiteLLM.Success_Call Error: Model=1024-x-1024/stability.stable-diffusion-xl-v1 not found in completion cost model map
+  
+    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 1 passed, 56 warnings in 2.43s ========================
+======================== 1 passed, 61 warnings in 3.00s ========================
