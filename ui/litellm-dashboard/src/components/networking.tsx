@@ -441,6 +441,8 @@ export const modelMetricsCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
@@ -448,7 +450,7 @@ export const modelMetricsCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics` : `/model/metrics`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}`
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
     }
     // message.info("Requesting model data");
     const response = await fetch(url, {
@@ -481,6 +483,8 @@ export const modelMetricsSlowResponsesCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
@@ -488,8 +492,9 @@ export const modelMetricsSlowResponsesCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/slow_responses` : `/model/metrics/slow_responses`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}`
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
     }
+    
     // message.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
@@ -520,14 +525,17 @@ export const modelExceptionsCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/exceptions` : `/model/metrics/exceptions`;
+
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}`
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
     }
     const response = await fetch(url, {
       method: "GET",

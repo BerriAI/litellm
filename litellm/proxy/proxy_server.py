@@ -7552,7 +7552,7 @@ async def model_metrics(
         FROM
             "LiteLLM_SpendLogs"
         WHERE
-            "startTime" >= NOW() - INTERVAL '30 days'
+            "startTime" BETWEEN $2::timestamp AND $3::timestamp
             AND "model" = $1 AND "cache_hit" != 'True'
         GROUP BY
             api_base,
@@ -7653,6 +7653,8 @@ FROM
 WHERE
     "model" = $2
     AND "cache_hit" != 'True'
+    AND "startTime" >= $3::timestamp
+    AND "startTime" <= $4::timestamp
 GROUP BY
     api_base
 ORDER BY
@@ -7660,7 +7662,7 @@ ORDER BY
     """
 
     db_response = await prisma_client.db.query_raw(
-        sql_query, alerting_threshold, _selected_model_group
+        sql_query, alerting_threshold, _selected_model_group, startTime, endTime
     )
 
     if db_response is not None:
