@@ -9077,6 +9077,9 @@ def exception_type(
                 elif (
                     "invalid_request_error" in error_str
                     and "content_policy_violation" in error_str
+                ) or (
+                    "The response was filtered due to the prompt triggering Azure OpenAI's content management"
+                    in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
