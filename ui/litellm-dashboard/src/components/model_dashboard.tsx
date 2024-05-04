@@ -16,7 +16,7 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
@@ -1118,20 +1118,36 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         </Card>
       </TabPanel>
       <TabPanel>
-              <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
-            <Select
-              className="mb-4 mt-2"
-            >
-              {availableModelGroups.map((group, idx) => (
-                <SelectItem 
-                  key={idx} 
-                  value={group}
-                  onClick={() => updateModelMetrics(group)}
-                >
-                  {group}
-                </SelectItem>
-              ))}
-            </Select>
+              {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
+            
+            <Grid numItems={2}>
+              <Col>
+                <DateRangePicker enableSelect={true} />
+              </Col>
+              <Col>
+                <Select
+                className="mb-4 mt-2"
+              >
+                {availableModelGroups.map((group, idx) => (
+                  <SelectItem 
+                    key={idx} 
+                    value={group}
+                    onClick={() => updateModelMetrics(group)}
+                  >
+                    {group}
+                  </SelectItem>
+                ))}
+              </Select>
+
+              </Col>
+
+              
+          
+
+            </Grid>
+            
+
+
 
             <Grid numItems={2}>
               <Col>
