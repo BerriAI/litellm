@@ -66,7 +66,7 @@ from .integrations.supabase import Supabase
 from .integrations.lunary import LunaryLogger
 from .integrations.prompt_layer import PromptLayerLogger
 from .integrations.langsmith import LangsmithLogger
-from .integrations.logfire_logger import LogfireLogger
+from .integrations.logfire_logger import LogfireLogger, LogfireLevel
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
@@ -1646,14 +1646,14 @@ class Logging:
                             else:
                                 print_verbose("reaches logfire for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
-                        
+
                         logfireLogger.log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
-                            user_id=kwargs.get("user", None),
+                            level=LogfireLevel.INFO.value,
                         )
 
                     if callback == "lunary":
@@ -2346,7 +2346,9 @@ class Logging:
     def failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
-        print_verbose(f"Logging Details LiteLLM-Failure Call")
+        print_verbose(
+            f"eLogging Details LiteLLM-Failure Call: {litellm.failure_callback}"
+        )
         try:
             start_time, end_time = self._failure_handler_helper_fn(
                 exception=exception,
@@ -2359,6 +2361,7 @@ class Logging:
 
             self.redact_message_input_output_from_logging(result=result)
             for callback in litellm.failure_callback:
+                print_verbose(f"failure_callback: {callback}")
                 try:
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
@@ -2386,7 +2389,7 @@ class Logging:
                             call_type=self.call_type,
                             stream=self.stream,
                         )
-                    elif callback == "lunary":
+                    if callback == "lunary":
                         print_verbose("reaches lunary for logging error!")
 
                         model = self.model
@@ -2411,7 +2414,7 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-                    elif callback == "sentry":
+                    if callback == "sentry":
                         print_verbose("sending exception to sentry")
                         if capture_exception:
                             capture_exception(exception)
@@ -2419,7 +2422,7 @@ class Logging:
                             print_verbose(
                                 f"capture exception not initialized: {capture_exception}"
                             )
-                    elif callable(callback):  # custom logger functions
+                    if callable(callback):  # custom logger functions
                         customLogger.log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
@@ -2428,7 +2431,7 @@ class Logging:
                             print_verbose=print_verbose,
                             callback_func=callback,
                         )
-                    elif (
+                    if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
@@ -2445,7 +2448,7 @@ class Logging:
                             response_obj=result,
                             kwargs=self.model_call_details,
                         )
-                    elif callback == "langfuse":
+                    if callback == "langfuse":
                         global langFuseLogger
                         verbose_logger.debug("reaches langfuse for logging!")
                         kwargs = {}
@@ -2473,7 +2476,7 @@ class Logging:
                             level="ERROR",
                             kwargs=self.model_call_details,
                         )
-                    elif callback == "prometheus":
+                    if callback == "prometheus":
                         global prometheusLogger
                         verbose_logger.debug("reaches prometheus for success logging!")
                         kwargs = {}
@@ -2489,6 +2492,26 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
+
+                    if callback == "logfire":
+                        global logfireLogger
+                        verbose_logger.debug("reaches logfire for failure logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        kwargs["exception"] = exception
+
+                        logfireLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            level=LogfireLevel.ERROR.value,
                             print_verbose=print_verbose,
                         )
                 except Exception as e:
@@ -3227,6 +3250,7 @@ def client(original_function):
                     return original_function(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             end_time = datetime.datetime.now()
+
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
                 logging_obj.failure_handler(
