@@ -914,39 +914,72 @@ Test Request
 litellm --test
 ```
 
-## Logging Proxy Input/Output Traceloop (OpenTelemetry)
+## Logging Proxy Input/Output in OpenTelemetry format using Traceloop's OpenLLMetry
 
-Traceloop allows you to log LLM Input/Output in the OpenTelemetry format
+[OpenLLMetry](https://github.com/traceloop/openllmetry) _(built and maintained by Traceloop)_ is a set of extensions
+built on top of [OpenTelemetry](https://opentelemetry.io/) that gives you complete observability over your LLM
+application. Because it uses OpenTelemetry under the
+hood, [it can be connected to various observability solutions](https://www.traceloop.com/docs/openllmetry/integrations/introduction)
+like:
 
-We will use the `--config` to set `litellm.success_callback = ["traceloop"]` this will log all successfull LLM calls to traceloop
+* [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop)
+* [Axiom](https://www.traceloop.com/docs/openllmetry/integrations/axiom)
+* [Azure Application Insights](https://www.traceloop.com/docs/openllmetry/integrations/azure)
+* [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
+* [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace)
+* [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana)
+* [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb)
+* [HyperDX](https://www.traceloop.com/docs/openllmetry/integrations/hyperdx)
+* [Instana](https://www.traceloop.com/docs/openllmetry/integrations/instana)
+* [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic)
+* [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
+* [Service Now Cloud Observability](https://www.traceloop.com/docs/openllmetry/integrations/service-now)
+* [Sentry](https://www.traceloop.com/docs/openllmetry/integrations/sentry)
+* [SigNoz](https://www.traceloop.com/docs/openllmetry/integrations/signoz)
+* [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk)
 
-**Step 1** Install traceloop-sdk and set Traceloop API key
+We will use the `--config` to set `litellm.success_callback = ["traceloop"]` to achieve this, steps are listed below.
+
+**Step 1:** Install the SDK
 
 ```shell
-pip install traceloop-sdk -U
+pip install traceloop-sdk
 ```
 
-Traceloop outputs standard OpenTelemetry data that can be connected to your observability stack. Send standard OpenTelemetry from LiteLLM Proxy to [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop), [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace), [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
-, [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic), [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb), [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana), [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk), [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
+**Step 2:** Configure Environment Variable for trace exporting
 
-**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+You will need to configure where to export your traces. Environment variables will control this, example: For Traceloop
+you should use `TRACELOOP_API_KEY`, whereas for Datadog you use `TRACELOOP_BASE_URL`. For more
+visit [the Integrations Catalog](https://www.traceloop.com/docs/openllmetry/integrations/introduction).
+
+If you are using Datadog as the observability solutions then you can set `TRACELOOP_BASE_URL` as:
+
+```shell
+TRACELOOP_BASE_URL=http://<datadog-agent-hostname>:4318
+```
+
+**Step 3**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+  - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
+      api_key: my-fake-key # replace api_key with actual key
 litellm_settings:
-  success_callback: ["traceloop"]
+  success_callback: [ "traceloop" ]
 ```
 
-**Step 3**: Start the proxy, make a test request
+**Step 4**: Start the proxy, make a test request
 
 Start proxy
+
 ```shell
 litellm --config config.yaml --debug
 ```
 
 Test Request
+
 ```
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
