@@ -4956,7 +4956,7 @@ def get_optional_params(
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
                 optional_params["functions_unsupported_model"] = non_default_params.pop(
-                    "tools", non_default_params.pop("functions")
+                    "tools", non_default_params.pop("functions", None)
                 )
             else:
                 raise UnsupportedParamsError(
