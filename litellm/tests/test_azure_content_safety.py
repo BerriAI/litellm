@@ -50,7 +50,7 @@ async def test_strict_input_filtering_01():
 
     assert exc_info.value.detail["source"] == "input"
     assert exc_info.value.detail["category"] == "Hate"
-    assert exc_info.value.detail["severity"] == "low"
+    assert exc_info.value.detail["severity"] == 2
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_strict_output_filtering_01():
 
     assert exc_info.value.detail["source"] == "output"
     assert exc_info.value.detail["category"] == "Hate"
-    assert exc_info.value.detail["severity"] == "low"
+    assert exc_info.value.detail["severity"] == 2
 
 
 @pytest.mark.asyncio
