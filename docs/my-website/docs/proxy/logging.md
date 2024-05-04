@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina
+# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina, Azure Content-Safety
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
@@ -1019,7 +1019,7 @@ Deploy an Azure Content-Safety instance from the Azure Portal and get the `endpo
 **Step 1** Set Athina API key
 
 ```shell
-AZURE_CONTENT_SAFETY_KEU = "<your-azure-content-safety-key>"
+AZURE_CONTENT_SAFETY_KEY = "<your-azure-content-safety-key>"
 ```
 
 **Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
