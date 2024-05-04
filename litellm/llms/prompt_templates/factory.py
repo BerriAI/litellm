@@ -16,7 +16,11 @@ from litellm.types.completion import (
     ChatCompletionUserMessageParam,
     ChatCompletionSystemMessageParam,
     ChatCompletionMessageParam,
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageToolCallParam,
 )
+from litellm.types.llms.anthropic import *
+import uuid
 
 
 def default_pt(messages):
@@ -947,8 +951,10 @@ def anthropic_messages_pt(messages: list):
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
     new_messages = []
     msg_i = 0
+    tool_use_param = False
     while msg_i < len(messages):
         user_content = []
+        init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
             if isinstance(messages[msg_i]["content"], list):
@@ -995,9 +1001,48 @@ def anthropic_messages_pt(messages: list):
 
             msg_i += 1
 
+        ## MERGE CONSECUTIVE FUNCTION CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "function":
+            """
+            Anthropic function message: "role", "name", "input", "id"
+            OpenAI function message: "content", "name", "role"
+
+            - Check if received message is a tool call input or model text response
+            """
+            tool_use_param = True
+            _message = ChatCompletionFunctionMessageParam(**messages[msg_i])  # type: ignore
+            anthropic_function_message: Optional[
+                AnthropicMessagesAssistantMessageValues
+            ] = None
+            try:
+                anthropic_function_message = (
+                    AnthopicMessagesAssistantMessageToolCallParam(type="tool_use")
+                )
+                anthropic_function_message["input"] = json.loads(_message["content"])
+                anthropic_function_message["id"] = str(uuid.uuid4())
+                anthropic_function_message["name"] = _message["name"]
+            except Exception as e:
+                litellm.print_verbose(
+                    "Invalid dictionary content. Treating as text instead."
+                )
+                anthropic_function_message = (
+                    AnthopicMessagesAssistantMessageTextContentParam(type="text")
+                )
+                anthropic_function_message["text"] = _message["content"]
+
+            assistant_content.append(anthropic_function_message)  # type: ignore
+
+            msg_i += 1
+
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
+        if msg_i == init_msg_i:  # prevent infinite loops
+            raise Exception(
+                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
+                    messages[msg_i]
+                )
+            )
     if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
@@ -1009,12 +1054,26 @@ def anthropic_messages_pt(messages: list):
             )
 
     if new_messages[-1]["role"] == "assistant":
-        for content in new_messages[-1]["content"]:
-            if isinstance(content, dict) and content["type"] == "text":
-                content["text"] = content[
-                    "text"
-                ].rstrip()  # no trailing whitespace for final assistant message
-
+        if tool_use_param == True:
+            """
+            Final assistant message cannot be a tool use param.
+            """
+            if litellm.modify_params:
+                new_messages.append(
+                    {"role": "user", "content": [{"type": "text", "text": "."}]}
+                )
+            else:
+                raise Exception(
+                    "AnthropicError: Invalid last message. Your API request included an `assistant` message in the final position, which would pre-fill the `assistant` response. When using tools, pre-filling the `assistant` response is not supported. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the last message, "
+                )
+        if isinstance(new_messages[-1]["content"], str):
+            new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
+        elif isinstance(new_messages[-1]["content"], list):
+            for content in new_messages[-1]["content"]:
+                if isinstance(content, dict) and content["type"] == "text":
+                    content["text"] = content[
+                        "text"
+                    ].rstrip()  # no trailing whitespace for final assistant message
     return new_messages
 
 

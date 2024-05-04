@@ -2355,6 +2355,59 @@ def test_completion_with_fallbacks():
 
 
 # test_completion_with_fallbacks()
+
+
+@pytest.mark.parametrize(
+    "function_call",
+    [
+        [{"role": "function", "name": "get_capital", "content": "Kokoko"}],
+        [
+            {"role": "function", "name": "get_capital", "content": "Kokoko"},
+            {"role": "function", "name": "get_capital", "content": "Kokoko"},
+        ],
+    ],
+)
+def test_completion_anthropic_hanging(function_call):
+    litellm.modify_params = True
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the capital of fictional country Ubabababababaaba? Use your tools.",
+        },
+        {
+            "role": "assistant",
+            "function_call": {
+                "name": "get_capital",
+                "arguments": '{"country": "Ubabababababaaba"}',
+            },
+        },
+    ]
+    messages = messages + function_call
+    litellm.completion(
+        model="claude-3-haiku-20240307",
+        messages=messages,
+        tools=[
+            {
+                "function": {
+                    "name": "get_capital",
+                    "description": "Get the capital of a country",
+                    "parameters": {
+                        "title": "GetCapitalToolArgs",
+                        "type": "object",
+                        "properties": {
+                            "country": {"title": "Country", "type": "string"}
+                        },
+                        "required": ["country"],
+                    },
+                },
+                "type": "function",
+            }
+        ],
+        tool_choice="auto",
+        temperature=0.0,
+    )
+
+
 def test_completion_anyscale_api():
     try:
         # litellm.set_verbose=True

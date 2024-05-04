@@ -93,6 +93,28 @@ class Function(TypedDict, total=False):
     """The name of the function to call."""
 
 
+class ChatCompletionToolMessageParam(TypedDict, total=False):
+    content: Required[str]
+    """The contents of the tool message."""
+
+    role: Required[Literal["tool"]]
+    """The role of the messages author, in this case `tool`."""
+
+    tool_call_id: Required[str]
+    """Tool call that this message is responding to."""
+
+
+class ChatCompletionFunctionMessageParam(TypedDict, total=False):
+    content: Required[Optional[str]]
+    """The contents of the function message."""
+
+    name: Required[str]
+    """The name of the function to call."""
+
+    role: Required[Literal["function"]]
+    """The role of the messages author, in this case `function`."""
+
+
 class ChatCompletionMessageToolCallParam(TypedDict, total=False):
     id: Required[str]
     """The ID of the tool call."""
@@ -136,6 +158,8 @@ ChatCompletionMessageParam = Union[
     ChatCompletionSystemMessageParam,
     ChatCompletionUserMessageParam,
     ChatCompletionAssistantMessageParam,
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionToolMessageParam,
 ]
 
 
