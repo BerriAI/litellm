@@ -6,7 +6,6 @@
 # +-----------------------------------------------+
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
-
 import sys, re, binascii, struct
 import litellm
 import dotenv, json, traceback, threading, base64, ast
@@ -67,6 +66,7 @@ from .integrations.supabase import Supabase
 from .integrations.lunary import LunaryLogger
 from .integrations.prompt_layer import PromptLayerLogger
 from .integrations.langsmith import LangsmithLogger
+from .integrations.logfire_logger import LogfireLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
@@ -128,6 +128,7 @@ heliconeLogger = None
 athinaLogger = None
 promptLayerLogger = None
 langsmithLogger = None
+logfireLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
@@ -1059,7 +1060,7 @@ class CallTypes(Enum):
 
 # Logging function -> log the exact model details + what's being sent | Non-BlockingP
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb, lunaryLogger
+    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger
 
     def __init__(
         self,
@@ -1628,6 +1629,33 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "logfire":
+                        global logfireLogger
+                        verbose_logger.debug("reaches logfire for success logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                break
+                            else:
+                                print_verbose("reaches logfire for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+                        
+                        logfireLogger.log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                            user_id=kwargs.get("user", None),
+                        )
+
                     if callback == "lunary":
                         print_verbose("reaches lunary for logging!")
                         model = self.model
@@ -3974,12 +4002,10 @@ def calculage_img_tokens(
         tile_tokens = (base_tokens * 2) * tiles_needed_high_res
         total_tokens = base_tokens + tile_tokens
         return total_tokens
-    
+
 
 def create_pretrained_tokenizer(
-    identifier: str, 
-    revision="main", 
-    auth_token: Optional[str] = None
+    identifier: str, revision="main", auth_token: Optional[str] = None
 ):
     """
     Creates a tokenizer from an existing file on a HuggingFace repository to be used with `token_counter`.
@@ -3993,7 +4019,9 @@ def create_pretrained_tokenizer(
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer = Tokenizer.from_pretrained(identifier, revision=revision, auth_token=auth_token)
+    tokenizer = Tokenizer.from_pretrained(
+        identifier, revision=revision, auth_token=auth_token
+    )
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -6973,7 +7001,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 def set_callbacks(callback_list, function_id=None):
 
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -7055,6 +7083,8 @@ def set_callbacks(callback_list, function_id=None):
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "langsmith":
                 langsmithLogger = LangsmithLogger()
+            elif callback == "logfire":
+                logfireLogger = LogfireLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
