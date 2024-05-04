@@ -459,10 +459,10 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         setAvailableModelGroups(_array_model_groups);
 
         console.log("array_model_groups:", _array_model_groups)
-
+        let _initial_model_group = "all"
         if (_array_model_groups.length > 0) {
           // set selectedModelGroup to the last model group
-          let _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
+          _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
           console.log("_initial_model_group:", _initial_model_group)
           setSelectedModelGroup(_initial_model_group);
         }
@@ -474,7 +474,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          selectedModelGroup,
+          _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         );
@@ -491,7 +491,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          selectedModelGroup,
+          _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         )
@@ -504,7 +504,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          selectedModelGroup,
+          _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         )
