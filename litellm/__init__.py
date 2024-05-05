@@ -93,6 +93,8 @@ common_cloud_provider_auth_params: dict = {
 use_client: bool = False
 ssl_verify: bool = True
 disable_streaming_logging: bool = False
+use_llm_key_in_header: bool = False
+
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 presidio_ad_hoc_recognizers: Optional[str] = None

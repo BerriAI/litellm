@@ -3577,9 +3577,12 @@ async def chat_completion(
         if "api-version" in query_params:
             data["api_version"] = query_params["api-version"]
 
-        # Reading API KEY From header
-        if req_header_api_key := request.headers.get('X-API-KEY'):
-            data["api_key"] = req_header_api_key
+        # Allow OpenAI and Anthropic's auth headers to be used as api_key
+        if litellm.use_llm_key_in_header or 'api_key' not in data:
+            if auth_bearer := request.headers.get('AUTHORIZATION'):  # OpenAI
+                data['api_key'] = _get_bearer_token(auth_bearer)
+            elif value_of_x_api_key := request.headers.get('X-API-KEY'):  # Anthropic
+                data['api_key'] = value_of_x_api_key
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
