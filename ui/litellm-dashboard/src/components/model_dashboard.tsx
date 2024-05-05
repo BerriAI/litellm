@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall, getCallbacksCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -221,6 +221,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
   });
+
+  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<Record<string, number>>({});
+  const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -523,6 +527,22 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         console.log("slowResponses:", slowResponses)
 
         setSlowResponsesData(slowResponses);
+
+
+        const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
+
+        let router_settings = routerSettingsInfo.router_settings;
+
+        console.log("routerSettingsInfo:", router_settings)
+
+        let model_group_retry_policy = router_settings.model_group_retry_policy;
+        let default_retries = router_settings.num_retries;
+
+        console.log("model_group_retry_policy:", model_group_retry_policy)
+        console.log("default_retries:", default_retries)
+        setModelGroupRetryPolicy(model_group_retry_policy);
+        setDefaultRetry(default_retries);
+
 
 
       } catch (error) {
@@ -1262,7 +1282,12 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             <Text>{key}</Text>
           </td>
           <td>
-            <InputNumber className="ml-5" />
+            
+            <InputNumber 
+              className="ml-5"
+              value={defaultRetry}
+              min={0} step={1}
+            />
           </td>
         </tr>
       ))}
