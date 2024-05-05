@@ -123,7 +123,8 @@ async def test_router_retries_errors(sync_mode, error_type):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error_type", ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"]
+    "error_type",
+    ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"],  #
 )
 async def test_router_retry_policy(error_type):
     from litellm.router import RetryPolicy
