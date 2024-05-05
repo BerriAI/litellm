@@ -585,7 +585,7 @@ def test_router_completion_vertex_exception():
         pytest.fail("Request should have failed - bad api key")
     except Exception as e:
         print("exception: ", e)
-        assert "model: vertex_ai/gemini-pro" in str(e)
+        assert "Model: gemini-pro" in str(e)
         assert "model_group: vertex-gemini-pro" in str(e)
         assert "deployment: vertex_ai/gemini-pro" in str(e)
 
@@ -604,7 +604,7 @@ def test_litellm_completion_vertex_exception():
         pytest.fail("Request should have failed - bad api key")
     except Exception as e:
         print("exception: ", e)
-        assert "model: vertex_ai/gemini-pro" in str(e)
+        assert "Model: gemini-pro" in str(e)
         assert "vertex_project: bad-project" in str(e)
 
 
