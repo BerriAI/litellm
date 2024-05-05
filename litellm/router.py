@@ -87,7 +87,7 @@ class Router:
             RetryPolicy
         ] = None,  # set custom retries for different exceptions
         model_group_retry_policy: Optional[
-            dict[str, RetryPolicy]
+            Dict[str, RetryPolicy]
         ] = {},  # set custom retry policies based on model group
         allowed_fails: Optional[
             int
