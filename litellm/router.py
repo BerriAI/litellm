@@ -1544,6 +1544,10 @@ class Router:
                         num_retries=num_retries,
                     )
                     await asyncio.sleep(_timeout)
+            try:
+                original_exception.message += f"\nNumber Retries = {current_attempt}"
+            except:
+                pass
             raise original_exception
 
     def function_with_fallbacks(self, *args, **kwargs):
@@ -1703,7 +1707,7 @@ class Router:
                     response = original_function(*args, **kwargs)
                     return response
 
-                except Exception as e:
+                except Exception as most_recent_exception:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
@@ -1713,7 +1717,7 @@ class Router:
                         num_retries=num_retries,
                     )
                     time.sleep(_timeout)
-            raise original_exception
+            raise most_recent_exception
 
     ### HELPER FUNCTIONS
 
@@ -1848,7 +1852,7 @@ class Router:
                 exception_status = 500
         _should_retry = litellm._should_retry(status_code=exception_status)
 
-        if updated_fails > self.allowed_fails or _should_retry == False:
+        if updated_fails > self.allowed_fails:
             # get the current cooldown list for that minute
             cooldown_key = f"{current_minute}:cooldown_models"  # group cooldown models by minute to reduce number of redis calls
             cached_value = self.cache.get_cache(key=cooldown_key)
