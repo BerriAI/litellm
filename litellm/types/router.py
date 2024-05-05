@@ -266,3 +266,18 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+
+
+class RetryPolicy(BaseModel):
+    """
+    Use this to set a custom number of retries per exception type
+    If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+    Mapping of Exception type to number of retries
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorRetries: Optional[int] = None
+    AuthenticationErrorRetries: Optional[int] = None
+    TimeoutErrorRetries: Optional[int] = None
+    RateLimitErrorRetries: Optional[int] = None
+    ContentPolicyViolationErrorRetries: Optional[int] = None
