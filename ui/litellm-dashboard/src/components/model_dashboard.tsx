@@ -83,6 +83,17 @@ const provider_map: Record <string, string> = {
 };
 
 
+
+const retry_policy_map: Record <string, string> = {
+  "BadRequestError (400)": "BadRequestErrorRetries", 
+  "AuthenticationError  (401)": "AuthenticationErrorRetries",
+  "TimeoutError (408)": "TimeoutErrorRetries",
+  "RateLimitError (429)": "RateLimitErrorRetries",
+  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries"
+};
+
+
+
 const handleSubmit = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
     /**
@@ -795,6 +806,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           <Tab>Add Model</Tab>
           <Tab><pre>/health Models</pre></Tab>
             <Tab>Model Analytics</Tab>
+            <Tab>Model Retry Settings</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -816,7 +828,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           <TabPanel>
       <Grid>
       <div className="flex items-center">
-        <Text>Filter by Public Model Name</Text>
+      <Text>Filter by Public Model Name</Text>
       <Select
               className="mb-4 mt-2 ml-2 w-50"
               defaultValue="all"
@@ -1213,6 +1225,46 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         yAxisWidth={30}
       />
         </Card>
+            </TabPanel>
+            <TabPanel>
+            <div className="flex items-center">
+              
+            <Text>Filter by Public Model Name</Text>
+
+        <Select
+              className="mb-4 mt-2 ml-2 w-50"
+              defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
+              value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
+              onValueChange={(value) => setSelectedModelGroup(value)}
+            >
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => setSelectedModelGroup(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+            </div>
+            <Card>
+              <Title>
+                Retry Policy for {selectedModelGroup}
+              </Title>
+              {
+                retry_policy_map && Object.keys(retry_policy_map).map((key, idx) => (
+                  <div key={idx}>
+                    <Grid numItems={2}>
+                      <Text>{key}</Text>
+                      <InputNumber />
+
+                    </Grid>
+                    
+                  </div>
+                ))
+              }
+              </Card>
             </TabPanel>
       
       </TabPanels>
