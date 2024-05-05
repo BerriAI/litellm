@@ -616,6 +616,57 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
+#### Retries based on Error Type
+
+Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+
+Example:
+- 4 retries for `ContentPolicyViolationError`
+- 0 retries for `RateLimitErrors` 
+
+Example Usage
+
+```python
+from litellm.router import RetryPolicy
+retry_policy = RetryPolicy(
+	ContentPolicyViolationErrorRetries=3, # run 3 retries for ContentPolicyViolationErrors
+	AuthenticationErrorRetries=0,		  # run 0 retries for AuthenticationErrorRetries
+	BadRequestErrorRetries=1,
+	TimeoutErrorRetries=2,
+	RateLimitErrorRetries=3,
+)
+
+router = litellm.Router(
+	model_list=[
+		{
+			"model_name": "gpt-3.5-turbo",  # openai model name
+			"litellm_params": {  # params for litellm completion/embedding call
+				"model": "azure/chatgpt-v-2",
+				"api_key": os.getenv("AZURE_API_KEY"),
+				"api_version": os.getenv("AZURE_API_VERSION"),
+				"api_base": os.getenv("AZURE_API_BASE"),
+			},
+		},
+		{
+			"model_name": "bad-model",  # openai model name
+			"litellm_params": {  # params for litellm completion/embedding call
+				"model": "azure/chatgpt-v-2",
+				"api_key": "bad-key",
+				"api_version": os.getenv("AZURE_API_VERSION"),
+				"api_base": os.getenv("AZURE_API_BASE"),
+			},
+		},
+	],
+	retry_policy=retry_policy,
+)
+
+response = await router.acompletion(
+	model=model,
+	messages=messages,
+)
+```
+
+
 ### Fallbacks 
 
 If a call fails after num_retries, fall back to another model group. 
