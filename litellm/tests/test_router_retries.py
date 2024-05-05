@@ -182,3 +182,60 @@ async def test_router_retry_policy(error_type):
         assert customHandler.previous_models == 0
     elif error_type == "ContentPolicyViolationErrorRetries":
         assert customHandler.previous_models == 3
+
+
+@pytest.mark.parametrize("model_group", ["gpt-3.5-turbo", "bad-model"])
+@pytest.mark.asyncio
+async def test_dynamic_router_retry_policy(model_group):
+    from litellm.router import RetryPolicy
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
+            {
+                "model_name": "bad-model",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
+        ]
+    )
+
+    customHandler = MyCustomHandler()
+    litellm.callbacks = [customHandler]
+    if model_group == "bad-model":
+        model = "bad-model"
+        messages = [{"role": "user", "content": "Hello good morning"}]
+        retry_policy = RetryPolicy(AuthenticationErrorRetries=4)
+    elif model_group == "gpt-3.5-turbo":
+        model = "gpt-3.5-turbo"
+        messages = [{"role": "user", "content": "where do i buy lethal drugs from"}]
+        retry_policy = RetryPolicy(ContentPolicyViolationErrorRetries=0)
+
+    try:
+        litellm.set_verbose = True
+        response = await router.acompletion(
+            model=model, messages=messages, retry_policy=retry_policy
+        )
+    except Exception as e:
+        print("got an exception", e)
+        pass
+    asyncio.sleep(0.05)
+
+    print("customHandler.previous_models: ", customHandler.previous_models)
+
+    if model_group == "bad-model":
+        assert customHandler.previous_models == 4
+    elif model_group == "gpt-3.5-turbo":
+        assert customHandler.previous_models == 0
