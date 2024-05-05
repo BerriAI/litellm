@@ -1405,10 +1405,10 @@ class OpenAIAssistantsAPI(BaseLLM):
     def get_thread(
         self,
         thread_id: str,
-        api_key: str,
+        api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
-        max_retries: int,
+        max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[OpenAI],
     ) -> Thread:

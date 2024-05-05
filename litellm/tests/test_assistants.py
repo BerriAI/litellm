@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
-from litellm import create_thread
+from litellm import create_thread, get_thread
 from litellm.llms.openai import (
     OpenAIAssistantsAPI,
     MessageData,
@@ -39,6 +39,20 @@ def test_create_thread_litellm() -> Thread:
     return new_thread
 
 
+def test_get_thread_litellm():
+    new_thread = test_create_thread_litellm()
+
+    received_thread = get_thread(
+        custom_llm_provider="openai",
+        thread_id=new_thread.id,
+    )
+
+    assert isinstance(
+        received_thread, Thread
+    ), f"type of thread={type(received_thread)}. Expected Thread-type"
+    return new_thread
+
+
 def test_add_message_litellm():
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
     new_thread = test_create_thread_litellm()
@@ -52,73 +66,6 @@ def test_add_message_litellm():
     print(f"added message: {added_message}")
 
     assert isinstance(added_message, Message)
-
-
-def test_create_thread_openai_direct() -> Thread:
-    openai_api = OpenAIAssistantsAPI()
-
-    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-    new_thread = openai_api.create_thread(
-        messages=[message],  # type: ignore
-        api_key=os.getenv("OPENAI_API_KEY"),  # type: ignore
-        metadata={},
-        api_base=None,
-        timeout=600,
-        max_retries=2,
-        organization=None,
-        client=None,
-    )
-
-    print(f"new_thread: {new_thread}")
-    print(f"type of thread: {type(new_thread)}")
-    assert isinstance(
-        new_thread, Thread
-    ), f"type of thread={type(new_thread)}. Expected Thread-type"
-    return new_thread
-
-
-def test_add_message_openai_direct():
-    openai_api = OpenAIAssistantsAPI()
-    # create thread
-    new_thread = test_create_thread_openai_direct()
-    # add message to thread
-    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-    added_message = openai_api.add_message(
-        thread_id=new_thread.id,
-        message_data=message,
-        api_key=os.getenv("OPENAI_API_KEY"),
-        api_base=None,
-        timeout=600,
-        max_retries=2,
-        organization=None,
-        client=None,
-    )
-
-    print(f"added message: {added_message}")
-
-    assert isinstance(added_message, Message)
-
-
-def test_get_thread_openai_direct():
-    openai_api = OpenAIAssistantsAPI()
-
-    ## create a thread w/ message ###
-    new_thread = test_create_thread()
-
-    retrieved_thread = openai_api.get_thread(
-        thread_id=new_thread.id,
-        api_key=os.getenv("OPENAI_API_KEY"),
-        api_base=None,
-        timeout=600,
-        max_retries=2,
-        organization=None,
-        client=None,
-    )
-
-    assert isinstance(
-        retrieved_thread, Thread
-    ), f"type of thread={type(retrieved_thread)}. Expected Thread-type"
-    return new_thread
 
 
 def test_run_thread_openai_direct():
