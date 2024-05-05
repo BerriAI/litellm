@@ -1438,7 +1438,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         instructions: Optional[str],
         metadata: Optional[object],
         model: Optional[str],
-        stream: Optional[Literal[False]] | Literal[True],
+        stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
         api_key: Optional[str],
         api_base: Optional[str],
