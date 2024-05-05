@@ -3314,4 +3314,5 @@ class Router:
         litellm.__async_success_callback = []
         litellm.failure_callback = []
         litellm._async_failure_callback = []
+        self.retry_policy = None
         self.flush_cache()
