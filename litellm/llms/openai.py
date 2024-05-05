@@ -1,4 +1,13 @@
-from typing import Optional, Union, Any, BinaryIO
+from typing import (
+    Optional,
+    Union,
+    Any,
+    BinaryIO,
+    Literal,
+    Iterable,
+)
+from typing_extensions import override
+from pydantic import BaseModel
 import types, time, json, traceback
 import httpx
 from .base import BaseLLM
@@ -17,6 +26,7 @@ import aiohttp, requests
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
+from ..types.llms.openai import *
 
 
 class OpenAIError(Exception):
@@ -1236,3 +1246,223 @@ class OpenAITextCompletion(BaseLLM):
 
         async for transformed_chunk in streamwrapper:
             yield transformed_chunk
+
+
+class OpenAIAssistantsAPI(BaseLLM):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_openai_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ) -> OpenAI:
+        received_args = locals()
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["base_url"] = v
+                elif v is not None:
+                    data[k] = v
+            openai_client = OpenAI(**data)  # type: ignore
+        else:
+            openai_client = client
+
+        return openai_client
+
+    ### ASSISTANTS ###
+
+    def get_assistants(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI],
+    ) -> SyncCursorPage[Assistant]:
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.assistants.list()
+
+        return response
+
+    ### MESSAGES ###
+
+    def add_message(
+        self,
+        thread_id: str,
+        message_data: MessageData,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ) -> OpenAIMessage:
+
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(
+            thread_id, **message_data
+        )
+
+        response_obj: Optional[OpenAIMessage] = None
+        if getattr(thread_message, "status", None) is None:
+            thread_message.status = "completed"
+            response_obj = OpenAIMessage(**thread_message.dict())
+        else:
+            response_obj = OpenAIMessage(**thread_message.dict())
+        return response_obj
+
+    def get_messages(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ) -> SyncCursorPage[OpenAIMessage]:
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.threads.messages.list(thread_id=thread_id)
+
+        return response
+
+    ### THREADS ###
+
+    def create_thread(
+        self,
+        metadata: Optional[dict],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI],
+        messages: Optional[Iterable[OpenAICreateThreadParamsMessage]],
+    ) -> Thread:
+        """
+        Here's an example:
+        ```
+        from litellm.llms.openai import OpenAIAssistantsAPI, MessageData
+
+        # create thread
+        message: MessageData = {"role": "user", "content": "Hey, how's it going?"}
+        openai_api.create_thread(messages=[message])
+        ```
+        """
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        data = {}
+        if messages is not None:
+            data["messages"] = messages  # type: ignore
+        if metadata is not None:
+            data["metadata"] = metadata  # type: ignore
+
+        message_thread = openai_client.beta.threads.create(**data)  # type: ignore
+
+        return Thread(**message_thread.dict())
+
+    def get_thread(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI],
+    ) -> Thread:
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.threads.retrieve(thread_id=thread_id)
+
+        return Thread(**response.dict())
+
+    def delete_thread(self):
+        pass
+
+    ### RUNS ###
+
+    def run_thread(
+        self,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        stream: Optional[bool],
+        tools: Optional[Iterable[AssistantToolParam]],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI],
+    ) -> Run:
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.threads.runs.create_and_poll(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
+        )
+
+        return response
