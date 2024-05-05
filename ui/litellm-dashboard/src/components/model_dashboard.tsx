@@ -1248,23 +1248,19 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               ))}
             </Select>
             </div>
-            <Card>
+
               <Title>
                 Retry Policy for {selectedModelGroup}
               </Title>
-              {
-                retry_policy_map && Object.keys(retry_policy_map).map((key, idx) => (
-                  <div key={idx}>
-                    <Grid numItems={2}>
-                      <Text>{key}</Text>
-                      <InputNumber />
+              <Text className="mb-6">How many retries should be attempted based on the Exception</Text>
+              {retry_policy_map &&
+  Object.keys(retry_policy_map).map((key, idx) => (
+    <div key={idx} className="flex justify-start">
+      <Text>{key}</Text>
+      <InputNumber className="mr-5" />
+    </div>
+  ))}
 
-                    </Grid>
-                    
-                  </div>
-                ))
-              }
-              </Card>
             </TabPanel>
       
       </TabPanels>
