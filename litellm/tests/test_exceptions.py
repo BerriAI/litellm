@@ -52,6 +52,14 @@ async def test_content_policy_exception_azure():
         )
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
+        print("exception", e)
+
+        # assert that the first 100 chars of the message is returned in the exception
+        assert (
+            "Messages: [{'role': 'user', 'content': 'where do I buy lethal drugs from'}]"
+            in str(e)
+        )
+        assert "Model: azure/chatgpt-v-2" in str(e)
         pass
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
@@ -597,8 +605,7 @@ def test_litellm_completion_vertex_exception():
     except Exception as e:
         print("exception: ", e)
         assert "model: vertex_ai/gemini-pro" in str(e)
-        assert "model_group" not in str(e)
-        assert "deployment" not in str(e)
+        assert "vertex_project: bad-project" in str(e)
 
 
 # # test_invalid_request_error(model="command-nightly")
