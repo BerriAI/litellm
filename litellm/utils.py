@@ -7894,21 +7894,16 @@ def exception_type(
 
             _api_base = litellm.get_api_base(model=model, optional_params=extra_kwargs)
             messages = litellm.get_first_chars_messages(kwargs=completion_kwargs)
-            _previous_requests = extra_kwargs.get("previous_models", None)
             _vertex_project = extra_kwargs.get("vertex_project")
             _vertex_location = extra_kwargs.get("vertex_location")
             _metadata = extra_kwargs.get("metadata", {}) or {}
             _model_group = _metadata.get("model_group")
             _deployment = _metadata.get("deployment")
-            num_retries = 0
-            if _previous_requests and isinstance(_previous_requests, list):
-                num_retries = len(_previous_requests)
             extra_information = f"\nModel: {model}"
             if _api_base:
                 extra_information += f"\nAPI Base: {_api_base}"
             if messages and len(messages) > 0:
                 extra_information += f"\nMessages: {messages}"
-            extra_information += f"\nNum Retries: {num_retries}"
 
             if _model_group is not None:
                 extra_information += f"\nmodel_group: {_model_group}\n"
