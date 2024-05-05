@@ -189,6 +189,11 @@ async def test_router_retry_policy(error_type):
 async def test_dynamic_router_retry_policy(model_group):
     from litellm.router import RetryPolicy
 
+    model_group_retry_policy = {
+        "gpt-3.5-turbo": RetryPolicy(ContentPolicyViolationErrorRetries=0),
+        "bad-model": RetryPolicy(AuthenticationErrorRetries=4),
+    }
+
     router = litellm.Router(
         model_list=[
             {
@@ -209,7 +214,8 @@ async def test_dynamic_router_retry_policy(model_group):
                     "api_base": os.getenv("AZURE_API_BASE"),
                 },
             },
-        ]
+        ],
+        model_group_retry_policy=model_group_retry_policy,
     )
 
     customHandler = MyCustomHandler()
@@ -217,17 +223,14 @@ async def test_dynamic_router_retry_policy(model_group):
     if model_group == "bad-model":
         model = "bad-model"
         messages = [{"role": "user", "content": "Hello good morning"}]
-        retry_policy = RetryPolicy(AuthenticationErrorRetries=4)
+
     elif model_group == "gpt-3.5-turbo":
         model = "gpt-3.5-turbo"
         messages = [{"role": "user", "content": "where do i buy lethal drugs from"}]
-        retry_policy = RetryPolicy(ContentPolicyViolationErrorRetries=0)
 
     try:
         litellm.set_verbose = True
-        response = await router.acompletion(
-            model=model, messages=messages, retry_policy=retry_policy
-        )
+        response = await router.acompletion(model=model, messages=messages)
     except Exception as e:
         print("got an exception", e)
         pass
