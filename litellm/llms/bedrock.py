@@ -20,6 +20,7 @@ from .prompt_templates.factory import (
     contains_tag,
 )
 import httpx
+from urllib.parse import urlparse, urlunparse
 
 
 class BedrockError(Exception):
@@ -541,6 +542,19 @@ def add_custom_header(headers):
     return callback
 
 
+def change_url_for_cf(api_base: str):
+    """Closure to change the host and path after signing."""
+    def callback(request, **kwargs):
+        """Actual callback function that Boto3 will call."""
+        # botocore.awsrequest.AWSRequest
+        api_base_url = urlparse(api_base)
+        old_url = urlparse(request.url)
+        new_path = api_base_url.path.lstrip('/') + old_url.path
+        request.url = urlunparse((api_base_url.scheme, api_base_url.netloc, new_path, old_url.params, old_url.query, old_url.fragment))
+
+    return callback
+
+
 def init_bedrock_client(
     region_name=None,
     aws_access_key_id: Optional[str] = None,
@@ -605,6 +619,11 @@ def init_bedrock_client(
     elif env_aws_bedrock_runtime_endpoint:
         endpoint_url = env_aws_bedrock_runtime_endpoint
     else:
+        endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+
+    real_endpoint_url = None
+    if "gateway.ai.cloudflare.com" in endpoint_url:
+        real_endpoint_url = endpoint_url
         endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
 
     import boto3
@@ -673,6 +692,11 @@ def init_bedrock_client(
         )
     if extra_headers:
         client.meta.events.register('before-sign.bedrock-runtime.*', add_custom_header(extra_headers))
+
+    if real_endpoint_url:
+        client.meta.events.register(
+            "before-send.bedrock-runtime.*", change_url_for_cf(real_endpoint_url)
+        )
 
     return client
 
