@@ -1282,10 +1282,10 @@ class OpenAIAssistantsAPI(BaseLLM):
 
     def get_assistants(
         self,
-        api_key: str,
+        api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
-        max_retries: int,
+        max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[OpenAI],
     ) -> SyncCursorPage[Assistant]:
@@ -1340,10 +1340,10 @@ class OpenAIAssistantsAPI(BaseLLM):
     def get_messages(
         self,
         thread_id: str,
-        api_key: str,
+        api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
-        max_retries: int,
+        max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[OpenAI] = None,
     ) -> SyncCursorPage[OpenAIMessage]:
@@ -1440,10 +1440,10 @@ class OpenAIAssistantsAPI(BaseLLM):
         model: Optional[str],
         stream: Optional[Literal[False]] | Literal[True],
         tools: Optional[Iterable[AssistantToolParam]],
-        api_key: str,
+        api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
-        max_retries: int,
+        max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[OpenAI],
     ) -> Run:
