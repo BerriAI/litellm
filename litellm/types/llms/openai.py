@@ -7,11 +7,10 @@ from typing import (
     Annotated,
     Iterable,
 )
-from typing_extensions import override
+from typing_extensions import override, Required
 from pydantic import BaseModel
 
 from openai.types.beta.threads.message_content import MessageContent
-from openai.types.beta.threads.message_create_params import Attachment
 from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.thread_create_params import (
     Message as OpenAICreateThreadParamsMessage,
@@ -52,6 +51,27 @@ class NotGiven:
 
 
 NOT_GIVEN = NotGiven()
+
+
+class FileSearchToolParam(TypedDict, total=False):
+    type: Required[Literal["file_search"]]
+    """The type of tool being defined: `file_search`"""
+
+
+class CodeInterpreterToolParam(TypedDict, total=False):
+    type: Required[Literal["code_interpreter"]]
+    """The type of tool being defined: `code_interpreter`"""
+
+
+AttachmentTool = Union[CodeInterpreterToolParam, FileSearchToolParam]
+
+
+class Attachment(TypedDict, total=False):
+    file_id: str
+    """The ID of the file to attach to the message."""
+
+    tools: Iterable[AttachmentTool]
+    """The tools to add this file to."""
 
 
 class MessageData(TypedDict):
