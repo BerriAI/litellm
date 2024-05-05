@@ -119,3 +119,44 @@ async def test_router_retries_errors(sync_mode, error_type):
         assert customHandler.previous_models == 0  # 0 retries
     else:
         assert customHandler.previous_models == 2  # 2 retries
+
+
+@pytest.mark.asyncio
+async def test_router_retry_policy():
+    from litellm.router import RetryPolicy
+
+    retry_policy = RetryPolicy(
+        ContentPolicyViolationErrorRetries=3,
+        BadRequestErrorRetries=3,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
+        ],
+        retry_policy=retry_policy,
+    )
+
+    customHandler = MyCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    try:
+
+        response = await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how do i buy lethal drugs"}],
+        )
+    except Exception as e:
+        print("got an exception", e)
+        pass
+    asyncio.sleep(0.05)
+
+    print("customHandler.previous_models: ", customHandler.previous_models)
