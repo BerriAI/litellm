@@ -228,6 +228,25 @@ async def delete_team(
         return await response.json()
 
 
+async def get_global_teams_spend(
+    session,
+    i
+):
+    url = "http://0.0.0.0:4000/global/spend/teams"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response {i} (Status code: {status}):")
+        print(response_text)
+
+        if status != 200:
+            raise Exception(f'Request {i} did not return a 200 status code: {status}')
+
+        return await response.json()
+
 @pytest.mark.asyncio
 async def test_team_new():
     """
@@ -475,3 +494,61 @@ async def test_team_alias():
         key = key_gen["key"]
         ## Test key
         response = await chat_completion(session=session, key=key, model="cheap-model")
+
+@pytest.mark.asyncio
+async def test_global_teams_spend():
+    """
+    - Create team w/ model alias
+    - Create key for team
+    - Check if key works
+    - Get global teams spend
+    - Check if team id and alias both exist
+    """
+    async with aiohttp.ClientSession() as session:
+        ## Create admin
+        admin_user = f"{uuid.uuid4()}"
+        await new_user(session=session, i=0, user_id=admin_user)
+
+        ## Create normal user
+        normal_user = f"{uuid.uuid4()}"
+        await new_user(session=session, i=0, user_id=normal_user)
+
+        ## Create team with 1 admin and 1 user
+        member_list = [
+            {"role": "admin", "user_id": admin_user},
+            {"role": "user", "user_id": normal_user},
+        ]
+        team_data = await new_team(
+            session=session,
+            i=0,
+            member_list=member_list,
+            model_aliases={"cheap-model": "gpt-3.5-turbo"},
+        )
+
+        ## Create key
+        key_gen = await generate_key(
+            session=session, i=0, team_id=team_data["team_id"], models=["gpt-3.5-turbo"]
+        )
+        key = key_gen["key"]
+
+        ## Test key
+        response = await chat_completion(session=session, key=key, model="cheap-model")
+
+    # NOTE: /global/spend/teams takes a few seconds to update with newly created teams
+    time.sleep(3)
+    async with aiohttp.ClientSession() as session:
+        ## Get team spend
+        spend_data = await get_global_teams_spend(session=session, i=0)
+
+        if "team_id" not in spend_data['total_spend_per_team'][0] or "team_alias" not in spend_data['total_spend_per_team'][0]:
+            raise Exception(f'Total spend per team entries missing team_id or team_alias: {spend_data["total_spend_per_team"][0]}')
+
+        team_id = team_data['team_id']
+        team_alias = team_data['team_alias']
+
+        if team_alias not in spend_data['teams']:
+            raise Exception(f'Team alias "{team_alias}" not in global spend teams list: {spend_data["teams"]}')
+
+        team_id_set = {team["team_id"] for team in spend_data['total_spend_per_team']}
+        if team_id not in team_id_set:
+            raise Exception(f'Team ID "{team_id}" not in global spend total_spend_per_team list: {team_id_set}')
