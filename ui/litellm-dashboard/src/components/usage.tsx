@@ -216,7 +216,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             // in total_spend_per_team, replace null team_id with "" and replace null total_spend with 0
 
             total_spend_per_team = total_spend_per_team.map((tspt: any) => {
-              tspt["name"] = tspt["team_id"] || "";
+              tspt["name"] = tspt["team_alias"] || "";
               tspt["value"] = tspt["total_spend"] || 0;
               return tspt;
             })
