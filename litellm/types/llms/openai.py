@@ -14,7 +14,6 @@ from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.thread_create_params import (
     Message as OpenAICreateThreadParamsMessage,
-    ToolResources as OpenAICreateThreadParamsToolResources,
 )
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.threads.run import Run
@@ -51,6 +50,56 @@ class NotGiven:
 
 
 NOT_GIVEN = NotGiven()
+
+
+class ToolResourcesCodeInterpreter(TypedDict, total=False):
+    file_ids: List[str]
+    """
+    A list of [file](https://platform.openai.com/docs/api-reference/files) IDs made
+    available to the `code_interpreter` tool. There can be a maximum of 20 files
+    associated with the tool.
+    """
+
+
+class ToolResourcesFileSearchVectorStore(TypedDict, total=False):
+    file_ids: List[str]
+    """
+    A list of [file](https://platform.openai.com/docs/api-reference/files) IDs to
+    add to the vector store. There can be a maximum of 10000 files in a vector
+    store.
+    """
+
+    metadata: object
+    """Set of 16 key-value pairs that can be attached to a vector store.
+
+    This can be useful for storing additional information about the vector store in
+    a structured format. Keys can be a maximum of 64 characters long and values can
+    be a maxium of 512 characters long.
+    """
+
+
+class ToolResourcesFileSearch(TypedDict, total=False):
+    vector_store_ids: List[str]
+    """
+    The
+    [vector store](https://platform.openai.com/docs/api-reference/vector-stores/object)
+    attached to this thread. There can be a maximum of 1 vector store attached to
+    the thread.
+    """
+
+    vector_stores: Iterable[ToolResourcesFileSearchVectorStore]
+    """
+    A helper to create a
+    [vector store](https://platform.openai.com/docs/api-reference/vector-stores/object)
+    with file_ids and attach it to this thread. There can be a maximum of 1 vector
+    store attached to the thread.
+    """
+
+
+class OpenAICreateThreadParamsToolResources(TypedDict, total=False):
+    code_interpreter: ToolResourcesCodeInterpreter
+
+    file_search: ToolResourcesFileSearch
 
 
 class FileSearchToolParam(TypedDict, total=False):
