@@ -1294,6 +1294,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     </tbody>
   </table>
 }
+<Button className="mt-6 mr-8">
+  Save
+</Button>
 
             </TabPanel>
       
