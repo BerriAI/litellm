@@ -1544,6 +1544,10 @@ class Router:
                         num_retries=num_retries,
                     )
                     await asyncio.sleep(_timeout)
+            try:
+                original_exception.message += f"\nNumber Retries = {current_attempt}"
+            except:
+                pass
             raise original_exception
 
     def function_with_fallbacks(self, *args, **kwargs):
