@@ -1254,12 +1254,21 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               </Title>
               <Text className="mb-6">How many retries should be attempted based on the Exception</Text>
               {retry_policy_map &&
-  Object.keys(retry_policy_map).map((key, idx) => (
-    <div key={idx} className="flex justify-start">
-      <Text>{key}</Text>
-      <InputNumber className="mr-5" />
-    </div>
-  ))}
+  <table>
+    <tbody>
+      {Object.keys(retry_policy_map).map((key, idx) => (
+        <tr key={idx} className="flex justify-between items-center mt-2">
+          <td>
+            <Text>{key}</Text>
+          </td>
+          <td>
+            <InputNumber className="ml-5" />
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+}
 
             </TabPanel>
       
