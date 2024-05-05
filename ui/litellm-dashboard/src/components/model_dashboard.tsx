@@ -1285,7 +1285,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             
             <InputNumber 
               className="ml-5"
-              value={defaultRetry}
+              defaultValue={defaultRetry}
               min={0} step={1}
             />
           </td>
