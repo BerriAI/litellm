@@ -4,7 +4,6 @@ from typing import (
     Any,
     BinaryIO,
     Literal,
-    Annotated,
     Iterable,
 )
 from typing_extensions import override, Required
