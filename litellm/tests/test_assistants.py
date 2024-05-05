@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
+from litellm import create_thread
 from litellm.llms.openai import (
     OpenAIAssistantsAPI,
     MessageData,
@@ -25,7 +26,23 @@ V0 Scope:
 """
 
 
-def test_create_thread() -> Thread:
+def test_create_thread_litellm():
+    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
+    new_thread = create_thread(
+        custom_llm_provider="openai",
+        messages=[message],
+    )
+
+    assert isinstance(
+        new_thread, Thread
+    ), f"type of thread={type(new_thread)}. Expected Thread-type"
+    return new_thread
+
+
+test_create_thread_litellm()
+
+
+def test_create_thread_openai_direct() -> Thread:
     openai_api = OpenAIAssistantsAPI()
 
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
@@ -48,7 +65,7 @@ def test_create_thread() -> Thread:
     return new_thread
 
 
-def test_add_message():
+def test_add_message_openai_direct():
     openai_api = OpenAIAssistantsAPI()
     # create thread
     new_thread = test_create_thread()
@@ -70,7 +87,7 @@ def test_add_message():
     assert isinstance(added_message, Message)
 
 
-def test_get_thread():
+def test_get_thread_openai_direct():
     openai_api = OpenAIAssistantsAPI()
 
     ## create a thread w/ message ###
@@ -92,7 +109,7 @@ def test_get_thread():
     return new_thread
 
 
-def test_run_thread():
+def test_run_thread_openai_direct():
     """
     - Get Assistants
     - Create thread
