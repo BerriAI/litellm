@@ -68,6 +68,40 @@ def test_add_message_litellm():
     assert isinstance(added_message, Message)
 
 
+def test_run_thread_litellm():
+    """
+    - Get Assistants
+    - Create thread
+    - Create run w/ Assistants + Thread
+    """
+    assistants = litellm.get_assistants(custom_llm_provider="openai")
+
+    ## get the first assistant ###
+    assistant_id = assistants.data[0].id
+
+    new_thread = test_create_thread_litellm()
+
+    thread_id = new_thread.id
+
+    # add message to thread
+    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
+    added_message = litellm.add_message(
+        thread_id=new_thread.id, custom_llm_provider="openai", **message
+    )
+
+    run = litellm.run_thread(
+        custom_llm_provider="openai", thread_id=thread_id, assistant_id=assistant_id
+    )
+
+    if run.status == "completed":
+        messages = litellm.get_messages(
+            thread_id=new_thread.id, custom_llm_provider="openai"
+        )
+        assert isinstance(messages.data[0], Message)
+    else:
+        pytest.fail("An unexpected error occurred when running the thread")
+
+
 def test_run_thread_openai_direct():
     """
     - Get Assistants
