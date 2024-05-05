@@ -122,12 +122,14 @@ async def test_router_retries_errors(sync_mode, error_type):
 
 
 @pytest.mark.asyncio
-async def test_router_retry_policy():
+@pytest.mark.parametrize(
+    "error_type", ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"]
+)
+async def test_router_retry_policy(error_type):
     from litellm.router import RetryPolicy
 
     retry_policy = RetryPolicy(
-        ContentPolicyViolationErrorRetries=3,
-        BadRequestErrorRetries=3,
+        ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
     )
 
     router = litellm.Router(
@@ -141,18 +143,33 @@ async def test_router_retry_policy():
                     "api_base": os.getenv("AZURE_API_BASE"),
                 },
             },
+            {
+                "model_name": "bad-model",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
         ],
         retry_policy=retry_policy,
     )
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
+    if error_type == "AuthenticationErrorRetries":
+        model = "bad-model"
+        messages = [{"role": "user", "content": "Hello good morning"}]
+    elif error_type == "ContentPolicyViolationErrorRetries":
+        model = "gpt-3.5-turbo"
+        messages = [{"role": "user", "content": "where do i buy lethal drugs from"}]
 
     try:
-
+        litellm.set_verbose = True
         response = await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hey, how do i buy lethal drugs"}],
+            model=model,
+            messages=messages,
         )
     except Exception as e:
         print("got an exception", e)
@@ -160,3 +177,8 @@ async def test_router_retry_policy():
     asyncio.sleep(0.05)
 
     print("customHandler.previous_models: ", customHandler.previous_models)
+
+    if error_type == "AuthenticationErrorRetries":
+        assert customHandler.previous_models == 0
+    elif error_type == "ContentPolicyViolationErrorRetries":
+        assert customHandler.previous_models == 3
