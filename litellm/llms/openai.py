@@ -1268,6 +1268,8 @@ class OpenAIAssistantsAPI(BaseLLM):
             for k, v in received_args.items():
                 if k == "self" or k == "client":
                     pass
+                elif k == "api_base" and v is not None:
+                    data["base_url"] = v
                 elif v is not None:
                     data[k] = v
             openai_client = OpenAI(**data)  # type: ignore
@@ -1306,10 +1308,10 @@ class OpenAIAssistantsAPI(BaseLLM):
         self,
         thread_id: str,
         message_data: MessageData,
-        api_key: str,
+        api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
-        max_retries: int,
+        max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[OpenAI] = None,
     ) -> OpenAIMessage:

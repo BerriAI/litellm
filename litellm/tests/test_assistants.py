@@ -26,11 +26,11 @@ V0 Scope:
 """
 
 
-def test_create_thread_litellm():
+def test_create_thread_litellm() -> Thread:
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
     new_thread = create_thread(
         custom_llm_provider="openai",
-        messages=[message],
+        messages=[message],  # type: ignore
     )
 
     assert isinstance(
@@ -39,7 +39,19 @@ def test_create_thread_litellm():
     return new_thread
 
 
-test_create_thread_litellm()
+def test_add_message_litellm():
+    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
+    new_thread = test_create_thread_litellm()
+
+    # add message to thread
+    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
+    added_message = litellm.add_message(
+        thread_id=new_thread.id, custom_llm_provider="openai", **message
+    )
+
+    print(f"added message: {added_message}")
+
+    assert isinstance(added_message, Message)
 
 
 def test_create_thread_openai_direct() -> Thread:
@@ -68,7 +80,7 @@ def test_create_thread_openai_direct() -> Thread:
 def test_add_message_openai_direct():
     openai_api = OpenAIAssistantsAPI()
     # create thread
-    new_thread = test_create_thread()
+    new_thread = test_create_thread_openai_direct()
     # add message to thread
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
     added_message = openai_api.add_message(
