@@ -311,7 +311,7 @@ class Router:
         )  # noqa
         self.routing_strategy_args = routing_strategy_args
         self.retry_policy: Optional[RetryPolicy] = retry_policy
-        self.model_group_retry_policy: Optional[dict[str, RetryPolicy]] = (
+        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
             model_group_retry_policy
         )
 
