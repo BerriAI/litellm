@@ -542,7 +542,11 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
-    "vertex_ai": vertex_chat_models + vertex_text_models,
+    "vertex_ai": vertex_chat_models
+    + vertex_text_models
+    + vertex_anthropic_models
+    + vertex_vision_models
+    + vertex_language_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models,
     "petals": petals_models,
@@ -601,7 +605,6 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
-
 from .timeout import timeout
 from .utils import (
     client,
@@ -609,6 +612,8 @@ from .utils import (
     get_optional_params,
     modify_integration,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
     cost_per_token,
     completion_cost,
     supports_function_calling,
@@ -632,6 +637,7 @@ from .utils import (
     get_secret,
     get_supported_openai_params,
     get_api_base,
+    get_first_chars_messages,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -688,3 +694,4 @@ from .exceptions import (
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
+from .assistants.main import *

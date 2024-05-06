@@ -7,7 +7,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
+import os, copy
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -18,6 +18,96 @@ from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.caching import DualCache
 
 ### UNIT TESTS FOR LATENCY ROUTING ###
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_latency_memory_leak(sync_mode):
+    """
+    Test to make sure there's no memory leak caused by lowest latency routing
+
+    - make 10 calls -> check memory
+    - make 11th call -> no change in memory
+    """
+    test_cache = DualCache()
+    model_list = []
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "1234"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/chatgpt-v-2",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 50}}
+    time.sleep(5)
+    end_time = time.time()
+    for _ in range(10):
+        if sync_mode:
+            lowest_latency_logger.log_success_event(
+                response_obj=response_obj,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        else:
+            await lowest_latency_logger.async_log_success_event(
+                response_obj=response_obj,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+    latency_key = f"{model_group}_map"
+    cache_value = copy.deepcopy(
+        test_cache.get_cache(key=latency_key)
+    )  # MAKE SURE NO MEMORY LEAK IN CACHING OBJECT
+
+    if sync_mode:
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    new_cache_value = test_cache.get_cache(key=latency_key)
+    # Assert that the size of the cache doesn't grow unreasonably
+    assert get_size(new_cache_value) <= get_size(
+        cache_value
+    ), f"Memory leak detected in function call! new_cache size={get_size(new_cache_value)}, old cache size={get_size(cache_value)}"
+
+
+def get_size(obj, seen=None):
+    # From https://goshippo.com/blog/measure-real-size-any-python-object/
+    # Recursively finds size of objects
+    size = sys.getsizeof(obj)
+    if seen is None:
+        seen = set()
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0
+    seen.add(obj_id)
+    if isinstance(obj, dict):
+        size += sum([get_size(v, seen) for v in obj.values()])
+        size += sum([get_size(k, seen) for k in obj.keys()])
+    elif hasattr(obj, "__dict__"):
+        size += get_size(obj.__dict__, seen)
+    elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, bytearray)):
+        size += sum([get_size(i, seen) for i in obj])
+    return size
 
 
 def test_latency_updated():
