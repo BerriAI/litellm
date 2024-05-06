@@ -182,7 +182,7 @@ class SlackAlerting:
                 and "metadata" in kwargs["litellm_params"]
             ):
                 _metadata = kwargs["litellm_params"]["metadata"]
-                request_info = self._add_key_name_and_team_to_alert(
+                request_info = litellm.utils._add_key_name_and_team_to_alert(
                     request_info=request_info, metadata=_metadata
                 )
 
@@ -259,7 +259,7 @@ class SlackAlerting:
                     _metadata = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
 
-                    request_info = self._add_key_name_and_team_to_alert(
+                    request_info = litellm.utils._add_key_name_and_team_to_alert(
                         request_info=request_info, metadata=_metadata
                     )
 
@@ -476,14 +476,3 @@ class SlackAlerting:
             pass
         else:
             print("Error sending slack alert. Error=", response.text)  # noqa
-
-    def _add_key_name_and_team_to_alert(self, request_info: str, metadata: dict) -> str:
-        _api_key_name = metadata.get("user_api_key_alias", "")
-        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", "")
-        if _api_key_name is not None:
-            request_info = (
-                f"\n\n\n*API Key Info* \n- Key Name: `{_api_key_name}`\n- Team: `{_user_api_key_team_alias}`\n\n"
-                + request_info
-            )
-
-        return request_info
