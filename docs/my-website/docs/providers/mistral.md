@@ -47,6 +47,7 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 | Model Name     | Function Call                                                |
 |----------------|--------------------------------------------------------------|
 | Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` |
+| Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`|
 | Mistral Large  | `completion(model="mistral/mistral-large-latest", messages)` |
 | Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      |
 | Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    |
