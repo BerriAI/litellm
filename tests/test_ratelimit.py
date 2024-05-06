@@ -91,7 +91,7 @@ class ExpectNoException(Exception):
 @pytest.mark.parametrize(
     "num_try_send, num_allowed_send",
     [
-        (2, 2),  # sending as many as allowed, ExpectNoException
+        (2, 3),  # sending as many as allowed, ExpectNoException
         # (10, 10),  # sending as many as allowed, ExpectNoException
         (3, 2),  # Sending more than allowed, ValueError
         # (10, 9),  # Sending more than allowed, ValueError

@@ -2,7 +2,7 @@
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug, verbose_logger
+from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -22,6 +22,7 @@ success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+_custom_logger_compatible_callbacks: list = ["openmeter"]
 _langfuse_default_tags: Optional[
     List[
         Literal[
@@ -45,6 +46,7 @@ _async_failure_callback: List[Callable] = (
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
+turn_off_message_logging: Optional[bool] = False
 ## end of callbacks #############
 
 email: Optional[str] = (
@@ -58,6 +60,7 @@ max_tokens = 256  # OpenAI Defaults
 drop_params = False
 modify_params = False
 retry = True
+### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -76,6 +79,10 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+common_cloud_provider_auth_params: dict = {
+    "params": ["project", "region_name", "token"],
+    "providers": ["vertex_ai", "bedrock", "watsonx", "azure"],
+}
 use_client: bool = False
 ssl_verify: bool = True
 disable_streaming_logging: bool = False
@@ -535,7 +542,11 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
-    "vertex_ai": vertex_chat_models + vertex_text_models,
+    "vertex_ai": vertex_chat_models
+    + vertex_text_models
+    + vertex_anthropic_models
+    + vertex_vision_models
+    + vertex_language_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models,
     "petals": petals_models,
@@ -594,7 +605,6 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
-
 from .timeout import timeout
 from .utils import (
     client,
@@ -602,6 +612,8 @@ from .utils import (
     get_optional_params,
     modify_integration,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
     cost_per_token,
     completion_cost,
     supports_function_calling,
@@ -625,6 +637,7 @@ from .utils import (
     get_secret,
     get_supported_openai_params,
     get_api_base,
+    get_first_chars_messages,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -654,6 +667,7 @@ from .llms.bedrock import (
     AmazonLlamaConfig,
     AmazonStabilityConfig,
     AmazonMistralConfig,
+    AmazonBedrockGlobalConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
@@ -680,3 +694,4 @@ from .exceptions import (
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
+from .assistants.main import *

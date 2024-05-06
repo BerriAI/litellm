@@ -422,6 +422,9 @@ class LiteLLM_ModelTable(LiteLLMBase):
     created_by: str
     updated_by: str
 
+    class Config:
+        protected_namespaces = ()
+
 
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
@@ -485,6 +488,9 @@ class TeamBase(LiteLLMBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
 
+    class Config:
+        protected_namespaces = ()
+
 
 class GlobalEndUsersSpend(LiteLLMBase):
     api_key: Optional[str] = None
@@ -534,6 +540,9 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
 
+    class Config:
+        protected_namespaces = ()
+
     @root_validator(pre=True)
     def set_model_info(cls, values):
         dict_fields = [
@@ -569,6 +578,9 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+
+    class Config:
+        protected_namespaces = ()
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -898,6 +910,20 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
+
+
+class LiteLLM_ErrorLogs(LiteLLMBase):
+    request_id: Optional[str] = str(uuid.uuid4())
+    api_base: Optional[str] = ""
+    model_group: Optional[str] = ""
+    litellm_model_name: Optional[str] = ""
+    model_id: Optional[str] = ""
+    request_kwargs: Optional[dict] = {}
+    exception_type: Optional[str] = ""
+    status_code: Optional[str] = ""
+    exception_string: Optional[str] = ""
+    startTime: Union[str, datetime, None]
+    endTime: Union[str, datetime, None]
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
