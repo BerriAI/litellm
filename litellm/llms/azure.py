@@ -151,7 +151,7 @@ class AzureChatCompletion(BaseLLM):
         api_type: str,
         azure_ad_token: str,
         print_verbose: Callable,
-        timeout,
+        timeout: Union[float, httpx.Timeout],
         logging_obj,
         optional_params,
         litellm_params,

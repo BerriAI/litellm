@@ -42,6 +42,7 @@ from litellm.types.router import (
     RouterErrors,
     updateDeployment,
     updateLiteLLMParams,
+    RetryPolicy,
 )
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -82,6 +83,12 @@ class Router:
         model_group_alias: Optional[dict] = {},
         enable_pre_call_checks: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
+        retry_policy: Optional[
+            RetryPolicy
+        ] = None,  # set custom retries for different exceptions
+        model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = {},  # set custom retry policies based on model group
         allowed_fails: Optional[
             int
         ] = None,  # Number of times a deployment can failbefore being added to cooldown
@@ -303,6 +310,10 @@ class Router:
             f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
         )  # noqa
         self.routing_strategy_args = routing_strategy_args
+        self.retry_policy: Optional[RetryPolicy] = retry_policy
+        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
+            model_group_retry_policy
+        )
 
     def routing_strategy_init(self, routing_strategy: str, routing_strategy_args: dict):
         if routing_strategy == "least-busy":
@@ -375,7 +386,9 @@ class Router:
         except Exception as e:
             raise e
 
-    def _completion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+    def _completion(
+        self, model: str, messages: List[Dict[str, str]], **kwargs
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         model_name = None
         try:
             # pick the one that is available (lowest TPM/RPM)
@@ -438,7 +451,9 @@ class Router:
             )
             raise e
 
-    async def acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+    async def acompletion(
+        self, model: str, messages: List[Dict[str, str]], **kwargs
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -454,7 +469,9 @@ class Router:
         except Exception as e:
             raise e
 
-    async def _acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+    async def _acompletion(
+        self, model: str, messages: List[Dict[str, str]], **kwargs
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         """
         - Get an available deployment
         - call it with a semaphore over the call
@@ -1455,48 +1472,24 @@ class Router:
             ):
                 raise original_exception
             ### RETRY
-            #### check if it should retry + back-off if required
-            # if "No models available" in str(
-            #     e
-            # ) or RouterErrors.no_deployments_available.value in str(e):
-            #     timeout = litellm._calculate_retry_after(
-            #         remaining_retries=num_retries,
-            #         max_retries=num_retries,
-            #         min_timeout=self.retry_after,
-            #     )
-            #     await asyncio.sleep(timeout)
-            # elif RouterErrors.user_defined_ratelimit_error.value in str(e):
-            #     raise e  # don't wait to retry if deployment hits user-defined rate-limit
 
-            # elif hasattr(original_exception, "status_code") and litellm._should_retry(
-            #     status_code=original_exception.status_code
-            # ):
-            #     if hasattr(original_exception, "response") and hasattr(
-            #         original_exception.response, "headers"
-            #     ):
-            #         timeout = litellm._calculate_retry_after(
-            #             remaining_retries=num_retries,
-            #             max_retries=num_retries,
-            #             response_headers=original_exception.response.headers,
-            #             min_timeout=self.retry_after,
-            #         )
-            #     else:
-            #         timeout = litellm._calculate_retry_after(
-            #             remaining_retries=num_retries,
-            #             max_retries=num_retries,
-            #             min_timeout=self.retry_after,
-            #         )
-            #     await asyncio.sleep(timeout)
-            # else:
-            #     raise original_exception
-
-            ### RETRY
             _timeout = self._router_should_retry(
                 e=original_exception,
                 remaining_retries=num_retries,
                 num_retries=num_retries,
             )
             await asyncio.sleep(_timeout)
+
+            if (
+                self.retry_policy is not None
+                or self.model_group_retry_policy is not None
+            ):
+                # get num_retries from retry policy
+                _retry_policy_retries = self.get_num_retries_from_retry_policy(
+                    exception=original_exception, model_group=kwargs.get("model")
+                )
+                if _retry_policy_retries is not None:
+                    num_retries = _retry_policy_retries
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
@@ -1524,6 +1517,10 @@ class Router:
                         num_retries=num_retries,
                     )
                     await asyncio.sleep(_timeout)
+            try:
+                original_exception.message += f"\nNumber Retries = {current_attempt}"
+            except:
+                pass
             raise original_exception
 
     def function_with_fallbacks(self, *args, **kwargs):
@@ -2590,6 +2587,16 @@ class Router:
                     return model
         return None
 
+    def get_model_info(self, id: str) -> Optional[dict]:
+        """
+        For a given model id, return the model info
+        """
+        for model in self.model_list:
+            if "model_info" in model and "id" in model["model_info"]:
+                if id == model["model_info"]["id"]:
+                    return model
+        return None
+
     def get_model_ids(self):
         ids = []
         for model in self.model_list:
@@ -2659,13 +2666,18 @@ class Router:
             "cooldown_time",
         ]
 
+        _existing_router_settings = self.get_settings()
         for var in kwargs:
             if var in _allowed_settings:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
                 else:
-                    if var == "routing_strategy":
+                    # only run routing strategy init if it has changed
+                    if (
+                        var == "routing_strategy"
+                        and _existing_router_settings["routing_strategy"] != kwargs[var]
+                    ):
                         self.routing_strategy_init(
                             routing_strategy=kwargs[var],
                             routing_strategy_args=kwargs.get(
@@ -2904,15 +2916,10 @@ class Router:
                 m for m in self.model_list if m["litellm_params"]["model"] == model
             ]
 
-        verbose_router_logger.debug(
-            f"initial list of deployments: {healthy_deployments}"
-        )
+        litellm.print_verbose(f"initial list of deployments: {healthy_deployments}")
 
-        verbose_router_logger.debug(
-            f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}"
-        )
         if len(healthy_deployments) == 0:
-            raise ValueError(f"No healthy deployment available, passed model={model}")
+            raise ValueError(f"No healthy deployment available, passed model={model}. ")
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -3238,6 +3245,53 @@ class Router:
         except Exception as e:
             verbose_router_logger.error(f"Error in _track_deployment_metrics: {str(e)}")
 
+    def get_num_retries_from_retry_policy(
+        self, exception: Exception, model_group: Optional[str] = None
+    ):
+        """
+        BadRequestErrorRetries: Optional[int] = None
+        AuthenticationErrorRetries: Optional[int] = None
+        TimeoutErrorRetries: Optional[int] = None
+        RateLimitErrorRetries: Optional[int] = None
+        ContentPolicyViolationErrorRetries: Optional[int] = None
+        """
+        # if we can find the exception then in the retry policy -> return the number of retries
+        retry_policy = self.retry_policy
+        if (
+            self.model_group_retry_policy is not None
+            and model_group is not None
+            and model_group in self.model_group_retry_policy
+        ):
+            retry_policy = self.model_group_retry_policy.get(model_group, None)
+
+        if retry_policy is None:
+            return None
+        if (
+            isinstance(exception, litellm.BadRequestError)
+            and retry_policy.BadRequestErrorRetries is not None
+        ):
+            return retry_policy.BadRequestErrorRetries
+        if (
+            isinstance(exception, litellm.AuthenticationError)
+            and retry_policy.AuthenticationErrorRetries is not None
+        ):
+            return retry_policy.AuthenticationErrorRetries
+        if (
+            isinstance(exception, litellm.Timeout)
+            and retry_policy.TimeoutErrorRetries is not None
+        ):
+            return retry_policy.TimeoutErrorRetries
+        if (
+            isinstance(exception, litellm.RateLimitError)
+            and retry_policy.RateLimitErrorRetries is not None
+        ):
+            return retry_policy.RateLimitErrorRetries
+        if (
+            isinstance(exception, litellm.ContentPolicyViolationError)
+            and retry_policy.ContentPolicyViolationErrorRetries is not None
+        ):
+            return retry_policy.ContentPolicyViolationErrorRetries
+
     def flush_cache(self):
         litellm.cache = None
         self.cache.flush_cache()
@@ -3248,4 +3302,5 @@ class Router:
         litellm.__async_success_callback = []
         litellm.failure_callback = []
         litellm._async_failure_callback = []
+        self.retry_policy = None
         self.flush_cache()
