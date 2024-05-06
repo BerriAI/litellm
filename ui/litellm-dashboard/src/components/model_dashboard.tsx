@@ -16,8 +16,8 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
-import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
+import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
 import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -206,6 +206,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [allExceptions, setAllExceptions] = useState<any[]>([]);
   const [failureTableData, setFailureTableData] = useState<any[]>([]);
   const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
+    to: new Date(),
+  });
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -454,11 +458,25 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
         setAvailableModelGroups(_array_model_groups);
 
+        console.log("array_model_groups:", _array_model_groups)
+        let _initial_model_group = "all"
+        if (_array_model_groups.length > 0) {
+          // set selectedModelGroup to the last model group
+          _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
+          console.log("_initial_model_group:", _initial_model_group)
+          setSelectedModelGroup(_initial_model_group);
+        }
+
+        console.log("selectedModelGroup:", selectedModelGroup)
+        
+
         const modelMetricsResponse = await modelMetricsCall(
           accessToken,
           userID,
           userRole,
-          null
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
         );
 
         console.log("Model metrics response:", modelMetricsResponse);
@@ -473,7 +491,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          null
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
         )
         console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
@@ -484,47 +504,15 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           accessToken,
           userID,
           userRole,
-          null
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
         )
 
         console.log("slowResponses:", slowResponses)
 
         setSlowResponsesData(slowResponses);
 
-
-        // let modelMetricsData = modelMetricsResponse.data;
-        // let successdeploymentToSuccess: Record<string, number> = {};
-        // for  (let i = 0; i < modelMetricsData.length; i++) {
-        //   let element = modelMetricsData[i];
-        //   let _model_name = element.model;
-        //   let _num_requests = element.num_requests;
-        //   successdeploymentToSuccess[_model_name] = _num_requests
-        // }
-        // console.log("successdeploymentToSuccess:", successdeploymentToSuccess)
-        
-        // let failureTableData = [];
-        // let _failureData = modelExceptionsResponse.data;
-        // for (let i = 0; i < _failureData.length; i++) {
-        //   const model = _failureData[i];
-        //   let _model_name = model.model;
-        //   let total_exceptions = model.total_exceptions;
-        //   let total_Requests = successdeploymentToSuccess[_model_name];
-        //   if (total_Requests == null) {
-        //     total_Requests = 0
-        //   }
-        //   let _data = {
-        //     model: _model_name,
-        //     total_exceptions: total_exceptions,
-        //     total_Requests: total_Requests,
-        //     failure_rate: total_Requests / total_exceptions
-        //   }
-        //   failureTableData.push(_data);
-        //   // sort failureTableData by failure_rate
-        //   failureTableData.sort((a, b) => b.failure_rate - a.failure_rate);
-        
-        //   setFailureTableData(failureTableData);
-        //   console.log("failureTableData:", failureTableData);
-        // }
 
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -678,16 +666,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   };
 
 
-  const updateModelMetrics = async (modelGroup: string | null) => {
+  const updateModelMetrics = async (modelGroup: string | null, startTime: Date | undefined, endTime: Date | undefined) => {
     console.log("Updating model metrics for group:", modelGroup);
-    if (!accessToken || !userID || !userRole) {
+    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
       return
     }
+    console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime)
     setSelectedModelGroup(modelGroup);  // If you want to store the selected model group in state
 
   
     try {
-      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup);
+      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup, startTime.toISOString(), endTime.toISOString());
       console.log("Model metrics response:", modelMetricsResponse);
   
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
@@ -698,7 +687,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         accessToken,
         userID,
         userRole,
-        modelGroup
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
       )
       console.log("Model exceptions response:", modelExceptionsResponse);
       setModelExceptions(modelExceptionsResponse.data);
@@ -709,7 +700,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         accessToken,
         userID,
         userRole,
-        modelGroup
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
       )
 
       console.log("slowResponses:", slowResponses)
@@ -1118,20 +1111,47 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         </Card>
       </TabPanel>
       <TabPanel>
-              <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p>
-            <Select
-              className="mb-4 mt-2"
-            >
-              {availableModelGroups.map((group, idx) => (
-                <SelectItem 
-                  key={idx} 
-                  value={group}
-                  onClick={() => updateModelMetrics(group)}
-                >
-                  {group}
-                </SelectItem>
-              ))}
-            </Select>
+              {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
+            
+            <Grid numItems={2} className="mt-2">
+              <Col>
+              <Text>Select Time Range</Text>
+                <DateRangePicker 
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateModelMetrics(selectedModelGroup, value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+                />
+              </Col>
+              <Col>
+              <Text>Select Model Group</Text>
+                <Select
+                className="mb-4 mt-2"
+                defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
+                value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
+              >
+                {availableModelGroups.map((group, idx) => (
+                  <SelectItem 
+                    key={idx} 
+                    value={group}
+                    onClick={() => updateModelMetrics(group, dateValue.from, dateValue.to)}
+                  >
+                    {group}
+                  </SelectItem>
+                ))}
+              </Select>
+
+              </Col>
+
+              
+          
+
+            </Grid>
+            
+
+
 
             <Grid numItems={2}>
               <Col>

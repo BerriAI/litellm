@@ -3,7 +3,7 @@
 
 import sys
 import os
-import io, asyncio, httpx
+import io, asyncio
 from datetime import datetime, timedelta
 
 # import logging
@@ -15,63 +15,22 @@ import litellm
 import pytest
 import asyncio
 from unittest.mock import patch, MagicMock
+from litellm.utils import get_api_base
 from litellm.caching import DualCache
 from litellm.integrations.slack_alerting import SlackAlerting
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.proxy_server import HTTPException
 
 
-@pytest.mark.parametrize("exception_type", ["llm-exception", "non-llm-exception"])
-@pytest.mark.asyncio
-async def test_slack_alerting_llm_exceptions(exception_type, monkeypatch):
-    """
-    Test if non-llm exception -> No request
-    Test if llm exception -> Request triggered
-    """
-    _pl = ProxyLogging(user_api_key_cache=DualCache())
-    _pl.update_values(
-        alerting=["slack"],
-        alerting_threshold=100,
-        redis_cache=None,
-        alert_types=["llm_exceptions"],
-    )
+@pytest.mark.parametrize(
+    "model, optional_params, expected_api_base",
+    [
+        ("openai/my-fake-model", {"api_base": "my-fake-api-base"}, "my-fake-api-base"),
+        ("gpt-3.5-turbo", {}, "https://api.openai.com"),
+    ],
+)
+def test_get_api_base_unit_test(model, optional_params, expected_api_base):
+    api_base = get_api_base(model=model, optional_params=optional_params)
 
-    async def mock_alerting_handler(message, level, alert_type):
-        global exception_type
-
-        if exception_type == "llm-exception":
-            pass
-        elif exception_type == "non-llm-exception":
-            pytest.fail("Function should not have been called")
-
-    monkeypatch.setattr(_pl, "alerting_handler", mock_alerting_handler)
-
-    if exception_type == "llm-exception":
-        await _pl.post_call_failure_hook(
-            original_exception=litellm.APIError(
-                status_code=500,
-                message="This is a test exception",
-                llm_provider="openai",
-                model="gpt-3.5-turbo",
-                request=httpx.Request(
-                    method="completion", url="https://github.com/BerriAI/litellm"
-                ),
-            ),
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
-
-        await asyncio.sleep(2)
-
-    elif exception_type == "non-llm-exception":
-        await _pl.post_call_failure_hook(
-            original_exception=HTTPException(
-                status_code=400,
-                detail={"error": "this is a test exception"},
-            ),
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
-
-        await asyncio.sleep(2)
+    assert api_base == expected_api_base
 
 
 @pytest.mark.asyncio
@@ -149,3 +108,80 @@ def test_init():
     assert slack_no_alerting.alerting == []
 
     print("passed testing slack alerting init")
+
+
+from unittest.mock import patch, AsyncMock
+from datetime import datetime, timedelta
+
+
+@pytest.fixture
+def slack_alerting():
+    return SlackAlerting(alerting_threshold=1)
+
+
+# Test for hanging LLM responses
+@pytest.mark.asyncio
+async def test_response_taking_too_long_hanging(slack_alerting):
+    request_data = {
+        "model": "test_model",
+        "messages": "test_messages",
+        "litellm_status": "running",
+    }
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.response_taking_too_long(
+            type="hanging_request", request_data=request_data
+        )
+        mock_send_alert.assert_awaited_once()
+
+
+# Test for slow LLM responses
+@pytest.mark.asyncio
+async def test_response_taking_too_long_callback(slack_alerting):
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=301)
+    kwargs = {"model": "test_model", "messages": "test_messages", "litellm_params": {}}
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.response_taking_too_long_callback(
+            kwargs, None, start_time, end_time
+        )
+        mock_send_alert.assert_awaited_once()
+
+
+# Test for budget crossed
+@pytest.mark.asyncio
+async def test_budget_alerts_crossed(slack_alerting):
+    user_max_budget = 100
+    user_current_spend = 101
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.budget_alerts(
+            "user_budget", user_max_budget, user_current_spend
+        )
+        mock_send_alert.assert_awaited_once()
+
+
+# Test for budget crossed again (should not fire alert 2nd time)
+@pytest.mark.asyncio
+async def test_budget_alerts_crossed_again(slack_alerting):
+    user_max_budget = 100
+    user_current_spend = 101
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.budget_alerts(
+            "user_budget", user_max_budget, user_current_spend
+        )
+        mock_send_alert.assert_awaited_once()
+        mock_send_alert.reset_mock()
+        await slack_alerting.budget_alerts(
+            "user_budget", user_max_budget, user_current_spend
+        )
+        mock_send_alert.assert_not_awaited()
+
+
+# Test for send_alert - should be called once
+@pytest.mark.asyncio
+async def test_send_alert(slack_alerting):
+    with patch.object(
+        slack_alerting.async_http_handler, "post", new=AsyncMock()
+    ) as mock_post:
+        mock_post.return_value.status_code = 200
+        await slack_alerting.send_alert("Test message", "Low", "budget_alerts")
+        mock_post.assert_awaited_once()

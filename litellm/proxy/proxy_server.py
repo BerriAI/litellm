@@ -3658,6 +3658,7 @@ async def chat_completion(
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
 
         # Post Call Processing
         if llm_router is not None:
@@ -3670,6 +3671,7 @@ async def chat_completion(
             custom_headers = {
                 "x-litellm-model-id": model_id,
                 "x-litellm-cache-key": cache_key,
+                "x-litellm-model-api-base": api_base,
             }
             selected_data_generator = select_data_generator(
                 response=response, user_api_key_dict=user_api_key_dict
@@ -3682,6 +3684,7 @@ async def chat_completion(
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -7549,7 +7552,7 @@ async def model_metrics(
         FROM
             "LiteLLM_SpendLogs"
         WHERE
-            "startTime" >= NOW() - INTERVAL '30 days'
+            "startTime" BETWEEN $2::timestamp AND $3::timestamp
             AND "model" = $1 AND "cache_hit" != 'True'
         GROUP BY
             api_base,
@@ -7650,6 +7653,8 @@ FROM
 WHERE
     "model" = $2
     AND "cache_hit" != 'True'
+    AND "startTime" >= $3::timestamp
+    AND "startTime" <= $4::timestamp
 GROUP BY
     api_base
 ORDER BY
@@ -7657,7 +7662,7 @@ ORDER BY
     """
 
     db_response = await prisma_client.db.query_raw(
-        sql_query, alerting_threshold, _selected_model_group
+        sql_query, alerting_threshold, _selected_model_group, startTime, endTime
     )
 
     if db_response is not None:
@@ -7703,7 +7708,7 @@ async def model_metrics_exceptions(
                 exception_type,
                 COUNT(*) AS num_exceptions
             FROM "LiteLLM_ErrorLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp
+            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
         )
         SELECT 
@@ -7715,7 +7720,9 @@ async def model_metrics_exceptions(
         ORDER BY total_exceptions DESC
         LIMIT 200;
     """
-    db_response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
+    db_response = await prisma_client.db.query_raw(
+        sql_query, startTime, endTime, _selected_model_group
+    )
     response: List[dict] = []
     exception_types = set()
 
@@ -8708,11 +8715,11 @@ async def update_config(config_info: ConfigYAML):
                 # overwrite existing settings with updated values
                 if k == "alert_to_webhook_url":
                     # check if slack is already enabled. if not, enable it
-                    if "slack" not in _existing_settings:
-                        if "alerting" not in _existing_settings:
+                    if "alerting" not in _existing_settings:
+                        _existing_settings["alerting"] = ["slack"]
+                    elif isinstance(_existing_settings["alerting"], list):
+                        if "slack" not in _existing_settings["alerting"]:
                             _existing_settings["alerting"] = ["slack"]
-                        elif isinstance(_existing_settings["alerting"], list):
-                            _existing_settings["alerting"].append("slack")
                 _existing_settings[k] = v
             config["general_settings"] = _existing_settings
 
@@ -9198,6 +9205,62 @@ def _db_health_readiness_check():
 
 
 @router.get(
+    "/active/callbacks",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def active_callbacks():
+    """
+    Returns a list of active callbacks on litellm.callbacks, litellm.input_callback, litellm.failure_callback, litellm.success_callback
+    """
+    global proxy_logging_obj
+    _alerting = str(general_settings.get("alerting"))
+    # get success callback
+    success_callback_names = []
+    try:
+        # this was returning a JSON of the values in some of the callbacks
+        # all we need is the callback name, hence we do str(callback)
+        success_callback_names = [str(x) for x in litellm.success_callback]
+    except:
+        # don't let this block the /health/readiness response, if we can't convert to str -> return litellm.success_callback
+        success_callback_names = litellm.success_callback
+
+    _num_callbacks = (
+        len(litellm.callbacks)
+        + len(litellm.input_callback)
+        + len(litellm.failure_callback)
+        + len(litellm.success_callback)
+        + len(litellm._async_failure_callback)
+        + len(litellm._async_success_callback)
+        + len(litellm._async_input_callback)
+    )
+
+    alerting = proxy_logging_obj.alerting
+    _num_alerting = 0
+    if alerting and isinstance(alerting, list):
+        _num_alerting = len(alerting)
+
+    return {
+        "alerting": _alerting,
+        "litellm.callbacks": [str(x) for x in litellm.callbacks],
+        "litellm.input_callback": [str(x) for x in litellm.input_callback],
+        "litellm.failure_callback": [str(x) for x in litellm.failure_callback],
+        "litellm.success_callback": [str(x) for x in litellm.success_callback],
+        "litellm._async_success_callback": [
+            str(x) for x in litellm._async_success_callback
+        ],
+        "litellm._async_failure_callback": [
+            str(x) for x in litellm._async_failure_callback
+        ],
+        "litellm._async_input_callback": [
+            str(x) for x in litellm._async_input_callback
+        ],
+        "num_callbacks": _num_callbacks,
+        "num_alerting": _num_alerting,
+    }
+
+
+@router.get(
     "/health/readiness",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
@@ -9206,9 +9269,11 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
+    global general_settings
     try:
         # get success callback
         success_callback_names = []
+
         try:
             # this was returning a JSON of the values in some of the callbacks
             # all we need is the callback name, hence we do str(callback)
@@ -9236,7 +9301,6 @@ async def health_readiness():
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = _db_health_readiness_check()
-
             return {
                 "status": "healthy",
                 "db": "connected",
