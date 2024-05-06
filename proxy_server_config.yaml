@@ -52,21 +52,21 @@ model_list:
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
       rpm: 1
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
       rpm: 100
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model-2
       api_key: my-fake-key
-      api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
       rpm: 100
   - model_name: "*"
