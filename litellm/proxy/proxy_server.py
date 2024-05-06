@@ -7303,6 +7303,7 @@ async def add_new_model(
             """
             # encrypt litellm params #
             _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
+            _orignal_litellm_model_name = model_params.litellm_params.model
             for k, v in _litellm_params_dict.items():
                 if isinstance(v, str):
                     encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
@@ -7327,6 +7328,11 @@ async def add_new_model(
 
             await proxy_config.add_deployment(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+            )
+
+            await proxy_logging_obj.slack_alerting_instance.model_added_alert(
+                model_name=model_params.model_name,
+                litellm_model_name=_orignal_litellm_model_name,
             )
 
         else:
