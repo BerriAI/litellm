@@ -8499,7 +8499,13 @@ def exception_type(
                         message=f"GeminiException - {original_exception.message}",
                         llm_provider="palm",
                         model=model,
-                        request=original_exception.request,
+                        request=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
                     )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
@@ -10289,7 +10295,9 @@ class CustomStreamWrapper:
                     try:
                         if len(chunk.parts) > 0:
                             completion_obj["content"] = chunk.parts[0].text
-                        if hasattr(chunk.parts[0], "finish_reason"):
+                        if len(chunk.parts) > 0 and hasattr(
+                            chunk.parts[0], "finish_reason"
+                        ):
                             self.received_finish_reason = chunk.parts[
                                 0
                             ].finish_reason.name
