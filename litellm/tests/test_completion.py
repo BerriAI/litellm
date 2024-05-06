@@ -2,8 +2,6 @@ import sys, os
 import traceback
 from dotenv import load_dotenv
 
-from litellm.utils import ModelResponse
-
 load_dotenv()
 import os, io
 
