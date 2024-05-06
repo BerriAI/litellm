@@ -395,6 +395,7 @@ async def ollama_async_streaming(
                 custom_llm_provider="ollama_chat",
                 logging_obj=logging_obj,
             )
+
             # If format is JSON, this was a function call
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
