@@ -10084,6 +10084,8 @@ class CustomStreamWrapper:
                 response_obj = self.handle_watsonx_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
+                if getattr(model_response, "usage", None) is None:
+                    model_response.usage = Usage()
                 if response_obj.get("prompt_tokens") is not None:
                     prompt_token_count = getattr(model_response.usage, "prompt_tokens", 0)
                     model_response.usage.prompt_tokens = (prompt_token_count+response_obj["prompt_tokens"])
@@ -10497,6 +10499,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "sagemaker"
                 or self.custom_llm_provider == "gemini"
                 or self.custom_llm_provider == "cached_response"
+                or self.custom_llm_provider == "watsonx"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:
