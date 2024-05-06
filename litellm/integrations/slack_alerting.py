@@ -101,7 +101,7 @@ class SlackAlerting:
         pass
         return request_info
 
-    def _response_taking_too_long_callback(
+    def _response_taking_too_long_callback_helper(
         self,
         kwargs,  # kwargs to completion
         start_time,
@@ -166,7 +166,7 @@ class SlackAlerting:
             return
 
         time_difference_float, model, api_base, messages = (
-            self._response_taking_too_long_callback(
+            self._response_taking_too_long_callback_helper(
                 kwargs=kwargs,
                 start_time=start_time,
                 end_time=end_time,
@@ -182,6 +182,9 @@ class SlackAlerting:
                 and "metadata" in kwargs["litellm_params"]
             ):
                 _metadata = kwargs["litellm_params"]["metadata"]
+                request_info = litellm.utils._add_key_name_and_team_to_alert(
+                    request_info=request_info, metadata=_metadata
+                )
 
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
                     metadata=_metadata
@@ -255,6 +258,11 @@ class SlackAlerting:
                     # in that case we fallback to the api base set in the request metadata
                     _metadata = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
+
+                    request_info = litellm.utils._add_key_name_and_team_to_alert(
+                        request_info=request_info, metadata=_metadata
+                    )
+
                     if _api_base is None:
                         _api_base = ""
                     request_info += f"\nAPI Base: `{_api_base}`"
