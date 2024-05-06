@@ -9215,24 +9215,24 @@ async def active_callbacks():
     """
     global proxy_logging_obj
     _alerting = str(general_settings.get("alerting"))
-    # get success callback
-    success_callback_names = []
-    try:
-        # this was returning a JSON of the values in some of the callbacks
-        # all we need is the callback name, hence we do str(callback)
-        success_callback_names = [str(x) for x in litellm.success_callback]
-    except:
-        # don't let this block the /health/readiness response, if we can't convert to str -> return litellm.success_callback
-        success_callback_names = litellm.success_callback
+    # get success callbacks
 
-    _num_callbacks = (
-        len(litellm.callbacks)
-        + len(litellm.input_callback)
-        + len(litellm.failure_callback)
-        + len(litellm.success_callback)
-        + len(litellm._async_failure_callback)
-        + len(litellm._async_success_callback)
-        + len(litellm._async_input_callback)
+    litellm_callbacks = [str(x) for x in litellm.callbacks]
+    litellm_input_callbacks = [str(x) for x in litellm.input_callback]
+    litellm_failure_callbacks = [str(x) for x in litellm.failure_callback]
+    litellm_success_callbacks = [str(x) for x in litellm.success_callback]
+    litellm_async_success_callbacks = [str(x) for x in litellm._async_success_callback]
+    litellm_async_failure_callbacks = [str(x) for x in litellm._async_failure_callback]
+    litellm_async_input_callbacks = [str(x) for x in litellm._async_input_callback]
+
+    all_litellm_callbacks = (
+        litellm_callbacks
+        + litellm_input_callbacks
+        + litellm_failure_callbacks
+        + litellm_success_callbacks
+        + litellm_async_success_callbacks
+        + litellm_async_failure_callbacks
+        + litellm_async_input_callbacks
     )
 
     alerting = proxy_logging_obj.alerting
@@ -9242,20 +9242,15 @@ async def active_callbacks():
 
     return {
         "alerting": _alerting,
-        "litellm.callbacks": [str(x) for x in litellm.callbacks],
-        "litellm.input_callback": [str(x) for x in litellm.input_callback],
-        "litellm.failure_callback": [str(x) for x in litellm.failure_callback],
-        "litellm.success_callback": [str(x) for x in litellm.success_callback],
-        "litellm._async_success_callback": [
-            str(x) for x in litellm._async_success_callback
-        ],
-        "litellm._async_failure_callback": [
-            str(x) for x in litellm._async_failure_callback
-        ],
-        "litellm._async_input_callback": [
-            str(x) for x in litellm._async_input_callback
-        ],
-        "num_callbacks": _num_callbacks,
+        "litellm.callbacks": litellm_callbacks,
+        "litellm.input_callback": litellm_input_callbacks,
+        "litellm.failure_callback": litellm_failure_callbacks,
+        "litellm.success_callback": litellm_success_callbacks,
+        "litellm._async_success_callback": litellm_async_success_callbacks,
+        "litellm._async_failure_callback": litellm_async_failure_callbacks,
+        "litellm._async_input_callback": litellm_async_input_callbacks,
+        "all_litellm_callbacks": all_litellm_callbacks,
+        "num_callbacks": len(all_litellm_callbacks),
         "num_alerting": _num_alerting,
     }
 
