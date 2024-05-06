@@ -2946,16 +2946,16 @@ def embedding(
                     model=model,  # type: ignore
                     llm_provider="ollama",  # type: ignore
                 )
-            if aembedding:
-                response = ollama.ollama_aembeddings(
-                    api_base=api_base,
-                    model=model,
-                    prompts=input,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    model_response=EmbeddingResponse(),
-                )
+            ollama_embeddings_fn = ollama.ollama_aembeddings if aembedding else ollama.ollama_embeddings
+            response = ollama_embeddings_fn(
+                api_base=api_base,
+                model=model,
+                prompts=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+            )
         elif custom_llm_provider == "sagemaker":
             response = sagemaker.embedding(
                 model=model,
