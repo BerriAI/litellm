@@ -550,6 +550,12 @@ def load_vertex_ai_credentials():
 
 ### Using GCP Service Account 
 
+:::info
+
+Trying to deploy LiteLLM on Google Cloud Run? Tutorial [here](https://docs.litellm.ai/docs/proxy/deploy#deploy-on-google-cloud-run)
+
+:::
+
 1. Figure out the Service Account bound to the Google Cloud Run service
 
 <Image img={require('../../img/gcp_acc_1.png')} />
