@@ -605,7 +605,6 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
-
 from .timeout import timeout
 from .utils import (
     client,
@@ -638,6 +637,7 @@ from .utils import (
     get_secret,
     get_supported_openai_params,
     get_api_base,
+    get_first_chars_messages,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -694,3 +694,4 @@ from .exceptions import (
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
+from .assistants.main import *

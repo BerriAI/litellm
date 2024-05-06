@@ -106,7 +106,8 @@ const Settings: React.FC<SettingsPageProps> = ({
     "llm_exceptions": "LLM Exceptions",
     "llm_too_slow": "LLM Responses Too Slow",
     "llm_requests_hanging": "LLM Requests Hanging",
-    "budget_alerts": "Budget Alerts (API Keys, Users)"
+    "budget_alerts": "Budget Alerts (API Keys, Users)",
+    "db_exceptions": "Database Exceptions (Read/Write)",
   }
 
   useEffect(() => {

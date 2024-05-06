@@ -60,12 +60,16 @@ class OpenMeterLogger(CustomLogger):
                 "total_tokens": response_obj["usage"].get("total_tokens"),
             }
 
+        subject = kwargs.get("user", None),  # end-user passed in via 'user' param
+        if not subject:
+            raise Exception("OpenMeter: user is required")
+
         return {
             "specversion": "1.0",
             "type": os.getenv("OPENMETER_EVENT_TYPE", "litellm_tokens"),
             "id": call_id,
             "time": dt,
-            "subject": kwargs.get("user", ""),  # end-user passed in via 'user' param
+            "subject": subject,
             "source": "litellm-proxy",
             "data": {"model": model, "cost": cost, **usage},
         }
@@ -80,14 +84,23 @@ class OpenMeterLogger(CustomLogger):
         api_key = os.getenv("OPENMETER_API_KEY")
 
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
-        self.sync_http_handler.post(
-            url=_url,
-            data=_data,
-            headers={
-                "Content-Type": "application/cloudevents+json",
-                "Authorization": "Bearer {}".format(api_key),
-            },
-        )
+        _headers = {
+            "Content-Type": "application/cloudevents+json",
+            "Authorization": "Bearer {}".format(api_key),
+        }
+
+        try:
+            response = self.sync_http_handler.post(
+                url=_url,
+                data=json.dumps(_data),
+                headers=_headers,
+            )
+
+            response.raise_for_status()
+        except Exception as e:
+            if hasattr(response, "text"):
+                litellm.print_verbose(f"\nError Message: {response.text}")
+            raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")

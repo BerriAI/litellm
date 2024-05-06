@@ -5,11 +5,56 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
-from litellm.utils import get_optional_params_embeddings
+from litellm.utils import get_optional_params_embeddings, get_optional_params
+from litellm.llms.prompt_templates.factory import (
+    map_system_message_pt,
+)
+from litellm.types.completion import (
+    ChatCompletionUserMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionMessageParam,
+)
 
 ## get_optional_params_embeddings
 ### Models: OpenAI, Azure, Bedrock
 ### Scenarios: w/ optional params + litellm.drop_params = True
+
+
+def test_supports_system_message():
+    """
+    Check if litellm.completion(...,supports_system_message=False)
+    """
+    messages = [
+        ChatCompletionSystemMessageParam(role="system", content="Listen here!"),
+        ChatCompletionUserMessageParam(role="user", content="Hello there!"),
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+
+    ## confirm you can make a openai call with this param
+
+    response = litellm.completion(
+        model="gpt-3.5-turbo", messages=new_messages, supports_system_message=False
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+
+
+@pytest.mark.parametrize(
+    "stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)]
+)
+def test_anthropic_optional_params(stop_sequence, expected_count):
+    """
+    Test if whitespace character optional param is dropped by anthropic
+    """
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model="claude-3", custom_llm_provider="anthropic", stop=stop_sequence
+    )
+    assert len(optional_params) == expected_count
 
 
 def test_bedrock_optional_params_embeddings():
