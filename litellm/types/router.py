@@ -97,8 +97,12 @@ class ModelInfo(BaseModel):
         setattr(self, key, value)
 
 
-class LiteLLM_Params(BaseModel):
-    model: str
+class GenericLiteLLMParams(BaseModel):
+    """
+    LiteLLM Params without 'model' arg (used across completion / assistants api)
+    """
+
+    custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
     api_key: Optional[str] = None
@@ -110,7 +114,7 @@ class LiteLLM_Params(BaseModel):
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
-    max_retries: int = 2  # follows openai default of 2
+    max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
@@ -122,7 +126,7 @@ class LiteLLM_Params(BaseModel):
 
     def __init__(
         self,
-        model: str,
+        custom_llm_provider: Optional[str] = None,
         max_retries: Optional[Union[int, str]] = None,
         tpm: Optional[int] = None,
         rpm: Optional[int] = None,
@@ -148,9 +152,68 @@ class LiteLLM_Params(BaseModel):
         args.pop("self", None)
         args.pop("params", None)
         args.pop("__class__", None)
-        if max_retries is None:
-            max_retries = 2
-        elif isinstance(max_retries, str):
+        if max_retries is not None and isinstance(max_retries, str):
+            max_retries = int(max_retries)  # cast to int
+        super().__init__(max_retries=max_retries, **args, **params)
+
+    class Config:
+        extra = "allow"
+        arbitrary_types_allowed = True
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
+
+class LiteLLM_Params(GenericLiteLLMParams):
+    """
+    LiteLLM Params with 'model' requirement - used for completions
+    """
+
+    model: str
+
+    def __init__(
+        self,
+        model: str,
+        custom_llm_provider: Optional[str] = None,
+        max_retries: Optional[Union[int, str]] = None,
+        tpm: Optional[int] = None,
+        rpm: Optional[int] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        timeout: Optional[Union[float, str]] = None,  # if str, pass in as os.environ/
+        stream_timeout: Optional[Union[float, str]] = (
+            None  # timeout when making stream=True calls, if str, pass in as os.environ/
+        ),
+        organization: Optional[str] = None,  # for openai orgs
+        ## VERTEX AI ##
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        ## AWS BEDROCK / SAGEMAKER ##
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_region_name: Optional[str] = None,
+        **params
+    ):
+        args = locals()
+        args.pop("max_retries", None)
+        args.pop("self", None)
+        args.pop("params", None)
+        args.pop("__class__", None)
+        if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
@@ -203,6 +266,9 @@ class updateDeployment(BaseModel):
     model_name: Optional[str] = None
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
+
+    class Config:
+        protected_namespaces = ()
 
 
 class Deployment(BaseModel):
@@ -262,3 +328,19 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    no_deployments_available = "No deployments available for selected model"
+
+
+class RetryPolicy(BaseModel):
+    """
+    Use this to set a custom number of retries per exception type
+    If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+    Mapping of Exception type to number of retries
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorRetries: Optional[int] = None
+    AuthenticationErrorRetries: Optional[int] = None
+    TimeoutErrorRetries: Optional[int] = None
+    RateLimitErrorRetries: Optional[int] = None
+    ContentPolicyViolationErrorRetries: Optional[int] = None

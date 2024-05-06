@@ -1,7 +1,7 @@
 #### What this tests ####
 # This tests litellm router
 
-import sys, os, time
+import sys, os, time, openai
 import traceback, asyncio
 import pytest
 
@@ -17,6 +17,45 @@ from dotenv import load_dotenv
 import os, httpx
 
 load_dotenv()
+
+
+@pytest.mark.parametrize("num_retries", [None, 2])
+@pytest.mark.parametrize("max_retries", [None, 4])
+def test_router_num_retries_init(num_retries, max_retries):
+    """
+    - test when num_retries set v/s not
+    - test client value when max retries set v/s not
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "max_retries": max_retries,
+                },
+                "model_info": {"id": 12345},
+            },
+        ],
+        num_retries=num_retries,
+    )
+
+    if num_retries is not None:
+        assert router.num_retries == num_retries
+    else:
+        assert router.num_retries == openai.DEFAULT_MAX_RETRIES
+
+    model_client = router._get_client(
+        {"model_info": {"id": 12345}}, client_type="async", kwargs={}
+    )
+
+    if max_retries is not None:
+        assert getattr(model_client, "max_retries") == max_retries
+    else:
+        assert getattr(model_client, "max_retries") == 0
 
 
 @pytest.mark.parametrize(
@@ -65,6 +104,42 @@ def test_router_timeout_init(timeout, ssl_verify):
         )
 
 
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_router_retries(sync_mode):
+    """
+    - make sure retries work as expected
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "bad-key"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list, num_retries=2)
+
+    if sync_mode:
+        router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    else:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+
 @pytest.mark.parametrize(
     "mistral_api_base",
     [
@@ -99,6 +174,7 @@ def test_router_azure_ai_studio_init(mistral_api_base):
     print(f"uri_reference: {uri_reference}")
 
     assert "/v1/" in uri_reference
+    assert uri_reference.count("v1") == 1
 
 
 def test_exception_raising():
@@ -1078,6 +1154,7 @@ def test_consistent_model_id():
     assert id1 == id2
 
 
+@pytest.mark.skip(reason="local test")
 def test_reading_keys_os_environ():
     import openai
 
@@ -1177,6 +1254,7 @@ def test_reading_keys_os_environ():
 # test_reading_keys_os_environ()
 
 
+@pytest.mark.skip(reason="local test")
 def test_reading_openai_keys_os_environ():
     import openai
 

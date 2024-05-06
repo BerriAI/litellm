@@ -387,15 +387,21 @@ class ProxyLogging:
         """
 
         ### ALERTING ###
-        if "llm_exceptions" not in self.alert_types:
-            return
-        asyncio.create_task(
-            self.alerting_handler(
-                message=f"LLM API call failed: {str(original_exception)}",
-                level="High",
-                alert_type="llm_exceptions",
+        if "llm_exceptions" in self.alert_types and not isinstance(
+            original_exception, HTTPException
+        ):
+            """
+            Just alert on LLM API exceptions. Do not alert on user errors
+
+            Related issue - https://github.com/BerriAI/litellm/issues/3395
+            """
+            asyncio.create_task(
+                self.alerting_handler(
+                    message=f"LLM API call failed: {str(original_exception)}",
+                    level="High",
+                    alert_type="llm_exceptions",
+                )
             )
-        )
 
         for callback in litellm.callbacks:
             try:
@@ -679,8 +685,8 @@ class PrismaClient:
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff
-        max_tries=3,  # maximum number of retries
-        max_time=10,  # maximum total time to retry for
+        max_tries=1,  # maximum number of retries
+        max_time=2,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def get_generic_data(
@@ -718,7 +724,8 @@ class PrismaClient:
             import traceback
 
             error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {str(e)}"
-            print_verbose(error_msg)
+            verbose_proxy_logger.error(error_msg)
+            error_msg = error_msg + "\nException Type: {}".format(type(e))
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
@@ -1777,7 +1784,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     usage = response_obj["usage"]
     if type(usage) == litellm.Usage:
         usage = dict(usage)
-    id = response_obj.get("id", str(uuid.uuid4()))
+    id = response_obj.get("id", kwargs.get("litellm_call_id"))
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
@@ -2049,6 +2056,11 @@ async def update_spend(
                 raise e
 
     ### UPDATE KEY TABLE ###
+    verbose_proxy_logger.debug(
+        "KEY Spend transactions: {}".format(
+            len(prisma_client.key_list_transactons.keys())
+        )
+    )
     if len(prisma_client.key_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
             start_time = time.time()

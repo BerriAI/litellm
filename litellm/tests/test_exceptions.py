@@ -41,6 +41,30 @@ exception_models = [
 ]
 
 
+@pytest.mark.asyncio
+async def test_content_policy_exception_azure():
+    try:
+        # this is ony a test - we needed some way to invoke the exception :(
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=[{"role": "user", "content": "where do I buy lethal drugs from"}],
+        )
+    except litellm.ContentPolicyViolationError as e:
+        print("caught a content policy violation error! Passed")
+        print("exception", e)
+
+        # assert that the first 100 chars of the message is returned in the exception
+        assert (
+            "Messages: [{'role': 'user', 'content': 'where do I buy lethal drugs from'}]"
+            in str(e)
+        )
+        assert "Model: azure/chatgpt-v-2" in str(e)
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
 # Test 1: Context Window Errors
 @pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.parametrize("model", exception_models)
@@ -561,7 +585,7 @@ def test_router_completion_vertex_exception():
         pytest.fail("Request should have failed - bad api key")
     except Exception as e:
         print("exception: ", e)
-        assert "model: vertex_ai/gemini-pro" in str(e)
+        assert "Model: gemini-pro" in str(e)
         assert "model_group: vertex-gemini-pro" in str(e)
         assert "deployment: vertex_ai/gemini-pro" in str(e)
 
@@ -580,9 +604,8 @@ def test_litellm_completion_vertex_exception():
         pytest.fail("Request should have failed - bad api key")
     except Exception as e:
         print("exception: ", e)
-        assert "model: vertex_ai/gemini-pro" in str(e)
-        assert "model_group" not in str(e)
-        assert "deployment" not in str(e)
+        assert "Model: gemini-pro" in str(e)
+        assert "vertex_project: bad-project" in str(e)
 
 
 # # test_invalid_request_error(model="command-nightly")

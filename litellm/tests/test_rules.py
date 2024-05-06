@@ -127,8 +127,8 @@ def test_post_call_rule_streaming():
         print(type(e))
         print(vars(e))
         assert (
-            e.message
-            == "OpenAIException - This violates LiteLLM Proxy Rules. Response too short"
+            "OpenAIException - This violates LiteLLM Proxy Rules. Response too short"
+            in e.message
         )
 
 

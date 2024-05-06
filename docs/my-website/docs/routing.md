@@ -278,6 +278,36 @@ router_settings:
 	routing_strategy_args: {"ttl": 10}
 ```
 
+### Set Lowest Latency Buffer
+
+Set a buffer within which deployments are candidates for making calls to. 
+
+E.g. 
+
+if you have 5 deployments
+
+```
+https://litellm-prod-1.openai.azure.com/: 0.07s
+https://litellm-prod-2.openai.azure.com/: 0.1s
+https://litellm-prod-3.openai.azure.com/: 0.1s
+https://litellm-prod-4.openai.azure.com/: 0.1s
+https://litellm-prod-5.openai.azure.com/: 4.66s
+```
+
+to prevent initially overloading `prod-1`, with all requests - we can set a buffer of 50%, to consider deployments `prod-2, prod-3, prod-4`. 
+
+**In Router**
+```python 
+router = Router(..., routing_strategy_args={"lowest_latency_buffer": 0.5})
+```
+
+**In Proxy**
+
+```yaml
+router_settings:
+	routing_strategy_args: {"lowest_latency_buffer": 0.5}
+```
+
 </TabItem>
 <TabItem value="simple-shuffle" label="(Default) Weighted Pick (Async)">
 
@@ -443,6 +473,35 @@ asyncio.run(router_acompletion())
 
 ## Basic Reliability
 
+### Max Parallel Requests (ASYNC)
+
+Used in semaphore for async requests on router. Limit the max concurrent calls made to a deployment. Useful in high-traffic scenarios. 
+
+If tpm/rpm is set, and no max parallel request limit given, we use the RPM or calculated RPM (tpm/1000/6) as the max parallel request limit. 
+
+
+```python
+from litellm import Router 
+
+model_list = [{
+	"model_name": "gpt-4",
+	"litellm_params": {
+		"model": "azure/gpt-4",
+		...
+		"max_parallel_requests": 10 # 👈 SET PER DEPLOYMENT
+	}
+}]
+
+### OR ### 
+
+router = Router(model_list=model_list, default_max_parallel_requests=20) # 👈 SET DEFAULT MAX PARALLEL REQUESTS 
+
+
+# deployment max parallel requests > default max parallel requests
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/a978f2d8813c04dad34802cb95e0a0e35a3324bc/litellm/utils.py#L5605)
+
 ### Timeouts 
 
 The timeout set in router is for the entire length of the call, and is passed down to the completion() call level as well. 
@@ -556,6 +615,57 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 
 print(f"response: {response}")
 ```
+
+#### Retries based on Error Type
+
+Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+
+Example:
+- 4 retries for `ContentPolicyViolationError`
+- 0 retries for `RateLimitErrors` 
+
+Example Usage
+
+```python
+from litellm.router import RetryPolicy
+retry_policy = RetryPolicy(
+	ContentPolicyViolationErrorRetries=3, # run 3 retries for ContentPolicyViolationErrors
+	AuthenticationErrorRetries=0,		  # run 0 retries for AuthenticationErrorRetries
+	BadRequestErrorRetries=1,
+	TimeoutErrorRetries=2,
+	RateLimitErrorRetries=3,
+)
+
+router = litellm.Router(
+	model_list=[
+		{
+			"model_name": "gpt-3.5-turbo",  # openai model name
+			"litellm_params": {  # params for litellm completion/embedding call
+				"model": "azure/chatgpt-v-2",
+				"api_key": os.getenv("AZURE_API_KEY"),
+				"api_version": os.getenv("AZURE_API_VERSION"),
+				"api_base": os.getenv("AZURE_API_BASE"),
+			},
+		},
+		{
+			"model_name": "bad-model",  # openai model name
+			"litellm_params": {  # params for litellm completion/embedding call
+				"model": "azure/chatgpt-v-2",
+				"api_key": "bad-key",
+				"api_version": os.getenv("AZURE_API_VERSION"),
+				"api_base": os.getenv("AZURE_API_BASE"),
+			},
+		},
+	],
+	retry_policy=retry_policy,
+)
+
+response = await router.acompletion(
+	model=model,
+	messages=messages,
+)
+```
+
 
 ### Fallbacks 
 

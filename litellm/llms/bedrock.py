@@ -4,7 +4,13 @@ from enum import Enum
 import time, uuid
 from typing import Callable, Optional, Any, Union, List
 import litellm
-from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse
+from litellm.utils import (
+    ModelResponse,
+    get_secret,
+    Usage,
+    ImageResponse,
+    map_finish_reason,
+)
 from .prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -27,6 +33,24 @@ class BedrockError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+
+class AmazonBedrockGlobalConfig:
+    def __init__(self):
+        pass
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Mapping of common auth params across bedrock/vertex/azure/watsonx
+        """
+        return {"region_name": "aws_region_name"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
 
 
 class AmazonTitanConfig:
@@ -139,7 +163,9 @@ class AmazonAnthropicClaude3Config:
             "stop",
             "temperature",
             "top_p",
+            "extra_headers"
         ]
+
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
@@ -506,6 +532,15 @@ class AmazonStabilityConfig:
         }
 
 
+def add_custom_header(headers):
+    """Closure to capture the headers and add them."""
+    def callback(request, **kwargs):
+        """Actual callback function that Boto3 will call."""
+        for header_name, header_value in headers.items():
+            request.headers.add_header(header_name, header_value)
+    return callback
+
+
 def init_bedrock_client(
     region_name=None,
     aws_access_key_id: Optional[str] = None,
@@ -515,12 +550,12 @@ def init_bedrock_client(
     aws_session_name: Optional[str] = None,
     aws_profile_name: Optional[str] = None,
     aws_role_name: Optional[str] = None,
-    timeout: Optional[int] = None,
+    extra_headers: Optional[dict] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
     standard_aws_region_name = get_secret("AWS_REGION", None)
-
     ## CHECK IS  'os.environ/' passed in
     # Define the list of parameters to check
     params_to_check = [
@@ -574,7 +609,14 @@ def init_bedrock_client(
 
     import boto3
 
-    config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+    if isinstance(timeout, float):
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+    elif isinstance(timeout, httpx.Timeout):
+        config = boto3.session.Config(
+            connect_timeout=timeout.connect, read_timeout=timeout.read
+        )
+    else:
+        config = boto3.session.Config()
 
     ### CHECK STS ###
     if aws_role_name is not None and aws_session_name is not None:
@@ -629,6 +671,8 @@ def init_bedrock_client(
             endpoint_url=endpoint_url,
             config=config,
         )
+    if extra_headers:
+        client.meta.events.register('before-sign.bedrock-runtime.*', add_custom_header(extra_headers))
 
     return client
 
@@ -692,6 +736,7 @@ def completion(
     litellm_params=None,
     logger_fn=None,
     timeout=None,
+    extra_headers: Optional[dict] = None,
 ):
     exception_mapping_worked = False
     _is_function_call = False
@@ -721,6 +766,7 @@ def completion(
                 aws_role_name=aws_role_name,
                 aws_session_name=aws_session_name,
                 aws_profile_name=aws_profile_name,
+                extra_headers=extra_headers,
                 timeout=timeout,
             )
 
@@ -934,7 +980,7 @@ def completion(
             original_response=json.dumps(response_body),
             additional_args={"complete_input_dict": data},
         )
-        print_verbose(f"raw model_response: {response}")
+        print_verbose(f"raw model_response: {response_body}")
         ## RESPONSE OBJECT
         outputText = "default"
         if provider == "ai21":
@@ -1025,7 +1071,9 @@ def completion(
                             logging_obj=logging_obj,
                         )
 
-                model_response["finish_reason"] = response_body["stop_reason"]
+                model_response["finish_reason"] = map_finish_reason(
+                    response_body["stop_reason"]
+                )
                 _usage = litellm.Usage(
                     prompt_tokens=response_body["usage"]["input_tokens"],
                     completion_tokens=response_body["usage"]["output_tokens"],
@@ -1047,6 +1095,7 @@ def completion(
             outputText = response_body.get("results")[0].get("outputText")
 
         response_metadata = response.get("ResponseMetadata", {})
+
         if response_metadata.get("HTTPStatusCode", 500) >= 400:
             raise BedrockError(
                 message=outputText,
@@ -1082,11 +1131,13 @@ def completion(
             prompt_tokens = response_metadata.get(
                 "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
             )
+            _text_response = model_response["choices"][0]["message"].get("content", "")
             completion_tokens = response_metadata.get(
                 "x-amzn-bedrock-output-token-count",
                 len(
                     encoding.encode(
-                        model_response["choices"][0]["message"].get("content", "")
+                        _text_response,
+                        disallowed_special=(),
                     )
                 ),
             )

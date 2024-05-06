@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
+from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
 # litellm.num_retries=3
 litellm.cache = None
@@ -57,7 +58,7 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to, check the response
+        # Add any assertions here to,check the response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
@@ -230,48 +231,143 @@ def test_completion_claude_3_function_call():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_claude_3_with_text_content_dictionaries():
+
+@pytest.mark.asyncio
+async def test_anthropic_no_content_error():
+    """
+    https://github.com/BerriAI/litellm/discussions/3440#discussioncomment-9323402
+    """
+    try:
+        litellm.drop_params = True
+        response = await litellm.acompletion(
+            model="anthropic/claude-3-opus-20240229",
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You will be given a list of fruits. Use the submitFruit function to submit a fruit. Don't say anything after.",
+                },
+                {"role": "user", "content": "I like apples"},
+                {
+                    "content": "<thinking>The most relevant tool for this request is the submitFruit function.</thinking>",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": '{"name": "Apple"}',
+                                "name": "submitFruit",
+                            },
+                            "id": "toolu_012ZTYKWD4VqrXGXyE7kEnAK",
+                            "type": "function",
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "content": '{"success":true}',
+                    "tool_call_id": "toolu_012ZTYKWD4VqrXGXyE7kEnAK",
+                },
+            ],
+            max_tokens=2000,
+            temperature=1,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submitFruit",
+                        "description": "Submits a fruit",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "The name of the fruit",
+                                }
+                            },
+                            "required": ["name"],
+                        },
+                    },
+                }
+            ],
+            frequency_penalty=0.8,
+        )
+
+        pass
+    except litellm.APIError as e:
+        assert e.status_code == 500
+    except Exception as e:
+        pytest.fail(f"An unexpected error occurred - {str(e)}")
+
+
+def test_completion_cohere_command_r_plus_function_call():
     litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
     messages = [
         {
             "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Hello"
-                }
-            ]
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Hello! How can I assist you today?"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Hello again!"
-                }
-            ]
+            "content": "What's the weather like in Boston today in Fahrenheit?",
         }
     ]
-
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model="command-r-plus",
             messages=messages,
+            tools=tools,
+            tool_choice="auto",
         )
         # Add any assertions, here to check response args
         print(response)
+        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+
+        messages.append(
+            response.choices[0].message.model_dump()
+        )  # Add assistant tool invokes
+        tool_result = (
+            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+        )
+        # Add user submitted tool results in the OpenAI format
+        messages.append(
+            {
+                "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                "role": "tool",
+                "name": response.choices[0].message.tool_calls[0].function.name,
+                "content": tool_result,
+            }
+        )
+        # In the second response, Cohere should deduce answer from tool results
+        second_response = completion(
+            model="command-r-plus",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        print(second_response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 def test_parse_xml_params():
     from litellm.llms.prompt_templates.factory import parse_xml_params
@@ -1412,6 +1508,198 @@ def test_completion_ollama_hosted():
 # test_completion_ollama_hosted()
 
 
+@pytest.mark.skip(reason="Local test")
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+def test_completion_ollama_function_call(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = litellm.completion(model=model, messages=messages, tools=tools)
+        print(response)
+        assert response.choices[0].message.tool_calls
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert response.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skip(reason="Local test")
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+def test_completion_ollama_function_call_stream(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model=model, messages=messages, tools=tools, stream=True
+        )
+        print(response)
+        first_chunk = next(response)
+        assert first_chunk.choices[0].delta.tool_calls
+        assert (
+            first_chunk.choices[0].delta.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert first_chunk.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_acompletion_ollama_function_call(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model=model, messages=messages, tools=tools
+        )
+        print(response)
+        assert response.choices[0].message.tool_calls
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert response.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_acompletion_ollama_function_call_stream(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model=model, messages=messages, tools=tools, stream=True
+        )
+        print(response)
+        first_chunk = await anext(response)
+        assert first_chunk.choices[0].delta.tool_calls
+        assert (
+            first_chunk.choices[0].delta.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert first_chunk.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_openrouter1():
     try:
         litellm.set_verbose = True
@@ -2327,6 +2615,56 @@ def test_completion_with_fallbacks():
 
 
 # test_completion_with_fallbacks()
+
+
+# @pytest.mark.parametrize(
+#     "function_call",
+#     [
+#         [{"role": "function", "name": "get_capital", "content": "Kokoko"}],
+#         [
+#             {"role": "function", "name": "get_capital", "content": "Kokoko"},
+#             {"role": "function", "name": "get_capital", "content": "Kokoko"},
+#         ],
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "tool_call",
+#     [
+#         [{"role": "tool", "tool_call_id": "1234", "content": "Kokoko"}],
+#         [
+#             {"role": "tool", "tool_call_id": "12344", "content": "Kokoko"},
+#             {"role": "tool", "tool_call_id": "1214", "content": "Kokoko"},
+#         ],
+#     ],
+# )
+def test_completion_anthropic_hanging():
+    litellm.set_verbose = True
+    litellm.modify_params = True
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the capital of fictional country Ubabababababaaba? Use your tools.",
+        },
+        {
+            "role": "assistant",
+            "function_call": {
+                "name": "get_capital",
+                "arguments": '{"country": "Ubabababababaaba"}',
+            },
+        },
+        {"role": "function", "name": "get_capital", "content": "Kokoko"},
+    ]
+
+    converted_messages = anthropic_messages_pt(messages)
+
+    print(f"converted_messages: {converted_messages}")
+
+    ## ENSURE USER / ASSISTANT ALTERNATING
+    for i, msg in enumerate(converted_messages):
+        if i < len(converted_messages) - 1:
+            assert msg["role"] != converted_messages[i + 1]["role"]
+
+
 def test_completion_anyscale_api():
     try:
         # litellm.set_verbose=True
@@ -2696,6 +3034,7 @@ def test_completion_palm_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -2713,10 +3052,57 @@ def test_completion_watsonx():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+@pytest.mark.parametrize(
+    "provider, model, project, region_name, token",
+    [
+        ("azure", "chatgpt-v-2", None, None, "test-token"),
+        ("vertex_ai", "anthropic-claude-3", "adroit-crow-1", "us-east1", None),
+        ("watsonx", "ibm/granite", "96946574", "dallas", "1234"),
+        ("bedrock", "anthropic.claude-3", None, "us-east-1", None),
+    ],
+)
+def test_unified_auth_params(provider, model, project, region_name, token):
+    """
+    Check if params = ["project", "region_name", "token"]
+    are correctly translated for = ["azure", "vertex_ai", "watsonx", "aws"]
+
+    tests get_optional_params
+    """
+    data = {
+        "project": project,
+        "region_name": region_name,
+        "token": token,
+        "custom_llm_provider": provider,
+        "model": model,
+    }
+
+    translated_optional_params = litellm.utils.get_optional_params(**data)
+
+    if provider == "azure":
+        special_auth_params = (
+            litellm.AzureOpenAIConfig().get_mapped_special_auth_params()
+        )
+    elif provider == "bedrock":
+        special_auth_params = (
+            litellm.AmazonBedrockGlobalConfig().get_mapped_special_auth_params()
+        )
+    elif provider == "vertex_ai":
+        special_auth_params = litellm.VertexAIConfig().get_mapped_special_auth_params()
+    elif provider == "watsonx":
+        special_auth_params = (
+            litellm.IBMWatsonXAIConfig().get_mapped_special_auth_params()
+        )
+
+    for param, value in special_auth_params.items():
+        assert param in data
+        assert value in translated_optional_params
+
+
 @pytest.mark.asyncio
 async def test_acompletion_watsonx():
     litellm.set_verbose = True
-    model_name = "watsonx/deployment/"+os.getenv("WATSONX_DEPLOYMENT_ID")
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
     print("testing watsonx")
     try:
         response = await litellm.acompletion(
@@ -2724,7 +3110,6 @@ async def test_acompletion_watsonx():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            space_id=os.getenv("WATSONX_SPACE_ID_TEST"),
         )
         # Add any assertions here to check the response
         print(response)
