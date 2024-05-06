@@ -8155,26 +8155,8 @@ def exception_type(
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
-                        raise ServiceUnavailableError(
-                            message=f"AnthropicException - {original_exception.message}",
-                            llm_provider="anthropic",
-                            model=model,
-                            response=(
-                                original_exception.response
-                                if hasattr(original_exception, "response")
-                                else httpx.Response(
-                                    status_code=500,
-                                    request=httpx.Request(
-                                        method="POST",
-                                        url="https://docs.anthropic.com/claude/reference/messages_post",
-                                    ),
-                                )
-                            ),
-                        )
-                    else:
-                        exception_mapping_worked = True
                         raise APIError(
-                            status_code=original_exception.status_code,
+                            status_code=500,
                             message=f"AnthropicException - {original_exception.message}. Handle with `litellm.APIError`.",
                             llm_provider="anthropic",
                             model=model,
