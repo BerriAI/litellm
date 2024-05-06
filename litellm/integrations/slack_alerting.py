@@ -416,6 +416,10 @@ class SlackAlerting:
         model_info = litellm.model_cost.get(litellm_model_name, {})
         model_info_str = ""
         for k, v in model_info.items():
+            if k == "input_cost_per_token" or k == "output_cost_per_token":
+                # when converting to string it should not be 1.63e-06
+                v = "{:.8f}".format(v)
+
             model_info_str += f"{k}: {v}\n"
 
         message = f"""
@@ -491,9 +495,12 @@ Model Info:
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-        formatted_message = (
-            f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-        )
+        if alert_type == "new_model_added":
+            formatted_message = message
+        else:
+            formatted_message = (
+                f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+            )
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
