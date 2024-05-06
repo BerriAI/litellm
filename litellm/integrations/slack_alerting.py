@@ -412,6 +412,49 @@ class SlackAlerting:
 
         return
 
+    async def model_added_alert(self, model_name: str, litellm_model_name: str):
+        model_info = litellm.model_cost.get(litellm_model_name, {})
+        model_info_str = ""
+        for k, v in model_info.items():
+            model_info_str += f"{k}: {v}\n"
+
+        message = f"""
+*🚅 New Model Added*
+Model Name: `{model_name}`
+
+Usage OpenAI Python SDK:
+```
+import openai
+client = openai.OpenAI(
+    api_key="your_api_key",
+    base_url={os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")}
+)
+
+response = client.chat.completions.create(
+    model="{model_name}", # model to send to the proxy
+    messages = [
+        {{
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }}
+    ]
+)
+```
+
+Model Info: 
+```
+{model_info_str}
+```
+"""
+
+        await self.send_alert(
+            message=message, level="Low", alert_type="new_model_added"
+        )
+        pass
+
+    async def model_removed_alert(self, model_name: str):
+        pass
+
     async def send_alert(
         self,
         message: str,
@@ -422,6 +465,7 @@ class SlackAlerting:
             "llm_requests_hanging",
             "budget_alerts",
             "db_exceptions",
+            "new_model_added",
         ],
     ):
         """
