@@ -2,6 +2,8 @@ import sys, os
 import traceback
 from dotenv import load_dotenv
 
+from litellm.utils import ModelResponse
+
 load_dotenv()
 import os, io
 
@@ -1439,6 +1441,162 @@ def test_completion_ollama_hosted():
 
 
 # test_completion_ollama_hosted()
+
+
+@pytest.mark.parametrize(("model"), [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ]
+)
+def test_completion_ollama_function_call(model):
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = litellm.completion(model=model, messages=messages, tools=tools)
+        print(response)
+        assert response.choices[0].message.tool_calls
+        assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+        assert response.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(("model"), [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ]
+)
+def test_completion_ollama_function_call_stream(model):
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = litellm.completion(model=model, messages=messages, tools=tools, stream=True)
+        print(response)
+        first_chunk = next(response)
+        assert first_chunk.choices[0].delta.tool_calls
+        assert first_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_weather"
+        assert first_chunk.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(("model"), [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ]
+)
+@pytest.mark.asyncio
+async def test_acompletion_ollama_function_call(model):
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(model=model, messages=messages, tools=tools)
+        print(response)
+        assert response.choices[0].message.tool_calls
+        assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+        assert response.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(("model"), [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ]
+)
+@pytest.mark.asyncio
+async def test_acompletion_ollama_function_call_stream(model):
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(model=model, messages=messages, tools=tools, stream=True)
+        print(response)
+        first_chunk = await anext(response)
+        assert first_chunk.choices[0].delta.tool_calls
+        assert first_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_weather"
+        assert first_chunk.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_openrouter1():
