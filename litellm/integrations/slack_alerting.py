@@ -101,7 +101,7 @@ class SlackAlerting:
         pass
         return request_info
 
-    def _response_taking_too_long_callback(
+    def _response_taking_too_long_callback_helper(
         self,
         kwargs,  # kwargs to completion
         start_time,
@@ -166,7 +166,7 @@ class SlackAlerting:
             return
 
         time_difference_float, model, api_base, messages = (
-            self._response_taking_too_long_callback(
+            self._response_taking_too_long_callback_helper(
                 kwargs=kwargs,
                 start_time=start_time,
                 end_time=end_time,
@@ -182,6 +182,9 @@ class SlackAlerting:
                 and "metadata" in kwargs["litellm_params"]
             ):
                 _metadata = kwargs["litellm_params"]["metadata"]
+                request_info = self._add_key_name_and_team_to_alert(
+                    request_info=request_info, metadata=_metadata
+                )
 
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
                     metadata=_metadata
@@ -255,6 +258,11 @@ class SlackAlerting:
                     # in that case we fallback to the api base set in the request metadata
                     _metadata = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
+
+                    request_info = self._add_key_name_and_team_to_alert(
+                        request_info=request_info, metadata=_metadata
+                    )
+
                     if _api_base is None:
                         _api_base = ""
                     request_info += f"\nAPI Base: `{_api_base}`"
@@ -468,3 +476,14 @@ class SlackAlerting:
             pass
         else:
             print("Error sending slack alert. Error=", response.text)  # noqa
+
+    def _add_key_name_and_team_to_alert(self, request_info: str, metadata: dict) -> str:
+        _api_key_name = metadata.get("user_api_key_alias", "")
+        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", "")
+        if _api_key_name is not None:
+            request_info = (
+                f"\n\n\n*API Key Info* \n- Key Name: `{_api_key_name}`\n- Team: `{_user_api_key_team_alias}`\n\n"
+                + request_info
+            )
+
+        return request_info
