@@ -213,7 +213,7 @@ def get_ollama_response(
 
     ## RESPONSE OBJECT
     model_response["choices"][0]["finish_reason"] = "stop"
-    if optional_params.get("format", "") == "json":
+    if data.get("format", "") == "json":
         function_call = json.loads(response_json["response"])
         message = litellm.Message(
             content=None,
