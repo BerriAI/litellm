@@ -23,6 +23,14 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 response = completion("command-nightly", messages)
 ```
 
+## JSON Logs 
+
+If you need to store the logs as JSON, just set the `litellm.json_logs = True`.
+
+We currently just log the raw POST request from litellm as a JSON - [**See Code**]. 
+
+[Share feedback here](https://github.com/BerriAI/litellm/issues)
+
 ## Logger Function 
 But sometimes all you care about is seeing exactly what's getting sent to your api call and what's being returned - e.g. if the api call is failing, why is that happening? what are the exact params being set? 
 

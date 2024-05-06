@@ -16,10 +16,10 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
-import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall } from "./networking";
-import { BarChart } from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
+import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall } from "./networking";
+import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -192,7 +192,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers = Object.values(Providers).filter(key => isNaN(Number(key)));
-
   
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>('');
@@ -200,6 +199,17 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
+  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
+  const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>([]);
+  const [modelExceptions, setModelExceptions] = useState<any[]>([]);
+  const [allExceptions, setAllExceptions] = useState<any[]>([]);
+  const [failureTableData, setFailureTableData] = useState<any[]>([]);
+  const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
+    to: new Date(),
+  });
 
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
@@ -443,14 +453,67 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         }
         console.log("all_model_groups:", all_model_groups)
         let _array_model_groups = Array.from(all_model_groups)
+        // sort _array_model_groups alphabetically
+        _array_model_groups = _array_model_groups.sort();
+
         setAvailableModelGroups(_array_model_groups);
 
-        // if userRole is Admin, show the pending requests
-        if (userRole === "Admin" && accessToken) {
-          const user_requests = await userGetRequesedtModelsCall(accessToken);
-          console.log("Pending Requests:", pendingRequests);
-          setPendingRequests(user_requests.requests || []);
+        console.log("array_model_groups:", _array_model_groups)
+        let _initial_model_group = "all"
+        if (_array_model_groups.length > 0) {
+          // set selectedModelGroup to the last model group
+          _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
+          console.log("_initial_model_group:", _initial_model_group)
+          setSelectedModelGroup(_initial_model_group);
         }
+
+        console.log("selectedModelGroup:", selectedModelGroup)
+        
+
+        const modelMetricsResponse = await modelMetricsCall(
+          accessToken,
+          userID,
+          userRole,
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        );
+
+        console.log("Model metrics response:", modelMetricsResponse);
+        // Sort by latency (avg_latency_per_token)
+
+
+        setModelMetrics(modelMetricsResponse.data);
+        setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+
+        const modelExceptionsResponse = await modelExceptionsCall(
+          accessToken,
+          userID,
+          userRole,
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        )
+        console.log("Model exceptions response:", modelExceptionsResponse);
+        setModelExceptions(modelExceptionsResponse.data);
+        setAllExceptions(modelExceptionsResponse.exception_types);
+
+
+        const slowResponses = await modelMetricsSlowResponsesCall(
+          accessToken,
+          userID,
+          userRole,
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        )
+
+        console.log("slowResponses:", slowResponses)
+
+        setSlowResponsesData(slowResponses);
+
+
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -603,6 +666,97 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   };
 
 
+  const updateModelMetrics = async (modelGroup: string | null, startTime: Date | undefined, endTime: Date | undefined) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
+      return
+    }
+    console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime)
+    setSelectedModelGroup(modelGroup);  // If you want to store the selected model group in state
+
+  
+    try {
+      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup, startTime.toISOString(), endTime.toISOString());
+      console.log("Model metrics response:", modelMetricsResponse);
+  
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      )
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
+
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      )
+
+      console.log("slowResponses:", slowResponses)
+
+      setSlowResponsesData(slowResponses);
+
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  }
+
+  const customTooltip = (props: any) => {
+    const { payload, active } = props;
+    if (!active || !payload) return null;
+  
+    // Extract the date from the first item in the payload array
+    const date = payload[0]?.payload?.date;
+  
+    // Sort the payload array by category.value in descending order
+    let sortedPayload = payload.sort((a: any, b: any) => b.value - a.value);
+  
+    // Only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
+    if (sortedPayload.length > 5) {
+      let remainingItems = sortedPayload.length - 5;
+      sortedPayload = sortedPayload.slice(0, 5);
+      sortedPayload.push({
+        dataKey: `${remainingItems} other deployments`,
+        value: payload.slice(5).reduce((acc: number, curr: any) => acc + curr.value, 0),
+        color: "gray",
+      });
+    }
+  
+    return (
+      <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
+        {date && <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>}
+        {sortedPayload.map((category: any, idx: number) => {
+          const roundedValue = parseFloat(category.value.toFixed(5));
+          const displayValue =
+            roundedValue === 0 && category.value > 0 ? "<0.00001" : roundedValue.toFixed(5);
+          return (
+            <div key={idx} className="flex justify-between">
+              <div className="flex items-center space-x-2">
+                <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
+                <p className="text-tremor-content">{category.dataKey}</p>
+              </div>
+              <p className="font-medium text-tremor-content-emphasis text-righ ml-2">{displayValue}</p>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+
 
   const getPlaceholder = (selectedProvider: string): string => {
     if (selectedProvider === Providers.Vertex_AI) {
@@ -640,6 +794,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
           <Tab><pre>/health Models</pre></Tab>
+            <Tab>Model Analytics</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -955,6 +1110,111 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
         </Card>
       </TabPanel>
+      <TabPanel>
+              {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
+            
+            <Grid numItems={2} className="mt-2">
+              <Col>
+              <Text>Select Time Range</Text>
+                <DateRangePicker 
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateModelMetrics(selectedModelGroup, value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+                />
+              </Col>
+              <Col>
+              <Text>Select Model Group</Text>
+                <Select
+                className="mb-4 mt-2"
+                defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
+                value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
+              >
+                {availableModelGroups.map((group, idx) => (
+                  <SelectItem 
+                    key={idx} 
+                    value={group}
+                    onClick={() => updateModelMetrics(group, dateValue.from, dateValue.to)}
+                  >
+                    {group}
+                  </SelectItem>
+                ))}
+              </Select>
+
+              </Col>
+
+              
+          
+
+            </Grid>
+            
+
+
+
+            <Grid numItems={2}>
+              <Col>
+              <Card className="mr-2 max-h-[400px] min-h-[400px]">
+                <Title>Avg Latency per Token</Title><p className="text-gray-500 italic"> (seconds/token)</p>
+                <Text className="text-gray-500 italic mt-1 mb-1">average Latency for successfull requests divided by the total tokens</Text>
+              { modelMetrics && modelMetricsCategories && (
+                <AreaChart
+                  title="Model Latency"
+                  className="h-72"
+                  data={modelMetrics}
+                  showLegend={false}
+                  index="date"
+                  categories={modelMetricsCategories}
+                  connectNulls={true}
+                  customTooltip={customTooltip}
+                />
+              )}
+
+              </Card>
+              </Col>
+            <Col>
+            <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
+              <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Deployment</TableHeaderCell>
+                  <TableHeaderCell>Success Responses</TableHeaderCell>
+                  <TableHeaderCell>Slow Responses <p>Success Responses taking 600+s</p></TableHeaderCell>
+
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {slowResponsesData.map((metric, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell>{metric.api_base}</TableCell>
+                    <TableCell>{metric.total_count}</TableCell>
+                    <TableCell>{metric.slow_count}</TableCell>
+
+                  </TableRow>
+
+                ))}
+              </TableBody>
+              </Table>
+
+
+            </Card>
+            </Col>
+            </Grid>
+        <Card className="mt-4">
+        <Title>Exceptions per Model</Title>
+        <BarChart
+        className="h-72"
+        data={modelExceptions}
+        index="model"
+        categories={allExceptions}
+        stack={true}
+        colors={['indigo-300', 'rose-200', '#ffcc33']}
+        yAxisWidth={30}
+      />
+        </Card>
+            </TabPanel>
+      
       </TabPanels>
       </TabGroup>
       

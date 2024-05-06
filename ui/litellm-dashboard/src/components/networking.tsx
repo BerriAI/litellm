@@ -441,6 +441,8 @@ export const modelMetricsCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
@@ -448,7 +450,7 @@ export const modelMetricsCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics` : `/model/metrics`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}`
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
     }
     // message.info("Requesting model data");
     const response = await fetch(url, {
@@ -473,6 +475,91 @@ export const modelMetricsCall = async (
     throw error;
   }
 };
+
+
+
+export const modelMetricsSlowResponsesCall = async (
+  accessToken: String,
+  userID: String,
+  userRole: String, 
+  modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
+  /**
+   * Get all models on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/slow_responses` : `/model/metrics/slow_responses`;
+    if (modelGroup) {
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
+    }
+    
+    // message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 20);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    // message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+
+export const modelExceptionsCall = async (
+  accessToken: String,
+  userID: String,
+  userRole: String, 
+  modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
+  /**
+   * Get all models on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/exceptions` : `/model/metrics/exceptions`;
+
+    if (modelGroup) {
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
+    }
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 20);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    // message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 
 export const modelAvailableCall = async (
   accessToken: String,

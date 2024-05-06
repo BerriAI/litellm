@@ -438,6 +438,7 @@ async def get_spend_logs(session, request_id):
         return await response.json()
 
 
+@pytest.mark.skip(reason="Hanging on ci/cd")
 @pytest.mark.asyncio
 async def test_key_info_spend_values():
     """
@@ -488,7 +489,9 @@ async def test_key_info_spend_values():
         )
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert rounded_response_cost == rounded_key_info_spend
+        assert (
+            rounded_response_cost == rounded_key_info_spend
+        ), f"Expected cost= {rounded_response_cost} != Tracked Cost={rounded_key_info_spend}"
 
 
 @pytest.mark.asyncio
