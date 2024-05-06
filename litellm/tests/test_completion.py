@@ -118,6 +118,7 @@ def test_completion_claude():
 
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
+
     messages = [
         {
             "role": "system",
