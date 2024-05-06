@@ -33,7 +33,7 @@ tiktoken==0.6.0 # for calculating usage
 importlib-metadata==6.8.0 # for random utils
 tokenizers==0.14.0 # for calculating usage
 click==8.1.7 # for proxy cli 
-jinja2==3.1.3 # for prompt templates
+jinja2==3.1.4 # for prompt templates
 certifi==2023.7.22 # [TODO] clean up 
 aiohttp==3.9.0 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
