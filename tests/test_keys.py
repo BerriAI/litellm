@@ -227,8 +227,8 @@ async def image_generation(session, key, model="dall-e-3"):
             async with session.post(url, headers=headers, json=data) as response:
                 status = response.status
                 response_text = await response.text()
+                print("/images/generations response", response_text)
 
-                print(response_text)
                 print()
 
                 if status != 200:
