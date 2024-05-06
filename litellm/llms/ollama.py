@@ -225,6 +225,7 @@ def get_ollama_response(
             ],
         )
         model_response["choices"][0]["message"] = message
+        model_response["choices"][0]["finish_reason"] = "tool_calls"
     else:
         model_response["choices"][0]["message"]["content"] = response_json["response"]
     model_response["created"] = int(time.time())
@@ -377,6 +378,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                     ],
                 )
                 model_response["choices"][0]["message"] = message
+                model_response["choices"][0]["finish_reason"] = "tool_calls"
             else:
                 model_response["choices"][0]["message"]["content"] = response_json[
                     "response"
