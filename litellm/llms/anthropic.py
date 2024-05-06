@@ -187,7 +187,7 @@ class AnthropicChatCompletion(BaseLLM):
         elif len(completion_response["content"]) == 0:
             raise AnthropicError(
                 message="No content in response",
-                status_code=response.status_code,
+                status_code=500,
             )
         else:
             text_content = ""

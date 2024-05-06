@@ -232,6 +232,73 @@ def test_completion_claude_3_function_call():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio
+async def test_anthropic_no_content_error():
+    """
+    https://github.com/BerriAI/litellm/discussions/3440#discussioncomment-9323402
+    """
+    try:
+        litellm.drop_params = True
+        response = await litellm.acompletion(
+            model="anthropic/claude-3-opus-20240229",
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You will be given a list of fruits. Use the submitFruit function to submit a fruit. Don't say anything after.",
+                },
+                {"role": "user", "content": "I like apples"},
+                {
+                    "content": "<thinking>The most relevant tool for this request is the submitFruit function.</thinking>",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": '{"name": "Apple"}',
+                                "name": "submitFruit",
+                            },
+                            "id": "toolu_012ZTYKWD4VqrXGXyE7kEnAK",
+                            "type": "function",
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "content": '{"success":true}',
+                    "tool_call_id": "toolu_012ZTYKWD4VqrXGXyE7kEnAK",
+                },
+            ],
+            max_tokens=2000,
+            temperature=1,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submitFruit",
+                        "description": "Submits a fruit",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "The name of the fruit",
+                                }
+                            },
+                            "required": ["name"],
+                        },
+                    },
+                }
+            ],
+            frequency_penalty=0.8,
+        )
+
+        pass
+    except litellm.APIError as e:
+        assert e.status_code == 500
+    except Exception as e:
+        pytest.fail(f"An unexpected error occurred - {str(e)}")
+
+
 def test_completion_cohere_command_r_plus_function_call():
     litellm.set_verbose = True
     tools = [
