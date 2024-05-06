@@ -11526,8 +11526,8 @@ def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
     [Non-Blocking helper function]
     """
     try:
-        _api_key_name = metadata.get("user_api_key_alias", "")
-        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", "")
+        _api_key_name = metadata.get("user_api_key_alias", None)
+        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", None)
         if _api_key_name is not None:
             request_info = (
                 f"\n\nKey Name: `{_api_key_name}`\nTeam: `{_user_api_key_team_alias}`"
