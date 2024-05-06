@@ -1621,6 +1621,7 @@ def test_completion_ollama_function_call_stream(model):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize(
     ("model"),
     [
@@ -1669,6 +1670,7 @@ async def test_acompletion_ollama_function_call(model):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize(
     ("model"),
     [
