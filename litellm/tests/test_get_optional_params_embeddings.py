@@ -40,3 +40,32 @@ def test_vertex_projects():
 
 
 # test_vertex_projects()
+
+
+def test_bedrock_embed_v2_regular():
+    model, custom_llm_provider, _, _ = get_llm_provider(
+        model="bedrock/amazon.titan-embed-text-v2:0"
+    )
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        custom_llm_provider=custom_llm_provider,
+    )
+    print(f"received optional_params: {optional_params}")
+    assert optional_params == {"dimensions": 512}
+
+
+def test_bedrock_embed_v2_with_drop_params():
+    litellm.drop_params = True
+    model, custom_llm_provider, _, _ = get_llm_provider(
+        model="bedrock/amazon.titan-embed-text-v2:0"
+    )
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        user="test-litellm-user-5",
+        encoding_format="base64",
+        custom_llm_provider=custom_llm_provider,
+    )
+    print(f"received optional_params: {optional_params}")
+    assert optional_params == {"dimensions": 512}

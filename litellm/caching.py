@@ -177,11 +177,18 @@ class RedisCache(BaseCache):
         try:
             # asyncio.get_running_loop().create_task(self.ping())
             result = asyncio.get_running_loop().create_task(self.ping())
-        except Exception:
-            pass
+        except Exception as e:
+            verbose_logger.error(
+                "Error connecting to Async Redis client", extra={"error": str(e)}
+            )
 
         ### SYNC HEALTH PING ###
-        self.redis_client.ping()
+        try:
+            self.redis_client.ping()
+        except Exception as e:
+            verbose_logger.error(
+                "Error connecting to Sync Redis client", extra={"error": str(e)}
+            )
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
