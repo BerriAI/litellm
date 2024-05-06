@@ -1276,22 +1276,22 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               {retry_policy_map &&
   <table>
     <tbody>
-      {Object.keys(retry_policy_map).map((key, idx) => (
-        <tr key={idx} className="flex justify-between items-center mt-2">
-          <td>
-            <Text>{key}</Text>
-          </td>
-          <td>
-            
-            <InputNumber 
-              className="ml-5"
-              defaultValue={defaultRetry}
-              min={0} step={1}
-            />
-          </td>
-        </tr>
-      ))}
-    </tbody>
+  {Object.keys(retry_policy_map).map((key, idx) => (
+    <tr key={idx} className="flex justify-between items-center mt-2">
+      <td>
+        <Text>{key}</Text>
+      </td>
+      <td>
+        <InputNumber
+          className="ml-5"
+          defaultValue={defaultRetry}
+          min={0}
+          step={1}
+        />
+      </td>
+    </tr>
+  ))}
+</tbody>
   </table>
 }
 <Button className="mt-6 mr-8">
