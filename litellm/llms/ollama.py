@@ -1,3 +1,4 @@
+from itertools import chain
 import requests, types, time
 import json, uuid
 import traceback
