@@ -299,6 +299,24 @@ async def test_anthropic_no_content_error():
         pytest.fail(f"An unexpected error occurred - {str(e)}")
 
 
+def test_gemini_completion_call_error():
+    try:
+        print("test completion + streaming")
+        litellm.set_verbose = True
+        messages = [{"role": "user", "content": "what is the capital of congo?"}]
+        response = completion(
+            model="gemini/gemini-1.5-pro-latest",
+            messages=messages,
+            stream=True,
+            max_tokens=10,
+        )
+        print(f"response: {response}")
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"error occurred: {str(e)}")
+
+
 def test_completion_cohere_command_r_plus_function_call():
     litellm.set_verbose = True
     tools = [
