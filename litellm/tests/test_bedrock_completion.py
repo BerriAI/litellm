@@ -207,6 +207,25 @@ def test_completion_bedrock_claude_sts_client_auth():
 # test_completion_bedrock_claude_sts_client_auth()
 
 
+def test_bedrock_extra_headers():
+    try:
+        litellm.set_verbose = True
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.78,
+            extra_headers={"x-key": "x_key_value"}
+        )
+        # Add any assertions here to check the response
+        assert len(response.choices) > 0
+        assert len(response.choices[0].message.content) > 0
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_bedrock_claude_3():
     try:
         litellm.set_verbose = True
