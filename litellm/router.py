@@ -3268,6 +3268,8 @@ class Router:
 
         if retry_policy is None:
             return None
+        if isinstance(retry_policy, dict):
+            retry_policy = RetryPolicy(**retry_policy)
         if (
             isinstance(exception, litellm.BadRequestError)
             and retry_policy.BadRequestErrorRetries is not None
