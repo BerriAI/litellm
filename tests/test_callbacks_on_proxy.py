@@ -100,9 +100,9 @@ async def test_check_num_callbacks():
     """
     Test 1:  num callbacks should NOT increase over time
     -> check current callbacks
-    -> sleep for 30s
+    -> sleep for 30 seconds
     -> check current callbacks
-    -> sleep for 30s
+    -> sleep for 30 seconds
     -> check current callbacks
     """
     import uuid
