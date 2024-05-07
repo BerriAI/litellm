@@ -98,6 +98,7 @@ async def get_current_routing_strategy(session):
 
 
 @pytest.mark.asyncio
+@pytest.mark.order1
 async def test_check_num_callbacks():
     """
     Test 1:  num callbacks should NOT increase over time
@@ -145,6 +146,7 @@ async def test_check_num_callbacks():
 
 
 @pytest.mark.asyncio
+@pytest.mark.order2
 async def test_check_num_callbacks_on_lowest_latency():
     """
     Test 1:  num callbacks should NOT increase over time
