@@ -797,6 +797,48 @@ Model Info:
                 )
             )
 
+    async def _run_scheduler_helper(self, llm_router: litellm.Router) -> bool:
+        """
+        Returns:
+        - True -> report sent
+        - False -> report not sent
+        """
+        report_sent_bool = False
+
+        report_sent = await self.internal_usage_cache.async_get_cache(
+            key=SlackAlertingCacheKeys.report_sent_key.value
+        )  # None | datetime
+
+        current_time = litellm.utils.get_utc_datetime()
+
+        if report_sent is None:
+            _current_time = current_time.isoformat()
+            await self.internal_usage_cache.async_set_cache(
+                key=SlackAlertingCacheKeys.report_sent_key.value,
+                value=_current_time,
+            )
+        else:
+            # check if current time - interval >= time last sent
+            delta = current_time - timedelta(
+                seconds=self.alerting_args.daily_report_frequency
+            )
+
+            if isinstance(report_sent, str):
+                report_sent = dt.fromisoformat(report_sent)
+
+            if delta >= report_sent:
+                # Sneak in the reporting logic here
+                await self.send_daily_reports(router=llm_router)
+                # Also, don't forget to update the report_sent time after sending the report!
+                _current_time = current_time.isoformat()
+                await self.internal_usage_cache.async_set_cache(
+                    key=SlackAlertingCacheKeys.report_sent_key.value,
+                    value=_current_time,
+                )
+                report_sent_bool = True
+
+        return report_sent_bool
+
     async def _run_scheduled_daily_report(self, llm_router: Optional[litellm.Router]):
         """
         If 'daily_reports' enabled
@@ -810,29 +852,7 @@ Model Info:
 
         if "daily_reports" in self.alert_types:
             while True:
-                report_sent = await self.internal_usage_cache.async_get_cache(
-                    key=SlackAlertingCacheKeys.report_sent_key.value
-                )  # None | datetime
-
-                if report_sent is None:
-                    await self.internal_usage_cache.async_set_cache(
-                        key=SlackAlertingCacheKeys.report_sent_key.value,
-                        value=litellm.utils.get_utc_datetime(),
-                    )
-                else:
-                    # check if current time - interval >= time last sent
-                    current_time = litellm.utils.get_utc_datetime()
-                    delta = current_time - timedelta(
-                        seconds=self.alerting_args.daily_report_frequency
-                    )
-                    if delta >= report_sent:
-                        # Sneak in the reporting logic here
-                        await self.send_daily_reports(router=llm_router)
-                        # Also, don't forget to update the report_sent time after sending the report!
-                        await self.internal_usage_cache.async_set_cache(
-                            key=SlackAlertingCacheKeys.report_sent_key.value,
-                            value=litellm.utils.get_utc_datetime(),
-                        )
+                await self._run_scheduler_helper(llm_router=llm_router)
                 interval = random.randint(
                     self.alerting_args.report_check_interval - 3,
                     self.alerting_args.report_check_interval + 3,
