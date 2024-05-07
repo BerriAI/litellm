@@ -62,10 +62,8 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
-
-    class Config:
-        protected_namespaces = ()
-
+    
+    model_config: ConfigDict = {"protected_namespaces": ()}
 
 class ModelInfo(BaseModel):
     id: Optional[
@@ -225,7 +223,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
-        **params
+        **params,
     ):
         args = locals()
         args.pop("max_retries", None)
@@ -320,7 +318,7 @@ class Deployment(BaseModel):
         model_name: str,
         litellm_params: LiteLLM_Params,
         model_info: Optional[Union[ModelInfo, dict]] = None,
-        **params
+        **params,
     ):
         if model_info is None:
             model_info = ModelInfo()
@@ -330,7 +328,7 @@ class Deployment(BaseModel):
             model_info=model_info,
             model_name=model_name,
             litellm_params=litellm_params,
-            **params
+            **params,
         )
 
     def to_json(self, **kwargs):
