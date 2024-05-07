@@ -470,7 +470,7 @@ asyncio.run(router_acompletion())
 </TabItem>
 <TabItem value="lowest-cost" label="Lowest Cost Routing">
 
-Picks a deployment based on the lowest cost. Cost is looked up in the LiteLLM Model cost map based on the provided `litellm_params["model"]`
+Picks a deployment based on the lowest cost
 
 How this works:
 - Get all healthy deployments
@@ -511,6 +511,57 @@ async def router_acompletion():
 asyncio.run(router_acompletion())
 
 ```
+
+
+#### Using Custom Input/Output pricing
+
+Set `litellm_params["input_cost_per_token"]` and `litellm_params["output_cost_per_token"]` for using custom pricing when routing
+
+```python
+model_list = [
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {
+			"model": "azure/chatgpt-v-2",
+			"input_cost_per_token": 0.00003,
+			"output_cost_per_token": 0.00003,
+		},
+		"model_info": {"id": "chatgpt-v-experimental"},
+	},
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {
+			"model": "azure/chatgpt-v-1",
+			"input_cost_per_token": 0.000000001,
+			"output_cost_per_token": 0.00000001,
+		},
+		"model_info": {"id": "chatgpt-v-1"},
+	},
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {
+			"model": "azure/chatgpt-v-5",
+			"input_cost_per_token": 10,
+			"output_cost_per_token": 12,
+		},
+		"model_info": {"id": "chatgpt-v-5"},
+	},
+]
+# init router
+router = Router(model_list=model_list, routing_strategy="cost-based-routing")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+
+	print(response._hidden_params["model_id"]) # expect chatgpt-v-1, since chatgpt-v-1 has lowest cost
+	return response
+
+asyncio.run(router_acompletion())
+```
+
 </TabItem>
 
 </Tabs>
