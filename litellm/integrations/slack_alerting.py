@@ -149,16 +149,21 @@ class SlackAlerting(CustomLogger):
 
     def _add_langfuse_trace_id_to_alert(
         self,
-        request_info: str,
         request_data: Optional[dict] = None,
-        kwargs: Optional[dict] = None,
-        type: Literal["hanging_request", "slow_response"] = "hanging_request",
-        start_time: Optional[datetime.datetime] = None,
-        end_time: Optional[datetime.datetime] = None,
-    ):
+    ) -> Optional[str]:
+        """
+        Returns langfuse trace url
+        """
         # do nothing for now
-        pass
-        return request_info
+        if (
+            request_data is not None
+            and request_data.get("metadata", {}).get("trace_id", None) is not None
+        ):
+            trace_id = request_data["metadata"]["trace_id"]
+            if litellm.utils.langFuseLogger is not None:
+                base_url = litellm.utils.langFuseLogger.Langfuse.base_url
+                return f"{base_url}/trace/{trace_id}"
+        return None
 
     def _response_taking_too_long_callback_helper(
         self,
@@ -501,13 +506,12 @@ class SlackAlerting(CustomLogger):
                 )
 
                 if "langfuse" in litellm.success_callback:
-                    request_info = self._add_langfuse_trace_id_to_alert(
-                        request_info=request_info,
+                    langfuse_url = self._add_langfuse_trace_id_to_alert(
                         request_data=request_data,
-                        type="hanging_request",
-                        start_time=start_time,
-                        end_time=end_time,
                     )
+
+                    if langfuse_url is not None:
+                        request_info += "\n🪢 Langfuse Trace: {}".format(langfuse_url)
 
                 # add deployment latencies to alert
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
@@ -701,6 +705,7 @@ Model Info:
             "daily_reports",
             "new_model_added",
         ],
+        **kwargs,
     ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
@@ -731,6 +736,10 @@ Model Info:
             formatted_message = (
                 f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
             )
+
+        if kwargs:
+            for key, value in kwargs.items():
+                formatted_message += f"\n\n{key}: `{value}`\n\n"
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
