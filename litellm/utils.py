@@ -4836,7 +4836,7 @@ def get_optional_params(
     **kwargs,
 ):
     # retrieve all parameters passed to the function
-    passed_params = locals()
+    passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         if k.startswith("aws_") and (
@@ -5770,7 +5770,7 @@ def get_optional_params(
         optional_params["extra_body"] = extra_body
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
-        for k in list(passed_params.keys()):
+        for k in passed_params.keys():
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
     print_verbose(f"Final returned optional params: {optional_params}")
