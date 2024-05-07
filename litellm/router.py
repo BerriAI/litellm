@@ -99,6 +99,7 @@ class Router:
             "least-busy",
             "usage-based-routing",
             "latency-based-routing",
+            "cost-based-routing",
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based routing
         semaphore: Optional[asyncio.Semaphore] = None,
