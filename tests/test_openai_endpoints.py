@@ -328,11 +328,10 @@ async def test_chat_completion_old_key():
     """
     async with aiohttp.ClientSession() as session:
         try:
-            key = "sk-ecMXHujzUtKCvHcwacdaTw"
+            key = "sk--W0Ph0uDZLVD7V7LQVrslg"
             await chat_completion(session=session, key=key)
         except Exception as e:
-            key = "sk-ecMXHujzUtKCvHcwacdaTw"  # try diff db key (in case db url is for the other db)
-            await chat_completion(session=session, key=key)
+            pytest.fail("Invalid api key")
 
 
 @pytest.mark.asyncio

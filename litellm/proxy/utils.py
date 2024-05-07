@@ -73,6 +73,7 @@ class ProxyLogging:
                 "llm_requests_hanging",
                 "budget_alerts",
                 "db_exceptions",
+                "daily_reports",
             ]
         ] = [
             "llm_exceptions",
@@ -80,11 +81,13 @@ class ProxyLogging:
             "llm_requests_hanging",
             "budget_alerts",
             "db_exceptions",
+            "daily_reports",
         ]
         self.slack_alerting_instance = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
             alert_types=self.alert_types,
+            internal_usage_cache=self.internal_usage_cache,
         )
 
     def update_values(
@@ -100,9 +103,11 @@ class ProxyLogging:
                     "llm_requests_hanging",
                     "budget_alerts",
                     "db_exceptions",
+                    "daily_reports",
                 ]
             ]
         ] = None,
+        alerting_args: Optional[dict] = None,
     ):
         self.alerting = alerting
         if alerting_threshold is not None:
@@ -114,7 +119,11 @@ class ProxyLogging:
             alerting=self.alerting,
             alerting_threshold=self.alerting_threshold,
             alert_types=self.alert_types,
+            alerting_args=alerting_args,
         )
+
+        if "daily_reports" in self.alert_types:
+            litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache

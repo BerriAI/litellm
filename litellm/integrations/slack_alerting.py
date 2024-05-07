@@ -1,24 +1,77 @@
 #### What this does ####
 #    Class for sending Slack Alerts #
 import dotenv, os
+from litellm.proxy._types import UserAPIKeyAuth
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
-import copy
-import traceback
 from litellm._logging import verbose_logger, verbose_proxy_logger
-import litellm
+import litellm, threading
 from typing import List, Literal, Any, Union, Optional, Dict
 from litellm.caching import DualCache
 import asyncio
 import aiohttp
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import datetime
+from pydantic import BaseModel
+from enum import Enum
+from datetime import datetime as dt, timedelta
+from litellm.integrations.custom_logger import CustomLogger
+import random
 
 
-class SlackAlerting:
+class LiteLLMBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
+
+    def json(self, **kwargs):
+        try:
+            return self.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
+
+
+class SlackAlertingArgs(LiteLLMBase):
+    daily_report_frequency: int = 12 * 60 * 60  # 12 hours
+    report_check_interval: int = 5 * 60  # 5 minutes
+
+
+class DeploymentMetrics(LiteLLMBase):
+    """
+    Metrics per deployment, stored in cache
+
+    Used for daily reporting
+    """
+
+    id: str
+    """id of deployment in router model list"""
+
+    failed_request: bool
+    """did it fail the request?"""
+
+    latency_per_output_token: Optional[float]
+    """latency/output token of deployment"""
+
+    updated_at: dt
+    """Current time of deployment being updated"""
+
+
+class SlackAlertingCacheKeys(Enum):
+    """
+    Enum for deployment daily metrics keys - {deployment_id}:{enum}
+    """
+
+    failed_requests_key = "failed_requests_daily_metrics"
+    latency_key = "latency_daily_metrics"
+    report_sent_key = "daily_metrics_report_sent"
+
+
+class SlackAlerting(CustomLogger):
     # Class variables or attributes
     def __init__(
         self,
+        internal_usage_cache: Optional[DualCache] = None,
         alerting_threshold: float = 300,
         alerting: Optional[List] = [],
         alert_types: Optional[
@@ -29,6 +82,7 @@ class SlackAlerting:
                     "llm_requests_hanging",
                     "budget_alerts",
                     "db_exceptions",
+                    "daily_reports",
                 ]
             ]
         ] = [
@@ -37,18 +91,21 @@ class SlackAlerting:
             "llm_requests_hanging",
             "budget_alerts",
             "db_exceptions",
+            "daily_reports",
         ],
         alert_to_webhook_url: Optional[
             Dict
         ] = None,  # if user wants to separate alerts to diff channels
+        alerting_args={},
     ):
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
         self.alert_types = alert_types
-        self.internal_usage_cache = DualCache()
+        self.internal_usage_cache = internal_usage_cache or DualCache()
         self.async_http_handler = AsyncHTTPHandler()
         self.alert_to_webhook_url = alert_to_webhook_url
-        pass
+        self.is_running = False
+        self.alerting_args = SlackAlertingArgs(**alerting_args)
 
     def update_values(
         self,
@@ -56,6 +113,7 @@ class SlackAlerting:
         alerting_threshold: Optional[float] = None,
         alert_types: Optional[List] = None,
         alert_to_webhook_url: Optional[Dict] = None,
+        alerting_args: Optional[Dict] = None,
     ):
         if alerting is not None:
             self.alerting = alerting
@@ -63,7 +121,8 @@ class SlackAlerting:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
-
+        if alerting_args is not None:
+            self.alerting_args = SlackAlertingArgs(**alerting_args)
         if alert_to_webhook_url is not None:
             # update the dict
             if self.alert_to_webhook_url is None:
@@ -101,7 +160,7 @@ class SlackAlerting:
         pass
         return request_info
 
-    def _response_taking_too_long_callback(
+    def _response_taking_too_long_callback_helper(
         self,
         kwargs,  # kwargs to completion
         start_time,
@@ -166,7 +225,7 @@ class SlackAlerting:
             return
 
         time_difference_float, model, api_base, messages = (
-            self._response_taking_too_long_callback(
+            self._response_taking_too_long_callback_helper(
                 kwargs=kwargs,
                 start_time=start_time,
                 end_time=end_time,
@@ -182,6 +241,9 @@ class SlackAlerting:
                 and "metadata" in kwargs["litellm_params"]
             ):
                 _metadata = kwargs["litellm_params"]["metadata"]
+                request_info = litellm.utils._add_key_name_and_team_to_alert(
+                    request_info=request_info, metadata=_metadata
+                )
 
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
                     metadata=_metadata
@@ -196,8 +258,178 @@ class SlackAlerting:
                 alert_type="llm_too_slow",
             )
 
-    async def log_failure_event(self, original_exception: Exception):
-        pass
+    async def async_update_daily_reports(
+        self, deployment_metrics: DeploymentMetrics
+    ) -> int:
+        """
+        Store the perf by deployment in cache
+        - Number of failed requests per deployment
+        - Latency / output tokens per deployment
+
+        'deployment_id:daily_metrics:failed_requests'
+        'deployment_id:daily_metrics:latency_per_output_token'
+
+        Returns
+            int - count of metrics set (1 - if just latency, 2 - if failed + latency)
+        """
+
+        return_val = 0
+        try:
+            ## FAILED REQUESTS ##
+            if deployment_metrics.failed_request:
+                await self.internal_usage_cache.async_increment_cache(
+                    key="{}:{}".format(
+                        deployment_metrics.id,
+                        SlackAlertingCacheKeys.failed_requests_key.value,
+                    ),
+                    value=1,
+                )
+
+                return_val += 1
+
+            ## LATENCY ##
+            if deployment_metrics.latency_per_output_token is not None:
+                await self.internal_usage_cache.async_increment_cache(
+                    key="{}:{}".format(
+                        deployment_metrics.id, SlackAlertingCacheKeys.latency_key.value
+                    ),
+                    value=deployment_metrics.latency_per_output_token,
+                )
+
+                return_val += 1
+
+            return return_val
+        except Exception as e:
+            return 0
+
+    async def send_daily_reports(self, router: litellm.Router) -> bool:
+        """
+        Send a daily report on:
+        - Top 5 deployments with most failed requests
+        - Top 5 slowest deployments (normalized by latency/output tokens)
+
+        Get the value from redis cache (if available) or in-memory and send it
+
+        Cleanup:
+        - reset values in cache -> prevent memory leak
+
+        Returns:
+            True -> if successfuly sent
+            False -> if not sent
+        """
+
+        ids = router.get_model_ids()
+
+        # get keys
+        failed_request_keys = [
+            "{}:{}".format(id, SlackAlertingCacheKeys.failed_requests_key.value)
+            for id in ids
+        ]
+        latency_keys = [
+            "{}:{}".format(id, SlackAlertingCacheKeys.latency_key.value) for id in ids
+        ]
+
+        combined_metrics_keys = failed_request_keys + latency_keys  # reduce cache calls
+
+        combined_metrics_values = await self.internal_usage_cache.async_batch_get_cache(
+            keys=combined_metrics_keys
+        )  # [1, 2, None, ..]
+
+        all_none = True
+        for val in combined_metrics_values:
+            if val is not None:
+                all_none = False
+
+        if all_none:
+            return False
+
+        failed_request_values = combined_metrics_values[
+            : len(failed_request_keys)
+        ]  # # [1, 2, None, ..]
+        latency_values = combined_metrics_values[len(failed_request_keys) :]
+
+        # find top 5 failed
+        ## Replace None values with a placeholder value (-1 in this case)
+        placeholder_value = 0
+        replaced_failed_values = [
+            value if value is not None else placeholder_value
+            for value in failed_request_values
+        ]
+
+        ## Get the indices of top 5 keys with the highest numerical values (ignoring None values)
+        top_5_failed = sorted(
+            range(len(replaced_failed_values)),
+            key=lambda i: replaced_failed_values[i],
+            reverse=True,
+        )[:5]
+
+        # find top 5 slowest
+        # Replace None values with a placeholder value (-1 in this case)
+        placeholder_value = 0
+        replaced_slowest_values = [
+            value if value is not None else placeholder_value
+            for value in latency_values
+        ]
+
+        # Get the indices of top 5 values with the highest numerical values (ignoring None values)
+        top_5_slowest = sorted(
+            range(len(replaced_slowest_values)),
+            key=lambda i: replaced_slowest_values[i],
+            reverse=True,
+        )[:5]
+
+        # format alert -> return the litellm model name + api base
+        message = f"\n\nHere are today's key metrics 📈: \n\n"
+
+        message += "\n\n*❗️ Top 5 Deployments with Most Failed Requests:*\n\n"
+        for i in range(len(top_5_failed)):
+            key = failed_request_keys[top_5_failed[i]].split(":")[0]
+            _deployment = router.get_model_info(key)
+            if isinstance(_deployment, dict):
+                deployment_name = _deployment["litellm_params"].get("model", "")
+            else:
+                return False
+
+            api_base = litellm.get_api_base(
+                model=deployment_name,
+                optional_params=(
+                    _deployment["litellm_params"] if _deployment is not None else {}
+                ),
+            )
+            if api_base is None:
+                api_base = ""
+            value = replaced_failed_values[top_5_failed[i]]
+            message += f"\t{i+1}. Deployment: `{deployment_name}`, Failed Requests: `{value}`,  API Base: `{api_base}`\n"
+
+        message += "\n\n*😅 Top 5 Slowest Deployments:*\n\n"
+        for i in range(len(top_5_slowest)):
+            key = latency_keys[top_5_slowest[i]].split(":")[0]
+            _deployment = router.get_model_info(key)
+            if _deployment is not None:
+                deployment_name = _deployment["litellm_params"].get("model", "")
+            else:
+                deployment_name = ""
+            api_base = litellm.get_api_base(
+                model=deployment_name,
+                optional_params=(
+                    _deployment["litellm_params"] if _deployment is not None else {}
+                ),
+            )
+            value = round(replaced_slowest_values[top_5_slowest[i]], 3)
+            message += f"\t{i+1}. Deployment: `{deployment_name}`, Latency per output token: `{value}s/token`,  API Base: `{api_base}`\n\n"
+
+        # cache cleanup -> reset values to 0
+        latency_cache_keys = [(key, 0) for key in latency_keys]
+        failed_request_cache_keys = [(key, 0) for key in failed_request_keys]
+        combined_metrics_cache_keys = latency_cache_keys + failed_request_cache_keys
+        await self.internal_usage_cache.async_batch_set_cache(
+            cache_list=combined_metrics_cache_keys
+        )
+
+        # send alert
+        await self.send_alert(message=message, level="Low", alert_type="daily_reports")
+
+        return True
 
     async def response_taking_too_long(
         self,
@@ -255,6 +487,11 @@ class SlackAlerting:
                     # in that case we fallback to the api base set in the request metadata
                     _metadata = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
+
+                    request_info = litellm.utils._add_key_name_and_team_to_alert(
+                        request_info=request_info, metadata=_metadata
+                    )
+
                     if _api_base is None:
                         _api_base = ""
                     request_info += f"\nAPI Base: `{_api_base}`"
@@ -404,6 +641,53 @@ class SlackAlerting:
 
         return
 
+    async def model_added_alert(self, model_name: str, litellm_model_name: str):
+        model_info = litellm.model_cost.get(litellm_model_name, {})
+        model_info_str = ""
+        for k, v in model_info.items():
+            if k == "input_cost_per_token" or k == "output_cost_per_token":
+                # when converting to string it should not be 1.63e-06
+                v = "{:.8f}".format(v)
+
+            model_info_str += f"{k}: {v}\n"
+
+        message = f"""
+*🚅 New Model Added*
+Model Name: `{model_name}`
+
+Usage OpenAI Python SDK:
+```
+import openai
+client = openai.OpenAI(
+    api_key="your_api_key",
+    base_url={os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")}
+)
+
+response = client.chat.completions.create(
+    model="{model_name}", # model to send to the proxy
+    messages = [
+        {{
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }}
+    ]
+)
+```
+
+Model Info: 
+```
+{model_info_str}
+```
+"""
+
+        await self.send_alert(
+            message=message, level="Low", alert_type="new_model_added"
+        )
+        pass
+
+    async def model_removed_alert(self, model_name: str):
+        pass
+
     async def send_alert(
         self,
         message: str,
@@ -414,6 +698,8 @@ class SlackAlerting:
             "llm_requests_hanging",
             "budget_alerts",
             "db_exceptions",
+            "daily_reports",
+            "new_model_added",
         ],
     ):
         """
@@ -439,9 +725,12 @@ class SlackAlerting:
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-        formatted_message = (
-            f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-        )
+        if alert_type == "daily_reports" or alert_type == "new_model_added":
+            formatted_message = message
+        else:
+            formatted_message = (
+                f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+            )
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
@@ -468,3 +757,85 @@ class SlackAlerting:
             pass
         else:
             print("Error sending slack alert. Error=", response.text)  # noqa
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """Log deployment latency"""
+        if "daily_reports" in self.alert_types:
+            model_id = (
+                kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
+            )
+            response_s: timedelta = end_time - start_time
+
+            final_value = response_s
+            total_tokens = 0
+
+            if isinstance(response_obj, litellm.ModelResponse):
+                completion_tokens = response_obj.usage.completion_tokens
+                final_value = float(response_s.total_seconds() / completion_tokens)
+
+            await self.async_update_daily_reports(
+                DeploymentMetrics(
+                    id=model_id,
+                    failed_request=False,
+                    latency_per_output_token=final_value,
+                    updated_at=litellm.utils.get_utc_datetime(),
+                )
+            )
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """Log failure + deployment latency"""
+        if "daily_reports" in self.alert_types:
+            model_id = (
+                kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
+            )
+            await self.async_update_daily_reports(
+                DeploymentMetrics(
+                    id=model_id,
+                    failed_request=True,
+                    latency_per_output_token=None,
+                    updated_at=litellm.utils.get_utc_datetime(),
+                )
+            )
+
+    async def _run_scheduled_daily_report(self, llm_router: Optional[litellm.Router]):
+        """
+        If 'daily_reports' enabled
+
+        Ping redis cache every 5 minutes to check if we should send the report
+
+        If yes -> call send_daily_report()
+        """
+        if llm_router is None or self.alert_types is None:
+            return
+
+        if "daily_reports" in self.alert_types:
+            while True:
+                report_sent = await self.internal_usage_cache.async_get_cache(
+                    key=SlackAlertingCacheKeys.report_sent_key.value
+                )  # None | datetime
+
+                if report_sent is None:
+                    await self.internal_usage_cache.async_set_cache(
+                        key=SlackAlertingCacheKeys.report_sent_key.value,
+                        value=litellm.utils.get_utc_datetime(),
+                    )
+                else:
+                    # check if current time - interval >= time last sent
+                    current_time = litellm.utils.get_utc_datetime()
+                    delta = current_time - timedelta(
+                        seconds=self.alerting_args.daily_report_frequency
+                    )
+                    if delta >= report_sent:
+                        # Sneak in the reporting logic here
+                        await self.send_daily_reports(router=llm_router)
+                        # Also, don't forget to update the report_sent time after sending the report!
+                        await self.internal_usage_cache.async_set_cache(
+                            key=SlackAlertingCacheKeys.report_sent_key.value,
+                            value=litellm.utils.get_utc_datetime(),
+                        )
+                interval = random.randint(
+                    self.alerting_args.report_check_interval - 3,
+                    self.alerting_args.report_check_interval + 3,
+                )  # shuffle to prevent collisions
+                await asyncio.sleep(interval)
+        return

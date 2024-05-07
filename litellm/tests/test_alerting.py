@@ -17,7 +17,7 @@ import asyncio
 from unittest.mock import patch, MagicMock
 from litellm.utils import get_api_base
 from litellm.caching import DualCache
-from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.integrations.slack_alerting import SlackAlerting, DeploymentMetrics
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,7 @@ async def test_get_api_base():
     end_time = datetime.now()
 
     time_difference_float, model, api_base, messages = (
-        _pl.slack_alerting_instance._response_taking_too_long_callback(
+        _pl.slack_alerting_instance._response_taking_too_long_callback_helper(
             kwargs={
                 "model": model,
                 "messages": messages,
@@ -98,7 +98,10 @@ def mock_env(monkeypatch):
 # Test the __init__ method
 def test_init():
     slack_alerting = SlackAlerting(
-        alerting_threshold=32, alerting=["slack"], alert_types=["llm_exceptions"]
+        alerting_threshold=32,
+        alerting=["slack"],
+        alert_types=["llm_exceptions"],
+        internal_usage_cache=DualCache(),
     )
     assert slack_alerting.alerting_threshold == 32
     assert slack_alerting.alerting == ["slack"]
@@ -116,7 +119,7 @@ from datetime import datetime, timedelta
 
 @pytest.fixture
 def slack_alerting():
-    return SlackAlerting(alerting_threshold=1)
+    return SlackAlerting(alerting_threshold=1, internal_usage_cache=DualCache())
 
 
 # Test for hanging LLM responses
@@ -185,3 +188,88 @@ async def test_send_alert(slack_alerting):
         mock_post.return_value.status_code = 200
         await slack_alerting.send_alert("Test message", "Low", "budget_alerts")
         mock_post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_daily_reports_unit_test(slack_alerting):
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "test-gpt",
+                    "litellm_params": {"model": "gpt-3.5-turbo"},
+                    "model_info": {"id": "1234"},
+                }
+            ]
+        )
+        deployment_metrics = DeploymentMetrics(
+            id="1234",
+            failed_request=False,
+            latency_per_output_token=20.3,
+            updated_at=litellm.utils.get_utc_datetime(),
+        )
+
+        updated_val = await slack_alerting.async_update_daily_reports(
+            deployment_metrics=deployment_metrics
+        )
+
+        assert updated_val == 1
+
+        await slack_alerting.send_daily_reports(router=router)
+
+        mock_send_alert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_daily_reports_completion(slack_alerting):
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        litellm.callbacks = [slack_alerting]
+
+        # on async success
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                    },
+                }
+            ]
+        )
+
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+        await asyncio.sleep(3)
+        response_val = await slack_alerting.send_daily_reports(router=router)
+
+        assert response_val == True
+
+        mock_send_alert.assert_awaited_once()
+
+        # on async failure
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "bad_key"},
+                }
+            ]
+        )
+
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+        except Exception as e:
+            pass
+
+        await asyncio.sleep(3)
+        response_val = await slack_alerting.send_daily_reports(router=router)
+
+        assert response_val == True
+
+        mock_send_alert.assert_awaited()
