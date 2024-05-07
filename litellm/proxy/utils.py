@@ -107,6 +107,7 @@ class ProxyLogging:
                 ]
             ]
         ] = None,
+        alerting_args: Optional[dict] = None,
     ):
         self.alerting = alerting
         if alerting_threshold is not None:
@@ -118,7 +119,11 @@ class ProxyLogging:
             alerting=self.alerting,
             alerting_threshold=self.alerting_threshold,
             alert_types=self.alert_types,
+            alerting_args=alerting_args,
         )
+
+        if "daily_reports" in self.alert_types:
+            litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache
