@@ -302,6 +302,7 @@ class ProxyLogging:
             "budget_alerts",
             "db_exceptions",
         ],
+        request_data: Optional[dict] = None,
     ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
@@ -331,10 +332,19 @@ class ProxyLogging:
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
+        extra_kwargs = {}
+        if request_data is not None:
+            _url = self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
+                request_data=request_data
+            )
+            if _url is not None:
+                extra_kwargs["🪢 Langfuse Trace"] = _url
+                formatted_message += "\n\n🪢 Langfuse Trace: {}".format(_url)
+
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
-                    message=message, level=level, alert_type=alert_type
+                    message=message, level=level, alert_type=alert_type, **extra_kwargs
                 )
             elif client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:
@@ -369,6 +379,7 @@ class ProxyLogging:
                 message=f"DB read/write call failed: {error_message}",
                 level="High",
                 alert_type="db_exceptions",
+                request_data={},
             )
         )
 
@@ -384,7 +395,10 @@ class ProxyLogging:
             litellm.utils.capture_exception(error=original_exception)
 
     async def post_call_failure_hook(
-        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+        self,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
     ):
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -409,6 +423,7 @@ class ProxyLogging:
                     message=f"LLM API call failed: {str(original_exception)}",
                     level="High",
                     alert_type="llm_exceptions",
+                    request_data=request_data,
                 )
             )
 
