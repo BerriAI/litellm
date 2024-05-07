@@ -48,6 +48,55 @@ def test_get_available_deployments():
     assert selected_model["model_info"]["id"] == "groq-llama"
 
 
+def test_get_available_deployments_custom_price():
+    from litellm._logging import verbose_router_logger
+    import logging
+
+    verbose_router_logger.setLevel(logging.DEBUG)
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-2",
+                "input_cost_per_token": 0.00003,
+                "output_cost_per_token": 0.00003,
+            },
+            "model_info": {"id": "chatgpt-v-experimental"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-1",
+                "input_cost_per_token": 0.000000001,
+                "output_cost_per_token": 0.00000001,
+            },
+            "model_info": {"id": "chatgpt-v-1"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-5",
+                "input_cost_per_token": 10,
+                "output_cost_per_token": 12,
+            },
+            "model_info": {"id": "chatgpt-v-5"},
+        },
+    ]
+    lowest_cost_logger = LowestCostLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+    model_group = "gpt-3.5-turbo"
+
+    ## CHECK WHAT'S SELECTED ##
+    selected_model = lowest_cost_logger.get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
+    )
+    print("selected model: ", selected_model)
+
+    assert selected_model["model_info"]["id"] == "chatgpt-v-1"
+
+
 @pytest.mark.asyncio
 async def test_lowest_cost_routing():
     """
