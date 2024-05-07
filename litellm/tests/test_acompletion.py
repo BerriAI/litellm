@@ -33,4 +33,13 @@ def test_acompletion_params():
         )
 
 
-# test_acompletion_params()
+@pytest.mark.asyncio
+async def test_mock_acompletion():
+    mock_response = "Hello there! How can I assist you today?"
+    response = await acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"content": "Hello World", "role": "user"}],
+        mock_response=mock_response
+    )
+    text_response = response["choices"][0]["message"]["content"]
+    assert text_response == mock_response
