@@ -40,7 +40,7 @@ class LowestCostLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.model_list = model_list
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
             Update usage on success
@@ -90,7 +90,11 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict = self.router_cache.get_cache(key=cost_key) or {}
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(key=cost_key) or {}
+                )
+
+                # check local result first
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -111,7 +115,9 @@ class LowestCostLoggingHandler(CustomLogger):
                     request_count_dict[id][precise_minute].get("rpm", 0) + 1
                 )
 
-                self.router_cache.set_cache(key=cost_key, value=request_count_dict)
+                await self.router_cache.async_set_cache(
+                    key=cost_key, value=request_count_dict
+                )
 
                 ### TESTING ###
                 if self.test_flag:
@@ -172,7 +178,9 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict = self.router_cache.get_cache(key=cost_key) or {}
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(key=cost_key) or {}
+                )
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -189,7 +197,7 @@ class LowestCostLoggingHandler(CustomLogger):
                     request_count_dict[id][precise_minute].get("rpm", 0) + 1
                 )
 
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=cost_key, value=request_count_dict
                 )  # reset map within window
 
@@ -200,7 +208,7 @@ class LowestCostLoggingHandler(CustomLogger):
             traceback.print_exc()
             pass
 
-    def get_available_deployments(
+    async def async_get_available_deployments(
         self,
         model_group: str,
         healthy_deployments: list,
@@ -213,7 +221,7 @@ class LowestCostLoggingHandler(CustomLogger):
         """
         cost_key = f"{model_group}_map"
 
-        request_count_dict = self.router_cache.get_cache(key=cost_key) or {}
+        request_count_dict = await self.router_cache.async_get_cache(key=cost_key) or {}
 
         # -----------------------
         # Find lowest used model
