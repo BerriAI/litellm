@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall, getCallbacksCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -60,6 +60,10 @@ interface EditModelModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
+interface RetryPolicyObject {
+  [key: string]: { [retryPolicyKey: string]: number } | undefined;
+}
+
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
 enum Providers {
@@ -89,7 +93,8 @@ const retry_policy_map: Record <string, string> = {
   "AuthenticationError  (401)": "AuthenticationErrorRetries",
   "TimeoutError (408)": "TimeoutErrorRetries",
   "RateLimitError (429)": "RateLimitErrorRetries",
-  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries"
+  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
+  "InternalServerError (500)": "InternalServerErrorRetries"
 };
 
 
@@ -222,7 +227,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     to: new Date(),
   });
 
-  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<Record<string, number>>({});
+  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
 
 
@@ -441,6 +446,29 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     // Update the 'lastRefreshed' state to the current date and time
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
+  };
+
+  const handleSaveRetrySettings = async () => {
+    if (!accessToken) {
+      console.error("Access token is missing");
+      return;
+    }
+
+    console.log("new modelGroupRetryPolicy:", modelGroupRetryPolicy);
+  
+    try {
+      const payload = {
+          router_settings: {
+            model_group_retry_policy: modelGroupRetryPolicy
+          }
+      };
+  
+      await setCallbacksCall(accessToken, payload);
+      message.success("Retry settings saved successfully");
+    } catch (error) {
+      console.error("Failed to save retry settings:", error);
+      message.error("Failed to save retry settings");
+    }
   };
 
 
@@ -1275,26 +1303,46 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <Text className="mb-6">How many retries should be attempted based on the Exception</Text>
               {retry_policy_map &&
   <table>
-    <tbody>
-  {Object.keys(retry_policy_map).map((key, idx) => (
-    <tr key={idx} className="flex justify-between items-center mt-2">
-      <td>
-        <Text>{key}</Text>
-      </td>
-      <td>
-        <InputNumber
-          className="ml-5"
-          defaultValue={defaultRetry}
-          min={0}
-          step={1}
-        />
-      </td>
-    </tr>
-  ))}
-</tbody>
-  </table>
+  <tbody>
+    {Object.entries(retry_policy_map).map(([exceptionType, retryPolicyKey], idx) => {
+
+      let retryCount = modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey]
+      if (retryCount == null) {
+        retryCount = defaultRetry;
+      }
+      
+      return (
+        <tr key={idx} className="flex justify-between items-center mt-2">
+          <td>
+            <Text>{exceptionType}</Text>
+          </td>
+          <td>
+            <InputNumber
+              className="ml-5"
+              value={retryCount}
+              min={0}
+              step={1}
+              onChange={(value) => {
+                setModelGroupRetryPolicy(prevModelGroupRetryPolicy => {
+                  const prevRetryPolicy = prevModelGroupRetryPolicy?.[selectedModelGroup!] ?? {};
+                  return {
+                    ...prevModelGroupRetryPolicy ?? {},
+                    [selectedModelGroup!]: {
+                      ...prevRetryPolicy,
+                      [retryPolicyKey!]: value,
+                    },
+                  } as RetryPolicyObject;
+                });
+              }}
+            />
+          </td>
+        </tr>
+      );
+    })}
+  </tbody>
+</table>
 }
-<Button className="mt-6 mr-8">
+<Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
   Save
 </Button>
 
