@@ -98,7 +98,10 @@ def mock_env(monkeypatch):
 # Test the __init__ method
 def test_init():
     slack_alerting = SlackAlerting(
-        alerting_threshold=32, alerting=["slack"], alert_types=["llm_exceptions"]
+        alerting_threshold=32,
+        alerting=["slack"],
+        alert_types=["llm_exceptions"],
+        internal_usage_cache=DualCache(),
     )
     assert slack_alerting.alerting_threshold == 32
     assert slack_alerting.alerting == ["slack"]
