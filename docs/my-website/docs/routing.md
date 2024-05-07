@@ -96,7 +96,7 @@ print(response)
 - `router.aimage_generation()` - async image generation calls
 
 ## Advanced - Routing Strategies
-#### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based
+#### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based, Cost Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
 
@@ -467,6 +467,50 @@ async def router_acompletion():
 asyncio.run(router_acompletion())
 ```
 
+</TabItem>
+<TabItem value="lowest-cost" label="Lowest Cost Routing">
+
+Picks a deployment based on the lowest cost. Cost is looked up in the LiteLLM Model cost map based on the provided `litellm_params["model"]`
+
+How this works:
+- Get all healthy deployments
+- Select all deployments that are under their provided `rpm/tpm` limits
+- For each deployment check if `litellm_param["model"]` exists in [`litellm_model_cost_map`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 
+	- if deployment does not exist in `litellm_model_cost_map` -> use deployment_cost= `$1`
+- Select deployment with lowest cost
+
+```python
+from litellm import Router 
+import asyncio
+
+model_list =  [
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {"model": "gpt-4"},
+		"model_info": {"id": "openai-gpt-4"},
+	},
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {"model": "groq/llama3-8b-8192"},
+		"model_info": {"id": "groq-llama"},
+	},
+]
+
+# init router
+router = Router(model_list=model_list, routing_strategy="cost-based-routing")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+
+	print(response._hidden_params["model_id"]) # expect groq-llama, since groq/llama has lowest cost
+	return response
+
+asyncio.run(router_acompletion())
+
+```
 </TabItem>
 
 </Tabs>
@@ -1159,6 +1203,7 @@ def __init__(
 		"least-busy",
 		"usage-based-routing",
 		"latency-based-routing",
+		"cost-based-routing",
 	] = "simple-shuffle",
 
 	## DEBUGGING ##
