@@ -276,12 +276,29 @@ class LowestCostLoggingHandler(CustomLogger):
             item_litellm_model_cost_map = litellm.model_cost.get(
                 item_litellm_model_name, {}
             )
-            item_input_cost = item_litellm_model_cost_map.get(
-                "input_cost_per_token", 5.0
-            )
-            item_output_cost = item_litellm_model_cost_map.get(
-                "output_cost_per_token", 5.0
-            )
+
+            # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
+            item_input_cost = None
+            item_output_cost = None
+            if _deployment.get("litellm_params", {}).get("input_cost_per_token", None):
+                item_input_cost = _deployment.get("litellm_params", {}).get(
+                    "input_cost_per_token"
+                )
+
+            if _deployment.get("litellm_params", {}).get("output_cost_per_token", None):
+                item_output_cost = _deployment.get("litellm_params", {}).get(
+                    "output_cost_per_token"
+                )
+
+            if item_input_cost is None:
+                item_input_cost = item_litellm_model_cost_map.get(
+                    "input_cost_per_token", 5.0
+                )
+
+            if item_output_cost is None:
+                item_output_cost = item_litellm_model_cost_map.get(
+                    "output_cost_per_token", 5.0
+                )
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
