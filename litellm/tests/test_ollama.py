@@ -83,7 +83,7 @@ def test_ollama_embeddings(mock_embeddings):
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_ollama_embeddings()
+# test_ollama_embeddings()
 
 @mock.patch(
     "litellm.llms.ollama.ollama_aembeddings",
@@ -105,4 +105,4 @@ def test_ollama_aembeddings(mock_aembeddings):
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_ollama_aembeddings()
+# test_ollama_aembeddings()
