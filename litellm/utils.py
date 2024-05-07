@@ -9373,7 +9373,7 @@ def get_secret(
         else:
             secret = os.environ.get(secret_name)
             try:
-                secret_value_as_bool = ast.literal_eval(secret)
+                secret_value_as_bool = ast.literal_eval(secret) if secret is not None else None
                 if isinstance(secret_value_as_bool, bool):
                     return secret_value_as_bool
                 else:
