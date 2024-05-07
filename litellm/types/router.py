@@ -345,3 +345,4 @@ class RetryPolicy(BaseModel):
     TimeoutErrorRetries: Optional[int] = None
     RateLimitErrorRetries: Optional[int] = None
     ContentPolicyViolationErrorRetries: Optional[int] = None
+    InternalServerErrorRetries: Optional[int] = None
