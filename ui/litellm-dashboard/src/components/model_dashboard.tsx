@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall, getCallbacksCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -441,6 +441,29 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     // Update the 'lastRefreshed' state to the current date and time
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
+  };
+
+  const handleSaveRetrySettings = async () => {
+    if (!accessToken) {
+      console.error("Access token is missing");
+      return;
+    }
+
+    console.log("new modelGroupRetryPolicy:", modelGroupRetryPolicy);
+  
+    try {
+      const payload = {
+          router_settings: {
+            model_group_retry_policy: modelGroupRetryPolicy
+          }
+      };
+  
+      await setCallbacksCall(accessToken, payload);
+      message.success("Retry settings saved successfully");
+    } catch (error) {
+      console.error("Failed to save retry settings:", error);
+      message.error("Failed to save retry settings");
+    }
   };
 
 
@@ -1277,7 +1300,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   <table>
   <tbody>
     {Object.entries(retry_policy_map).map(([exceptionType, retryPolicyKey], idx) => {
-      let retryCount = (modelGroupRetryPolicy[selectedModelGroup] ?? {})[retryPolicyKey];
+
+      let retryCount = modelGroupRetryPolicy?.[selectedModelGroup]?.[retryPolicyKey]
       if (retryCount == null) {
         retryCount = defaultRetry;
       }
@@ -1310,7 +1334,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   </tbody>
 </table>
 }
-<Button className="mt-6 mr-8">
+<Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
   Save
 </Button>
 
