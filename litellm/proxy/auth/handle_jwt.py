@@ -156,6 +156,11 @@ class JWTHandler:
         return public_key
 
     async def auth_jwt(self, token: str) -> dict:
+        audience = os.getenv("JWT_AUDIENCE")
+        decode_options = None
+        if audience is None:
+            decode_options = {"verify_aud": False}
+        
         from jwt.algorithms import RSAAlgorithm
 
         header = jwt.get_unverified_header(token)
@@ -185,7 +190,8 @@ class JWTHandler:
                     token,
                     public_key_rsa,  # type: ignore
                     algorithms=["RS256"],
-                    options={"verify_aud": False},
+                    options=decode_options,
+                    audience=audience,
                 )
                 return payload
 
@@ -195,9 +201,6 @@ class JWTHandler:
             except Exception as e:
                 raise Exception(f"Validation fails: {str(e)}")
         elif public_key is not None and isinstance(public_key, str):
-            audience = os.getenv("JWT_AUDIENCE")
-            if audience is None:
-                raise Exception("Missing JWT Audience from environment.")
             try:
                 cert = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
 
@@ -213,6 +216,7 @@ class JWTHandler:
                     key,
                     algorithms=["RS256"],
                     audience=audience,
+                    options=decode_options
                 )
                 return payload
 
