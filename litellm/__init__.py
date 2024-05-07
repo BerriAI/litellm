@@ -361,6 +361,7 @@ openai_compatible_endpoints: List = [
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
     "api.groq.com/openai/v1",
+    "api.deepseek.com/v1",
     "api.together.xyz/v1",
 ]
 
@@ -369,6 +370,7 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "groq",
+    "deepseek",
     "deepinfra",
     "perplexity",
     "xinference",
@@ -523,6 +525,7 @@ provider_list: List = [
     "anyscale",
     "mistral",
     "groq",
+    "deepseek",
     "maritalk",
     "voyage",
     "cloudflare",
