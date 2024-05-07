@@ -1275,24 +1275,40 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <Text className="mb-6">How many retries should be attempted based on the Exception</Text>
               {retry_policy_map &&
   <table>
-    <tbody>
-  {Object.keys(retry_policy_map).map((key, idx) => (
-    <tr key={idx} className="flex justify-between items-center mt-2">
-      <td>
-        <Text>{key}</Text>
-      </td>
-      <td>
-        <InputNumber
-          className="ml-5"
-          defaultValue={defaultRetry}
-          min={0}
-          step={1}
-        />
-      </td>
-    </tr>
-  ))}
-</tbody>
-  </table>
+  <tbody>
+    {Object.entries(retry_policy_map).map(([exceptionType, retryPolicyKey], idx) => {
+      let retryCount = (modelGroupRetryPolicy[selectedModelGroup] ?? {})[retryPolicyKey];
+      if (retryCount == null) {
+        retryCount = defaultRetry;
+      }
+      
+      return (
+        <tr key={idx} className="flex justify-between items-center mt-2">
+          <td>
+            <Text>{exceptionType}</Text>
+          </td>
+          <td>
+            <InputNumber
+              className="ml-5"
+              value={retryCount}
+              min={0}
+              step={1}
+              onChange={(value) => {
+                setModelGroupRetryPolicy({
+                  ...modelGroupRetryPolicy,
+                  [selectedModelGroup]: {
+                    ...modelGroupRetryPolicy[selectedModelGroup],
+                    [retryPolicyKey]: value,
+                  },
+                });
+              }}
+            />
+          </td>
+        </tr>
+      );
+    })}
+  </tbody>
+</table>
 }
 <Button className="mt-6 mr-8">
   Save
