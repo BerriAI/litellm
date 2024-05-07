@@ -189,7 +189,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 )
 
                 self.router_cache.set_cache(
-                    key=cost_key, value=request_count_dict, ttl=self.routing_args.ttl
+                    key=cost_key, value=request_count_dict
                 )  # reset map within window
 
                 ### TESTING ###
