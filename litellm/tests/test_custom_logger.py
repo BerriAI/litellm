@@ -90,10 +90,10 @@ class TmpFunction:
         print(f"ON ASYNC LOGGING")
         self.async_success = True
         print(
-            f'kwargs.get("complete_streaming_response"): {kwargs.get("complete_streaming_response")}'
+            f'kwargs.get("async_complete_streaming_response"): {kwargs.get("async_complete_streaming_response")}'
         )
         self.complete_streaming_response_in_callback = kwargs.get(
-            "complete_streaming_response"
+            "async_complete_streaming_response"
         )
 
 
@@ -115,6 +115,10 @@ async def test_async_chat_openai_stream():
             print(complete_streaming_response)
 
         complete_streaming_response = complete_streaming_response.strip("'")
+
+        await asyncio.sleep(3)
+
+        # problematic line
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"
         ]["content"]
