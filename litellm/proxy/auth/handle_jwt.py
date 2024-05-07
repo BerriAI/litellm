@@ -159,7 +159,7 @@ class JWTHandler:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
-        algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"],
+        algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
 
         audience = os.getenv("JWT_AUDIENCE")
         decode_options = None
