@@ -262,7 +262,7 @@ class LangFuseLogger:
 
         try:
             tags = []
-            metadata = copy.deepcopy(metadata) # Avoid modifying the original metadata
+            metadata = copy.deepcopy(metadata)  # Avoid modifying the original metadata
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
             supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
             supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
@@ -275,7 +275,6 @@ class LangFuseLogger:
             if supports_tags:
                 metadata_tags = metadata.pop("tags", [])
                 tags = metadata_tags
-
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
@@ -303,18 +302,17 @@ class LangFuseLogger:
                     else:
                         clean_metadata[key] = value
 
-
             session_id = clean_metadata.pop("session_id", None)
             trace_name = clean_metadata.pop("trace_name", None)
             trace_id = clean_metadata.pop("trace_id", None)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
             update_trace_keys = clean_metadata.pop("update_trace_keys", [])
-            
+
             if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name
                 ## DO NOT SET TRACE_NAME if trace-id set. this can lead to overwriting of past traces.
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
-            
+
             if existing_trace_id is not None:
                 trace_params = {"id": existing_trace_id}
 
@@ -322,15 +320,18 @@ class LangFuseLogger:
                 for metadata_param_key in update_trace_keys:
                     trace_param_key = metadata_param_key.replace("trace_", "")
                     if trace_param_key not in trace_params:
-                        updated_trace_value = clean_metadata.pop(metadata_param_key, None)
+                        updated_trace_value = clean_metadata.pop(
+                            metadata_param_key, None
+                        )
                         if updated_trace_value is not None:
                             trace_params[trace_param_key] = updated_trace_value
-            
 
                 # Pop the trace specific keys that would have been popped if there were a new trace
-                for key in list(filter(lambda key: key.startswith("trace_"), clean_metadata.keys())):
+                for key in list(
+                    filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
+                ):
                     clean_metadata.pop(key, None)
-                
+
                 # Special keys that are found in the function arguments and not the metadata
                 if "input" in update_trace_keys:
                     trace_params["input"] = input
@@ -342,16 +343,22 @@ class LangFuseLogger:
                     "name": trace_name,
                     "session_id": session_id,
                     "input": input,
-                    "version": clean_metadata.pop("trace_version", clean_metadata.get("version", None)), # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
+                    "version": clean_metadata.pop(
+                        "trace_version", clean_metadata.get("version", None)
+                    ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
                 }
-                for key in list(filter(lambda key: key.startswith("trace_"), clean_metadata.keys())):
-                    trace_params[key.replace("trace_", "")] = clean_metadata.pop(key, None)
-                
+                for key in list(
+                    filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
+                ):
+                    trace_params[key.replace("trace_", "")] = clean_metadata.pop(
+                        key, None
+                    )
+
                 if level == "ERROR":
                     trace_params["status_message"] = output
                 else:
                     trace_params["output"] = output
-            
+
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
 
@@ -454,7 +461,7 @@ class LangFuseLogger:
                 )
 
             generation_client = trace.generation(**generation_params)
-            
+
             return generation_client.trace_id, generation_id
         except Exception as e:
             verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
