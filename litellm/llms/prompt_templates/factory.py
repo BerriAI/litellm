@@ -1019,7 +1019,7 @@ def anthropic_messages_pt(messages: list):
                 merge_with_previous = False
             else:
                 new_messages.append({"role": "user", "content": user_content})
-        else:
+        elif msg_i > 0:
             merge_with_previous = True
 
         assistant_content = []
@@ -1053,7 +1053,7 @@ def anthropic_messages_pt(messages: list):
                 merge_with_previous = False
             else:
                 new_messages.append({"role": "assistant", "content": assistant_content})
-        else:
+        elif msg_i > 0:
             merge_with_previous = True
 
         if msg_i == init_msg_i:  # prevent infinite loops
