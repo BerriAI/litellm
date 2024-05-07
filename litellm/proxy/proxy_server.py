@@ -1900,9 +1900,6 @@ async def _run_background_health_check():
         await asyncio.sleep(health_check_interval)
 
 
-semaphore = asyncio.Semaphore(1)
-
-
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -2377,6 +2374,7 @@ class ProxyConfig:
                 alerting=general_settings.get("alerting", None),
                 alerting_threshold=general_settings.get("alerting_threshold", 600),
                 alert_types=general_settings.get("alert_types", None),
+                alerting_args=general_settings.get("alerting_args", None),
                 redis_cache=redis_usage_cache,
             )
             ### CONNECT TO DATABASE ###
@@ -2501,7 +2499,7 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
-        router = litellm.Router(**router_params, semaphore=semaphore)  # type:ignore
+        router = litellm.Router(**router_params)  # type:ignore
         return router, model_list, general_settings
 
     def get_model_info_with_id(self, model) -> RouterModelInfo:
@@ -3272,6 +3270,13 @@ async def startup_event():
     db_writer_client = HTTPHandler()
 
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
+
+    if "daily_reports" in proxy_logging_obj.slack_alerting_instance.alert_types:
+        asyncio.create_task(
+            proxy_logging_obj.slack_alerting_instance._run_scheduled_daily_report(
+                llm_router=llm_router
+            )
+        )  # RUN DAILY REPORT (if scheduled)
 
     ## JWT AUTH ##
     if general_settings.get("litellm_jwtauth", None) is not None:
