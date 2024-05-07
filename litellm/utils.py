@@ -5825,7 +5825,7 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
 
     Parameters:
     - model: str - the model passed to litellm.completion()
-    - optional_params - the additional params passed to litellm.completion - eg. api_base, api_key, etc. See `LiteLLM_Params` - https://github.com/BerriAI/litellm/blob/f09e6ba98d65e035a79f73bc069145002ceafd36/litellm/router.py#L67
+    - optional_params - the 'litellm_params' in router.completion *OR* additional params passed to litellm.completion - eg. api_base, api_key, etc. See `LiteLLM_Params` - https://github.com/BerriAI/litellm/blob/f09e6ba98d65e035a79f73bc069145002ceafd36/litellm/router.py#L67
 
     Returns:
     - string (api_base) or None
@@ -7914,6 +7914,11 @@ def exception_type(
             if _vertex_location is not None:
                 extra_information += f"\nvertex_location: {_vertex_location}\n"
 
+            # on litellm proxy add key name + team to exceptions
+            extra_information = _add_key_name_and_team_to_alert(
+                request_info=extra_information, metadata=_metadata
+            )
+
             ################################################################################
             # End of Common Extra information Needed for all providers
             ################################################################################
@@ -9368,7 +9373,7 @@ def get_secret(
         else:
             secret = os.environ.get(secret_name)
             try:
-                secret_value_as_bool = ast.literal_eval(secret)
+                secret_value_as_bool = ast.literal_eval(secret) if secret is not None else None
                 if isinstance(secret_value_as_bool, bool):
                     return secret_value_as_bool
                 else:
@@ -11510,3 +11515,25 @@ def _get_base_model_from_metadata(model_call_details=None):
                 if base_model is not None:
                     return base_model
     return None
+
+
+def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
+    """
+    Internal helper function for litellm proxy
+    Add the Key Name + Team Name to the error
+    Only gets added if the metadata contains the user_api_key_alias and user_api_key_team_alias
+
+    [Non-Blocking helper function]
+    """
+    try:
+        _api_key_name = metadata.get("user_api_key_alias", None)
+        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", None)
+        if _api_key_name is not None:
+            request_info = (
+                f"\n\nKey Name: `{_api_key_name}`\nTeam: `{_user_api_key_team_alias}`"
+                + request_info
+            )
+
+        return request_info
+    except:
+        return request_info

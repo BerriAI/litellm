@@ -2597,7 +2597,10 @@ class Router:
                     return model
         return None
 
-    def get_model_ids(self):
+    def get_model_ids(self) -> List[str]:
+        """
+        Returns list of model id's.
+        """
         ids = []
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
@@ -2605,7 +2608,7 @@ class Router:
                 ids.append(id)
         return ids
 
-    def get_model_names(self):
+    def get_model_names(self) -> List[str]:
         return self.model_names
 
     def get_model_list(self):
@@ -2631,6 +2634,7 @@ class Router:
             "retry_after",
             "fallbacks",
             "context_window_fallbacks",
+            "model_group_retry_policy",
         ]
 
         for var in vars_to_include:
@@ -2656,6 +2660,7 @@ class Router:
             "retry_after",
             "fallbacks",
             "context_window_fallbacks",
+            "model_group_retry_policy",
         ]
 
         _int_settings = [
@@ -3266,6 +3271,8 @@ class Router:
 
         if retry_policy is None:
             return None
+        if isinstance(retry_policy, dict):
+            retry_policy = RetryPolicy(**retry_policy)
         if (
             isinstance(exception, litellm.BadRequestError)
             and retry_policy.BadRequestErrorRetries is not None

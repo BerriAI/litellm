@@ -58,7 +58,7 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to,check the response
+        # Add any assertions here to, check the response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
@@ -118,6 +118,7 @@ def test_completion_claude():
 
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
+
     messages = [
         {
             "role": "system",
@@ -1621,6 +1622,7 @@ def test_completion_ollama_function_call_stream(model):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize(
     ("model"),
     [
@@ -1669,6 +1671,7 @@ async def test_acompletion_ollama_function_call(model):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize(
     ("model"),
     [

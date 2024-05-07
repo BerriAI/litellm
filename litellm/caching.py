@@ -106,7 +106,7 @@ class InMemoryCache(BaseCache):
             return_val.append(val)
         return return_val
 
-    async def async_increment(self, key, value: int, **kwargs) -> int:
+    async def async_increment(self, key, value: float, **kwargs) -> float:
         # get the value
         init_value = await self.async_get_cache(key=key) or 0
         value = init_value + value
@@ -423,12 +423,12 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
-    async def async_increment(self, key, value: int, **kwargs) -> int:
+    async def async_increment(self, key, value: float, **kwargs) -> float:
         _redis_client = self.init_async_client()
         start_time = time.time()
         try:
             async with _redis_client as redis_client:
-                result = await redis_client.incr(name=key, amount=value)
+                result = await redis_client.incrbyfloat(name=key, amount=value)
                 ## LOGGING ##
                 end_time = time.time()
                 _duration = end_time - start_time
@@ -1382,18 +1382,41 @@ class DualCache(BaseCache):
             print_verbose(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
             traceback.print_exc()
 
+    async def async_batch_set_cache(
+        self, cache_list: list, local_only: bool = False, **kwargs
+    ):
+        """
+        Batch write values to the cache
+        """
+        print_verbose(
+            f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}"
+        )
+        try:
+            if self.in_memory_cache is not None:
+                await self.in_memory_cache.async_set_cache_pipeline(
+                    cache_list=cache_list, **kwargs
+                )
+
+            if self.redis_cache is not None and local_only == False:
+                await self.redis_cache.async_set_cache_pipeline(
+                    cache_list=cache_list, ttl=kwargs.get("ttl", None)
+                )
+        except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
+            traceback.print_exc()
+
     async def async_increment_cache(
-        self, key, value: int, local_only: bool = False, **kwargs
-    ) -> int:
+        self, key, value: float, local_only: bool = False, **kwargs
+    ) -> float:
         """
         Key - the key in cache
 
-        Value - int - the value you want to increment by
+        Value - float - the value you want to increment by
 
-        Returns - int - the incremented value
+        Returns - float - the incremented value
         """
         try:
-            result: int = value
+            result: float = value
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment(
                     key, value, **kwargs
