@@ -177,9 +177,7 @@ class GenericLiteLLMParams(BaseModel):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    model_config: ConfigDict = {"extra": "allow", "arbitrary_types_allowed": True, "protected_namespaces": ()}
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
