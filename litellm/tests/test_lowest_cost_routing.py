@@ -68,3 +68,31 @@ async def _deploy(lowest_latency_logger, deployment_id, tokens_used, duration):
         start_time=start_time,
         end_time=end_time,
     )
+
+
+@pytest.mark.asyncio
+async def test_lowest_cost_routing():
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "openai-gpt-4"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "groq/llama3-8b-8192"},
+            "model_info": {"id": "groq-llama"},
+        },
+    ]
+
+    # init router
+    router = Router(model_list=model_list, routing_strategy="cost-based-routing")
+    response = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+    print(response)
+    print(
+        response._hidden_params["model_id"]
+    )  # expect groq-llama, since groq/llama has lowest cost
+    assert "groq-llama" == response._hidden_params["model_id"]
