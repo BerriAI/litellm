@@ -10,6 +10,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm._logging import verbose_router_logger
 from litellm import ModelResponse
 from litellm import token_counter
 import litellm
@@ -288,6 +289,10 @@ class LowestCostLoggingHandler(CustomLogger):
 
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
+
+            verbose_router_logger.debug(
+                f"item_cost: {item_cost}, item_tpm: {item_tpm}, item_rpm: {item_rpm}, model_id: {_deployment.get('model_info', {}).get('id')}"
+            )
 
             # -------------- #
             # Debugging Logic

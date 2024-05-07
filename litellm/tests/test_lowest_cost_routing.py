@@ -1,5 +1,5 @@
 #### What this tests ####
-#    This tests the router's ability to pick deployment with lowest latency
+#    This tests the router's ability to pick deployment with lowest cost
 
 import sys, os, asyncio, time, random
 from datetime import datetime
@@ -17,7 +17,7 @@ from litellm import Router
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.caching import DualCache
 
-### UNIT TESTS FOR LATENCY ROUTING ###
+### UNIT TESTS FOR cost ROUTING ###
 
 
 def test_get_available_deployments():
@@ -48,30 +48,11 @@ def test_get_available_deployments():
     assert selected_model["model_info"]["id"] == "groq-llama"
 
 
-async def _deploy(lowest_latency_logger, deployment_id, tokens_used, duration):
-    kwargs = {
-        "litellm_params": {
-            "metadata": {
-                "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
-            },
-            "model_info": {"id": deployment_id},
-        }
-    }
-    start_time = time.time()
-    response_obj = {"usage": {"total_tokens": tokens_used}}
-    time.sleep(duration)
-    end_time = time.time()
-    lowest_latency_logger.log_success_event(
-        response_obj=response_obj,
-        kwargs=kwargs,
-        start_time=start_time,
-        end_time=end_time,
-    )
-
-
 @pytest.mark.asyncio
 async def test_lowest_cost_routing():
+    """
+    Test if router returns model with the lowest cost
+    """
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
@@ -96,3 +77,78 @@ async def test_lowest_cost_routing():
         response._hidden_params["model_id"]
     )  # expect groq-llama, since groq/llama has lowest cost
     assert "groq-llama" == response._hidden_params["model_id"]
+
+
+async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "gpt-4",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": tokens_used}}
+    time.sleep(duration)
+    end_time = time.time()
+    lowest_cost_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
+async def _gather_deploy(all_deploys):
+    return await asyncio.gather(*[_deploy(*t) for t in all_deploys])
+
+
+@pytest.mark.parametrize(
+    "ans_rpm", [1, 5]
+)  # 1 should produce nothing, 10 should select first
+def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
+    """
+    Pass in list of 2 valid models
+
+    Update cache with 1 model clearly being at tpm/rpm limit
+
+    assert that only the valid model is returned
+    """
+    from litellm._logging import verbose_router_logger
+    import logging
+
+    verbose_router_logger.setLevel(logging.DEBUG)
+    test_cache = DualCache()
+    ans = "1234"
+    non_ans_rpm = 3
+    assert ans_rpm != non_ans_rpm, "invalid test"
+    if ans_rpm < non_ans_rpm:
+        ans = None
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "1234", "rpm": ans_rpm},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "groq/llama3-8b-8192"},
+            "model_info": {"id": "5678", "rpm": non_ans_rpm},
+        },
+    ]
+    lowest_cost_logger = LowestCostLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+    model_group = "gpt-3.5-turbo"
+    d1 = [(lowest_cost_logger, "1234", 50, 0.01)] * non_ans_rpm
+    d2 = [(lowest_cost_logger, "5678", 50, 0.01)] * non_ans_rpm
+    asyncio.run(_gather_deploy([*d1, *d2]))
+    ## CHECK WHAT'S SELECTED ##
+    d_ans = lowest_cost_logger.get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
+    )
+    assert (d_ans and d_ans["model_info"]["id"]) == ans
+
+    print("selected deployment:", d_ans)
