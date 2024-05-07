@@ -313,3 +313,70 @@ async def test_daily_reports_redis_cache_scheduler():
 
         # second call - expect empty
         await slack_alerting._run_scheduler_helper(llm_router=router)
+
+
+@pytest.mark.asyncio
+async def test_send_llm_exception(slack_alerting):
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        litellm.callbacks = [slack_alerting]
+
+        # on async success
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "bad_key",
+                    },
+                }
+            ]
+        )
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+        except:
+            pass
+
+        await asyncio.sleep(3)
+
+        mock_send_alert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="Local test. Test if slack alerts are sent.")
+async def test_send_llm_exception_to_slack():
+    from litellm.integrations.slack_alerting import SlackAlerting
+
+    new_alerting = SlackAlerting(
+        alerting_threshold=0.00002,
+        alerting=["slack"],
+        alert_types=["llm_exceptions", "llm_requests_hanging", "llm_too_slow"],
+    )
+
+    litellm.callbacks = [new_alerting]
+    litellm.set_verbose = True
+
+    # on async success
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "bad_key",
+                },
+            }
+        ]
+    )
+    try:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    except:
+        pass
+
+    await asyncio.sleep(3)
