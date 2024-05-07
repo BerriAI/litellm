@@ -796,6 +796,14 @@ Model Info:
                     updated_at=litellm.utils.get_utc_datetime(),
                 )
             )
+        if "llm_exceptions" in self.alert_types:
+            original_exception = kwargs.get("exception", None)
+
+            await self.send_alert(
+                message="LLM API Failure - " + str(original_exception),
+                level="High",
+                alert_type="llm_exceptions",
+            )
 
     async def _run_scheduler_helper(self, llm_router: litellm.Router) -> bool:
         """
