@@ -7344,14 +7344,17 @@ async def add_new_model(
             await proxy_config.add_deployment(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
-
-            _alerting = general_settings.get("alerting", []) or []
-            if "slack" in _alerting:
-                # send notification - new model added
-                await proxy_logging_obj.slack_alerting_instance.model_added_alert(
-                    model_name=model_params.model_name,
-                    litellm_model_name=_orignal_litellm_model_name,
-                )
+            try:
+                # don't let failed slack alert block the /model/new response
+                _alerting = general_settings.get("alerting", []) or []
+                if "slack" in _alerting:
+                    # send notification - new model added
+                    await proxy_logging_obj.slack_alerting_instance.model_added_alert(
+                        model_name=model_params.model_name,
+                        litellm_model_name=_orignal_litellm_model_name,
+                    )
+            except:
+                pass
 
         else:
             raise HTTPException(
