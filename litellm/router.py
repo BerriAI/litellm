@@ -2634,6 +2634,7 @@ class Router:
             "retry_after",
             "fallbacks",
             "context_window_fallbacks",
+            "model_group_retry_policy",
         ]
 
         for var in vars_to_include:
@@ -2659,6 +2660,7 @@ class Router:
             "retry_after",
             "fallbacks",
             "context_window_fallbacks",
+            "model_group_retry_policy",
         ]
 
         _int_settings = [
@@ -3269,6 +3271,8 @@ class Router:
 
         if retry_policy is None:
             return None
+        if isinstance(retry_policy, dict):
+            retry_policy = RetryPolicy(**retry_policy)
         if (
             isinstance(exception, litellm.BadRequestError)
             and retry_policy.BadRequestErrorRetries is not None
