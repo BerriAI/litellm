@@ -166,6 +166,8 @@ async def test_check_num_callbacks_on_lowest_latency():
         original_routing_strategy = await get_current_routing_strategy(session=session)
         await config_update(session=session, routing_strategy="latency-based-routing")
 
+        await asyncio.sleep(5)
+
         num_callbacks_1, num_alerts_1, all_litellm_callbacks_1 = (
             await get_active_callbacks(session=session)
         )
