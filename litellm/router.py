@@ -2958,6 +2958,7 @@ class Router:
         if (
             self.routing_strategy != "usage-based-routing-v2"
             and self.routing_strategy != "simple-shuffle"
+            and self.routing_strategy != "cost-based-routing"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -3009,6 +3010,16 @@ class Router:
             and self.lowesttpm_logger_v2 is not None
         ):
             deployment = await self.lowesttpm_logger_v2.async_get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,
+                messages=messages,
+                input=input,
+            )
+        if (
+            self.routing_strategy == "cost-based-routing"
+            and self.lowestcost_logger is not None
+        ):
+            deployment = await self.lowestcost_logger.async_get_available_deployments(
                 model_group=model,
                 healthy_deployments=healthy_deployments,
                 messages=messages,
@@ -3183,15 +3194,6 @@ class Router:
                 healthy_deployments=healthy_deployments,
                 messages=messages,
                 input=input,
-            )
-        elif (
-            self.routing_strategy == "cost-based-routing"
-            and self.lowestcost_logger is not None
-        ):
-            deployment = self.lowestcost_logger.get_available_deployments(
-                model_group=model,
-                healthy_deployments=healthy_deployments,
-                request_kwargs=request_kwargs,
             )
         if deployment is None:
             verbose_router_logger.info(
