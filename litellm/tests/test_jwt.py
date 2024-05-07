@@ -77,9 +77,9 @@ async def test_token_single_public_key():
         == "qIgOQfEVrrErJC0E7gsHXi6rs_V0nyFY5qPFui2-tv0o4CwpwDzgfBtLO7o_wLiguq0lnu54sMT2eLNoRiiPuLvv6bg7Iy1H9yc5_4Jf5oYEOrqN5o9ZBOoYp1q68Pv0oNJYyZdGu5ZJfd7V4y953vB2XfEKgXCsAkhVhlvIUMiDNKWoMDWsyb2xela5tRURZ2mJAXcHfSC_sYdZxIA2YYrIHfoevq_vTlaz0qVSe_uOKjEpgOAS08UUrgda4CQL11nzICiIQzc6qmjIQt2cjzB2D_9zb4BYndzEtfl0kwAT0z_I85S3mkwTqHU-1BvKe_4MG4VG3dAAeffLPXJyXQ"
     )
 
-
+@pytest.mark.parametrize('audience', [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_valid_invalid_token():
+async def test_valid_invalid_token(audience):
     """
     Tests
     - valid token
@@ -89,6 +89,10 @@ async def test_valid_invalid_token():
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.backends import default_backend
+
+    os.environ.pop('JWT_AUDIENCE', None)
+    if audience:
+        os.environ["JWT_AUDIENCE"] = audience
 
     # Generate a private / public key pair using RSA algorithm
     key = rsa.generate_private_key(
@@ -134,9 +138,8 @@ async def test_valid_invalid_token():
         "sub": "user123",
         "exp": expiration_time,  # set the token to expire in 10 minutes
         "scope": "litellm-proxy-admin",
+        "aud": audience
     }
-    if os.getenv("JWT_AUDIENCE"):
-        payload["aud"] = os.getenv("JWT_AUDIENCE")
 
     # Generate the JWT token
     # But before, you should convert bytes to string
@@ -163,9 +166,8 @@ async def test_valid_invalid_token():
         "sub": "user123",
         "exp": expiration_time,  # set the token to expire in 10 minutes
         "scope": "litellm-NO-SCOPE",
+        "aud": audience
     }
-    if os.getenv("JWT_AUDIENCE"):
-        payload["aud"] = os.getenv("JWT_AUDIENCE")
 
     # Generate the JWT token
     # But before, you should convert bytes to string
@@ -180,7 +182,6 @@ async def test_valid_invalid_token():
         response = await jwt_handler.auth_jwt(token=token)
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
-
 
 @pytest.fixture
 def prisma_client():
@@ -204,8 +205,9 @@ def prisma_client():
     return prisma_client
 
 
+@pytest.mark.parametrize('audience', [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_team_token_output(prisma_client):
+async def test_team_token_output(prisma_client, audience):
     import jwt, json
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -219,6 +221,10 @@ async def test_team_token_output(prisma_client):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()
+
+    os.environ.pop('JWT_AUDIENCE', None)
+    if audience:
+        os.environ["JWT_AUDIENCE"] = audience
 
     # Generate a private / public key pair using RSA algorithm
     key = rsa.generate_private_key(
@@ -268,9 +274,8 @@ async def test_team_token_output(prisma_client):
         "exp": expiration_time,  # set the token to expire in 10 minutes
         "scope": "litellm_team",
         "client_id": team_id,
+        "aud": audience
     }
-    if os.getenv("JWT_AUDIENCE"):
-        payload["aud"] = os.getenv("JWT_AUDIENCE")
 
     # Generate the JWT token
     # But before, you should convert bytes to string
@@ -284,9 +289,8 @@ async def test_team_token_output(prisma_client):
         "sub": "user123",
         "exp": expiration_time,  # set the token to expire in 10 minutes
         "scope": "litellm_proxy_admin",
+        "aud": audience
     }
-    if os.getenv("JWT_AUDIENCE"):
-        payload["aud"] = os.getenv("JWT_AUDIENCE")
 
     admin_token = jwt.encode(payload, private_key_str, algorithm="RS256")
 
@@ -354,8 +358,9 @@ async def test_team_token_output(prisma_client):
     assert team_result.team_models == ["gpt-3.5-turbo", "gpt-4"]
 
 
+@pytest.mark.parametrize('audience', [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_user_token_output(prisma_client):
+async def test_user_token_output(prisma_client, audience):
     """
     - If user required, check if it exists
     - fail initial request (when user doesn't exist)
@@ -375,6 +380,10 @@ async def test_user_token_output(prisma_client):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()
+
+    os.environ.pop('JWT_AUDIENCE', None)
+    if audience:
+        os.environ["JWT_AUDIENCE"] = audience
 
     # Generate a private / public key pair using RSA algorithm
     key = rsa.generate_private_key(
@@ -427,9 +436,8 @@ async def test_user_token_output(prisma_client):
         "exp": expiration_time,  # set the token to expire in 10 minutes
         "scope": "litellm_team",
         "client_id": team_id,
+        "aud": audience
     }
-    if os.getenv("JWT_AUDIENCE"):
-        payload["aud"] = os.getenv("JWT_AUDIENCE")
 
     # Generate the JWT token
     # But before, you should convert bytes to string
@@ -443,9 +451,8 @@ async def test_user_token_output(prisma_client):
         "sub": user_id,
         "exp": expiration_time,  # set the token to expire in 10 minutes
         "scope": "litellm_proxy_admin",
+        "aud": audience
     }
-    if os.getenv("JWT_AUDIENCE"):
-        payload["aud"] = os.getenv("JWT_AUDIENCE")
 
     admin_token = jwt.encode(payload, private_key_str, algorithm="RS256")
 
