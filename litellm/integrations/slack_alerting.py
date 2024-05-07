@@ -160,7 +160,7 @@ class SlackAlerting(CustomLogger):
         pass
         return request_info
 
-    def _response_taking_too_long_callback(
+    def _response_taking_too_long_callback_helper(
         self,
         kwargs,  # kwargs to completion
         start_time,
@@ -225,7 +225,7 @@ class SlackAlerting(CustomLogger):
             return
 
         time_difference_float, model, api_base, messages = (
-            self._response_taking_too_long_callback(
+            self._response_taking_too_long_callback_helper(
                 kwargs=kwargs,
                 start_time=start_time,
                 end_time=end_time,
@@ -241,6 +241,9 @@ class SlackAlerting(CustomLogger):
                 and "metadata" in kwargs["litellm_params"]
             ):
                 _metadata = kwargs["litellm_params"]["metadata"]
+                request_info = litellm.utils._add_key_name_and_team_to_alert(
+                    request_info=request_info, metadata=_metadata
+                )
 
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
                     metadata=_metadata
@@ -484,6 +487,11 @@ class SlackAlerting(CustomLogger):
                     # in that case we fallback to the api base set in the request metadata
                     _metadata = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
+
+                    request_info = litellm.utils._add_key_name_and_team_to_alert(
+                        request_info=request_info, metadata=_metadata
+                    )
+
                     if _api_base is None:
                         _api_base = ""
                     request_info += f"\nAPI Base: `{_api_base}`"
@@ -633,6 +641,53 @@ class SlackAlerting(CustomLogger):
 
         return
 
+    async def model_added_alert(self, model_name: str, litellm_model_name: str):
+        model_info = litellm.model_cost.get(litellm_model_name, {})
+        model_info_str = ""
+        for k, v in model_info.items():
+            if k == "input_cost_per_token" or k == "output_cost_per_token":
+                # when converting to string it should not be 1.63e-06
+                v = "{:.8f}".format(v)
+
+            model_info_str += f"{k}: {v}\n"
+
+        message = f"""
+*🚅 New Model Added*
+Model Name: `{model_name}`
+
+Usage OpenAI Python SDK:
+```
+import openai
+client = openai.OpenAI(
+    api_key="your_api_key",
+    base_url={os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")}
+)
+
+response = client.chat.completions.create(
+    model="{model_name}", # model to send to the proxy
+    messages = [
+        {{
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }}
+    ]
+)
+```
+
+Model Info: 
+```
+{model_info_str}
+```
+"""
+
+        await self.send_alert(
+            message=message, level="Low", alert_type="new_model_added"
+        )
+        pass
+
+    async def model_removed_alert(self, model_name: str):
+        pass
+
     async def send_alert(
         self,
         message: str,
@@ -644,6 +699,7 @@ class SlackAlerting(CustomLogger):
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "new_model_added",
         ],
     ):
         """
@@ -669,7 +725,7 @@ class SlackAlerting(CustomLogger):
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-        if alert_type == "daily_reports":
+        if alert_type == "daily_reports" or alert_type == "new_model_added":
             formatted_message = message
         else:
             formatted_message = (
