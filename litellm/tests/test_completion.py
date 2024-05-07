@@ -1061,16 +1061,16 @@ def test_completion_perplexity_api_2():
 ######### HUGGING FACE TESTS ########################
 #####################################################
 """
-HF Tests we should pass 
-- TGI: 
-    - Pro Inference API 
-    - Deployed Endpoint 
-- Coversational 
-    - Free Inference API 
-    - Deployed Endpoint 
+HF Tests we should pass
+- TGI:
+    - Pro Inference API
+    - Deployed Endpoint
+- Coversational
+    - Free Inference API
+    - Deployed Endpoint
 - Neither TGI or Coversational
-    - Free Inference API 
-    - Deployed Endpoint 
+    - Free Inference API
+    - Deployed Endpoint
 """
 
 
@@ -3015,6 +3015,20 @@ async def test_acompletion_gemini():
             pass
         else:
             pytest.fail(f"Error occurred: {e}")
+
+# Deepseek tests
+def test_completion_deepseek():
+    litellm.set_verbose = True
+    model_name = "deepseek/deepseek-chat"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # Palm tests
