@@ -71,7 +71,7 @@ class SlackAlerting(CustomLogger):
     # Class variables or attributes
     def __init__(
         self,
-        internal_usage_cache: DualCache,
+        internal_usage_cache: Optional[DualCache] = None,
         alerting_threshold: float = 300,
         alerting: Optional[List] = [],
         alert_types: Optional[
@@ -101,7 +101,7 @@ class SlackAlerting(CustomLogger):
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
         self.alert_types = alert_types
-        self.internal_usage_cache = internal_usage_cache
+        self.internal_usage_cache = internal_usage_cache or DualCache()
         self.async_http_handler = AsyncHTTPHandler()
         self.alert_to_webhook_url = alert_to_webhook_url
         self.is_running = False
