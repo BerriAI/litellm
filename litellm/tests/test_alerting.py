@@ -61,7 +61,7 @@ async def test_get_api_base():
     end_time = datetime.now()
 
     time_difference_float, model, api_base, messages = (
-        _pl.slack_alerting_instance._response_taking_too_long_callback(
+        _pl.slack_alerting_instance._response_taking_too_long_callback_helper(
             kwargs={
                 "model": model,
                 "messages": messages,
