@@ -15,6 +15,9 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable
 from litellm.proxy.utils import PrismaClient
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from typing import Optional
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 
 
 class JWTHandler:
@@ -142,8 +145,8 @@ class JWTHandler:
                 public_key = keys[0]
         elif len(keys) > 1:
             for key in keys:
-                if kid is not None and key["kid"] == kid:
-                    public_key = key
+                if kid is not None and key == kid:
+                    public_key = keys[key]
 
         if public_key is None:
             raise Exception(
@@ -183,6 +186,33 @@ class JWTHandler:
                     public_key_rsa,  # type: ignore
                     algorithms=["RS256"],
                     options={"verify_aud": False},
+                )
+                return payload
+
+            except jwt.ExpiredSignatureError:
+                # the token is expired, do something to refresh it
+                raise Exception("Token Expired")
+            except Exception as e:
+                raise Exception(f"Validation fails: {str(e)}")
+        elif public_key is not None and isinstance(public_key, str):
+            audience = os.getenv("JWT_AUDIENCE")
+            if audience is None:
+                raise Exception("Missing JWT Audience from environment.")
+            try:
+                cert = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
+
+                # Extract public key
+                key = cert.public_key().public_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PublicFormat.SubjectPublicKeyInfo
+                )
+
+                # decode the token using the public key
+                payload = jwt.decode(
+                    token,
+                    key,
+                    algorithms=["RS256"],
+                    audience=audience,
                 )
                 return payload
 
