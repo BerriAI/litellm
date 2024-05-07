@@ -146,7 +146,7 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
             message="OIDC token could not be retrieved from secret manager.",
         )
 
-    req_token = httpx.get(
+    req_token = httpx.post(
         f"https://login.microsoftonline.com/{azure_tenant}/oauth2/v2.0/token",
         data={
             "client_id": azure_client_id,
