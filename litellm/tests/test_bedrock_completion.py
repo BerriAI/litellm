@@ -66,6 +66,41 @@ def test_completion_bedrock_claude_completion_auth():
 
 # test_completion_bedrock_claude_completion_auth()
 
+def test_completion_bedrock_cloudflare_ai_gateway():
+    print("calling bedrock with cloudflare ai gateway")
+    import os
+
+    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_bedrock_runtime_endpoint = f"https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/aws-bedrock/bedrock-runtime/{aws_region_name}"
+
+    os.environ.pop("AWS_ACCESS_KEY_ID", None)
+    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+    os.environ.pop("AWS_REGION_NAME", None)
+
+    try:
+        response = completion(
+            model="bedrock/amazon.titan-text-express-v1",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name=aws_region_name,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+        os.environ["AWS_REGION_NAME"] = aws_region_name
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 def test_completion_bedrock_claude_2_1_completion_auth():
     print("calling bedrock claude 2.1 completion params auth")
