@@ -60,6 +60,10 @@ interface EditModelModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
+interface RetryPolicyObject {
+  [key: string]: { [retryPolicyKey: string]: number } | undefined;
+}
+
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
 enum Providers {
@@ -222,7 +226,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     to: new Date(),
   });
 
-  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<Record<string, number>>({});
+  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
 
 
@@ -1301,7 +1305,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   <tbody>
     {Object.entries(retry_policy_map).map(([exceptionType, retryPolicyKey], idx) => {
 
-      let retryCount = modelGroupRetryPolicy?.[selectedModelGroup]?.[retryPolicyKey]
+      let retryCount = modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey]
       if (retryCount == null) {
         retryCount = defaultRetry;
       }
@@ -1318,12 +1322,15 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               min={0}
               step={1}
               onChange={(value) => {
-                setModelGroupRetryPolicy({
-                  ...modelGroupRetryPolicy,
-                  [selectedModelGroup]: {
-                    ...modelGroupRetryPolicy[selectedModelGroup],
-                    [retryPolicyKey]: value,
-                  },
+                setModelGroupRetryPolicy(prevModelGroupRetryPolicy => {
+                  const prevRetryPolicy = prevModelGroupRetryPolicy?.[selectedModelGroup!] ?? {};
+                  return {
+                    ...prevModelGroupRetryPolicy ?? {},
+                    [selectedModelGroup!]: {
+                      ...prevRetryPolicy,
+                      [retryPolicyKey!]: value,
+                    },
+                  } as RetryPolicyObject;
                 });
               }}
             />
