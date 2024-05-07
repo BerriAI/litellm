@@ -93,7 +93,8 @@ const retry_policy_map: Record <string, string> = {
   "AuthenticationError  (401)": "AuthenticationErrorRetries",
   "TimeoutError (408)": "TimeoutErrorRetries",
   "RateLimitError (429)": "RateLimitErrorRetries",
-  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries"
+  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
+  "InternalServerError (500)": "InternalServerErrorRetries"
 };
 
 
