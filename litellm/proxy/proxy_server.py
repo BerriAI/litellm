@@ -5924,6 +5924,7 @@ async def new_user(data: NewUserRequest):
         models=response.get("models", None),
         tpm_limit=response.get("tpm_limit", None),
         rpm_limit=response.get("rpm_limit", None),
+        budget_duration=response.get("budget_duration", None),
     )
 
 
