@@ -73,6 +73,7 @@ class ProxyLogging:
                 "llm_requests_hanging",
                 "budget_alerts",
                 "db_exceptions",
+                "daily_reports",
             ]
         ] = [
             "llm_exceptions",
@@ -80,11 +81,13 @@ class ProxyLogging:
             "llm_requests_hanging",
             "budget_alerts",
             "db_exceptions",
+            "daily_reports",
         ]
         self.slack_alerting_instance = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
             alert_types=self.alert_types,
+            internal_usage_cache=self.internal_usage_cache,
         )
 
     def update_values(
@@ -100,6 +103,7 @@ class ProxyLogging:
                     "llm_requests_hanging",
                     "budget_alerts",
                     "db_exceptions",
+                    "daily_reports",
                 ]
             ]
         ] = None,
