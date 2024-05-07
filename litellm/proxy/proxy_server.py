@@ -221,6 +221,12 @@ class ProxyException(Exception):
         }
 
 
+class UserAPIKeyCacheTTLEnum(enum.Enum):
+    key_information_cache = 600
+    user_information_cache = 600
+    global_proxy_spend = 60
+
+
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
@@ -479,7 +485,7 @@ async def user_api_key_auth(
                         await user_api_key_cache.async_set_cache(
                             key="{}:spend".format(litellm_proxy_admin_name),
                             value=global_proxy_spend,
-                            ttl=60,
+                            ttl=UserAPIKeyCacheTTLEnum.global_proxy_spend.value,
                         )
                     if global_proxy_spend is not None:
                         user_info = {
@@ -740,7 +746,9 @@ async def user_api_key_auth(
                         )
                         for _id in user_id_information:
                             await user_api_key_cache.async_set_cache(
-                                key=_id["user_id"], value=_id, ttl=600
+                                key=_id["user_id"],
+                                value=_id,
+                                ttl=UserAPIKeyCacheTTLEnum.user_information_cache.value,
                             )
                     if custom_db_client is not None:
                         user_id_information = await custom_db_client.get_data(
@@ -961,7 +969,7 @@ async def user_api_key_auth(
                     await user_api_key_cache.async_set_cache(
                         key="{}:spend".format(litellm_proxy_admin_name),
                         value=global_proxy_spend,
-                        ttl=60,
+                        ttl=UserAPIKeyCacheTTLEnum.global_proxy_spend.value,
                     )
 
                 if global_proxy_spend is not None:
@@ -993,7 +1001,9 @@ async def user_api_key_auth(
 
             # Add hashed token to cache
             await user_api_key_cache.async_set_cache(
-                key=api_key, value=valid_token, ttl=600
+                key=api_key,
+                value=valid_token,
+                ttl=UserAPIKeyCacheTTLEnum.key_information_cache.value,
             )
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
