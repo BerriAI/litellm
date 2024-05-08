@@ -2528,7 +2528,9 @@ class ProxyConfig:
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
                 model.model_info["id"] = model.model_id
-            _model_info = RouterModelInfo(**model.model_info, db_model=db_model)
+            if "db_model" in model.model_info and model.model_info["db_model"] == False:
+                model.model_info["db_model"] = db_model
+            _model_info = RouterModelInfo(**model.model_info)
         else:
             _model_info = RouterModelInfo(id=model.model_id, db_model=db_model)
         return _model_info
@@ -2613,7 +2615,13 @@ class ProxyConfig:
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
                         # decode base64
-                        decoded_b64 = base64.b64decode(v)
+                        try:
+                            decoded_b64 = base64.b64decode(v)
+                        except Exception as e:
+                            verbose_proxy_logger.error(
+                                "Error decoding value - {}".format(v)
+                            )
+                            continue
                         # decrypt value
                         _value = decrypt_value(value=decoded_b64, master_key=master_key)
                         # sanity check if string > size 0
@@ -2629,7 +2637,7 @@ class ProxyConfig:
                 model=m, db_model=True
             )  ## 👈 FLAG = True for db_models
 
-            added = llm_router.add_deployment(
+            added = llm_router.upsert_deployment(
                 deployment=Deployment(
                     model_name=m.model_name,
                     litellm_params=_litellm_params,
@@ -7457,18 +7465,39 @@ async def update_model(
                 exclude_none=True
             )
 
-            for key, value in _existing_litellm_params_dict.items():
-                if key in _new_litellm_params_dict:
-                    _existing_litellm_params_dict[key] = _new_litellm_params_dict[key]
+            ### ENCRYPT PARAMS ###
+            for k, v in _new_litellm_params_dict.items():
+                if isinstance(v, str):
+                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
+                    model_params.litellm_params[k] = base64.b64encode(
+                        encrypted_value
+                    ).decode("utf-8")
+
+            ### MERGE WITH EXISTING DATA ###
+            merged_dictionary = {}
+            _mp = model_params.litellm_params.dict()
+
+            for key, value in _mp.items():
+                if value is not None:
+                    merged_dictionary[key] = value
+                elif (
+                    key in _existing_litellm_params_dict
+                    and _existing_litellm_params_dict[key] is not None
+                ):
+                    merged_dictionary[key] = _existing_litellm_params_dict[key]
+                else:
+                    pass
 
             _data: dict = {
-                "litellm_params": json.dumps(_existing_litellm_params_dict),  # type: ignore
+                "litellm_params": json.dumps(merged_dictionary),  # type: ignore
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             }
             model_response = await prisma_client.db.litellm_proxymodeltable.update(
                 where={"model_id": _model_id},
                 data=_data,  # type: ignore
             )
+
+            return model_response
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):
