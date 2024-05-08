@@ -18,6 +18,10 @@ from unittest.mock import patch, MagicMock
 from litellm.utils import get_api_base
 from litellm.caching import DualCache
 from litellm.integrations.slack_alerting import SlackAlerting, DeploymentMetrics
+import unittest.mock
+from unittest.mock import AsyncMock
+import pytest
+from litellm.router import AlertingConfig, Router
 
 
 @pytest.mark.parametrize(
@@ -316,60 +320,30 @@ async def test_daily_reports_redis_cache_scheduler():
 
 
 @pytest.mark.asyncio
-async def test_send_llm_exception(slack_alerting):
-    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        litellm.callbacks = [slack_alerting]
-
-        # on async success
-        router = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "gpt-5",
-                    "litellm_params": {
-                        "model": "gpt-3.5-turbo",
-                        "api_key": "bad_key",
-                    },
-                }
-            ]
-        )
-        try:
-            await router.acompletion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            )
-        except:
-            pass
-
-        await asyncio.sleep(3)
-
-        mock_send_alert.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 @pytest.mark.skip(reason="Local test. Test if slack alerts are sent.")
 async def test_send_llm_exception_to_slack():
-    from litellm.integrations.slack_alerting import SlackAlerting
-
-    new_alerting = SlackAlerting(
-        alerting_threshold=0.00002,
-        alerting=["slack"],
-        alert_types=["llm_exceptions", "llm_requests_hanging", "llm_too_slow"],
-    )
-
-    litellm.callbacks = [new_alerting]
-    litellm.set_verbose = True
+    from litellm.router import AlertingConfig
 
     # on async success
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "gpt-5",
+                "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
                     "api_key": "bad_key",
                 },
-            }
-        ]
+            },
+            {
+                "model_name": "gpt-5-good",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+        ],
+        alerting_config=AlertingConfig(
+            alerting_threshold=0.5, webhook_url=os.getenv("SLACK_WEBHOOK_URL")
+        ),
     )
     try:
         await router.acompletion(
@@ -378,5 +352,10 @@ async def test_send_llm_exception_to_slack():
         )
     except:
         pass
+
+    await router.acompletion(
+        model="gpt-5-good",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
 
     await asyncio.sleep(3)
