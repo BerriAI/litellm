@@ -1,8 +1,8 @@
 import os
 import json
 from enum import Enum
-import requests
-import time, httpx
+import requests  # type: ignore
+import time, httpx  # type: ignore
 from typing import Callable, Any
 from litellm.utils import ModelResponse, Usage
 from .prompt_templates.factory import prompt_factory, custom_prompt

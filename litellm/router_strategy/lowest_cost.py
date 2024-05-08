@@ -1,7 +1,7 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 from pydantic import BaseModel, Extra, Field, root_validator
-import dotenv, os, requests, random
+import dotenv, os, requests, random  # type: ignore
 from typing import Optional, Union, List, Dict
 from datetime import datetime, timedelta
 import random
