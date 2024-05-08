@@ -766,10 +766,10 @@ def test_ausage_based_routing_fallbacks():
         load_dotenv()
 
         # Constants for TPM and RPM allocation
-        AZURE_FAST_RPM = 1
-        AZURE_BASIC_RPM = 1
-        OPENAI_RPM = 2
-        ANTHROPIC_RPM = 100000
+        AZURE_FAST_RPM = 0
+        AZURE_BASIC_RPM = 0
+        OPENAI_RPM = 0
+        ANTHROPIC_RPM = 2
 
         def get_azure_params(deployment_name: str):
             params = {
@@ -854,7 +854,7 @@ def test_ausage_based_routing_fallbacks():
         assert response._hidden_params["model_id"] == "1"
 
         # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
-        for i in range(21):
+        for i in range(3):
             response = router.completion(
                 model="azure/gpt-4-fast",
                 messages=messages,
@@ -863,7 +863,7 @@ def test_ausage_based_routing_fallbacks():
             )
             print("response: ", response)
             print("response._hidden_params: ", response._hidden_params)
-            if i == 20:
+            if i == 2:
                 # by the 19th call we should have hit TPM LIMIT for OpenAI, it should fallback to anthropic-claude-instant-1.2
                 assert response._hidden_params["model_id"] == "4"
 

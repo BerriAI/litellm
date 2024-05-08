@@ -65,9 +65,11 @@ async def get_active_callbacks(session):
 
         _num_callbacks = _json_response["num_callbacks"]
         _num_alerts = _json_response["num_alerting"]
+        all_litellm_callbacks = _json_response["all_litellm_callbacks"]
+
         print("current number of callbacks: ", _num_callbacks)
         print("current number of alerts: ", _num_alerts)
-        return _num_callbacks, _num_alerts
+        return _num_callbacks, _num_alerts, all_litellm_callbacks
 
 
 async def get_current_routing_strategy(session):
@@ -96,35 +98,55 @@ async def get_current_routing_strategy(session):
 
 
 @pytest.mark.asyncio
+@pytest.mark.order1
 async def test_check_num_callbacks():
     """
     Test 1:  num callbacks should NOT increase over time
     -> check current callbacks
-    -> sleep for 30s
+    -> sleep for 30 seconds
     -> check current callbacks
-    -> sleep for 30s
+    -> sleep for 30 seconds
     -> check current callbacks
     """
     import uuid
 
     async with aiohttp.ClientSession() as session:
         await asyncio.sleep(30)
-        num_callbacks_1, _ = await get_active_callbacks(session=session)
+        num_callbacks_1, _, all_litellm_callbacks_1 = await get_active_callbacks(
+            session=session
+        )
         assert num_callbacks_1 > 0
         await asyncio.sleep(30)
 
-        num_callbacks_2, _ = await get_active_callbacks(session=session)
+        num_callbacks_2, _, all_litellm_callbacks_2 = await get_active_callbacks(
+            session=session
+        )
+
+        print("all_litellm_callbacks_1", all_litellm_callbacks_1)
+
+        print(
+            "diff in callbacks=",
+            set(all_litellm_callbacks_1) - set(all_litellm_callbacks_2),
+        )
 
         assert num_callbacks_1 == num_callbacks_2
 
         await asyncio.sleep(30)
 
-        num_callbacks_3, _ = await get_active_callbacks(session=session)
+        num_callbacks_3, _, all_litellm_callbacks_3 = await get_active_callbacks(
+            session=session
+        )
+
+        print(
+            "diff in callbacks = all_litellm_callbacks3 - all_litellm_callbacks2 ",
+            set(all_litellm_callbacks_3) - set(all_litellm_callbacks_2),
+        )
 
         assert num_callbacks_1 == num_callbacks_2 == num_callbacks_3
 
 
 @pytest.mark.asyncio
+@pytest.mark.order2
 async def test_check_num_callbacks_on_lowest_latency():
     """
     Test 1:  num callbacks should NOT increase over time
@@ -144,17 +166,35 @@ async def test_check_num_callbacks_on_lowest_latency():
         original_routing_strategy = await get_current_routing_strategy(session=session)
         await config_update(session=session, routing_strategy="latency-based-routing")
 
-        num_callbacks_1, num_alerts_1 = await get_active_callbacks(session=session)
+        await asyncio.sleep(30)
+
+        num_callbacks_1, num_alerts_1, all_litellm_callbacks_1 = (
+            await get_active_callbacks(session=session)
+        )
 
         await asyncio.sleep(30)
 
-        num_callbacks_2, num_alerts_2 = await get_active_callbacks(session=session)
+        num_callbacks_2, num_alerts_2, all_litellm_callbacks_2 = (
+            await get_active_callbacks(session=session)
+        )
+
+        print(
+            "diff in callbacks all_litellm_callbacks_2 - all_litellm_callbacks_1 =",
+            set(all_litellm_callbacks_2) - set(all_litellm_callbacks_1),
+        )
 
         assert num_callbacks_1 == num_callbacks_2
 
         await asyncio.sleep(30)
 
-        num_callbacks_3, num_alerts_3 = await get_active_callbacks(session=session)
+        num_callbacks_3, num_alerts_3, all_litellm_callbacks_3 = (
+            await get_active_callbacks(session=session)
+        )
+
+        print(
+            "diff in callbacks all_litellm_callbacks_3 - all_litellm_callbacks_2 =",
+            set(all_litellm_callbacks_3) - set(all_litellm_callbacks_2),
+        )
 
         assert num_callbacks_1 == num_callbacks_2 == num_callbacks_3
 
