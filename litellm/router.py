@@ -53,6 +53,7 @@ class Router:
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
+    default_cooldown_time: float = 60  # seconds
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
@@ -94,7 +95,9 @@ class Router:
         allowed_fails: Optional[
             int
         ] = None,  # Number of times a deployment can failbefore being added to cooldown
-        cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
+        cooldown_time: Optional[
+            float
+        ] = None,  # (seconds) time to cooldown a deployment after failure
         routing_strategy: Literal[
             "simple-shuffle",
             "least-busy",
@@ -238,7 +241,7 @@ class Router:
             )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
         self.allowed_fails = allowed_fails or litellm.allowed_fails
-        self.cooldown_time = cooldown_time or 1
+        self.cooldown_time = cooldown_time or self.default_cooldown_time
         self.failed_calls = (
             InMemoryCache()
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
@@ -1826,7 +1829,7 @@ class Router:
         verbose_router_logger.debug(
             f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
         )
-        cooldown_time = self.cooldown_time or 1
+        cooldown_time = self.cooldown_time
 
         if isinstance(exception_status, str):
             try:
