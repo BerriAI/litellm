@@ -346,3 +346,19 @@ class RetryPolicy(BaseModel):
     RateLimitErrorRetries: Optional[int] = None
     ContentPolicyViolationErrorRetries: Optional[int] = None
     InternalServerErrorRetries: Optional[int] = None
+
+
+class RouterAlerting(BaseModel):
+    """
+    Use this configure alerting for the router. Receive alerts on the following events
+    - LLM API Exceptions
+    - LLM Responses Too Slow
+    - LLM Requests Hanging
+
+    Args:
+        webhook_url: Optional[str] = None            - webhook url for alerting
+        alerting_threshold: Optional[float] = None - threhshold for slow / hanging llm responses (in seconds)
+    """
+
+    webhook_url: Optional[str] = None
+    alerting_threshold: Optional[float] = None
