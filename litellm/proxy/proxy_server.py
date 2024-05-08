@@ -2516,20 +2516,21 @@ class ProxyConfig:
         router = litellm.Router(**router_params)  # type:ignore
         return router, model_list, general_settings
 
-    def get_model_info_with_id(self, model) -> RouterModelInfo:
+    def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
         Common logic across add + delete router models
         Parameters:
         - deployment
+        - db_model -> flag for differentiating model stored in db vs. config -> used on UI
 
         Return model info w/ id
         """
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
                 model.model_info["id"] = model.model_id
-            _model_info = RouterModelInfo(**model.model_info)
+            _model_info = RouterModelInfo(**model.model_info, db_model=db_model)
         else:
-            _model_info = RouterModelInfo(id=model.model_id)
+            _model_info = RouterModelInfo(id=model.model_id, db_model=db_model)
         return _model_info
 
     async def _delete_deployment(self, db_models: list) -> int:
@@ -2624,7 +2625,9 @@ class ProxyConfig:
                     f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
                 )
                 continue  # skip to next model
-            _model_info = self.get_model_info_with_id(model=m)
+            _model_info = self.get_model_info_with_id(
+                model=m, db_model=True
+            )  ## 👈 FLAG = True for db_models
 
             added = llm_router.add_deployment(
                 deployment=Deployment(
@@ -7432,6 +7435,16 @@ async def update_model(
                 )
             )
             if _existing_litellm_params is None:
+                if (
+                    llm_router is not None
+                    and llm_router.get_deployment(model_id=_model_id) is not None
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."
+                        },
+                    )
                 raise Exception("model not found")
             _existing_litellm_params_dict = dict(
                 _existing_litellm_params.litellm_params
