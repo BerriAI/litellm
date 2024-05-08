@@ -68,11 +68,15 @@ class SlackAlertingCacheKeys(Enum):
 
 
 class SlackAlerting(CustomLogger):
+    """
+    Class for sending Slack Alerts
+    """
+
     # Class variables or attributes
     def __init__(
         self,
         internal_usage_cache: Optional[DualCache] = None,
-        alerting_threshold: float = 300,
+        alerting_threshold: float = 300,  # threshold for slow / hanging llm responses (in seconds)
         alerting: Optional[List] = [],
         alert_types: Optional[
             List[
@@ -97,6 +101,7 @@ class SlackAlerting(CustomLogger):
             Dict
         ] = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
+        default_webhook_url: Optional[str] = None,
     ):
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
@@ -106,6 +111,7 @@ class SlackAlerting(CustomLogger):
         self.alert_to_webhook_url = alert_to_webhook_url
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
+        self.default_webhook_url = default_webhook_url
 
     def update_values(
         self,
@@ -149,16 +155,21 @@ class SlackAlerting(CustomLogger):
 
     def _add_langfuse_trace_id_to_alert(
         self,
-        request_info: str,
         request_data: Optional[dict] = None,
-        kwargs: Optional[dict] = None,
-        type: Literal["hanging_request", "slow_response"] = "hanging_request",
-        start_time: Optional[datetime.datetime] = None,
-        end_time: Optional[datetime.datetime] = None,
-    ):
+    ) -> Optional[str]:
+        """
+        Returns langfuse trace url
+        """
         # do nothing for now
-        pass
-        return request_info
+        if (
+            request_data is not None
+            and request_data.get("metadata", {}).get("trace_id", None) is not None
+        ):
+            trace_id = request_data["metadata"]["trace_id"]
+            if litellm.utils.langFuseLogger is not None:
+                base_url = litellm.utils.langFuseLogger.Langfuse.base_url
+                return f"{base_url}/trace/{trace_id}"
+        return None
 
     def _response_taking_too_long_callback_helper(
         self,
@@ -302,7 +313,7 @@ class SlackAlerting(CustomLogger):
         except Exception as e:
             return 0
 
-    async def send_daily_reports(self, router: litellm.Router) -> bool:
+    async def send_daily_reports(self, router) -> bool:
         """
         Send a daily report on:
         - Top 5 deployments with most failed requests
@@ -501,13 +512,12 @@ class SlackAlerting(CustomLogger):
                 )
 
                 if "langfuse" in litellm.success_callback:
-                    request_info = self._add_langfuse_trace_id_to_alert(
-                        request_info=request_info,
+                    langfuse_url = self._add_langfuse_trace_id_to_alert(
                         request_data=request_data,
-                        type="hanging_request",
-                        start_time=start_time,
-                        end_time=end_time,
                     )
+
+                    if langfuse_url is not None:
+                        request_info += "\n🪢 Langfuse Trace: {}".format(langfuse_url)
 
                 # add deployment latencies to alert
                 _deployment_latency_map = self._get_deployment_latencies_to_alert(
@@ -701,6 +711,7 @@ Model Info:
             "daily_reports",
             "new_model_added",
         ],
+        **kwargs,
     ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
@@ -731,6 +742,10 @@ Model Info:
             formatted_message = (
                 f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
             )
+
+        if kwargs:
+            for key, value in kwargs.items():
+                formatted_message += f"\n\n{key}: `{value}`\n\n"
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
@@ -740,6 +755,8 @@ Model Info:
             and alert_type in self.alert_to_webhook_url
         ):
             slack_webhook_url = self.alert_to_webhook_url[alert_type]
+        elif self.default_webhook_url is not None:
+            slack_webhook_url = self.default_webhook_url
         else:
             slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
 
@@ -796,8 +813,16 @@ Model Info:
                     updated_at=litellm.utils.get_utc_datetime(),
                 )
             )
+        if "llm_exceptions" in self.alert_types:
+            original_exception = kwargs.get("exception", None)
 
-    async def _run_scheduler_helper(self, llm_router: litellm.Router) -> bool:
+            await self.send_alert(
+                message="LLM API Failure - " + str(original_exception),
+                level="High",
+                alert_type="llm_exceptions",
+            )
+
+    async def _run_scheduler_helper(self, llm_router) -> bool:
         """
         Returns:
         - True -> report sent
@@ -839,7 +864,7 @@ Model Info:
 
         return report_sent_bool
 
-    async def _run_scheduled_daily_report(self, llm_router: Optional[litellm.Router]):
+    async def _run_scheduled_daily_report(self, llm_router: Optional[Any] = None):
         """
         If 'daily_reports' enabled
 

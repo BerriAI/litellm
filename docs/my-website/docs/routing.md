@@ -468,7 +468,7 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
-<TabItem value="lowest-cost" label="Lowest Cost Routing">
+<TabItem value="lowest-cost" label="Lowest Cost Routing (Async)">
 
 Picks a deployment based on the lowest cost
 
@@ -1084,6 +1084,46 @@ async def test_acompletion_caching_on_router_caching_groups():
 		traceback.print_exc()
 
 asyncio.run(test_acompletion_caching_on_router_caching_groups())
+```
+
+## Alerting 🚨
+
+Send alerts to slack / your webhook url for the following events
+- LLM API Exceptions
+- Slow LLM Responses
+
+Get a slack webhook url from https://api.slack.com/messaging/webhooks
+
+#### Usage
+Initialize an `AlertingConfig` and pass it to `litellm.Router`. The following code will trigger an alert because `api_key=bad-key` which is invalid
+
+```python
+from litellm.router import AlertingConfig
+import litellm
+import os
+
+router = litellm.Router(
+	model_list=[
+		{
+			"model_name": "gpt-3.5-turbo",
+			"litellm_params": {
+				"model": "gpt-3.5-turbo",
+				"api_key": "bad_key",
+			},
+		}
+	],
+	alerting_config= AlertingConfig(
+		alerting_threshold=10,                        # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
+		webhook_url= os.getenv("SLACK_WEBHOOK_URL")   # webhook you want to send alerts to
+	),
+)
+try:
+	await router.acompletion(
+		model="gpt-3.5-turbo",
+		messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	)
+except:
+	pass
 ```
 
 ## Track cost for Azure Deployments

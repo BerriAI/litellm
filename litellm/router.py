@@ -44,6 +44,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
     RetryPolicy,
+    AlertingConfig,
 )
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -103,6 +104,7 @@ class Router:
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based routing
         semaphore: Optional[asyncio.Semaphore] = None,
+        alerting_config: Optional[AlertingConfig] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -131,7 +133,7 @@ class Router:
             cooldown_time (float): Time to cooldown a deployment after failure in seconds. Defaults to 1.
             routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"]): Routing strategy. Defaults to "simple-shuffle".
             routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
-
+            alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -316,6 +318,9 @@ class Router:
         self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
             model_group_retry_policy
         )
+        self.alerting_config: Optional[AlertingConfig] = alerting_config
+        if self.alerting_config is not None:
+            self._initialize_alerting()
 
     def routing_strategy_init(self, routing_strategy: str, routing_strategy_args: dict):
         if routing_strategy == "least-busy":
@@ -3000,6 +3005,7 @@ class Router:
         if (
             self.routing_strategy != "usage-based-routing-v2"
             and self.routing_strategy != "simple-shuffle"
+            and self.routing_strategy != "cost-based-routing"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -3051,6 +3057,16 @@ class Router:
             and self.lowesttpm_logger_v2 is not None
         ):
             deployment = await self.lowesttpm_logger_v2.async_get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,
+                messages=messages,
+                input=input,
+            )
+        if (
+            self.routing_strategy == "cost-based-routing"
+            and self.lowestcost_logger is not None
+        ):
+            deployment = await self.lowestcost_logger.async_get_available_deployments(
                 model_group=model,
                 healthy_deployments=healthy_deployments,
                 messages=messages,
@@ -3226,15 +3242,6 @@ class Router:
                 messages=messages,
                 input=input,
             )
-        elif (
-            self.routing_strategy == "cost-based-routing"
-            and self.lowestcost_logger is not None
-        ):
-            deployment = self.lowestcost_logger.get_available_deployments(
-                model_group=model,
-                healthy_deployments=healthy_deployments,
-                request_kwargs=request_kwargs,
-            )
         if deployment is None:
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, No deployment available"
@@ -3359,6 +3366,23 @@ class Router:
             and retry_policy.ContentPolicyViolationErrorRetries is not None
         ):
             return retry_policy.ContentPolicyViolationErrorRetries
+
+    def _initialize_alerting(self):
+        from litellm.integrations.slack_alerting import SlackAlerting
+
+        router_alerting_config: AlertingConfig = self.alerting_config
+
+        _slack_alerting_logger = SlackAlerting(
+            alerting_threshold=router_alerting_config.alerting_threshold,
+            alerting=["slack"],
+            default_webhook_url=router_alerting_config.webhook_url,
+        )
+
+        litellm.callbacks.append(_slack_alerting_logger)
+        litellm.success_callback.append(
+            _slack_alerting_logger.response_taking_too_long_callback
+        )
+        print("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
 
     def flush_cache(self):
         litellm.cache = None

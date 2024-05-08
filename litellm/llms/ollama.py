@@ -474,3 +474,23 @@ async def ollama_aembeddings(
         "total_tokens": total_input_tokens,
     }
     return model_response
+
+def ollama_embeddings(
+    api_base: str,
+    model: str,
+    prompts: list,
+    optional_params=None,
+    logging_obj=None,
+    model_response=None,
+    encoding=None,
+):
+    return asyncio.run(
+        ollama_aembeddings(
+            api_base,
+            model,
+            prompts,
+            optional_params,
+            logging_obj,
+            model_response,
+            encoding)
+        )

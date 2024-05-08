@@ -340,3 +340,19 @@ class RetryPolicy(BaseModel):
     RateLimitErrorRetries: Optional[int] = None
     ContentPolicyViolationErrorRetries: Optional[int] = None
     InternalServerErrorRetries: Optional[int] = None
+
+
+class AlertingConfig(BaseModel):
+    """
+    Use this configure alerting for the router. Receive alerts on the following events
+    - LLM API Exceptions
+    - LLM Responses Too Slow
+    - LLM Requests Hanging
+
+    Args:
+        webhook_url: str            - webhook url for alerting, slack provides a webhook url to send alerts to
+        alerting_threshold: Optional[float] = None - threshold for slow / hanging llm responses (in seconds)
+    """
+
+    webhook_url: str
+    alerting_threshold: Optional[float] = 300
