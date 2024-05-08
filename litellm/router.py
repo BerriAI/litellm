@@ -2590,11 +2590,21 @@ class Router:
         except:
             return None
 
-    def get_deployment(self, model_id: str):
+    def get_deployment(self, model_id: str) -> Optional[Deployment]:
+        """
+        Returns -> Deployment or None
+
+        Raise Exception -> if model found in invalid format
+        """
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
                 if model_id == model["model_info"]["id"]:
-                    return model
+                    if isinstance(model, dict):
+                        return Deployment(**model)
+                    elif isinstance(model, Deployment):
+                        return model
+                    else:
+                        raise Exception("Model invalid format - {}".format(type(model)))
         return None
 
     def get_model_info(self, id: str) -> Optional[dict]:
