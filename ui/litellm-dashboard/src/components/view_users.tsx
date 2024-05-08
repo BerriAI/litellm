@@ -158,12 +158,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[80vh] mb-4">
         <div className="mb-4 mt-1">
         <Text><b>Key Owners: </b> Users on LiteLLM that created API Keys. Automatically tracked by LiteLLM</Text>
-        <Text className="mt-1"><b>End Users: </b>End Users of your LLM API calls. Tracked When a `user` param is passed in your LLM calls</Text>
+       
         </div>
           <TabGroup>
             <TabList variant="line" defaultValue="1">
               <Tab value="1">Key Owners</Tab>
-              <Tab value="2">End-Users</Tab>
             </TabList>
             <TabPanels>
               <TabPanel>
@@ -220,7 +219,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 <div className="flex items-center">
                   <div className="flex-1"></div>
                   <div className="flex-1 flex justify-between items-center">
-                    <Text className="w-1/4 mr-2 text-right">Key</Text>
+                    {/* <Text className="w-1/4 mr-2 text-right">Key</Text>
                     <Select defaultValue="1" className="w-3/4">
                       {keys?.map((key: any, index: number) => {
                         if (
@@ -239,10 +238,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           );
                         }
                       })}
-                    </Select>
+                    </Select> */}
                   </div>
                 </div>
-                <Table className="max-h-[70vh] min-h-[500px]">
+                {/* <Table className="max-h-[70vh] min-h-[500px]">
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>End User</TableHeaderCell>
@@ -260,7 +259,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
+                </Table> */}
               </TabPanel>
             </TabPanels>
           </TabGroup>
