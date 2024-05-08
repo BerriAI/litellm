@@ -95,41 +95,7 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
 }
 type DataDict = { [key: string]: unknown };
 type UserData = { user_id: string; spend: number };
-function getTopUsers(data: Array<DataDict>): UserData[] {
-  const userSpend: { [key: string]: number } = {};
 
-  data.forEach((dict) => {
-    const payload: DataDict = dict["users"] as DataDict;
-    Object.entries(payload).forEach(([user_id, value]) => {
-      if (
-        user_id === "" ||
-        user_id === undefined ||
-        user_id === null ||
-        user_id == "None"
-      ) {
-        return;
-      }
-
-      if (!userSpend[user_id]) {
-        userSpend[user_id] = 0;
-      }
-      userSpend[user_id] += value as number;
-    });
-  });
-
-  const spendUsers: UserData[] = Object.entries(userSpend).map(
-    ([user_id, spend]) => ({
-      user_id,
-      spend,
-    })
-  );
-
-  spendUsers.sort((a, b) => b.spend - a.spend);
-
-  const topKeys = spendUsers.slice(0, 5);
-  console.log(`topKeys: ${Object.values(topKeys[0])}`);
-  return topKeys;
-}
 
 const UsagePage: React.FC<UsagePageProps> = ({
   accessToken,
@@ -286,6 +252,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabList className="mt-2">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
+          <Tab>End User Usage</Tab>
            <Tab>Tag Based Usage</Tab>
         </TabList>
         <TabPanels>
@@ -324,23 +291,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 </Card>
               </Col>
               <Col numColSpan={1}>
-                <Card>
-                  <Title>Top Users</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={topUsers}
-                    index="user_id"
-                    categories={["spend"]}
-                    colors={["blue"]}
-                    yAxisWidth={200}
-                    layout="vertical"
-                    showXAxis={false}
-                    showLegend={false}
-                  />
-                </Card>
-              </Col>
-              <Col numColSpan={1}>
-                <Card>
+              <Card>
                   <Title>Top Models</Title>
                   <BarChart
                     className="mt-4 h-40"
@@ -354,6 +305,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     showLegend={false}
                   />
                 </Card>
+               
+              </Col>
+              <Col numColSpan={1}>
+                
               </Col>
             </Grid>
             </TabPanel>
@@ -385,6 +340,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Col numColSpan={2}>
               </Col>
             </Grid>
+            </TabPanel>
+            <TabPanel>
+                
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
