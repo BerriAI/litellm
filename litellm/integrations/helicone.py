@@ -1,7 +1,7 @@
 #### What this does ####
 #    On success, logs events to Helicone
 import dotenv, os
-import requests
+import requests  # type: ignore
 import litellm
 
 dotenv.load_dotenv()  # Loading env variables using dotenv

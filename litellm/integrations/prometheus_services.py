@@ -4,7 +4,7 @@
 
 
 import dotenv, os
-import requests
+import requests  # type: ignore
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -183,7 +183,6 @@ class PrometheusServicesLogger:
                     )
 
     async def async_service_failure_hook(self, payload: ServiceLoggerPayload):
-        print(f"received error payload: {payload.error}")
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
 
