@@ -68,11 +68,15 @@ class SlackAlertingCacheKeys(Enum):
 
 
 class SlackAlerting(CustomLogger):
+    """
+    Class for sending Slack Alerts
+    """
+
     # Class variables or attributes
     def __init__(
         self,
         internal_usage_cache: Optional[DualCache] = None,
-        alerting_threshold: float = 300,
+        alerting_threshold: float = 300,  # threshold for slow / hanging llm responses (in seconds)
         alerting: Optional[List] = [],
         alert_types: Optional[
             List[
@@ -97,6 +101,7 @@ class SlackAlerting(CustomLogger):
             Dict
         ] = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
+        default_webhook_url: Optional[str] = None,
     ):
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
@@ -106,6 +111,7 @@ class SlackAlerting(CustomLogger):
         self.alert_to_webhook_url = alert_to_webhook_url
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
+        self.default_webhook_url = default_webhook_url
 
     def update_values(
         self,
@@ -307,7 +313,7 @@ class SlackAlerting(CustomLogger):
         except Exception as e:
             return 0
 
-    async def send_daily_reports(self, router: litellm.Router) -> bool:
+    async def send_daily_reports(self, router) -> bool:
         """
         Send a daily report on:
         - Top 5 deployments with most failed requests
@@ -749,6 +755,8 @@ Model Info:
             and alert_type in self.alert_to_webhook_url
         ):
             slack_webhook_url = self.alert_to_webhook_url[alert_type]
+        elif self.default_webhook_url is not None:
+            slack_webhook_url = self.default_webhook_url
         else:
             slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
 
@@ -805,8 +813,16 @@ Model Info:
                     updated_at=litellm.utils.get_utc_datetime(),
                 )
             )
+        if "llm_exceptions" in self.alert_types:
+            original_exception = kwargs.get("exception", None)
 
-    async def _run_scheduler_helper(self, llm_router: litellm.Router) -> bool:
+            await self.send_alert(
+                message="LLM API Failure - " + str(original_exception),
+                level="High",
+                alert_type="llm_exceptions",
+            )
+
+    async def _run_scheduler_helper(self, llm_router) -> bool:
         """
         Returns:
         - True -> report sent
@@ -848,7 +864,7 @@ Model Info:
 
         return report_sent_bool
 
-    async def _run_scheduled_daily_report(self, llm_router: Optional[litellm.Router]):
+    async def _run_scheduled_daily_report(self, llm_router: Optional[Any] = None):
         """
         If 'daily_reports' enabled
 
