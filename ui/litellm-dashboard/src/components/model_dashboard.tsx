@@ -37,7 +37,7 @@ import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from '@ant-design/icons';
@@ -921,6 +921,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Max Tokens</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -929,6 +930,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     selectedModelGroup === "all" || model.model_name === selectedModelGroup || selectedModelGroup === null || selectedModelGroup === undefined || selectedModelGroup === ""
                   )
                   .map((model: any, index: number) => (
+                    
                 <TableRow key={index}>
                   <TableCell>
                     <Text>{model.model_name}</Text>
@@ -958,6 +960,12 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                   <TableCell>{model.input_cost}</TableCell>
                   <TableCell>{model.output_cost}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
+                  <TableCell>
+                    {
+                      model.model_info.db_model ? <Badge icon={CheckCircleIcon} className="text-white">DB Model</Badge> : <Badge icon={XCircleIcon} className="text-black">Config Model</Badge>
+                    }
+                    
+                  </TableCell>
                   <TableCell>
                         <Icon
                             icon={PencilAltIcon}
