@@ -117,6 +117,7 @@ def test_embedding(client):
             "input_cost_per_token": 0.002,
             "mode": "embedding",
             "id": "hello",
+            "db_model": False,
         }
         result = response.json()
         print(f"Received response: {result}")
@@ -191,6 +192,7 @@ def test_chat_completion(client):
             "id": "gm",
             "input_cost_per_token": 0.0002,
             "mode": "chat",
+            "db_model": False,
         }
         assert proxy_server_request_object == {
             "url": "http://testserver/chat/completions",

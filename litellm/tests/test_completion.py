@@ -58,7 +58,7 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to,check the response
+        # Add any assertions here to, check the response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
@@ -118,6 +118,7 @@ def test_completion_claude():
 
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
+
     messages = [
         {
             "role": "system",
@@ -297,6 +298,24 @@ async def test_anthropic_no_content_error():
         assert e.status_code == 500
     except Exception as e:
         pytest.fail(f"An unexpected error occurred - {str(e)}")
+
+
+def test_gemini_completion_call_error():
+    try:
+        print("test completion + streaming")
+        litellm.set_verbose = True
+        messages = [{"role": "user", "content": "what is the capital of congo?"}]
+        response = completion(
+            model="gemini/gemini-1.5-pro-latest",
+            messages=messages,
+            stream=True,
+            max_tokens=10,
+        )
+        print(f"response: {response}")
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"error occurred: {str(e)}")
 
 
 def test_completion_cohere_command_r_plus_function_call():
@@ -1042,16 +1061,16 @@ def test_completion_perplexity_api_2():
 ######### HUGGING FACE TESTS ########################
 #####################################################
 """
-HF Tests we should pass 
-- TGI: 
-    - Pro Inference API 
-    - Deployed Endpoint 
-- Coversational 
-    - Free Inference API 
-    - Deployed Endpoint 
+HF Tests we should pass
+- TGI:
+    - Pro Inference API
+    - Deployed Endpoint
+- Coversational
+    - Free Inference API
+    - Deployed Endpoint
 - Neither TGI or Coversational
-    - Free Inference API 
-    - Deployed Endpoint 
+    - Free Inference API
+    - Deployed Endpoint
 """
 
 
@@ -1603,6 +1622,7 @@ def test_completion_ollama_function_call_stream(model):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize(
     ("model"),
     [
@@ -1651,6 +1671,7 @@ async def test_acompletion_ollama_function_call(model):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize(
     ("model"),
     [
@@ -2147,9 +2168,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-70b-chat"
+    model_name = "replicate/meta/llama-2-7b"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-70b-chat",
+        model="replicate/meta/llama-2-7b",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -2179,6 +2200,7 @@ def test_replicate_custom_prompt_dict():
             repetition_penalty=0.1,
             num_retries=3,
         )
+
     except litellm.APIError as e:
         pass
     except litellm.APIConnectionError as e:
@@ -2994,6 +3016,21 @@ async def test_acompletion_gemini():
             pass
         else:
             pytest.fail(f"Error occurred: {e}")
+
+
+# Deepseek tests
+def test_completion_deepseek():
+    litellm.set_verbose = True
+    model_name = "deepseek/deepseek-chat"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # Palm tests
