@@ -2168,9 +2168,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-70b-chat"
+    model_name = "replicate/meta/llama-2-7b"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-70b-chat",
+        model="replicate/meta/llama-2-7b",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -2200,6 +2200,7 @@ def test_replicate_custom_prompt_dict():
             repetition_penalty=0.1,
             num_retries=3,
         )
+
     except litellm.APIError as e:
         pass
     except litellm.APIConnectionError as e:
@@ -3015,6 +3016,7 @@ async def test_acompletion_gemini():
             pass
         else:
             pytest.fail(f"Error occurred: {e}")
+
 
 # Deepseek tests
 def test_completion_deepseek():
