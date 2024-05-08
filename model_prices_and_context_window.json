@@ -739,6 +739,24 @@
         "litellm_provider": "mistral",
         "mode": "embedding"
     },
+    "deepseek-chat": {
+        "max_tokens": 4096,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000028,
+        "litellm_provider": "deepseek",
+        "mode": "chat"
+    },
+    "deepseek-coder": {
+        "max_tokens": 4096,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000028,
+        "litellm_provider": "deepseek",
+        "mode": "chat"
+    },
     "groq/llama2-70b-4096": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,

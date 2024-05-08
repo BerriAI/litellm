@@ -20,7 +20,8 @@ from litellm.caching import DualCache
 ### UNIT TESTS FOR cost ROUTING ###
 
 
-def test_get_available_deployments():
+@pytest.mark.asyncio
+async def test_get_available_deployments():
     test_cache = DualCache()
     model_list = [
         {
@@ -40,7 +41,7 @@ def test_get_available_deployments():
     model_group = "gpt-3.5-turbo"
 
     ## CHECK WHAT'S SELECTED ##
-    selected_model = lowest_cost_logger.get_available_deployments(
+    selected_model = await lowest_cost_logger.async_get_available_deployments(
         model_group=model_group, healthy_deployments=model_list
     )
     print("selected model: ", selected_model)
@@ -48,7 +49,8 @@ def test_get_available_deployments():
     assert selected_model["model_info"]["id"] == "groq-llama"
 
 
-def test_get_available_deployments_custom_price():
+@pytest.mark.asyncio
+async def test_get_available_deployments_custom_price():
     from litellm._logging import verbose_router_logger
     import logging
 
@@ -89,7 +91,7 @@ def test_get_available_deployments_custom_price():
     model_group = "gpt-3.5-turbo"
 
     ## CHECK WHAT'S SELECTED ##
-    selected_model = lowest_cost_logger.get_available_deployments(
+    selected_model = await lowest_cost_logger.async_get_available_deployments(
         model_group=model_group, healthy_deployments=model_list
     )
     print("selected model: ", selected_model)
@@ -142,7 +144,7 @@ async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
     response_obj = {"usage": {"total_tokens": tokens_used}}
     time.sleep(duration)
     end_time = time.time()
-    lowest_cost_logger.log_success_event(
+    await lowest_cost_logger.async_log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -150,14 +152,11 @@ async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
     )
 
 
-async def _gather_deploy(all_deploys):
-    return await asyncio.gather(*[_deploy(*t) for t in all_deploys])
-
-
 @pytest.mark.parametrize(
     "ans_rpm", [1, 5]
 )  # 1 should produce nothing, 10 should select first
-def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
+@pytest.mark.asyncio
+async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     """
     Pass in list of 2 valid models
 
@@ -193,9 +192,13 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     model_group = "gpt-3.5-turbo"
     d1 = [(lowest_cost_logger, "1234", 50, 0.01)] * non_ans_rpm
     d2 = [(lowest_cost_logger, "5678", 50, 0.01)] * non_ans_rpm
-    asyncio.run(_gather_deploy([*d1, *d2]))
+
+    await asyncio.gather(*[_deploy(*t) for t in [*d1, *d2]])
+
+    asyncio.sleep(3)
+
     ## CHECK WHAT'S SELECTED ##
-    d_ans = lowest_cost_logger.get_available_deployments(
+    d_ans = await lowest_cost_logger.async_get_available_deployments(
         model_group=model_group, healthy_deployments=model_list
     )
     assert (d_ans and d_ans["model_info"]["id"]) == ans
