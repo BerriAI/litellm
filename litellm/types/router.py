@@ -127,6 +127,11 @@ class GenericLiteLLMParams(BaseModel):
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
 
     def __init__(
         self,
@@ -149,6 +154,10 @@ class GenericLiteLLMParams(BaseModel):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
+        input_cost_per_token: Optional[float] = None,
+        output_cost_per_token: Optional[float] = None,
+        input_cost_per_second: Optional[float] = None,
+        output_cost_per_second: Optional[float] = None,
         **params
     ):
         args = locals()
@@ -242,28 +251,10 @@ class LiteLLM_Params(GenericLiteLLMParams):
         setattr(self, key, value)
 
 
-class updateLiteLLMParams(BaseModel):
+class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
     model: Optional[str] = None
-    tpm: Optional[int] = None
-    rpm: Optional[int] = None
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
-    api_version: Optional[str] = None
-    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
-    stream_timeout: Optional[Union[float, str]] = (
-        None  # timeout when making stream=True calls, if str, pass in as os.environ/
-    )
-    max_retries: int = 2  # follows openai default of 2
-    organization: Optional[str] = None  # for openai orgs
-    ## VERTEX AI ##
-    vertex_project: Optional[str] = None
-    vertex_location: Optional[str] = None
-    ## AWS BEDROCK / SAGEMAKER ##
-    aws_access_key_id: Optional[str] = None
-    aws_secret_access_key: Optional[str] = None
-    aws_region_name: Optional[str] = None
 
 
 class updateDeployment(BaseModel):

@@ -2572,6 +2572,38 @@ class Router:
         self.model_names.append(deployment.model_name)
         return deployment
 
+    def upsert_deployment(self, deployment: Deployment) -> Deployment:
+        """
+        Add or update deployment
+        Parameters:
+        - deployment: Deployment - the deployment to be added to the Router
+
+        Returns:
+        - The added/updated deployment
+        """
+        # check if deployment already exists
+
+        if deployment.model_info.id in self.get_model_ids():
+            # remove the previous deployment
+            removal_idx: Optional[int] = None
+            for idx, model in enumerate(self.model_list):
+                if model["model_info"]["id"] == deployment.model_info.id:
+                    removal_idx = idx
+
+            if removal_idx is not None:
+                self.model_list.pop(removal_idx)
+
+        # add to model list
+        _deployment = deployment.to_json(exclude_none=True)
+        self.model_list.append(_deployment)
+
+        # initialize client
+        self._add_deployment(deployment=deployment)
+
+        # add to model names
+        self.model_names.append(deployment.model_name)
+        return deployment
+
     def delete_deployment(self, id: str) -> Optional[Deployment]:
         """
         Parameters:

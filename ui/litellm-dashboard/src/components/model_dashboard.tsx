@@ -332,7 +332,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <InputNumber min={0} step={1} />
 
                   </Form.Item>
+                  
+                  <Form.Item 
+                    label="input_cost_per_token" 
+                    name="input_cost_per_token"
+                    tooltip="float (optional) - Input cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
 
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="output_cost_per_token" 
+                    name="output_cost_per_token"
+                    tooltip="float (optional) - Output cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
+
+                  </Form.Item>
                   
 
                   <Form.Item 
@@ -394,19 +411,16 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   console.log("handleEditSubmit payload:", payload);
 
-  let newModelValue = await modelUpdateCall(accessToken, payload);
+  try {
+    let newModelValue = await modelUpdateCall(accessToken, payload);
+    message.success("Model updated successfully, restart server to see updates");
 
-  // Update the teams state with the updated team data
-  // if (teams) {
-  //   const updatedTeams = teams.map((team) =>
-  //     team.team_id === teamId ? newTeamValues.data : team
-  //   );
-  //   setTeams(updatedTeams);
-  // }
-  message.success("Model updated successfully, restart server to see updates");
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  } catch (error) {
+    console.log(`Error occurred`)
+  }
 
-  setEditModalVisible(false);
-  setSelectedModel(null);
 };
 
 
@@ -956,9 +970,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </Accordion>
                    
                   </TableCell>
-
-                  <TableCell>{model.input_cost}</TableCell>
-                  <TableCell>{model.output_cost}</TableCell>
+                  <TableCell>{model.input_cost || model.litellm_params.input_cost_per_token || null}</TableCell>
+                  <TableCell>{model.output_cost || model.litellm_params.output_cost_per_token || null}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
                   <TableCell>
                     {
