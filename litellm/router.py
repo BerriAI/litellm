@@ -1862,6 +1862,10 @@ class Router:
                 self.cache.set_cache(
                     value=cached_value, key=cooldown_key, ttl=cooldown_time
                 )
+
+            self.send_deployment_cooldown_alert(
+                deployment_id=deployment, exception_status=exception_status
+            )
         else:
             self.failed_calls.set_cache(
                 key=deployment, value=updated_fails, ttl=cooldown_time
@@ -3383,6 +3387,39 @@ class Router:
             _slack_alerting_logger.response_taking_too_long_callback
         )
         print("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
+
+    def send_deployment_cooldown_alert(
+        self, deployment_id: str, exception_status: Union[str, int]
+    ):
+        try:
+            from litellm.proxy.proxy_server import proxy_logging_obj
+
+            # trigger slack alert saying deployment is in cooldown
+            if (
+                proxy_logging_obj is not None
+                and proxy_logging_obj.alerting is not None
+                and "slack" in proxy_logging_obj.alerting
+            ):
+                _deployment = self.get_deployment(model_id=deployment_id)
+                if _deployment is None:
+                    return
+
+                _litellm_params = _deployment["litellm_params"]
+                temp_litellm_params = copy.deepcopy(_litellm_params)
+                temp_litellm_params = dict(temp_litellm_params)
+                _model_name = _deployment.get("model_name", None)
+                _api_base = litellm.get_api_base(
+                    model=_model_name, optional_params=temp_litellm_params
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.slack_alerting_instance.send_alert(
+                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}",
+                        alert_type="cooldown_deployment",
+                        level="Low",
+                    )
+                )
+        except Exception as e:
+            pass
 
     def flush_cache(self):
         litellm.cache = None
