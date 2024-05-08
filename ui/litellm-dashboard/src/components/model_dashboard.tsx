@@ -18,7 +18,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall } from "./networking";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
@@ -37,7 +37,7 @@ import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from '@ant-design/icons';
@@ -58,6 +58,10 @@ interface EditModelModalProps {
   onCancel: () => void;
   model: any; // Assuming TeamType is a type representing your team object
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
+}
+
+interface RetryPolicyObject {
+  [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
@@ -81,6 +85,18 @@ const provider_map: Record <string, string> = {
   "OpenAI_Compatible": "openai",
   "Vertex_AI": "vertex_ai"
 };
+
+
+
+const retry_policy_map: Record <string, string> = {
+  "BadRequestError (400)": "BadRequestErrorRetries", 
+  "AuthenticationError  (401)": "AuthenticationErrorRetries",
+  "TimeoutError (408)": "TimeoutErrorRetries",
+  "RateLimitError (429)": "RateLimitErrorRetries",
+  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
+  "InternalServerError (500)": "InternalServerErrorRetries"
+};
+
 
 
 const handleSubmit = async (formValues: Record<string, any>, accessToken: string, form: any) => {
@@ -211,6 +227,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     to: new Date(),
   });
 
+  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
+  const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
+
   const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
     const [form] = Form.useForm();
     let litellm_params_to_edit: Record<string, any> = {}
@@ -312,7 +332,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <InputNumber min={0} step={1} />
 
                   </Form.Item>
+                  
+                  <Form.Item 
+                    label="input_cost_per_token" 
+                    name="input_cost_per_token"
+                    tooltip="float (optional) - Input cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
 
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="output_cost_per_token" 
+                    name="output_cost_per_token"
+                    tooltip="float (optional) - Output cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
+
+                  </Form.Item>
                   
 
                   <Form.Item 
@@ -374,19 +411,16 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   console.log("handleEditSubmit payload:", payload);
 
-  let newModelValue = await modelUpdateCall(accessToken, payload);
+  try {
+    let newModelValue = await modelUpdateCall(accessToken, payload);
+    message.success("Model updated successfully, restart server to see updates");
 
-  // Update the teams state with the updated team data
-  // if (teams) {
-  //   const updatedTeams = teams.map((team) =>
-  //     team.team_id === teamId ? newTeamValues.data : team
-  //   );
-  //   setTeams(updatedTeams);
-  // }
-  message.success("Model updated successfully, restart server to see updates");
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  } catch (error) {
+    console.log(`Error occurred`)
+  }
 
-  setEditModalVisible(false);
-  setSelectedModel(null);
 };
 
 
@@ -426,6 +460,29 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     // Update the 'lastRefreshed' state to the current date and time
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
+  };
+
+  const handleSaveRetrySettings = async () => {
+    if (!accessToken) {
+      console.error("Access token is missing");
+      return;
+    }
+
+    console.log("new modelGroupRetryPolicy:", modelGroupRetryPolicy);
+  
+    try {
+      const payload = {
+          router_settings: {
+            model_group_retry_policy: modelGroupRetryPolicy
+          }
+      };
+  
+      await setCallbacksCall(accessToken, payload);
+      message.success("Retry settings saved successfully");
+    } catch (error) {
+      console.error("Failed to save retry settings:", error);
+      message.error("Failed to save retry settings");
+    }
   };
 
 
@@ -512,6 +569,22 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         console.log("slowResponses:", slowResponses)
 
         setSlowResponsesData(slowResponses);
+
+
+        const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
+
+        let router_settings = routerSettingsInfo.router_settings;
+
+        console.log("routerSettingsInfo:", router_settings)
+
+        let model_group_retry_policy = router_settings.model_group_retry_policy;
+        let default_retries = router_settings.num_retries;
+
+        console.log("model_group_retry_policy:", model_group_retry_policy)
+        console.log("default_retries:", default_retries)
+        setModelGroupRetryPolicy(model_group_retry_policy);
+        setDefaultRetry(default_retries);
+
 
 
       } catch (error) {
@@ -795,6 +868,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           <Tab>Add Model</Tab>
           <Tab><pre>/health Models</pre></Tab>
             <Tab>Model Analytics</Tab>
+            <Tab>Model Retry Settings</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -816,7 +890,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           <TabPanel>
       <Grid>
       <div className="flex items-center">
-        <Text>Filter by Public Model Name</Text>
+      <Text>Filter by Public Model Name</Text>
       <Select
               className="mb-4 mt-2 ml-2 w-50"
               defaultValue="all"
@@ -861,6 +935,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Max Tokens</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -869,6 +944,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     selectedModelGroup === "all" || model.model_name === selectedModelGroup || selectedModelGroup === null || selectedModelGroup === undefined || selectedModelGroup === ""
                   )
                   .map((model: any, index: number) => (
+                    
                 <TableRow key={index}>
                   <TableCell>
                     <Text>{model.model_name}</Text>
@@ -894,10 +970,15 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </Accordion>
                    
                   </TableCell>
-
-                  <TableCell>{model.input_cost}</TableCell>
-                  <TableCell>{model.output_cost}</TableCell>
+                  <TableCell>{model.input_cost || model.litellm_params.input_cost_per_token || null}</TableCell>
+                  <TableCell>{model.output_cost || model.litellm_params.output_cost_per_token || null}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
+                  <TableCell>
+                    {
+                      model.model_info.db_model ? <Badge icon={CheckCircleIcon} className="text-white">DB Model</Badge> : <Badge icon={XCircleIcon} className="text-black">Config Model</Badge>
+                    }
+                    
+                  </TableCell>
                   <TableCell>
                         <Icon
                             icon={PencilAltIcon}
@@ -1213,6 +1294,79 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
         yAxisWidth={30}
       />
         </Card>
+            </TabPanel>
+            <TabPanel>
+            <div className="flex items-center">
+              
+            <Text>Filter by Public Model Name</Text>
+
+        <Select
+              className="mb-4 mt-2 ml-2 w-50"
+              defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
+              value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
+              onValueChange={(value) => setSelectedModelGroup(value)}
+            >
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => setSelectedModelGroup(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+            </div>
+
+              <Title>
+                Retry Policy for {selectedModelGroup}
+              </Title>
+              <Text className="mb-6">How many retries should be attempted based on the Exception</Text>
+              {retry_policy_map &&
+  <table>
+  <tbody>
+    {Object.entries(retry_policy_map).map(([exceptionType, retryPolicyKey], idx) => {
+
+      let retryCount = modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey]
+      if (retryCount == null) {
+        retryCount = defaultRetry;
+      }
+      
+      return (
+        <tr key={idx} className="flex justify-between items-center mt-2">
+          <td>
+            <Text>{exceptionType}</Text>
+          </td>
+          <td>
+            <InputNumber
+              className="ml-5"
+              value={retryCount}
+              min={0}
+              step={1}
+              onChange={(value) => {
+                setModelGroupRetryPolicy(prevModelGroupRetryPolicy => {
+                  const prevRetryPolicy = prevModelGroupRetryPolicy?.[selectedModelGroup!] ?? {};
+                  return {
+                    ...prevModelGroupRetryPolicy ?? {},
+                    [selectedModelGroup!]: {
+                      ...prevRetryPolicy,
+                      [retryPolicyKey!]: value,
+                    },
+                  } as RetryPolicyObject;
+                });
+              }}
+            />
+          </td>
+        </tr>
+      );
+    })}
+  </tbody>
+</table>
+}
+<Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
+  Save
+</Button>
+
             </TabPanel>
       
       </TabPanels>

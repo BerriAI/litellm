@@ -12,8 +12,8 @@ Requirements:
 
 You can set budgets at 3 levels: 
 - For the proxy 
-- For a user 
-- For a 'user' passed to `/chat/completions`, `/embeddings` etc
+- For an internal user 
+- For an end-user
 - For a key
 - For a key (model specific budgets)
 
@@ -58,7 +58,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 </TabItem>
-<TabItem value="per-user" label="For User">
+<TabItem value="per-user" label="For Internal User">
 
 Apply a budget across multiple keys.
 
@@ -165,12 +165,12 @@ curl --location 'http://localhost:4000/team/new' \
 }
 ```
 </TabItem>
-<TabItem value="per-user-chat" label="For 'user' passed to /chat/completions">
+<TabItem value="per-user-chat" label="For End User">
 
 Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
 
 **Step 1. Modify config.yaml**
-Define `litellm.max_user_budget`
+Define `litellm.max_end_user_budget`
 ```yaml
 general_settings:
   master_key: sk-1234
@@ -328,7 +328,7 @@ You can set:
 - max parallel requests
 
 <Tabs>
-<TabItem value="per-user" label="Per User">
+<TabItem value="per-user" label="Per Internal User">
 
 Use `/user/new`, to persist rate limits across multiple keys.
 
@@ -408,7 +408,7 @@ curl --location 'http://localhost:4000/user/new' \
 ```
 
 
-## Create new keys for existing user
+## Create new keys for existing internal user
 
 Just include user_id in the `/key/generate` request.
 
