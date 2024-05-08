@@ -14,7 +14,7 @@ import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
 import itertools
-import random, uuid, requests
+import random, uuid, requests  # type: ignore
 from functools import wraps
 import datetime, time
 import tiktoken
@@ -36,7 +36,7 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 
 try:
     # this works in python 3.8
-    import pkg_resources
+    import pkg_resources  # type: ignore
 
     filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 # try:
@@ -7732,11 +7732,11 @@ def _calculate_retry_after(
             try:
                 retry_after = int(retry_header)
             except Exception:
-                retry_date_tuple = email.utils.parsedate_tz(retry_header)
+                retry_date_tuple = email.utils.parsedate_tz(retry_header)  # type: ignore
                 if retry_date_tuple is None:
                     retry_after = -1
                 else:
-                    retry_date = email.utils.mktime_tz(retry_date_tuple)
+                    retry_date = email.utils.mktime_tz(retry_date_tuple)  # type: ignore
                     retry_after = int(retry_date - time.time())
         else:
             retry_after = -1
@@ -9423,7 +9423,9 @@ def get_secret(
         else:
             secret = os.environ.get(secret_name)
             try:
-                secret_value_as_bool = ast.literal_eval(secret) if secret is not None else None
+                secret_value_as_bool = (
+                    ast.literal_eval(secret) if secret is not None else None
+                )
                 if isinstance(secret_value_as_bool, bool):
                     return secret_value_as_bool
                 else:
