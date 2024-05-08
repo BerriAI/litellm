@@ -223,7 +223,7 @@ jobs:
           background: true
       - run: 
           name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 1m
+          command: dockerize -wait http://localhost:4000 -timeout 5m
       - run:
           name: Run tests
           command: |
