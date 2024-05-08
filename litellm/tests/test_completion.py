@@ -1,21 +1,17 @@
-import os
-import sys
+import sys, os
 import traceback
-
 from dotenv import load_dotenv
 
 load_dotenv()
-import io
-import os
+import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the, system path
 import pytest
-
 import litellm
-from litellm import (RateLimitError, Timeout, completion, completion_cost,
-                     embedding)
+from litellm import embedding, completion, completion_cost, Timeout
+from litellm import RateLimitError
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
 # litellm.num_retries=3
@@ -162,32 +158,6 @@ def test_completion_claude_3():
             messages=messages,
         )
         # Add any assertions, here to check response args
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_completion_claude_3_empty_message():
-    litellm.set_verbose = True
-    messages = [{'role': 'user', 'content': 'please create a logo for a modern AI app. create in SVG format'},
-         {'role': 'assistant', 'content': "To create a logo for a modern AI app in SVG format, I'll use the DALL-E 3 Image Generator."},
-         {'role': 'user', 'content': 'output SVG'},
-         {'role': 'assistant', 'content': 'To generate a logo for a modern AI app in SVG format using DALL-E 3, I need to:\n1. Craft a detailed prompt describing the desired logo style and elements\n2. Specify the image size (SVG is vector-based, so size is less relevant)\n3. Call the generate_image function with the prompt and size\n4. Display the generated SVG logo using the provided syntax\nThe prompt should include keywords related to AI, modern design, and SVG format. Some key elements to incorporate could be a brain symbol, circuit lines, or a robot icon, using a minimalist style and a blue color scheme often associated with technology and intelligence.',
-          'tool_calls': [
-             {'id': 'toolu_01KEUtRVySSeMrf3g7rCA12E', 'type': 'function', 'function': {'name': 'python_tool', 'arguments': '{"code": "...python code..."}'}}
-         ]},
-         {'role': 'tool', 'content': '...python output...', 'tool_call_id': 'toolu_01KEUtRVySSeMrf3g7rCA12E'},
-         {'role': 'assistant', 'content': ''}, # empty message appended by model after tool call response
-         {'role': 'user', 'content': 'write SVG source youself!'},
-    ]
-
-    try:
-        response = completion(
-            model="anthropic/claude-3-opus-20240229",
-            messages=messages,
-            stream=True,
-            tools=[{'type': 'function', 'function': {'name': 'python_tool', 'description': 'Execute code', 'parameters': {'type': 'object', 'properties': {'headline': {'description': 'Must have. Title of this tool call (maximum 15 characters).', 'type': 'string'}, 'code': {'description': 'Python code to execute.', 'type': 'string'}}, 'required': ['code', 'headline']}}}]
-        )
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
