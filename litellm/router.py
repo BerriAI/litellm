@@ -2212,6 +2212,7 @@ class Router:
                         "api_key": api_key,
                         "azure_endpoint": api_base,
                         "api_version": api_version,
+                        "azure_ad_token": azure_ad_token,
                     }
                     from litellm.llms.azure import select_azure_base_url_or_endpoint
 
