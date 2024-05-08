@@ -1,6 +1,6 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 import httpx
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, validator, Field
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 import uuid, enum
@@ -70,6 +70,9 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
