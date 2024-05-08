@@ -357,7 +357,7 @@ class AlertingConfig(BaseModel):
 
     Args:
         webhook_url: str            - webhook url for alerting, slack provides a webhook url to send alerts to
-        alerting_threshold: Optional[float] = None - threhshold for slow / hanging llm responses (in seconds)
+        alerting_threshold: Optional[float] = None - threshold for slow / hanging llm responses (in seconds)
     """
 
     webhook_url: str
