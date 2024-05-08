@@ -3,13 +3,14 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem } from "@tremor/react";
+import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem, DateRangePicker, DateRangePickerValue } from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
+  adminTopEndUsersCall,
   teamSpendLogsCall,
   tagsSpendLogsCall,
   modelMetricsCall,
@@ -112,6 +113,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
+    to: new Date(),
+  });
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -126,6 +131,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
+
+  // const updateEndUserUsage(startTime: string, endTime: string) {
+    
+  // }
 
   function formatDate(date: Date) {
     const year = date.getFullYear();
@@ -193,6 +202,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
             const top_tags = await tagsSpendLogsCall(accessToken);
             setTopTagsData(top_tags.top_10_tags);
 
+            // get spend per end-user
+            let spend_user_call = await adminTopEndUsersCall(accessToken, null);
+            setTopUsers(spend_user_call);
+
+            console.log("spend/user result", spend_user_call);
+
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -224,7 +239,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   spend: k["spend"],
                 }));
                 setTopKeys(filtered_keys);
-                setTopUsers(getTopUsers(response));
                 setKeySpendData(response);
               }
             });
@@ -342,7 +356,42 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
+            <DateRangePicker 
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateModelMetrics(selectedModelGroup, value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+                />
+                 <Text className="mt-4">End Users of your LLM API calls. Tracked When a `user` param is passed in your LLM calls</Text>
                 
+              <Card className="mt-4">
+
+
+             
+              <Table className="max-h-[70vh] min-h-[500px]">
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>End User</TableHeaderCell>
+                      <TableHeaderCell>Spend</TableHeaderCell>
+                      <TableHeaderCell>Total Events</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+
+                  <TableBody>
+                    {topUsers?.map((user: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell>{user.end_user}</TableCell>
+                        <TableCell>{user.total_spend?.toFixed(4)}</TableCell>
+                        <TableCell>{user.total_events}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+              </Card>
+
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
