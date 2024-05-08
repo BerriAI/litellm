@@ -65,6 +65,9 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
 
+    class Config:
+        protected_namespaces = ()
+
 
 class ModelInfo(BaseModel):
     id: Optional[
