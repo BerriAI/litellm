@@ -341,7 +341,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-      <Callout title="Presidio PII / Guardrails Coming Soon" color="sky">
+      <Callout title="[UI] Presidio PII + Guardrails Coming Soon. https://docs.litellm.ai/docs/proxy/pii_masking" color="sky">
 
 </Callout>
         <TabGroup>
@@ -353,9 +353,6 @@ const Settings: React.FC<SettingsPageProps> = ({
           <TabPanel>
           
           <Card >
-            <Text>
-              Presidio + Guardrails coming soon
-            </Text>
             <Table>
               <TableHead>
                 <TableRow>
