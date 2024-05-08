@@ -1,23 +1,27 @@
-import json
-import re
-import traceback
-import uuid
-import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence
-
-import requests
-from jinja2 import BaseLoader, Template, exceptions, meta
+import requests, traceback
+import json, re, xml.etree.ElementTree as ET
+from jinja2 import Template, exceptions, meta, BaseLoader
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-
+from typing import (
+    Any,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+)
 import litellm
-from litellm.types.completion import (ChatCompletionFunctionMessageParam,
-                                      ChatCompletionMessageParam,
-                                      ChatCompletionMessageToolCallParam,
-                                      ChatCompletionSystemMessageParam,
-                                      ChatCompletionToolMessageParam,
-                                      ChatCompletionUserMessageParam)
+from litellm.types.completion import (
+    ChatCompletionUserMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageToolCallParam,
+    ChatCompletionToolMessageParam,
+)
 from litellm.types.llms.anthropic import *
+import uuid
 
 
 def default_pt(messages):
@@ -599,9 +603,8 @@ def construct_tool_use_system_prompt(
 
 
 def convert_url_to_base64(url):
-    import base64
-
     import requests
+    import base64
 
     for _ in range(3):
         try:
@@ -981,7 +984,6 @@ def anthropic_messages_pt(messages: list):
     new_messages = []
     msg_i = 0
     tool_use_param = False
-    merge_with_previous = False
     while msg_i < len(messages):
         user_content = []
         init_msg_i = msg_i
@@ -1014,13 +1016,7 @@ def anthropic_messages_pt(messages: list):
             msg_i += 1
 
         if user_content:
-            if merge_with_previous:
-                new_messages[-1]["content"].extend(user_content)
-                merge_with_previous = False
-            else:
-                new_messages.append({"role": "user", "content": user_content})
-        elif msg_i > 0:
-            merge_with_previous = True
+            new_messages.append({"role": "user", "content": user_content})
 
         assistant_content = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
@@ -1048,13 +1044,7 @@ def anthropic_messages_pt(messages: list):
             msg_i += 1
 
         if assistant_content:
-            if merge_with_previous:
-                new_messages[-1]["content"].extend(assistant_content)
-                merge_with_previous = False
-            else:
-                new_messages.append({"role": "assistant", "content": assistant_content})
-        elif msg_i > 0:
-            merge_with_previous = True
+            new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
             raise Exception(
