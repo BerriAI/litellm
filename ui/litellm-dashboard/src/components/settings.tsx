@@ -21,7 +21,8 @@ import {
   TabPanels, 
   TabGroup, 
   TabList, 
-  Tab
+  Tab,
+  Callout,
 } from "@tremor/react";
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
@@ -340,6 +341,9 @@ const Settings: React.FC<SettingsPageProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+      <Callout title="Presidio PII / Guardrails Coming Soon" color="sky">
+
+</Callout>
         <TabGroup>
         <TabList variant="line" defaultValue="1">
           <Tab value="1">Logging Callbacks</Tab>
@@ -347,7 +351,11 @@ const Settings: React.FC<SettingsPageProps> = ({
         </TabList>
         <TabPanels>
           <TabPanel>
+          
           <Card >
+            <Text>
+              Presidio + Guardrails coming soon
+            </Text>
             <Table>
               <TableHead>
                 <TableRow>
