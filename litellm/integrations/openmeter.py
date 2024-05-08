@@ -2,7 +2,6 @@
 ## On Success events log cost to OpenMeter - https://github.com/BerriAI/litellm/issues/1268
 
 import dotenv, os, json
-import requests
 import litellm
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
@@ -60,7 +59,7 @@ class OpenMeterLogger(CustomLogger):
                 "total_tokens": response_obj["usage"].get("total_tokens"),
             }
 
-        subject = kwargs.get("user", None),  # end-user passed in via 'user' param
+        subject = (kwargs.get("user", None),)  # end-user passed in via 'user' param
         if not subject:
             raise Exception("OpenMeter: user is required")
 

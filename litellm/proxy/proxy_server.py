@@ -30,7 +30,7 @@ sys.path.insert(
 try:
     import fastapi
     import backoff
-    import yaml
+    import yaml  # type: ignore
     import orjson
     import logging
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -3719,6 +3719,7 @@ async def chat_completion(
                 "x-litellm-model-id": model_id,
                 "x-litellm-cache-key": cache_key,
                 "x-litellm-model-api-base": api_base,
+                "x-litellm-version": version,
             }
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3734,6 +3735,7 @@ async def chat_completion(
         fastapi_response.headers["x-litellm-model-id"] = model_id
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -3890,14 +3892,10 @@ async def completion(
                 },
             )
 
-        if hasattr(response, "_hidden_params"):
-            model_id = response._hidden_params.get("model_id", None) or ""
-            original_response = (
-                response._hidden_params.get("original_response", None) or ""
-            )
-        else:
-            model_id = ""
-            original_response = ""
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
 
         verbose_proxy_logger.debug("final response: %s", response)
         if (
@@ -3905,6 +3903,9 @@ async def completion(
         ):  # use generate_responses to stream responses
             custom_headers = {
                 "x-litellm-model-id": model_id,
+                "x-litellm-cache-key": cache_key,
+                "x-litellm-model-api-base": api_base,
+                "x-litellm-version": version,
             }
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3919,6 +3920,10 @@ async def completion(
             )
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -3958,6 +3963,7 @@ async def completion(
 )  # azure compatible endpoint
 async def embeddings(
     request: Request,
+    fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -4104,6 +4110,17 @@ async def embeddings(
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
 
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -4142,6 +4159,7 @@ async def embeddings(
 )
 async def image_generation(
     request: Request,
+    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     global proxy_logging_obj
@@ -4261,6 +4279,17 @@ async def image_generation(
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
 
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -4297,6 +4326,7 @@ async def image_generation(
 )
 async def audio_transcriptions(
     request: Request,
+    fastapi_response: Response,
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -4441,6 +4471,18 @@ async def audio_transcriptions(
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -4480,6 +4522,7 @@ async def audio_transcriptions(
 )
 async def moderations(
     request: Request,
+    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -4603,6 +4646,17 @@ async def moderations(
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
 
         return response
     except Exception as e:
