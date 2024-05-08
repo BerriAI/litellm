@@ -3,7 +3,6 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import dotenv, os
-import requests
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
