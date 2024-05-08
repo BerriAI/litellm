@@ -343,6 +343,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Form.Item>
 
                   <Form.Item 
+                    label="output_cost_per_token" 
+                    name="output_cost_per_token"
+                    tooltip="float (optional) - Output cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
+
+                  </Form.Item>
+                  
+
+                  <Form.Item 
                     label="model_id" 
                     name="model_id"
                     hidden={true}
