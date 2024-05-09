@@ -458,6 +458,27 @@ class UpdateUserRequest(GenerateRequestBase):
         return values
 
 
+class NewEndUserRequest(LiteLLMBase):
+    user_id: str
+    alias: Optional[str] = None  # human-friendly alias
+    blocked: bool = False  # allow/disallow requests for this end-user
+    max_budget: Optional[float] = None
+    budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    allowed_model_region: Optional[Literal["eu"]] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("max_budget") is not None and values.get("budget_id") is not None:
+            raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
+
+        return values
+
+
 class Member(LiteLLMBase):
     role: Literal["admin", "user"]
     user_id: Optional[str] = None
@@ -838,6 +859,7 @@ class UserAPIKeyAuth(
 
     api_key: Optional[str] = None
     user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
+    allowed_model_region: Optional[Literal["eu"]] = None
 
     @root_validator(pre=True)
     def check_api_key(cls, values):
@@ -883,6 +905,8 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
+    allowed_model_region: Optional[Literal["eu"]] = None
+    default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     @root_validator(pre=True)

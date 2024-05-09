@@ -1,5 +1,5 @@
-from typing import Optional, Union, Any
-import types, requests  # type: ignore
+from typing import Optional, Union, Any, Literal
+import types, requests
 from .base import BaseLLM
 from litellm.utils import (
     ModelResponse,
@@ -952,6 +952,81 @@ class AzureChatCompletion(BaseLLM):
             )
             raise e
 
+    def get_headers(
+        self,
+        model: Optional[str],
+        api_key: str,
+        api_base: str,
+        api_version: str,
+        timeout: float,
+        mode: str,
+        messages: Optional[list] = None,
+        input: Optional[list] = None,
+        prompt: Optional[str] = None,
+    ) -> dict:
+        client_session = litellm.client_session or httpx.Client(
+            transport=CustomHTTPTransport(),  # handle dall-e-2 calls
+        )
+        if "gateway.ai.cloudflare.com" in api_base:
+            ## build base url - assume api base includes resource name
+            if not api_base.endswith("/"):
+                api_base += "/"
+            api_base += f"{model}"
+            client = AzureOpenAI(
+                base_url=api_base,
+                api_version=api_version,
+                api_key=api_key,
+                timeout=timeout,
+                http_client=client_session,
+            )
+            model = None
+            # cloudflare ai gateway, needs model=None
+        else:
+            client = AzureOpenAI(
+                api_version=api_version,
+                azure_endpoint=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                http_client=client_session,
+            )
+
+            # only run this check if it's not cloudflare ai gateway
+            if model is None and mode != "image_generation":
+                raise Exception("model is not set")
+
+        completion = None
+
+        if messages is None:
+            messages = [{"role": "user", "content": "Hey"}]
+        try:
+            completion = client.chat.completions.with_raw_response.create(
+                model=model,  # type: ignore
+                messages=messages,  # type: ignore
+            )
+        except Exception as e:
+            raise e
+        response = {}
+
+        if completion is None or not hasattr(completion, "headers"):
+            raise Exception("invalid completion response")
+
+        if (
+            completion.headers.get("x-ratelimit-remaining-requests", None) is not None
+        ):  # not provided for dall-e requests
+            response["x-ratelimit-remaining-requests"] = completion.headers[
+                "x-ratelimit-remaining-requests"
+            ]
+
+        if completion.headers.get("x-ratelimit-remaining-tokens", None) is not None:
+            response["x-ratelimit-remaining-tokens"] = completion.headers[
+                "x-ratelimit-remaining-tokens"
+            ]
+
+        if completion.headers.get("x-ms-region", None) is not None:
+            response["x-ms-region"] = completion.headers["x-ms-region"]
+
+        return response
+
     async def ahealth_check(
         self,
         model: Optional[str],
@@ -963,7 +1038,7 @@ class AzureChatCompletion(BaseLLM):
         messages: Optional[list] = None,
         input: Optional[list] = None,
         prompt: Optional[str] = None,
-    ):
+    ) -> dict:
         client_session = litellm.aclient_session or httpx.AsyncClient(
             transport=AsyncCustomHTTPTransport(),  # handle dall-e-2 calls
         )
@@ -1040,4 +1115,8 @@ class AzureChatCompletion(BaseLLM):
             response["x-ratelimit-remaining-tokens"] = completion.headers[
                 "x-ratelimit-remaining-tokens"
             ]
+
+        if completion.headers.get("x-ms-region", None) is not None:
+            response["x-ms-region"] = completion.headers["x-ms-region"]
+
         return response
