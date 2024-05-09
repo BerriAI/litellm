@@ -5934,6 +5934,8 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     if _optional_params.api_base is not None:
         return _optional_params.api_base
 
+    if litellm.model_alias_map and model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
     try:
         model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
             get_llm_provider(
