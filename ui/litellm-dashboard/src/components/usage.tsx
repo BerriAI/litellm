@@ -375,7 +375,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
-            <DateRangePicker 
+            <p className="mb-2 text-gray-500 italic text-[12px]">End-Users of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
+              <Grid numItems={2}>
+                <Col>
+                <Text>Select Time Range</Text>
+       
+              <DateRangePicker 
                   enableSelect={true} 
                   value={dateValue} 
                   onValueChange={(value) => {
@@ -383,8 +388,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     updateEndUserData(value.from, value.to); // Call updateModelMetrics with the new date range
                   }}
                 />
-                  <Text className="w-1/4 mr-2 text-right">Key</Text>
-                  <Select defaultValue="1" className="w-3/4">
+                         </Col>
+                         <Col>
+                  <Text>Select Key</Text>
+                  <Select defaultValue="1">
                     {keys?.map((key: any, index: number) => {
                       if (
                         key &&
@@ -407,7 +414,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
                       return null; // Add this line to handle the case when the condition is not met
                     })}
                   </Select>
-                 <Text className="mt-4">End Users of your LLM API calls. Tracked When a `user` param is passed in your LLM calls</Text>
+                  </Col>
+
+              </Grid>
+            
+                
                 
               <Card className="mt-4">
 
