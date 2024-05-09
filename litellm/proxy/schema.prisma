@@ -150,6 +150,8 @@ model LiteLLM_EndUserTable {
   user_id String @id
   alias    String? // admin-facing alias
   spend      Float    @default(0.0)
+  allowed_model_region String? // require all user requests to use models in this specific region
+  default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   blocked Boolean @default(false)
