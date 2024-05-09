@@ -458,6 +458,37 @@ class UpdateUserRequest(GenerateRequestBase):
         return values
 
 
+class NewEndUserRequest(LiteLLMBase):
+    user_id: str
+    alias: Optional[str] = None  # human-friendly alias
+    blocked: bool = False  # allow/disallow requests for this end-user
+    max_budget: Optional[float] = None
+    budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    allowed_model_region: Optional[Literal["eu"]] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("max_budget") is not None and values.get("budget_id") is not None:
+            raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
+
+        if (
+            values.get("allowed_model_region") is not None
+            and values.get("default_model") is None
+        ) or (
+            values.get("allowed_model_region") is None
+            and values.get("default_model") is not None
+        ):
+            raise ValueError(
+                "If 'allowed_model_region' is set, then 'default_model' must be set."
+            )
+        return values
+
+
 class Member(LiteLLMBase):
     role: Literal["admin", "user"]
     user_id: Optional[str] = None
