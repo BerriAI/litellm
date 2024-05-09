@@ -222,7 +222,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             setTopTagsData(top_tags.top_10_tags);
 
             // get spend per end-user
-            let spend_user_call = await adminTopEndUsersCall(accessToken, null);
+            let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
             setTopUsers(spend_user_call);
 
             console.log("spend/user result", spend_user_call);
@@ -385,7 +385,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   value={dateValue} 
                   onValueChange={(value) => {
                     setDateValue(value);
-                    updateEndUserData(value.from, value.to); // Call updateModelMetrics with the new date range
+                    updateEndUserData(value.from, value.to, null); // Call updateModelMetrics with the new date range
                   }}
                 />
                          </Col>
