@@ -64,6 +64,11 @@ if __name__ == "__main__":
     )  # Replace with your repository's username and name
     latest_release = repo.get_latest_release()
     print("got latest release: ", latest_release)
+    print(latest_release.title)
+    print(latest_release.tag_name)
+
+    release_version = latest_release.title
+
     print("latest release body: ", latest_release.body)
     print("markdown table: ", markdown_table)
 
@@ -73,6 +78,18 @@ if __name__ == "__main__":
         # find the "Load Test LiteLLM Proxy Results" section and delete it
         start_index = latest_release.body.find("Load Test LiteLLM Proxy Results")
         existing_release_body = latest_release.body[:start_index]
+
+    docker_run_command = f"""
+    ## Docker Run LiteLLM Proxy
+
+    ```
+    docker run \\
+    -e STORE_MODEL_IN_DB=True \\
+    -p 4000:4000 \\
+    ghcr.io/berriai/litellm:main-{release_version}
+    ```
+    """
+    print("docker run command: ", docker_run_command)
 
     new_release_body = (
         existing_release_body
