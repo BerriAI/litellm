@@ -797,7 +797,7 @@ export const adminTopEndUsersCall = async (
 
     let body = "";
     if (keyToken) {
-      body = JSON.stringify({ api_key: keyToken });
+      body = JSON.stringify({ api_key: keyToken, startTime: startTime, endTime: endTime });
     } else {
       body = JSON.stringify({ startTime: startTime, endTime: endTime });
     }

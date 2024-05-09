@@ -24,6 +24,7 @@ interface UsagePageProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  keys: any[] | null;
 }
 
 type CustomTooltipTypeBar = {
@@ -103,6 +104,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   token,
   userRole,
   userID,
+  keys,
 }) => {
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
@@ -113,6 +115,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [selectedKeyID, setSelectedKeyID] = useState<string>("");
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
@@ -132,14 +135,18 @@ const UsagePage: React.FC<UsagePageProps> = ({
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
 
+  console.log("keys in usage", keys);
+
   const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
     if (!startTime || !endTime || !accessToken) {
       return;
     }
 
+    console.log("selectedKeyID", selectedKeyID);
+
     let newTopUserData = await adminTopEndUsersCall(
       accessToken,
-      null,
+      selectedKeyID,
       startTime.toISOString(),
       endTime.toISOString()
     )
@@ -376,6 +383,30 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     updateEndUserData(value.from, value.to); // Call updateModelMetrics with the new date range
                   }}
                 />
+                  <Text className="w-1/4 mr-2 text-right">Key</Text>
+                  <Select defaultValue="1" className="w-3/4">
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            onClick={() => {
+                              setSelectedKeyID(key["token"]);
+                              updateEndUserData(dateValue.from, dateValue.to);
+                            }}
+                          >
+                            {key["key_alias"]}
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
                  <Text className="mt-4">End Users of your LLM API calls. Tracked When a `user` param is passed in your LLM calls</Text>
                 
               <Card className="mt-4">
