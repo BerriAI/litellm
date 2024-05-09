@@ -80,15 +80,15 @@ if __name__ == "__main__":
         existing_release_body = latest_release.body[:start_index]
 
     docker_run_command = f"""
-    \n\n
-    ## Docker Run LiteLLM Proxy
+\n\n
+## Docker Run LiteLLM Proxy
 
-    ```
-    docker run \\
-    -e STORE_MODEL_IN_DB=True \\
-    -p 4000:4000 \\
-    ghcr.io/berriai/litellm:main-{release_version}
-    ```
+```
+docker run \\
+-e STORE_MODEL_IN_DB=True \\
+-p 4000:4000 \\
+ghcr.io/berriai/litellm:main-{release_version}
+```
     """
     print("docker run command: ", docker_run_command)
 
