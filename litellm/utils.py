@@ -10026,16 +10026,19 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = None
+            usage = None
             choices = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
                     is_finished = True
                     finish_reason = choices[0].finish_reason
+            usage = getattr(chunk, "usage", None)
             return {
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
+                "usage": usage,
             }
 
         except Exception as e:
@@ -10565,6 +10568,11 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) == True
+                ):
+                    model_response.usage = response_obj["usage"]
             elif self.custom_llm_provider == "azure_text":
                 response_obj = self.handle_azure_text_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -11094,9 +11102,10 @@ class CustomStreamWrapper:
 
 
 class TextCompletionStreamWrapper:
-    def __init__(self, completion_stream, model):
+    def __init__(self, completion_stream, model, stream_options):
         self.completion_stream = completion_stream
         self.model = model
+        self.stream_options = stream_options
 
     def __iter__(self):
         return self
@@ -11120,6 +11129,14 @@ class TextCompletionStreamWrapper:
             text_choices["index"] = chunk["choices"][0]["index"]
             text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
             response["choices"] = [text_choices]
+
+            # only pass usage when stream_options["include_usage"] is True
+            if (
+                self.stream_options
+                and self.stream_options.get("include_usage", False) == True
+            ):
+                response["usage"] = chunk.get("usage", None)
+
             return response
         except Exception as e:
             raise Exception(
