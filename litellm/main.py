@@ -651,6 +651,8 @@ def completion(
         "base_model",
         "stream_timeout",
         "supports_system_message",
+        "region_name",
+        "allowed_model_region",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -2721,6 +2723,8 @@ def embedding(
         "ttl",
         "cache",
         "no-log",
+        "region_name",
+        "allowed_model_region",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -3595,6 +3599,8 @@ def image_generation(
             "caching_groups",
             "ttl",
             "cache",
+            "region_name",
+            "allowed_model_region",
         ]
         default_params = openai_params + litellm_params
         non_default_params = {
