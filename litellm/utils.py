@@ -5938,7 +5938,7 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
                 model=model, **optional_params
             )  # convert to pydantic object
     except Exception as e:
-        verbose_logger.error("Error occurred in getting api base - {}".format(str(e)))
+        verbose_logger.debug("Error occurred in getting api base - {}".format(str(e)))
         return None
     # get llm provider
 
