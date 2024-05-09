@@ -115,7 +115,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
-  const [selectedKeyID, setSelectedKeyID] = useState<string>("");
+  const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
@@ -137,16 +137,16 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   console.log("keys in usage", keys);
 
-  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
+  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
     if (!startTime || !endTime || !accessToken) {
       return;
     }
 
-    console.log("selectedKeyID", selectedKeyID);
+    console.log("uiSelectedKey", uiSelectedKey);
 
     let newTopUserData = await adminTopEndUsersCall(
       accessToken,
-      selectedKeyID,
+      uiSelectedKey,
       startTime.toISOString(),
       endTime.toISOString()
     )
@@ -391,7 +391,16 @@ const UsagePage: React.FC<UsagePageProps> = ({
                          </Col>
                          <Col>
                   <Text>Select Key</Text>
-                  <Select defaultValue="1">
+                  <Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      updateEndUserData(dateValue.from, dateValue.to, null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
                     {keys?.map((key: any, index: number) => {
                       if (
                         key &&
@@ -399,12 +408,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
                         key["key_alias"].length > 0
                       ) {
                         return (
+                          
                           <SelectItem
                             key={index}
                             value={String(index)}
                             onClick={() => {
-                              setSelectedKeyID(key["token"]);
-                              updateEndUserData(dateValue.from, dateValue.to);
+                              updateEndUserData(dateValue.from, dateValue.to, key["token"]);
                             }}
                           >
                             {key["key_alias"]}
