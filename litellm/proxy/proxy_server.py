@@ -5795,25 +5795,35 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     """
     Gets the top 100 end-users for a given api key
     """
-    startTime = datetime.now() - timedelta(days=30)
-    endTime = datetime.now()
+    startTime = None
+    endTime = None
+    selected_api_key = None
+    if data is not None:
+        startTime = data.startTime
+        endTime = data.endTime
+        selected_api_key = data.api_key
+
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
 
     sql_query = """
-SELECT
-  end_user,
-  COUNT(*) AS total_count,
-  SUM(spend) AS total_spend
-FROM
-  "LiteLLM_SpendLogs"
-GROUP BY
-  end_user
-WHERE
-  "startTime" >= $1 AND "startTime" < $2
-ORDER BY
-  total_spend DESC
+SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
+FROM "LiteLLM_SpendLogs"
+WHERE "startTime" >= $1::timestamp
+  AND "startTime" < $2::timestamp
+  AND (
+    CASE
+      WHEN $3::TEXT IS NULL THEN TRUE
+      ELSE api_key = $3
+    END
+  )
+GROUP BY end_user
+ORDER BY total_spend DESC
 LIMIT 100
     """
-    response = await prisma_client.db.query_raw(sql_query, startTime, endTime)
+    response = await prisma_client.db.query_raw(
+        sql_query, startTime, endTime, selected_api_key
+    )
 
     return response
 
