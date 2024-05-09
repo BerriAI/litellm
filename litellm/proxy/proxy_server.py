@@ -7313,6 +7313,43 @@ async def unblock_team(
     return record
 
 
+@router.get(
+    "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def list_team(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [Admin-only] List all available teams
+
+    ```
+    curl --location --request GET 'http://0.0.0.0:4000/team/list' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    global prisma_client
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Admin-only endpoint. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    response = await prisma_client.db.litellm_teamtable.find_many()
+
+    return response
+
+
 #### ORGANIZATION MANAGEMENT ####
 
 
