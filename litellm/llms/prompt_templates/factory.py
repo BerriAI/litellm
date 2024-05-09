@@ -11,12 +11,14 @@ from jinja2 import BaseLoader, Template, exceptions, meta
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 import litellm
-from litellm.types.completion import (ChatCompletionFunctionMessageParam,
-                                      ChatCompletionMessageParam,
-                                      ChatCompletionMessageToolCallParam,
-                                      ChatCompletionSystemMessageParam,
-                                      ChatCompletionToolMessageParam,
-                                      ChatCompletionUserMessageParam)
+from litellm.types.completion import (
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionMessageToolCallParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+)
 from litellm.types.llms.anthropic import *
 
 
@@ -978,7 +980,7 @@ def anthropic_messages_pt(messages: list):
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages = []
+    new_messages: list = []
     msg_i = 0
     tool_use_param = False
     merge_with_previous = False
