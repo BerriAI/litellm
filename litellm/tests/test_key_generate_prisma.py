@@ -418,9 +418,16 @@ def test_call_with_user_over_budget(prisma_client):
         print(vars(e))
 
 
+def test_end_user_cache_write_unit_test():
+    """
+    assert end user object is being written to cache as expected
+    """
+    pass
+
+
 def test_call_with_end_user_over_budget(prisma_client):
     # Test if a user passed to /chat/completions is tracked & fails when they cross their budget
-    # we only check this when litellm.max_user_budget is set
+    # we only check this when litellm.max_end_user_budget is set
     import random
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)

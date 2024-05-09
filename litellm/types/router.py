@@ -1,6 +1,6 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 import httpx
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, validator, Field
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 import uuid, enum
@@ -55,6 +55,7 @@ class UpdateRouterConfig(BaseModel):
 
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
+    model_group_retry_policy: Optional[dict] = None
     allowed_fails: Optional[int] = None
     cooldown_time: Optional[float] = None
     num_retries: Optional[int] = None
@@ -64,11 +65,17 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
 
+    class Config:
+        protected_namespaces = ()
+
 
 class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -116,6 +123,8 @@ class GenericLiteLLMParams(BaseModel):
     )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
+    ## UNIFIED PROJECT/REGION ##
+    region_name: Optional[str] = None
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
@@ -123,6 +132,11 @@ class GenericLiteLLMParams(BaseModel):
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
 
     def __init__(
         self,
@@ -138,6 +152,8 @@ class GenericLiteLLMParams(BaseModel):
             None  # timeout when making stream=True calls, if str, pass in as os.environ/
         ),
         organization: Optional[str] = None,  # for openai orgs
+        ## UNIFIED PROJECT/REGION ##
+        region_name: Optional[str] = None,
         ## VERTEX AI ##
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
@@ -145,6 +161,10 @@ class GenericLiteLLMParams(BaseModel):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
+        input_cost_per_token: Optional[float] = None,
+        output_cost_per_token: Optional[float] = None,
+        input_cost_per_second: Optional[float] = None,
+        output_cost_per_second: Optional[float] = None,
         **params
     ):
         args = locals()
@@ -238,28 +258,10 @@ class LiteLLM_Params(GenericLiteLLMParams):
         setattr(self, key, value)
 
 
-class updateLiteLLMParams(BaseModel):
+class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
     model: Optional[str] = None
-    tpm: Optional[int] = None
-    rpm: Optional[int] = None
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
-    api_version: Optional[str] = None
-    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
-    stream_timeout: Optional[Union[float, str]] = (
-        None  # timeout when making stream=True calls, if str, pass in as os.environ/
-    )
-    max_retries: int = 2  # follows openai default of 2
-    organization: Optional[str] = None  # for openai orgs
-    ## VERTEX AI ##
-    vertex_project: Optional[str] = None
-    vertex_location: Optional[str] = None
-    ## AWS BEDROCK / SAGEMAKER ##
-    aws_access_key_id: Optional[str] = None
-    aws_secret_access_key: Optional[str] = None
-    aws_region_name: Optional[str] = None
 
 
 class updateDeployment(BaseModel):
@@ -344,3 +346,20 @@ class RetryPolicy(BaseModel):
     TimeoutErrorRetries: Optional[int] = None
     RateLimitErrorRetries: Optional[int] = None
     ContentPolicyViolationErrorRetries: Optional[int] = None
+    InternalServerErrorRetries: Optional[int] = None
+
+
+class AlertingConfig(BaseModel):
+    """
+    Use this configure alerting for the router. Receive alerts on the following events
+    - LLM API Exceptions
+    - LLM Responses Too Slow
+    - LLM Requests Hanging
+
+    Args:
+        webhook_url: str            - webhook url for alerting, slack provides a webhook url to send alerts to
+        alerting_threshold: Optional[float] = None - threshold for slow / hanging llm responses (in seconds)
+    """
+
+    webhook_url: str
+    alerting_threshold: Optional[float] = 300

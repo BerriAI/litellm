@@ -140,6 +140,8 @@ async def test_add_existing_deployment():
             deployment_2.to_json(exclude_none=True),
         ]
     )
+
+    init_len_list = len(llm_router.model_list)
     print(f"llm_router: {llm_router}")
     master_key = "sk-1234"
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
@@ -164,7 +166,7 @@ async def test_add_existing_deployment():
     db_models = [db_model]
     num_added = pc._add_deployment(db_models=db_models)
 
-    assert num_added == 0
+    assert init_len_list == len(llm_router.model_list)
 
 
 litellm_params = LiteLLM_Params(

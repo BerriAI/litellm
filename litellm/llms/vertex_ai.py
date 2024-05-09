@@ -1,12 +1,12 @@
 import os, types
 import json
 from enum import Enum
-import requests
+import requests  # type: ignore
 import time
 from typing import Callable, Optional, Union, List
 from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
 import litellm, uuid
-import httpx, inspect
+import httpx, inspect  # type: ignore
 
 
 class VertexAIError(Exception):
