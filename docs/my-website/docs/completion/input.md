@@ -83,6 +83,7 @@ def completion(
     top_p: Optional[float] = None,
     n: Optional[int] = None,
     stream: Optional[bool] = None,
+    stream_options: Optional[dict] = None,
     stop=None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
@@ -138,6 +139,10 @@ def completion(
 - `n`: *integer or null (optional)* - The number of chat completion choices to generate for each input message.
 
 - `stream`: *boolean or null (optional)* - If set to true, it sends partial message deltas. Tokens will be sent as they become available, with the stream terminated by a [DONE] message.
+
+- `stream_options` *dict or null (optional)* - Options for streaming response. Only set this when you set `stream: true`
+
+    - `include_usage` *boolean (optional)* - If set, an additional chunk will be streamed before the data: [DONE] message. The usage field on this chunk shows the token usage statistics for the entire request, and the choices field will always be an empty array. All other chunks will also include a usage field, but with a null value. 
 
 - `stop`: *string/ array/ null (optional)* - Up to 4 sequences where the API will stop generating further tokens.
 
