@@ -4,7 +4,7 @@
 
 
 import dotenv, os
-import requests
+import requests  # type: ignore
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -129,8 +129,6 @@ class PrometheusServicesLogger:
         if self.mock_testing:
             self.mock_testing_success_calls += 1
 
-        print(f"payload call type: {payload.call_type}")
-
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
@@ -151,8 +149,6 @@ class PrometheusServicesLogger:
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
 
-        print(f"payload call type: {payload.call_type}")
-
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
@@ -169,8 +165,6 @@ class PrometheusServicesLogger:
         """
         if self.mock_testing:
             self.mock_testing_success_calls += 1
-
-        print(f"payload call type: {payload.call_type}")
 
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
@@ -189,11 +183,8 @@ class PrometheusServicesLogger:
                     )
 
     async def async_service_failure_hook(self, payload: ServiceLoggerPayload):
-        print(f"received error payload: {payload.error}")
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
-
-        print(f"payload call type: {payload.call_type}")
 
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]

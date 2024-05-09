@@ -1,13 +1,13 @@
-# Slack Alerting
+# 🚨 Alerting 
 
 Get alerts for:
-- hanging LLM api calls
-- failed LLM api calls
-- slow LLM api calls
-- budget Tracking per key/user:
+- Hanging LLM api calls
+- Failed LLM api calls
+- Slow LLM api calls
+- Budget Tracking per key/user:
     - When a User/Key crosses their Budget 
     - When a User/Key is 15% away from crossing their Budget
-- failed db read/writes
+- Failed db read/writes
 
 ## Quick Start
 

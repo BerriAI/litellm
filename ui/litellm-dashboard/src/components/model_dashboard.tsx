@@ -16,10 +16,10 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon } from "@tremor/react";
-import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
-import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall } from "./networking";
-import { BarChart } from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, TextInput, Icon, DateRangePicker } from "@tremor/react";
+import { Select, SelectItem, MultiSelect, MultiSelectItem, DateRangePickerValue } from "@tremor/react";
+import { modelInfoCall, userGetRequesedtModelsCall, modelCreateCall, Model, modelCostMap, modelDeleteCall, healthCheckCall, modelUpdateCall, modelMetricsCall, modelExceptionsCall, modelMetricsSlowResponsesCall, getCallbacksCall, setCallbacksCall } from "./networking";
+import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -37,7 +37,7 @@ import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from '@ant-design/icons';
@@ -49,6 +49,19 @@ interface ModelDashboardProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  modelData: any, 
+  setModelData: any
+}
+
+interface EditModelModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  model: any; // Assuming TeamType is a type representing your team object
+  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
+}
+
+interface RetryPolicyObject {
+  [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
@@ -74,24 +87,344 @@ const provider_map: Record <string, string> = {
 };
 
 
+
+const retry_policy_map: Record <string, string> = {
+  "BadRequestError (400)": "BadRequestErrorRetries", 
+  "AuthenticationError  (401)": "AuthenticationErrorRetries",
+  "TimeoutError (408)": "TimeoutErrorRetries",
+  "RateLimitError (429)": "RateLimitErrorRetries",
+  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
+  "InternalServerError (500)": "InternalServerErrorRetries"
+};
+
+
+
+const handleSubmit = async (formValues: Record<string, any>, accessToken: string, form: any) => {
+  try {
+    /**
+     * For multiple litellm model names - create a separate deployment for each 
+     * - get the list
+     * - iterate through it 
+     * - create a new deployment for each
+     * 
+     * For single model name -> make it a 1 item list
+     */
+
+    // get the list of deployments
+    let deployments: Array<string> = Array.isArray(formValues["model"]) ? formValues["model"] : [formValues["model"]];
+    console.log(`received deployments: ${deployments}`)
+    console.log(`received type of deployments: ${typeof deployments}`)
+    deployments.forEach(async (litellm_model) => { 
+      console.log(`litellm_model: ${litellm_model}`)
+      const litellmParamsObj: Record<string, any>  = {};
+      const modelInfoObj: Record<string, any>  = {};
+      // Iterate through the key-value pairs in formValues
+      litellmParamsObj["model"] = litellm_model
+      let modelName: string  = "";
+      for (const [key, value] of Object.entries(formValues)) {
+        if (value === '') {
+          continue;
+        }
+        if (key == "model_name") {
+          modelName = modelName + value
+        }
+        else if (key == "custom_llm_provider") {
+          // const providerEnumValue = Providers[value as keyof typeof Providers];
+          // const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
+          // modelName = mappingResult + "/" + modelName
+          continue
+        }
+        else if (key == "model") {
+          continue
+        }
+
+        // Check if key is "base_model"
+        else if (key === "base_model") {
+          // Add key-value pair to model_info dictionary
+          modelInfoObj[key] = value;
+        }
+
+        else if (key == "litellm_extra_params") {
+          console.log("litellm_extra_params:", value);
+          let litellmExtraParams = {};
+          if (value && value != undefined) {
+            try {
+              litellmExtraParams = JSON.parse(value);
+            }
+            catch (error) {
+              message.error("Failed to parse LiteLLM Extra Params: " + error, 20);
+              throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            for (const [key, value] of Object.entries(litellmExtraParams)) {
+              litellmParamsObj[key] = value;
+            }
+          }
+        }
+
+        // Check if key is any of the specified API related keys
+        else {
+          // Add key-value pair to litellm_params dictionary
+          litellmParamsObj[key] = value;
+        }
+      }
+
+      const new_model: Model = {  
+        "model_name": modelName,
+        "litellm_params": litellmParamsObj,
+        "model_info": modelInfoObj
+      }
+
+      
+
+      const response: any = await modelCreateCall(
+        accessToken,
+        new_model
+      );
+
+      console.log(`response for model create call: ${response["data"]}`);
+    }); 
+    
+    form.resetFields();
+
+    
+    } catch (error) {
+      message.error("Failed to create model: " + error, 20);
+    }
+}
+
 const ModelDashboard: React.FC<ModelDashboardProps> = ({
   accessToken,
   token,
   userRole,
   userID,
+  modelData = { data: [] },
+  setModelData
 }) => {
-  const [modelData, setModelData] = useState<any>({ data: [] });
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
+  const [lastRefreshed, setLastRefreshed] = useState('');
 
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers = Object.values(Providers).filter(key => isNaN(Number(key)));
-
   
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>('');
+  const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
+  const [selectedModel, setSelectedModel] = useState<any>(null);
+  const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
+  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
+  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
+  const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>([]);
+  const [modelExceptions, setModelExceptions] = useState<any[]>([]);
+  const [allExceptions, setAllExceptions] = useState<any[]>([]);
+  const [failureTableData, setFailureTableData] = useState<any[]>([]);
+  const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
+    to: new Date(),
+  });
+
+  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
+  const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
+
+  const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
+    const [form] = Form.useForm();
+    let litellm_params_to_edit: Record<string, any> = {}
+    let model_name = "";
+    let model_id = "";
+    if (model) {
+      litellm_params_to_edit = model.litellm_params
+      model_name = model.model_name;
+      let model_info = model.model_info;
+      if (model_info ) {
+        model_id = model_info.id;
+        console.log(`model_id: ${model_id}`)
+        litellm_params_to_edit.model_id = model_id;
+      }
+    }
+   
+  
+    const handleOk = () => {
+      form
+        .validateFields()
+        .then((values) => {
+          onSubmit(values);
+          form.resetFields();
+        })
+        .catch((error) => {
+          console.error("Validation failed:", error);
+        });
+  };
+  
+    return (
+        <Modal
+              title={"Edit Model " + model_name}
+              visible={visible}
+              width={800}
+              footer={null}
+              onOk={handleOk}
+              onCancel={onCancel}
+            >
+        <Form
+          form={form}
+          onFinish={handleEditSubmit}
+          initialValues={litellm_params_to_edit} // Pass initial values here
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+                <>
+
+                <Form.Item className="mt-8"
+                    label="api_base" 
+                    name="api_base"
+                    
+                  >
+                  <TextInput/>
+
+                  </Form.Item>
+                  
+                  <Form.Item 
+                    label="tpm" 
+                    name="tpm"
+                    tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="rpm" 
+                    name="rpm"
+                    tooltip="int (optional) - Rate limit for this deployment: in requests per minute (rpm). Find this information on your model/providers website"
+                  >
+                  <InputNumber min={0} step={1} />
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="max_retries" 
+                    name="max_retries"
+                  >
+
+                    
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="timeout" 
+                    name="timeout"
+                    tooltip="int (optional) - Timeout in seconds for LLM requests (Defaults to 600 seconds)"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="stream_timeout" 
+                    name="stream_timeout"
+                    tooltip="int (optional) - Timeout for stream requests (seconds)"
+                  >
+                  <InputNumber min={0} step={1} />
+
+                  </Form.Item>
+                  
+                  <Form.Item 
+                    label="input_cost_per_token" 
+                    name="input_cost_per_token"
+                    tooltip="float (optional) - Input cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
+
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="output_cost_per_token" 
+                    name="output_cost_per_token"
+                    tooltip="float (optional) - Output cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
+
+                  </Form.Item>
+                  
+
+                  <Form.Item 
+                    label="model_id" 
+                    name="model_id"
+                    hidden={true}
+                  >
+                  </Form.Item>
+
+                  
+
+                  
+                </>
+                <div style={{ textAlign: "right", marginTop: "10px" }}>
+                  <Button2 htmlType="submit">Save</Button2>
+                </div>
+              </Form>
+      </Modal>
+    );
+  };
+  
+
+  const handleEditClick = (model: any) => {
+    setSelectedModel(model);
+    setEditModalVisible(true);
+  };
+
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  };
+
+
+const handleEditSubmit = async (formValues: Record<string, any>) => {
+  // Call API to update team with teamId and values
+  
+  console.log("handleEditSubmit:", formValues);
+  if (accessToken == null) {
+    return;
+  }
+
+  let newLiteLLMParams: Record<string, any> = {}
+  let model_info_model_id = null;
+
+  for (const [key, value] of Object.entries(formValues)) {
+    if (key !== "model_id") {
+      newLiteLLMParams[key] = value;
+    } else {
+      model_info_model_id = value;
+    }
+  }
+
+  let payload = {
+    litellm_params: newLiteLLMParams, 
+    model_info: {
+      "id": model_info_model_id
+    }
+  }
+
+  console.log("handleEditSubmit payload:", payload);
+
+  try {
+    let newModelValue = await modelUpdateCall(accessToken, payload);
+    message.success("Model updated successfully, restart server to see updates");
+
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  } catch (error) {
+    console.log(`Error occurred`)
+  }
+
+};
+
+
+  
 
 
   const props: UploadProps = {
@@ -123,6 +456,36 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     },
   };
 
+  const handleRefreshClick = () => {
+    // Update the 'lastRefreshed' state to the current date and time
+    const currentDate = new Date();
+    setLastRefreshed(currentDate.toLocaleString());
+  };
+
+  const handleSaveRetrySettings = async () => {
+    if (!accessToken) {
+      console.error("Access token is missing");
+      return;
+    }
+
+    console.log("new modelGroupRetryPolicy:", modelGroupRetryPolicy);
+  
+    try {
+      const payload = {
+          router_settings: {
+            model_group_retry_policy: modelGroupRetryPolicy
+          }
+      };
+  
+      await setCallbacksCall(accessToken, payload);
+      message.success("Retry settings saved successfully");
+    } catch (error) {
+      console.error("Failed to save retry settings:", error);
+      message.error("Failed to save retry settings");
+    }
+  };
+
+
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
@@ -138,14 +501,92 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
 
-       
+        // loop through modelDataResponse and get all`model_name` values 
 
-        // if userRole is Admin, show the pending requests
-        if (userRole === "Admin" && accessToken) {
-          const user_requests = await userGetRequesedtModelsCall(accessToken);
-          console.log("Pending Requests:", pendingRequests);
-          setPendingRequests(user_requests.requests || []);
+        let all_model_groups: Set<string> = new Set();
+        for (let i = 0; i < modelDataResponse.data.length; i++) {
+          const model = modelDataResponse.data[i];
+          all_model_groups.add(model.model_name)
         }
+        console.log("all_model_groups:", all_model_groups)
+        let _array_model_groups = Array.from(all_model_groups)
+        // sort _array_model_groups alphabetically
+        _array_model_groups = _array_model_groups.sort();
+
+        setAvailableModelGroups(_array_model_groups);
+
+        console.log("array_model_groups:", _array_model_groups)
+        let _initial_model_group = "all"
+        if (_array_model_groups.length > 0) {
+          // set selectedModelGroup to the last model group
+          _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
+          console.log("_initial_model_group:", _initial_model_group)
+          setSelectedModelGroup(_initial_model_group);
+        }
+
+        console.log("selectedModelGroup:", selectedModelGroup)
+        
+
+        const modelMetricsResponse = await modelMetricsCall(
+          accessToken,
+          userID,
+          userRole,
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        );
+
+        console.log("Model metrics response:", modelMetricsResponse);
+        // Sort by latency (avg_latency_per_token)
+
+
+        setModelMetrics(modelMetricsResponse.data);
+        setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+
+        const modelExceptionsResponse = await modelExceptionsCall(
+          accessToken,
+          userID,
+          userRole,
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        )
+        console.log("Model exceptions response:", modelExceptionsResponse);
+        setModelExceptions(modelExceptionsResponse.data);
+        setAllExceptions(modelExceptionsResponse.exception_types);
+
+
+        const slowResponses = await modelMetricsSlowResponsesCall(
+          accessToken,
+          userID,
+          userRole,
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        )
+
+        console.log("slowResponses:", slowResponses)
+
+        setSlowResponsesData(slowResponses);
+
+
+        const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
+
+        let router_settings = routerSettingsInfo.router_settings;
+
+        console.log("routerSettingsInfo:", router_settings)
+
+        let model_group_retry_policy = router_settings.model_group_retry_policy;
+        let default_retries = router_settings.num_retries;
+
+        console.log("model_group_retry_policy:", model_group_retry_policy)
+        console.log("default_retries:", default_retries)
+        setModelGroupRetryPolicy(model_group_retry_policy);
+        setDefaultRetry(default_retries);
+
+
+
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -163,7 +604,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (modelMap == null) {
       fetchModelMap()
     }
-  }, [accessToken, token, userRole, userID, modelMap]);
+
+    handleRefreshClick()
+  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed]);
 
   if (!modelData) {
     return <div>Loading...</div>;
@@ -295,93 +738,98 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
-  const handleSubmit = async (formValues: Record<string, any>) => {
+
+  const updateModelMetrics = async (modelGroup: string | null, startTime: Date | undefined, endTime: Date | undefined) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
+      return
+    }
+    console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime)
+    setSelectedModelGroup(modelGroup);  // If you want to store the selected model group in state
+
+  
     try {
-      /**
-       * For multiple litellm model names - create a separate deployment for each 
-       * - get the list
-       * - iterate through it 
-       * - create a new deployment for each
-       */
-
-      // get the list of deployments
-      let deployments: Array<string> = Object.values(formValues["model"])
-      console.log(`received deployments: ${deployments}`)
-      console.log(`received type of deployments: ${typeof deployments}`)
-      deployments.forEach(async (litellm_model) => { 
-        console.log(`litellm_model: ${litellm_model}`)
-        const litellmParamsObj: Record<string, any>  = {};
-        const modelInfoObj: Record<string, any>  = {};
-        // Iterate through the key-value pairs in formValues
-        litellmParamsObj["model"] = litellm_model
-        let modelName: string  = "";
-        for (const [key, value] of Object.entries(formValues)) {
-          if (key == "model_name") {
-            modelName = modelName + value
-          }
-          else if (key == "custom_llm_provider") {
-            // const providerEnumValue = Providers[value as keyof typeof Providers];
-            // const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
-            // modelName = mappingResult + "/" + modelName
-            continue
-          }
-          else if (key == "model") {
-            continue
-          }
-
-          // Check if key is "base_model"
-          else if (key === "base_model") {
-            // Add key-value pair to model_info dictionary
-            modelInfoObj[key] = value;
-          }
-
-          else if (key == "litellm_extra_params") {
-            console.log("litellm_extra_params:", value);
-            let litellmExtraParams = {};
-            if (value && value != undefined) {
-              try {
-                litellmExtraParams = JSON.parse(value);
-              }
-              catch (error) {
-                message.error("Failed to parse LiteLLM Extra Params: " + error, 20);
-                throw new Error("Failed to parse litellm_extra_params: " + error);
-              }
-              for (const [key, value] of Object.entries(litellmExtraParams)) {
-                litellmParamsObj[key] = value;
-              }
-            }
-          }
-
-          // Check if key is any of the specified API related keys
-          else {
-            // Add key-value pair to litellm_params dictionary
-            litellmParamsObj[key] = value;
-          }
-        }
-
-        const new_model: Model = {  
-          "model_name": modelName,
-          "litellm_params": litellmParamsObj,
-          "model_info": modelInfoObj
-        }
+      const modelMetricsResponse = await modelMetricsCall(accessToken, userID, userRole, modelGroup, startTime.toISOString(), endTime.toISOString());
+      console.log("Model metrics response:", modelMetricsResponse);
   
-        
-  
-        const response: any = await modelCreateCall(
-          accessToken,
-          new_model
-        );
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
 
-        console.log(`response for model create call: ${response["data"]}`);
-      }); 
-      
-      form.resetFields();
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      )
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
 
-      
-      } catch (error) {
-        message.error("Failed to create model: " + error, 20);
-      }
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      )
+
+      console.log("slowResponses:", slowResponses)
+
+      setSlowResponsesData(slowResponses);
+
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
   }
+
+  const customTooltip = (props: any) => {
+    const { payload, active } = props;
+    if (!active || !payload) return null;
+  
+    // Extract the date from the first item in the payload array
+    const date = payload[0]?.payload?.date;
+  
+    // Sort the payload array by category.value in descending order
+    let sortedPayload = payload.sort((a: any, b: any) => b.value - a.value);
+  
+    // Only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
+    if (sortedPayload.length > 5) {
+      let remainingItems = sortedPayload.length - 5;
+      sortedPayload = sortedPayload.slice(0, 5);
+      sortedPayload.push({
+        dataKey: `${remainingItems} other deployments`,
+        value: payload.slice(5).reduce((acc: number, curr: any) => acc + curr.value, 0),
+        color: "gray",
+      });
+    }
+  
+    return (
+      <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
+        {date && <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>}
+        {sortedPayload.map((category: any, idx: number) => {
+          const roundedValue = parseFloat(category.value.toFixed(5));
+          const displayValue =
+            roundedValue === 0 && category.value > 0 ? "<0.00001" : roundedValue.toFixed(5);
+          return (
+            <div key={idx} className="flex justify-between">
+              <div className="flex items-center space-x-2">
+                <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
+                <p className="text-tremor-content">{category.dataKey}</p>
+              </div>
+              <p className="font-medium text-tremor-content-emphasis text-righ ml-2">{displayValue}</p>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+
 
   const getPlaceholder = (selectedProvider: string): string => {
     if (selectedProvider === Providers.Vertex_AI) {
@@ -401,7 +849,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     form
         .validateFields()
         .then((values) => {
-          handleSubmit(values);
+          handleSubmit(values, accessToken, form);
           // form.resetFields();
         })
         .catch((error) => {
@@ -414,21 +862,62 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   return (
     <div style={{ width: "100%", height: "100%"}}>
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <TabList className="mt-2">
+      <TabList className="flex justify-between mt-2 w-full items-center">
+        <div className="flex">
           <Tab>All Models</Tab>
           <Tab>Add Model</Tab>
           <Tab><pre>/health Models</pre></Tab>
-        </TabList>
-      
+            <Tab>Model Analytics</Tab>
+            <Tab>Model Retry Settings</Tab>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          {lastRefreshed && (
+            <Text>
+              Last Refreshed: {lastRefreshed}
+            </Text>
+          )}
+          <Icon
+            icon={RefreshIcon} // Modify as necessary for correct icon name
+            variant="shadow"
+            size="xs"
+            className="self-center"
+            onClick={handleRefreshClick}
+          />
+        </div>
+      </TabList>
       <TabPanels>
           <TabPanel>
       <Grid>
+      <div className="flex items-center">
+      <Text>Filter by Public Model Name</Text>
+      <Select
+              className="mb-4 mt-2 ml-2 w-50"
+              defaultValue="all"
+              onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+            >
+              <SelectItem 
+                  value={"all"}
+                >
+                  All Models
+                </SelectItem>
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => setSelectedModelGroup(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+          </div>
         <Card>
           <Table className="mt-5">
             <TableHead>
               <TableRow>
 
-                  <TableHeaderCell>Model Name </TableHeaderCell>
+                  <TableHeaderCell>Public Model Name </TableHeaderCell>
 
                 <TableHeaderCell>
                   Provider
@@ -446,10 +935,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Max Tokens</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {modelData.data.map((model: any, index: number) => (
+              { modelData.data
+                  .filter((model: any) =>
+                    selectedModelGroup === "all" || model.model_name === selectedModelGroup || selectedModelGroup === null || selectedModelGroup === undefined || selectedModelGroup === ""
+                  )
+                  .map((model: any, index: number) => (
+                    
                 <TableRow key={index}>
                   <TableCell>
                     <Text>{model.model_name}</Text>
@@ -475,20 +970,37 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Accordion>
                    
                   </TableCell>
-
-                  <TableCell>{model.input_cost}</TableCell>
-                  <TableCell>{model.output_cost}</TableCell>
+                  <TableCell>{model.input_cost || model.litellm_params.input_cost_per_token || null}</TableCell>
+                  <TableCell>{model.output_cost || model.litellm_params.output_cost_per_token || null}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
                   <TableCell>
+                    {
+                      model.model_info.db_model ? <Badge icon={CheckCircleIcon} className="text-white">DB Model</Badge> : <Badge icon={XCircleIcon} className="text-black">Config Model</Badge>
+                    }
+                    
+                  </TableCell>
+                  <TableCell>
+                        <Icon
+                            icon={PencilAltIcon}
+                            size="sm"
+                            onClick={() => handleEditClick(model)}
+                          />
                           <DeleteModelButton modelID={model.model_info.id} accessToken={accessToken} />
                         </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+
         </Card>
 
       </Grid>
+      <EditModelModal
+          visible={editModalVisible}
+          onCancel={handleEditCancel}
+          model={selectedModel}
+          onSubmit={handleEditSubmit}
+        />
       </TabPanel>
       <TabPanel className="h-full">
       <Title2 level={2}>Add new model</Title2>
@@ -679,6 +1191,184 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
         </Card>
       </TabPanel>
+      <TabPanel>
+              {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
+            
+            <Grid numItems={2} className="mt-2">
+              <Col>
+              <Text>Select Time Range</Text>
+                <DateRangePicker 
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateModelMetrics(selectedModelGroup, value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+                />
+              </Col>
+              <Col>
+              <Text>Select Model Group</Text>
+                <Select
+                className="mb-4 mt-2"
+                defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
+                value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
+              >
+                {availableModelGroups.map((group, idx) => (
+                  <SelectItem 
+                    key={idx} 
+                    value={group}
+                    onClick={() => updateModelMetrics(group, dateValue.from, dateValue.to)}
+                  >
+                    {group}
+                  </SelectItem>
+                ))}
+              </Select>
+
+              </Col>
+
+              
+          
+
+            </Grid>
+            
+
+
+
+            <Grid numItems={2}>
+              <Col>
+              <Card className="mr-2 max-h-[400px] min-h-[400px]">
+                <Title>Avg Latency per Token</Title><p className="text-gray-500 italic"> (seconds/token)</p>
+                <Text className="text-gray-500 italic mt-1 mb-1">average Latency for successfull requests divided by the total tokens</Text>
+              { modelMetrics && modelMetricsCategories && (
+                <AreaChart
+                  title="Model Latency"
+                  className="h-72"
+                  data={modelMetrics}
+                  showLegend={false}
+                  index="date"
+                  categories={modelMetricsCategories}
+                  connectNulls={true}
+                  customTooltip={customTooltip}
+                />
+              )}
+
+              </Card>
+              </Col>
+            <Col>
+            <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
+              <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Deployment</TableHeaderCell>
+                  <TableHeaderCell>Success Responses</TableHeaderCell>
+                  <TableHeaderCell>Slow Responses <p>Success Responses taking 600+s</p></TableHeaderCell>
+
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {slowResponsesData.map((metric, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell>{metric.api_base}</TableCell>
+                    <TableCell>{metric.total_count}</TableCell>
+                    <TableCell>{metric.slow_count}</TableCell>
+
+                  </TableRow>
+
+                ))}
+              </TableBody>
+              </Table>
+
+
+            </Card>
+            </Col>
+            </Grid>
+        <Card className="mt-4">
+        <Title>Exceptions per Model</Title>
+        <BarChart
+        className="h-72"
+        data={modelExceptions}
+        index="model"
+        categories={allExceptions}
+        stack={true}
+        colors={['indigo-300', 'rose-200', '#ffcc33']}
+        yAxisWidth={30}
+      />
+        </Card>
+            </TabPanel>
+            <TabPanel>
+            <div className="flex items-center">
+              
+            <Text>Filter by Public Model Name</Text>
+
+        <Select
+              className="mb-4 mt-2 ml-2 w-50"
+              defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
+              value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
+              onValueChange={(value) => setSelectedModelGroup(value)}
+            >
+              {availableModelGroups.map((group, idx) => (
+                <SelectItem 
+                  key={idx} 
+                  value={group}
+                  onClick={() => setSelectedModelGroup(group)}
+                >
+                  {group}
+                </SelectItem>
+              ))}
+            </Select>
+            </div>
+
+              <Title>
+                Retry Policy for {selectedModelGroup}
+              </Title>
+              <Text className="mb-6">How many retries should be attempted based on the Exception</Text>
+              {retry_policy_map &&
+  <table>
+  <tbody>
+    {Object.entries(retry_policy_map).map(([exceptionType, retryPolicyKey], idx) => {
+
+      let retryCount = modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey]
+      if (retryCount == null) {
+        retryCount = defaultRetry;
+      }
+      
+      return (
+        <tr key={idx} className="flex justify-between items-center mt-2">
+          <td>
+            <Text>{exceptionType}</Text>
+          </td>
+          <td>
+            <InputNumber
+              className="ml-5"
+              value={retryCount}
+              min={0}
+              step={1}
+              onChange={(value) => {
+                setModelGroupRetryPolicy(prevModelGroupRetryPolicy => {
+                  const prevRetryPolicy = prevModelGroupRetryPolicy?.[selectedModelGroup!] ?? {};
+                  return {
+                    ...prevModelGroupRetryPolicy ?? {},
+                    [selectedModelGroup!]: {
+                      ...prevRetryPolicy,
+                      [retryPolicyKey!]: value,
+                    },
+                  } as RetryPolicyObject;
+                });
+              }}
+            />
+          </td>
+        </tr>
+      );
+    })}
+  </tbody>
+</table>
+}
+<Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
+  Save
+</Button>
+
+            </TabPanel>
+      
       </TabPanels>
       </TabGroup>
       

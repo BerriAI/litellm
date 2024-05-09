@@ -3,7 +3,7 @@
 #    On success, log events to Prometheus
 
 import dotenv, os
-import requests
+import requests  # type: ignore
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -19,7 +19,6 @@ class PrometheusLogger:
         **kwargs,
     ):
         try:
-            print(f"in init prometheus metrics")
             from prometheus_client import Counter
 
             self.litellm_llm_api_failed_requests_metric = Counter(
@@ -71,7 +70,7 @@ class PrometheusLogger:
             litellm_params = kwargs.get("litellm_params", {}) or {}
             proxy_server_request = litellm_params.get("proxy_server_request") or {}
             end_user_id = proxy_server_request.get("body", {}).get("user", None)
-            user_id = proxy_server_request.get("metadata", {}).get(
+            user_id = litellm_params.get("metadata", {}).get(
                 "user_api_key_user_id", None
             )
             user_api_key = litellm_params.get("metadata", {}).get("user_api_key", None)

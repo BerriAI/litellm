@@ -3,7 +3,7 @@
 import os, types
 import json
 from enum import Enum
-import requests, copy
+import requests, copy  # type: ignore
 import time, uuid
 from typing import Callable, Optional, List
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
@@ -17,7 +17,7 @@ from .prompt_templates.factory import (
     extract_between_tags,
     parse_xml_params,
 )
-import httpx
+import httpx  # type: ignore
 
 
 class VertexAIError(Exception):
@@ -349,7 +349,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
@@ -422,7 +422,7 @@ async def async_completion(
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 

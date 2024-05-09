@@ -3,7 +3,7 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem } from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -13,6 +13,8 @@ import {
   teamSpendLogsCall,
   tagsSpendLogsCall,
   modelMetricsCall,
+  modelAvailableCall,
+  modelInfoCall,
 } from "./networking";
 import { start } from "repl";
 
@@ -144,8 +146,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
-  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
-  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -227,7 +227,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
             const top_tags = await tagsSpendLogsCall(accessToken);
             setTopTagsData(top_tags.top_10_tags);
 
-            
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -264,21 +263,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
               }
             });
           }
-
-          const modelMetricsResponse = await modelMetricsCall(
-            accessToken,
-            userID,
-            userRole
-          );
-  
-          console.log("Model metrics response:", modelMetricsResponse);
-          // Sort by latency (avg_latency_seconds)
-          const sortedByLatency = [...modelMetricsResponse].sort((a, b) => b.avg_latency_seconds - a.avg_latency_seconds);
-          console.log("Sorted by latency:", sortedByLatency);
-
-          setModelMetrics(modelMetricsResponse);
-          setModelLatencyMetrics(sortedByLatency);
-
         } catch (error) {
           console.error("There was an error fetching the data", error);
           // Optionally, update your UI to reflect the error state here as well
@@ -287,6 +271,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
       fetchData();
     }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
+
 
   return (
     <div style={{ width: "100%" }} className="p-8">
@@ -302,7 +287,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
            <Tab>Tag Based Usage</Tab>
-           <Tab>Model Based Usage</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -404,7 +388,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
-              <Col numColSpan={2}>
+            <Col numColSpan={2}>
 
               <Card>
               <Title>Spend Per Tag - Last 30 Days</Title>
@@ -444,35 +428,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             
-            <TabPanel>
-            <Card>
-          <Title>Number Requests per Model</Title>
-              <BarChart
-                data={modelMetrics}
-                className="h-[50vh]"
-                index="model"
-                categories={["num_requests"]}
-                colors={["blue"]}
-                yAxisWidth={400}
-                layout="vertical"
-                tickGap={5}
-              />
-        </Card>
-        <Card className="mt-4">
-          <Title>Latency Per Model</Title>
-              <BarChart
-                data={modelLatencyMetrics}
-                className="h-[50vh]"
-                index="model"
-                categories={["avg_latency_seconds"]}
-                colors={["red"]}
-                yAxisWidth={400}
-                layout="vertical"
-                tickGap={5}
-              />
-        </Card>
-
-            </TabPanel>
         </TabPanels>
       </TabGroup>
     </div>

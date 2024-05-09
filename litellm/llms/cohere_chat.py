@@ -1,12 +1,12 @@
 import os, types
 import json
 from enum import Enum
-import requests
+import requests  # type: ignore
 import time, traceback
 from typing import Callable, Optional
 from litellm.utils import ModelResponse, Choices, Message, Usage
 import litellm
-import httpx
+import httpx  # type: ignore
 from .prompt_templates.factory import cohere_message_pt
 
 
@@ -305,5 +305,5 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response

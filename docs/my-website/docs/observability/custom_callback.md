@@ -331,49 +331,25 @@ response = litellm.completion(model="gpt-3.5-turbo", messages=messages, metadata
 ## Examples
 
 ### Custom Callback to track costs for Streaming + Non-Streaming
+By default, the response cost is accessible in the logging object via `kwargs["response_cost"]` on success (sync + async)
 ```python
 
+# Step 1. Write your custom callback function
 def track_cost_callback(
     kwargs,                 # kwargs to completion
     completion_response,    # response from completion
     start_time, end_time    # start/end time
 ):
     try:
-        # init logging config
-        logging.basicConfig(
-                filename='cost.log',
-                level=logging.INFO,
-                format='%(asctime)s - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
-        )
-
-        # check if it has collected an entire stream response
-        if "complete_streaming_response" in kwargs:
-            # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost 
-            completion_response=kwargs["complete_streaming_response"]
-            input_text = kwargs["messages"]
-            output_text = completion_response["choices"][0]["message"]["content"]
-            response_cost = litellm.completion_cost(
-                model = kwargs["model"],
-                messages = input_text,
-                completion=output_text
-            )
-            print("streaming response_cost", response_cost)
-            logging.info(f"Model {kwargs['model']} Cost: ${response_cost:.8f}")
-
-        # for non streaming responses
-        else:
-            # we pass the completion_response obj
-            if kwargs["stream"] != True:
-                response_cost = litellm.completion_cost(completion_response=completion_response)
-                print("regular response_cost", response_cost)
-                logging.info(f"Model {completion_response.model} Cost: ${response_cost:.8f}")
+        response_cost = kwargs["response_cost"] # litellm calculates response cost for you
+        print("regular response_cost", response_cost)
     except:
         pass
 
-# Assign the custom callback function
+# Step 2. Assign the custom callback function
 litellm.success_callback = [track_cost_callback]
 
+# Step 3. Make litellm.completion call
 response = completion(
     model="gpt-3.5-turbo",
     messages=[

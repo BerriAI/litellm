@@ -20,6 +20,8 @@ from litellm.utils import (
     validate_environment,
     function_to_dict,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
 )
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'

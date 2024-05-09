@@ -1,5 +1,5 @@
 from typing import Optional, Union, Any
-import types, requests
+import types, requests  # type: ignore
 from .base import BaseLLM
 from litellm.utils import (
     ModelResponse,
@@ -12,7 +12,7 @@ from litellm.utils import (
 from typing import Callable, Optional, BinaryIO
 from litellm import OpenAIConfig
 import litellm, json
-import httpx
+import httpx  # type: ignore
 from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTransport
 from openai import AzureOpenAI, AsyncAzureOpenAI
 import uuid
@@ -96,6 +96,15 @@ class AzureOpenAIConfig(OpenAIConfig):
             top_p,
         )
 
+    def get_mapped_special_auth_params(self) -> dict:
+        return {"token": "azure_ad_token"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "token":
+                optional_params["azure_ad_token"] = value
+        return optional_params
+
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
     # azure_client_params = {
@@ -142,7 +151,7 @@ class AzureChatCompletion(BaseLLM):
         api_type: str,
         azure_ad_token: str,
         print_verbose: Callable,
-        timeout,
+        timeout: Union[float, httpx.Timeout],
         logging_obj,
         optional_params,
         litellm_params,

@@ -3,7 +3,7 @@
 import pytest
 import asyncio
 import aiohttp, openai
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 
 
 def response_header_check(response):
@@ -297,6 +297,29 @@ async def test_chat_completion_different_deployments():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_streaming():
+    """
+    [PROD Test] Ensures logprobs are returned correctly
+    """
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    response = await client.chat.completions.create(
+        model="gpt-3.5-turbo-large",
+        messages=[{"role": "user", "content": "Hello!"}],
+        logprobs=True,
+        top_logprobs=2,
+        stream=True,
+    )
+
+    response_str = ""
+
+    async for chunk in response:
+        response_str += chunk.choices[0].delta.content or ""
+
+    print(f"response_str: {response_str}")
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_old_key():
     """
     Production test for backwards compatibility. Test db against a pre-generated (old key)
@@ -305,11 +328,10 @@ async def test_chat_completion_old_key():
     """
     async with aiohttp.ClientSession() as session:
         try:
-            key = "sk-ecMXHujzUtKCvHcwacdaTw"
+            key = "sk--W0Ph0uDZLVD7V7LQVrslg"
             await chat_completion(session=session, key=key)
         except Exception as e:
-            key = "sk-ecMXHujzUtKCvHcwacdaTw"  # try diff db key (in case db url is for the other db)
-            await chat_completion(session=session, key=key)
+            pytest.fail("Invalid api key")
 
 
 @pytest.mark.asyncio

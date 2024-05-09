@@ -95,8 +95,8 @@ print(response)
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
 - `router.aimage_generation()` - async image generation calls
 
-### Advanced - Routing Strategies
-#### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based
+## Advanced - Routing Strategies
+#### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based, Cost Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
 
@@ -278,6 +278,36 @@ router_settings:
 	routing_strategy_args: {"ttl": 10}
 ```
 
+### Set Lowest Latency Buffer
+
+Set a buffer within which deployments are candidates for making calls to. 
+
+E.g. 
+
+if you have 5 deployments
+
+```
+https://litellm-prod-1.openai.azure.com/: 0.07s
+https://litellm-prod-2.openai.azure.com/: 0.1s
+https://litellm-prod-3.openai.azure.com/: 0.1s
+https://litellm-prod-4.openai.azure.com/: 0.1s
+https://litellm-prod-5.openai.azure.com/: 4.66s
+```
+
+to prevent initially overloading `prod-1`, with all requests - we can set a buffer of 50%, to consider deployments `prod-2, prod-3, prod-4`. 
+
+**In Router**
+```python 
+router = Router(..., routing_strategy_args={"lowest_latency_buffer": 0.5})
+```
+
+**In Proxy**
+
+```yaml
+router_settings:
+	routing_strategy_args: {"lowest_latency_buffer": 0.5}
+```
+
 </TabItem>
 <TabItem value="simple-shuffle" label="(Default) Weighted Pick (Async)">
 
@@ -438,10 +468,134 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
+<TabItem value="lowest-cost" label="Lowest Cost Routing (Async)">
+
+Picks a deployment based on the lowest cost
+
+How this works:
+- Get all healthy deployments
+- Select all deployments that are under their provided `rpm/tpm` limits
+- For each deployment check if `litellm_param["model"]` exists in [`litellm_model_cost_map`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 
+	- if deployment does not exist in `litellm_model_cost_map` -> use deployment_cost= `$1`
+- Select deployment with lowest cost
+
+```python
+from litellm import Router 
+import asyncio
+
+model_list =  [
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {"model": "gpt-4"},
+		"model_info": {"id": "openai-gpt-4"},
+	},
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {"model": "groq/llama3-8b-8192"},
+		"model_info": {"id": "groq-llama"},
+	},
+]
+
+# init router
+router = Router(model_list=model_list, routing_strategy="cost-based-routing")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+
+	print(response._hidden_params["model_id"]) # expect groq-llama, since groq/llama has lowest cost
+	return response
+
+asyncio.run(router_acompletion())
+
+```
+
+
+#### Using Custom Input/Output pricing
+
+Set `litellm_params["input_cost_per_token"]` and `litellm_params["output_cost_per_token"]` for using custom pricing when routing
+
+```python
+model_list = [
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {
+			"model": "azure/chatgpt-v-2",
+			"input_cost_per_token": 0.00003,
+			"output_cost_per_token": 0.00003,
+		},
+		"model_info": {"id": "chatgpt-v-experimental"},
+	},
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {
+			"model": "azure/chatgpt-v-1",
+			"input_cost_per_token": 0.000000001,
+			"output_cost_per_token": 0.00000001,
+		},
+		"model_info": {"id": "chatgpt-v-1"},
+	},
+	{
+		"model_name": "gpt-3.5-turbo",
+		"litellm_params": {
+			"model": "azure/chatgpt-v-5",
+			"input_cost_per_token": 10,
+			"output_cost_per_token": 12,
+		},
+		"model_info": {"id": "chatgpt-v-5"},
+	},
+]
+# init router
+router = Router(model_list=model_list, routing_strategy="cost-based-routing")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+
+	print(response._hidden_params["model_id"]) # expect chatgpt-v-1, since chatgpt-v-1 has lowest cost
+	return response
+
+asyncio.run(router_acompletion())
+```
+
+</TabItem>
 
 </Tabs>
 
 ## Basic Reliability
+
+### Max Parallel Requests (ASYNC)
+
+Used in semaphore for async requests on router. Limit the max concurrent calls made to a deployment. Useful in high-traffic scenarios. 
+
+If tpm/rpm is set, and no max parallel request limit given, we use the RPM or calculated RPM (tpm/1000/6) as the max parallel request limit. 
+
+
+```python
+from litellm import Router 
+
+model_list = [{
+	"model_name": "gpt-4",
+	"litellm_params": {
+		"model": "azure/gpt-4",
+		...
+		"max_parallel_requests": 10 # 👈 SET PER DEPLOYMENT
+	}
+}]
+
+### OR ### 
+
+router = Router(model_list=model_list, default_max_parallel_requests=20) # 👈 SET DEFAULT MAX PARALLEL REQUESTS 
+
+
+# deployment max parallel requests > default max parallel requests
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/a978f2d8813c04dad34802cb95e0a0e35a3324bc/litellm/utils.py#L5605)
 
 ### Timeouts 
 
@@ -556,6 +710,57 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 
 print(f"response: {response}")
 ```
+
+#### Retries based on Error Type
+
+Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+
+Example:
+- 4 retries for `ContentPolicyViolationError`
+- 0 retries for `RateLimitErrors` 
+
+Example Usage
+
+```python
+from litellm.router import RetryPolicy
+retry_policy = RetryPolicy(
+	ContentPolicyViolationErrorRetries=3, # run 3 retries for ContentPolicyViolationErrors
+	AuthenticationErrorRetries=0,		  # run 0 retries for AuthenticationErrorRetries
+	BadRequestErrorRetries=1,
+	TimeoutErrorRetries=2,
+	RateLimitErrorRetries=3,
+)
+
+router = litellm.Router(
+	model_list=[
+		{
+			"model_name": "gpt-3.5-turbo",  # openai model name
+			"litellm_params": {  # params for litellm completion/embedding call
+				"model": "azure/chatgpt-v-2",
+				"api_key": os.getenv("AZURE_API_KEY"),
+				"api_version": os.getenv("AZURE_API_VERSION"),
+				"api_base": os.getenv("AZURE_API_BASE"),
+			},
+		},
+		{
+			"model_name": "bad-model",  # openai model name
+			"litellm_params": {  # params for litellm completion/embedding call
+				"model": "azure/chatgpt-v-2",
+				"api_key": "bad-key",
+				"api_version": os.getenv("AZURE_API_VERSION"),
+				"api_base": os.getenv("AZURE_API_BASE"),
+			},
+		},
+	],
+	retry_policy=retry_policy,
+)
+
+response = await router.acompletion(
+	model=model,
+	messages=messages,
+)
+```
+
 
 ### Fallbacks 
 
@@ -881,6 +1086,46 @@ async def test_acompletion_caching_on_router_caching_groups():
 asyncio.run(test_acompletion_caching_on_router_caching_groups())
 ```
 
+## Alerting 🚨
+
+Send alerts to slack / your webhook url for the following events
+- LLM API Exceptions
+- Slow LLM Responses
+
+Get a slack webhook url from https://api.slack.com/messaging/webhooks
+
+#### Usage
+Initialize an `AlertingConfig` and pass it to `litellm.Router`. The following code will trigger an alert because `api_key=bad-key` which is invalid
+
+```python
+from litellm.router import AlertingConfig
+import litellm
+import os
+
+router = litellm.Router(
+	model_list=[
+		{
+			"model_name": "gpt-3.5-turbo",
+			"litellm_params": {
+				"model": "gpt-3.5-turbo",
+				"api_key": "bad_key",
+			},
+		}
+	],
+	alerting_config= AlertingConfig(
+		alerting_threshold=10,                        # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
+		webhook_url= os.getenv("SLACK_WEBHOOK_URL")   # webhook you want to send alerts to
+	),
+)
+try:
+	await router.acompletion(
+		model="gpt-3.5-turbo",
+		messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	)
+except:
+	pass
+```
+
 ## Track cost for Azure Deployments
 
 **Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
@@ -1049,6 +1294,7 @@ def __init__(
 		"least-busy",
 		"usage-based-routing",
 		"latency-based-routing",
+		"cost-based-routing",
 	] = "simple-shuffle",
 
 	## DEBUGGING ##

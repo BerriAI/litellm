@@ -226,7 +226,9 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [deepinfra](https://docs.litellm.ai/docs/providers/deepinfra)                       | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [perplexity-ai](https://docs.litellm.ai/docs/providers/perplexity)                  | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [Groq AI](https://docs.litellm.ai/docs/providers/groq)                              | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
+| [Deepseek](https://docs.litellm.ai/docs/providers/deepseek)                         | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [anyscale](https://docs.litellm.ai/docs/providers/anyscale)                         | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
+| [IBM - watsonx.ai](https://docs.litellm.ai/docs/providers/watsonx)                  | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅ 
 | [voyage ai](https://docs.litellm.ai/docs/providers/voyage)                          |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                            |
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference) |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                            |
 
@@ -247,7 +249,7 @@ Step 2: Navigate into the project, and install dependencies:
 
 ```
 cd litellm
-poetry install
+poetry install -E extra_proxy -E proxy
 ```
 
 Step 3: Test your change:
