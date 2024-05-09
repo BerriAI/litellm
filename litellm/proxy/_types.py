@@ -476,16 +476,6 @@ class NewEndUserRequest(LiteLLMBase):
         if values.get("max_budget") is not None and values.get("budget_id") is not None:
             raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
 
-        if (
-            values.get("allowed_model_region") is not None
-            and values.get("default_model") is None
-        ) or (
-            values.get("allowed_model_region") is None
-            and values.get("default_model") is not None
-        ):
-            raise ValueError(
-                "If 'allowed_model_region' is set, then 'default_model' must be set."
-            )
         return values
 
 
@@ -867,6 +857,7 @@ class UserAPIKeyAuth(
 
     api_key: Optional[str] = None
     user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
+    allowed_model_region: Optional[Literal["eu"]] = None
 
     @root_validator(pre=True)
     def check_api_key(cls, values):
@@ -912,6 +903,8 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
+    allowed_model_region: Optional[Literal["eu"]] = None
+    default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     @root_validator(pre=True)

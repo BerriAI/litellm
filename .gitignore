@@ -55,3 +55,4 @@ litellm/proxy/_super_secret_config.yaml
 litellm/proxy/_super_secret_config.yaml
 litellm/proxy/myenv/bin/activate
 litellm/proxy/myenv/bin/Activate.ps1
+myenv/*
