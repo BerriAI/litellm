@@ -369,7 +369,7 @@ class ChatCompletionMessageToolCall(OpenAIObject):
 class Message(OpenAIObject):
     def __init__(
         self,
-        content="default",
+        content: Optional[str] = "default",
         role="assistant",
         logprobs=None,
         function_call=None,
