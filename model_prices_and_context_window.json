@@ -2753,8 +2753,8 @@
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000010,
-        "output_cost_per_token": 0.00000010,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "mode": "chat"
     },
