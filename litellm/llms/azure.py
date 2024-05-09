@@ -12,7 +12,7 @@ from litellm.utils import (
 from typing import Callable, Optional, BinaryIO
 from litellm import OpenAIConfig
 import litellm, json
-import httpx
+import httpx  # type: ignore
 from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTransport
 from openai import AzureOpenAI, AsyncAzureOpenAI
 import uuid

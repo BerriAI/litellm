@@ -1,10 +1,10 @@
 from itertools import chain
-import requests, types, time
+import requests, types, time  # type: ignore
 import json, uuid
 import traceback
 from typing import Optional
 import litellm
-import httpx, aiohttp, asyncio
+import httpx, aiohttp, asyncio  # type: ignore
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
 
@@ -220,7 +220,10 @@ def get_ollama_response(
             tool_calls=[
                 {
                     "id": f"call_{str(uuid.uuid4())}",
-                    "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                    "function": {
+                        "name": function_call["name"],
+                        "arguments": json.dumps(function_call["arguments"]),
+                    },
                     "type": "function",
                 }
             ],
@@ -232,7 +235,9 @@ def get_ollama_response(
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
     prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt, disallowed_special=())))  # type: ignore
-    completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
+    completion_tokens = response_json.get(
+        "eval_count", len(response_json.get("message", dict()).get("content", ""))
+    )
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -273,7 +278,10 @@ def ollama_completion_stream(url, data, logging_obj):
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
-                            "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
                             "type": "function",
                         }
                     ],
@@ -314,9 +322,10 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 first_chunk_content = first_chunk.choices[0].delta.content or ""
                 response_content = first_chunk_content + "".join(
                     [
-                    chunk.choices[0].delta.content
-                    async for chunk in streamwrapper
-                    if chunk.choices[0].delta.content]
+                        chunk.choices[0].delta.content
+                        async for chunk in streamwrapper
+                        if chunk.choices[0].delta.content
+                    ]
                 )
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
@@ -324,7 +333,10 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
-                            "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
                             "type": "function",
                         }
                     ],
@@ -373,7 +385,10 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
-                            "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
                             "type": "function",
                         }
                     ],
@@ -387,7 +402,10 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data["model"]
             prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(data["prompt"], disallowed_special=())))  # type: ignore
-            completion_tokens = response_json.get("eval_count", len(response_json.get("message",dict()).get("content", "")))
+            completion_tokens = response_json.get(
+                "eval_count",
+                len(response_json.get("message", dict()).get("content", "")),
+            )
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -475,6 +493,7 @@ async def ollama_aembeddings(
     }
     return model_response
 
+
 def ollama_embeddings(
     api_base: str,
     model: str,
@@ -492,5 +511,6 @@ def ollama_embeddings(
             optional_params,
             logging_obj,
             model_response,
-            encoding)
+            encoding,
         )
+    )
