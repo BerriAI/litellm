@@ -83,22 +83,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       fetchData();
     }
 
-    const fetchEndUserSpend = async () => {
-      try {
-        const topEndUsers = await adminTopEndUsersCall(accessToken, null);
-        console.log("user data response:", topEndUsers);
-        setEndUsers(topEndUsers);
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-    if (
-      userRole &&
-      (userRole == "Admin" || userRole == "Admin Viewer") &&
-      !endUsers
-    ) {
-      fetchEndUserSpend();
-    }
+
   }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
@@ -217,26 +202,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 <div className="flex items-center">
                   <div className="flex-1"></div>
                   <div className="flex-1 flex justify-between items-center">
-                    {/* <Text className="w-1/4 mr-2 text-right">Key</Text>
-                    <Select defaultValue="1" className="w-3/4">
-                      {keys?.map((key: any, index: number) => {
-                        if (
-                          key &&
-                          key["key_alias"] !== null &&
-                          key["key_alias"].length > 0
-                        ) {
-                          return (
-                            <SelectItem
-                              key={index}
-                              value={String(index)}
-                              onClick={() => onKeyClick(key["token"])}
-                            >
-                              {key["key_alias"]}
-                            </SelectItem>
-                          );
-                        }
-                      })}
-                    </Select> */}
+   
                   </div>
                 </div>
                 {/* <Table className="max-h-[70vh] min-h-[500px]">
