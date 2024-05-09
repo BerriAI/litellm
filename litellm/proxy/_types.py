@@ -494,6 +494,8 @@ class NewTeamRequest(TeamBase):
 
 class GlobalEndUsersSpend(LiteLLMBase):
     api_key: Optional[str] = None
+    startTime: Optional[datetime] = None
+    endTime: Optional[datetime] = None
 
 
 class TeamMemberAddRequest(LiteLLMBase):
