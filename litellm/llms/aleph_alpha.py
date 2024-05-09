@@ -1,12 +1,12 @@
 import os, types
 import json
 from enum import Enum
-import requests
+import requests  # type: ignore
 import time
 from typing import Callable, Optional
 import litellm
 from litellm.utils import ModelResponse, Choices, Message, Usage
-import httpx
+import httpx  # type: ignore
 
 
 class AlephAlphaError(Exception):

@@ -1,7 +1,6 @@
 #### What this does ####
 #    On success + failure, log events to aispend.io
 import dotenv, os
-import requests
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback

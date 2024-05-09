@@ -30,7 +30,7 @@ sys.path.insert(
 try:
     import fastapi
     import backoff
-    import yaml
+    import yaml  # type: ignore
     import orjson
     import logging
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -229,6 +229,11 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
+
+
+class CommonProxyErrors(enum.Enum):
+    db_not_connected_error = "DB not connected"
+    no_llm_router = "No models configured on proxy"
 
 
 @app.exception_handler(ProxyException)
@@ -466,10 +471,6 @@ async def user_api_key_auth(
                         end_user_id=end_user_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
-                    )
-                    # save the end-user object to cache
-                    await user_api_key_cache.async_set_cache(
-                        key=end_user_id, value=end_user_object
                     )
 
                 global_proxy_spend = None
@@ -952,13 +953,16 @@ async def user_api_key_auth(
 
             _end_user_object = None
             if "user" in request_data:
-                _id = "end_user_id:{}".format(request_data["user"])
-                _end_user_object = await user_api_key_cache.async_get_cache(key=_id)
-                if _end_user_object is not None:
-                    _end_user_object = LiteLLM_EndUserTable(**_end_user_object)
+                _end_user_object = await get_end_user_object(
+                    end_user_id=request_data["user"],
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
             global_proxy_spend = None
-            if litellm.max_budget > 0:  # user set proxy max budget
+            if (
+                litellm.max_budget > 0 and prisma_client is not None
+            ):  # user set proxy max budget
                 # check cache
                 global_proxy_spend = await user_api_key_cache.async_get_cache(
                     key="{}:spend".format(litellm_proxy_admin_name)
@@ -1011,6 +1015,12 @@ async def user_api_key_auth(
             )
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
+
+            if _end_user_object is not None:
+                valid_token_dict["allowed_model_region"] = (
+                    _end_user_object.allowed_model_region
+                )
+
             """
             asyncio create task to update the user api key cache with the user db table as well
 
@@ -1035,10 +1045,7 @@ async def user_api_key_auth(
                         # check if user can access this route
                         query_params = request.query_params
                         key = query_params.get("key")
-                        if (
-                            key is not None
-                            and prisma_client.hash_token(token=key) != api_key
-                        ):
+                        if key is not None and hash_token(token=key) != api_key:
                             raise HTTPException(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail="user not allowed to access this key's info",
@@ -1091,6 +1098,7 @@ async def user_api_key_auth(
         # sso/login, ui/login, /key functions and /user functions
         # this will never be allowed to call /chat/completions
         token_team = getattr(valid_token, "team_id", None)
+
         if token_team is not None and token_team == "litellm-dashboard":
             # this token is only used for managing the ui
             allowed_routes = [
@@ -3612,6 +3620,10 @@ async def chat_completion(
                     **data,
                 }  # add the team-specific configs to the completion call
 
+        ### END-USER SPECIFIC PARAMS ###
+        if user_api_key_dict.allowed_model_region is not None:
+            data["allowed_model_region"] = user_api_key_dict.allowed_model_region
+
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
         if user_temperature:
@@ -3719,6 +3731,7 @@ async def chat_completion(
                 "x-litellm-model-id": model_id,
                 "x-litellm-cache-key": cache_key,
                 "x-litellm-model-api-base": api_base,
+                "x-litellm-version": version,
             }
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3734,6 +3747,7 @@ async def chat_completion(
         fastapi_response.headers["x-litellm-model-id"] = model_id
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -3890,14 +3904,10 @@ async def completion(
                 },
             )
 
-        if hasattr(response, "_hidden_params"):
-            model_id = response._hidden_params.get("model_id", None) or ""
-            original_response = (
-                response._hidden_params.get("original_response", None) or ""
-            )
-        else:
-            model_id = ""
-            original_response = ""
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
 
         verbose_proxy_logger.debug("final response: %s", response)
         if (
@@ -3905,6 +3915,9 @@ async def completion(
         ):  # use generate_responses to stream responses
             custom_headers = {
                 "x-litellm-model-id": model_id,
+                "x-litellm-cache-key": cache_key,
+                "x-litellm-model-api-base": api_base,
+                "x-litellm-version": version,
             }
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3919,6 +3932,10 @@ async def completion(
             )
 
         fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -3958,6 +3975,7 @@ async def completion(
 )  # azure compatible endpoint
 async def embeddings(
     request: Request,
+    fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -4104,6 +4122,17 @@ async def embeddings(
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
 
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -4142,6 +4171,7 @@ async def embeddings(
 )
 async def image_generation(
     request: Request,
+    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     global proxy_logging_obj
@@ -4261,6 +4291,17 @@ async def image_generation(
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
 
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -4297,6 +4338,7 @@ async def image_generation(
 )
 async def audio_transcriptions(
     request: Request,
+    fastapi_response: Response,
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -4441,6 +4483,18 @@ async def audio_transcriptions(
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
+
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
@@ -4480,6 +4534,7 @@ async def audio_transcriptions(
 )
 async def moderations(
     request: Request,
+    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -4603,6 +4658,17 @@ async def moderations(
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers["x-litellm-model-id"] = model_id
+        fastapi_response.headers["x-litellm-cache-key"] = cache_key
+        fastapi_response.headers["x-litellm-model-api-base"] = api_base
+        fastapi_response.headers["x-litellm-version"] = version
 
         return response
     except Exception as e:
@@ -5809,35 +5875,38 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    if data is None:
-        sql_query = f"""SELECT * FROM "Last30dTopEndUsersSpend";"""
+    """
+    Gets the top 100 end-users for a given api key
+    """
+    startTime = None
+    endTime = None
+    selected_api_key = None
+    if data is not None:
+        startTime = data.startTime
+        endTime = data.endTime
+        selected_api_key = data.api_key
 
-        response = await prisma_client.db.query_raw(query=sql_query)
-    else:
-        """
-        Gets the top 100 end-users for a given api key
-        """
-        current_date = datetime.now()
-        past_date = current_date - timedelta(days=30)
-        response = await prisma_client.db.litellm_spendlogs.group_by(  # type: ignore
-            by=["end_user"],
-            where={
-                "AND": [{"startTime": {"gte": past_date}}, {"api_key": data.api_key}]  # type: ignore
-            },
-            sum={"spend": True},
-            order={"_sum": {"spend": "desc"}},  # type: ignore
-            take=100,
-            count=True,
-        )
-        if response is not None and isinstance(response, list):
-            new_response = []
-            for r in response:
-                new_r = r
-                new_r["total_spend"] = r["_sum"]["spend"]
-                new_r["total_count"] = r["_count"]["_all"]
-                new_r.pop("_sum")
-                new_r.pop("_count")
-                new_response.append(new_r)
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
+
+    sql_query = """
+SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
+FROM "LiteLLM_SpendLogs"
+WHERE "startTime" >= $1::timestamp
+  AND "startTime" < $2::timestamp
+  AND (
+    CASE
+      WHEN $3::TEXT IS NULL THEN TRUE
+      ELSE api_key = $3
+    END
+  )
+GROUP BY end_user
+ORDER BY total_spend DESC
+LIMIT 100
+    """
+    response = await prisma_client.db.query_raw(
+        sql_query, startTime, endTime, selected_api_key
+    )
 
     return response
 
@@ -5883,7 +5952,7 @@ async def global_predict_spend_logs(request: Request):
     return _forecast_daily_cost(data)
 
 
-#### USER MANAGEMENT ####
+#### INTERNAL USER MANAGEMENT ####
 @router.post(
     "/user/new",
     tags=["user management"],
@@ -6376,6 +6445,43 @@ async def user_get_requests():
         )
 
 
+@router.get(
+    "/user/get_users",
+    tags=["user management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_users(
+    role: str = fastapi.Query(
+        default=None,
+        description="Either 'proxy_admin', 'proxy_viewer', 'app_owner', 'app_user'",
+    )
+):
+    """
+    [BETA] This could change without notice. Give feedback - https://github.com/BerriAI/litellm/issues
+
+    Get all users who are a specific `user_role`.
+
+    Used by the UI to populate the user lists.
+
+    Currently - admin-only endpoint.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"No db connected. prisma client={prisma_client}"},
+        )
+    all_users = await prisma_client.get_data(
+        table_name="user", query_type="find_all", key_val={"user_role": role}
+    )
+
+    return all_users
+
+
+#### END-USER MANAGEMENT ####
+
+
 @router.post(
     "/end_user/block",
     tags=["End User Management"],
@@ -6466,38 +6572,140 @@ async def unblock_user(data: BlockUsers):
     return {"blocked_users": litellm.blocked_user_list}
 
 
-@router.get(
-    "/user/get_users",
-    tags=["user management"],
+@router.post(
+    "/end_user/new",
+    tags=["End User Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_users(
-    role: str = fastapi.Query(
-        default=None,
-        description="Either 'proxy_admin', 'proxy_viewer', 'app_owner', 'app_user'",
-    )
+async def new_end_user(
+    data: NewEndUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [BETA] This could change without notice. Give feedback - https://github.com/BerriAI/litellm/issues
+    [TODO] Needs to be implemented.
 
-    Get all users who are a specific `user_role`.
+    Allow creating a new end-user 
 
-    Used by the UI to populate the user lists.
+    - Allow specifying allowed regions 
+    - Allow specifying default model
 
-    Currently - admin-only endpoint.
+    Example curl:
+    ```
+    curl --location 'http://0.0.0.0:4000/end_user/new' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "end_user_id" : "ishaan-jaff-3", <- specific customer
+            
+            "allowed_region": "eu" <- set region for models        
+
+                    + 
+
+            "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model? 
+
+        }'
+
+        # return end-user object
+    ```
     """
-    global prisma_client
+    global prisma_client, llm_router
+    """
+    Validation:
+        - check if default model exists 
+        - create budget object if not already created
+    
+    - Add user to end user table 
 
+    Return 
+    - end-user object
+    - currently allowed models 
+    """
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"No db connected. prisma client={prisma_client}"},
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
-    all_users = await prisma_client.get_data(
-        table_name="user", query_type="find_all", key_val={"user_role": role}
+
+    ## VALIDATION ##
+    if data.default_model is not None:
+        if llm_router is None:
+            raise HTTPException(
+                status_code=422, detail={"error": CommonProxyErrors.no_llm_router.value}
+            )
+        elif data.default_model not in llm_router.get_model_names():
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
+                        data.default_model, set(llm_router.get_model_names())
+                    )
+                },
+            )
+
+    new_end_user_obj: Dict = {}
+
+    ## CREATE BUDGET ## if set
+    if data.max_budget is not None:
+        budget_record = await prisma_client.db.litellm_budgettable.create(
+            data={
+                "max_budget": data.max_budget,
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }
+        )
+
+        new_end_user_obj["budget_id"] = budget_record.budget_id
+    elif data.budget_id is not None:
+        new_end_user_obj["budget_id"] = data.budget_id
+
+    _user_data = data.dict(exclude_none=True)
+
+    for k, v in _user_data.items():
+        if k != "max_budget" and k != "budget_id":
+            new_end_user_obj[k] = v
+
+    ## WRITE TO DB ##
+    end_user_record = await prisma_client.db.litellm_endusertable.create(
+        data=new_end_user_obj  # type: ignore
     )
 
-    return all_users
+    return end_user_record
+
+
+@router.post(
+    "/end_user/info",
+    tags=["End User Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def end_user_info():
+    """
+    [TODO] Needs to be implemented.
+    """
+    pass
+
+
+@router.post(
+    "/end_user/update",
+    tags=["End User Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_end_user():
+    """
+    [TODO] Needs to be implemented.
+    """
+    pass
+
+
+@router.post(
+    "/end_user/delete",
+    tags=["End User Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_end_user():
+    """
+    [TODO] Needs to be implemented.
+    """
+    pass
 
 
 #### TEAM MANAGEMENT ####
