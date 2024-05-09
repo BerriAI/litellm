@@ -530,6 +530,7 @@ class OpenAIChatCompletion(BaseLLM):
             model=model,
             custom_llm_provider="openai",
             logging_obj=logging_obj,
+            stream_options=data.get("stream_options", None),
         )
         return streamwrapper
 
@@ -579,6 +580,7 @@ class OpenAIChatCompletion(BaseLLM):
                 model=model,
                 custom_llm_provider="openai",
                 logging_obj=logging_obj,
+                stream_options=data.get("stream_options", None),
             )
             return streamwrapper
         except (
