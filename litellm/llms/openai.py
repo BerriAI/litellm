@@ -22,7 +22,6 @@ from litellm.utils import (
     TextCompletionResponse,
 )
 from typing import Callable, Optional
-import aiohttp, requests
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI

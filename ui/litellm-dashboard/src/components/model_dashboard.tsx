@@ -37,7 +37,7 @@ import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import { Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PencilAltIcon, PencilIcon, StatusOnlineIcon, TrashIcon, RefreshIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from '@ant-design/icons';
@@ -332,7 +332,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <InputNumber min={0} step={1} />
 
                   </Form.Item>
+                  
+                  <Form.Item 
+                    label="input_cost_per_token" 
+                    name="input_cost_per_token"
+                    tooltip="float (optional) - Input cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
 
+                  </Form.Item>
+
+                  <Form.Item 
+                    label="output_cost_per_token" 
+                    name="output_cost_per_token"
+                    tooltip="float (optional) - Output cost per token"
+                  >
+                  <InputNumber min={0} step={0.0001} />
+
+                  </Form.Item>
                   
 
                   <Form.Item 
@@ -394,19 +411,16 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   console.log("handleEditSubmit payload:", payload);
 
-  let newModelValue = await modelUpdateCall(accessToken, payload);
+  try {
+    let newModelValue = await modelUpdateCall(accessToken, payload);
+    message.success("Model updated successfully, restart server to see updates");
 
-  // Update the teams state with the updated team data
-  // if (teams) {
-  //   const updatedTeams = teams.map((team) =>
-  //     team.team_id === teamId ? newTeamValues.data : team
-  //   );
-  //   setTeams(updatedTeams);
-  // }
-  message.success("Model updated successfully, restart server to see updates");
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  } catch (error) {
+    console.log(`Error occurred`)
+  }
 
-  setEditModalVisible(false);
-  setSelectedModel(null);
 };
 
 
@@ -921,6 +935,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
                 <TableHeaderCell>Max Tokens</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -929,6 +944,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                     selectedModelGroup === "all" || model.model_name === selectedModelGroup || selectedModelGroup === null || selectedModelGroup === undefined || selectedModelGroup === ""
                   )
                   .map((model: any, index: number) => (
+                    
                 <TableRow key={index}>
                   <TableCell>
                     <Text>{model.model_name}</Text>
@@ -954,10 +970,15 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </Accordion>
                    
                   </TableCell>
-
-                  <TableCell>{model.input_cost}</TableCell>
-                  <TableCell>{model.output_cost}</TableCell>
+                  <TableCell>{model.input_cost || model.litellm_params.input_cost_per_token || null}</TableCell>
+                  <TableCell>{model.output_cost || model.litellm_params.output_cost_per_token || null}</TableCell>
                   <TableCell>{model.max_tokens}</TableCell>
+                  <TableCell>
+                    {
+                      model.model_info.db_model ? <Badge icon={CheckCircleIcon} className="text-white">DB Model</Badge> : <Badge icon={XCircleIcon} className="text-black">Config Model</Badge>
+                    }
+                    
+                  </TableCell>
                   <TableCell>
                         <Icon
                             icon={PencilAltIcon}

@@ -710,6 +710,7 @@ Model Info:
             "db_exceptions",
             "daily_reports",
             "new_model_added",
+            "cooldown_deployment",
         ],
         **kwargs,
     ):

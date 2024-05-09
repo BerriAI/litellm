@@ -291,7 +291,7 @@ def _create_clickhouse_aggregate_tables(client=None, table_names=[]):
 
 
 def _forecast_daily_cost(data: list):
-    import requests
+    import requests  # type: ignore
     from datetime import datetime, timedelta
 
     if len(data) == 0:
