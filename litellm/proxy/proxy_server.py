@@ -5863,35 +5863,38 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    if data is None:
-        sql_query = f"""SELECT * FROM "Last30dTopEndUsersSpend";"""
+    """
+    Gets the top 100 end-users for a given api key
+    """
+    startTime = None
+    endTime = None
+    selected_api_key = None
+    if data is not None:
+        startTime = data.startTime
+        endTime = data.endTime
+        selected_api_key = data.api_key
 
-        response = await prisma_client.db.query_raw(query=sql_query)
-    else:
-        """
-        Gets the top 100 end-users for a given api key
-        """
-        current_date = datetime.now()
-        past_date = current_date - timedelta(days=30)
-        response = await prisma_client.db.litellm_spendlogs.group_by(  # type: ignore
-            by=["end_user"],
-            where={
-                "AND": [{"startTime": {"gte": past_date}}, {"api_key": data.api_key}]  # type: ignore
-            },
-            sum={"spend": True},
-            order={"_sum": {"spend": "desc"}},  # type: ignore
-            take=100,
-            count=True,
-        )
-        if response is not None and isinstance(response, list):
-            new_response = []
-            for r in response:
-                new_r = r
-                new_r["total_spend"] = r["_sum"]["spend"]
-                new_r["total_count"] = r["_count"]["_all"]
-                new_r.pop("_sum")
-                new_r.pop("_count")
-                new_response.append(new_r)
+    startTime = startTime or datetime.now() - timedelta(days=30)
+    endTime = endTime or datetime.now()
+
+    sql_query = """
+SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
+FROM "LiteLLM_SpendLogs"
+WHERE "startTime" >= $1::timestamp
+  AND "startTime" < $2::timestamp
+  AND (
+    CASE
+      WHEN $3::TEXT IS NULL THEN TRUE
+      ELSE api_key = $3
+    END
+  )
+GROUP BY end_user
+ORDER BY total_spend DESC
+LIMIT 100
+    """
+    response = await prisma_client.db.query_raw(
+        sql_query, startTime, endTime, selected_api_key
+    )
 
     return response
 
