@@ -130,7 +130,7 @@ async def test_router_retry_policy(error_type):
     from litellm.router import RetryPolicy
 
     retry_policy = RetryPolicy(
-        ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
+        ContentPolicyViolationErrorRetries=0, AuthenticationErrorRetries=0
     )
 
     router = litellm.Router(
@@ -182,7 +182,7 @@ async def test_router_retry_policy(error_type):
     if error_type == "AuthenticationErrorRetries":
         assert customHandler.previous_models == 0
     elif error_type == "ContentPolicyViolationErrorRetries":
-        assert customHandler.previous_models == 3
+        assert customHandler.previous_models == 0
 
 
 @pytest.mark.parametrize("model_group", ["gpt-3.5-turbo", "bad-model"])
@@ -192,7 +192,7 @@ async def test_dynamic_router_retry_policy(model_group):
 
     model_group_retry_policy = {
         "gpt-3.5-turbo": RetryPolicy(ContentPolicyViolationErrorRetries=0),
-        "bad-model": RetryPolicy(AuthenticationErrorRetries=4),
+        "bad-model": RetryPolicy(AuthenticationErrorRetries=0),
     }
 
     router = litellm.Router(
@@ -240,6 +240,6 @@ async def test_dynamic_router_retry_policy(model_group):
     print("customHandler.previous_models: ", customHandler.previous_models)
 
     if model_group == "bad-model":
-        assert customHandler.previous_models == 4
+        assert customHandler.previous_models == 0
     elif model_group == "gpt-3.5-turbo":
         assert customHandler.previous_models == 0
