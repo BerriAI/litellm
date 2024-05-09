@@ -132,9 +132,21 @@ const UsagePage: React.FC<UsagePageProps> = ({
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
 
-  // const updateEndUserUsage(startTime: string, endTime: string) {
-    
-  // }
+  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
+    if (!startTime || !endTime || !accessToken) {
+      return;
+    }
+
+    let newTopUserData = await adminTopEndUsersCall(
+      accessToken,
+      null,
+      startTime.toISOString(),
+      endTime.toISOString()
+    )
+    console.log("End user data updated successfully", newTopUserData);
+    setTopUsers(newTopUserData);
+  
+  }
 
   function formatDate(date: Date) {
     const year = date.getFullYear();
@@ -361,7 +373,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   value={dateValue} 
                   onValueChange={(value) => {
                     setDateValue(value);
-                    updateModelMetrics(selectedModelGroup, value.from, value.to); // Call updateModelMetrics with the new date range
+                    updateEndUserData(value.from, value.to); // Call updateModelMetrics with the new date range
                   }}
                 />
                  <Text className="mt-4">End Users of your LLM API calls. Tracked When a `user` param is passed in your LLM calls</Text>
@@ -384,7 +396,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                       <TableRow key={index}>
                         <TableCell>{user.end_user}</TableCell>
                         <TableCell>{user.total_spend?.toFixed(4)}</TableCell>
-                        <TableCell>{user.total_events}</TableCell>
+                        <TableCell>{user.total_count}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
