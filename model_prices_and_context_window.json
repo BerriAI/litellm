@@ -1663,28 +1663,28 @@
         "mode": "chat"
     },
     "openrouter/meta-llama/llama-3-8b-instruct:free": {
-        "max_tokens": 8200,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
     "openrouter/meta-llama/llama-3-8b-instruct:extended": {
-        "max_tokens": 16000,
+        "max_tokens": 16384,
         "input_cost_per_token": 0.000000225,
         "output_cost_per_token": 0.00000225,
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
     "openrouter/meta-llama/llama-3-70b-instruct:nitro": {
-        "max_tokens": 8200,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.0000009,
         "output_cost_per_token": 0.0000009,
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
     "openrouter/meta-llama/llama-3-70b-instruct": {
-        "max_tokens": 8200,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.00000059,
         "output_cost_per_token": 0.00000079,
         "litellm_provider": "openrouter",
@@ -1750,14 +1750,14 @@
         "tool_use_system_prompt_tokens": 395
     },
     "openrouter/google/palm-2-chat-bison": {
-        "max_tokens": 8000,
+        "max_tokens": 25804,
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000005,
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
     "openrouter/google/palm-2-codechat-bison": {
-        "max_tokens": 8000,
+        "max_tokens": 20070,
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000005,
         "litellm_provider": "openrouter",
