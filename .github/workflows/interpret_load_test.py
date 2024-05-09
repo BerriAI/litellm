@@ -80,6 +80,7 @@ if __name__ == "__main__":
         existing_release_body = latest_release.body[:start_index]
 
     docker_run_command = f"""
+    \n\n
     ## Docker Run LiteLLM Proxy
 
     ```
@@ -93,6 +94,7 @@ if __name__ == "__main__":
 
     new_release_body = (
         existing_release_body
+        + docker_run_command
         + "\n\n"
         + "### Don't want to maintain your internal proxy? get in touch 🎉"
         + "\nHosted Proxy Alpha: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
