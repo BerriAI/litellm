@@ -206,9 +206,9 @@ async def get_end_user_object(
 
     if end_user_id is None:
         return None
-
+    _key = "end_user_id:{}".format(end_user_id)
     # check if in cache
-    cached_user_obj = user_api_key_cache.async_get_cache(key=end_user_id)
+    cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
         if isinstance(cached_user_obj, dict):
             return LiteLLM_EndUserTable(**cached_user_obj)
@@ -223,7 +223,14 @@ async def get_end_user_object(
         if response is None:
             raise Exception
 
-        return LiteLLM_EndUserTable(**response.dict())
+        # save the end-user object to cache
+        await user_api_key_cache.async_set_cache(
+            key="end_user_id:{}".format(end_user_id), value=response
+        )
+
+        _response = LiteLLM_EndUserTable(**response.dict())
+
+        return _response
     except Exception as e:  # if end-user not in db
         return None
 

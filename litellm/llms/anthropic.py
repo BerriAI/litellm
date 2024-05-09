@@ -1,7 +1,7 @@
 import os, types
 import json
 from enum import Enum
-import requests, copy
+import requests, copy  # type: ignore
 import time
 from typing import Callable, Optional, List
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
@@ -9,7 +9,7 @@ import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from .base import BaseLLM
-import httpx
+import httpx  # type: ignore
 
 
 class AnthropicConstants(Enum):
@@ -183,11 +183,6 @@ class AnthropicChatCompletion(BaseLLM):
             raise AnthropicError(
                 message=str(completion_response["error"]),
                 status_code=response.status_code,
-            )
-        elif len(completion_response["content"]) == 0:
-            raise AnthropicError(
-                message="No content in response",
-                status_code=500,
             )
         else:
             text_content = ""

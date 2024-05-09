@@ -118,6 +118,7 @@ def test_completion_claude():
 
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
+
     messages = [
         {
             "role": "system",
@@ -1060,16 +1061,16 @@ def test_completion_perplexity_api_2():
 ######### HUGGING FACE TESTS ########################
 #####################################################
 """
-HF Tests we should pass 
-- TGI: 
-    - Pro Inference API 
-    - Deployed Endpoint 
-- Coversational 
-    - Free Inference API 
-    - Deployed Endpoint 
+HF Tests we should pass
+- TGI:
+    - Pro Inference API
+    - Deployed Endpoint
+- Coversational
+    - Free Inference API
+    - Deployed Endpoint
 - Neither TGI or Coversational
-    - Free Inference API 
-    - Deployed Endpoint 
+    - Free Inference API
+    - Deployed Endpoint
 """
 
 
@@ -2167,9 +2168,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-70b-chat"
+    model_name = "replicate/meta/llama-2-7b"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-70b-chat",
+        model="replicate/meta/llama-2-7b",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -2199,6 +2200,7 @@ def test_replicate_custom_prompt_dict():
             repetition_penalty=0.1,
             num_retries=3,
         )
+
     except litellm.APIError as e:
         pass
     except litellm.APIConnectionError as e:
@@ -3014,6 +3016,21 @@ async def test_acompletion_gemini():
             pass
         else:
             pytest.fail(f"Error occurred: {e}")
+
+
+# Deepseek tests
+def test_completion_deepseek():
+    litellm.set_verbose = True
+    model_name = "deepseek/deepseek-chat"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # Palm tests

@@ -14,7 +14,7 @@ import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
 import itertools
-import random, uuid, requests
+import random, uuid, requests  # type: ignore
 from functools import wraps
 import datetime, time
 import tiktoken
@@ -36,7 +36,7 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 
 try:
     # this works in python 3.8
-    import pkg_resources
+    import pkg_resources  # type: ignore
 
     filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 # try:
@@ -612,6 +612,7 @@ class ModelResponse(OpenAIObject):
         system_fingerprint=None,
         usage=None,
         stream=None,
+        stream_options=None,
         response_ms=None,
         hidden_params=None,
         **params,
@@ -657,6 +658,12 @@ class ModelResponse(OpenAIObject):
         if usage is not None:
             usage = usage
         elif stream is None or stream == False:
+            usage = Usage()
+        elif (
+            stream == True
+            and stream_options is not None
+            and stream_options.get("include_usage") == True
+        ):
             usage = Usage()
         if hidden_params:
             self._hidden_params = hidden_params
@@ -4161,8 +4168,30 @@ def cost_per_token(
                 model_with_provider_and_region in model_cost_ref
             ):  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
-    if model_with_provider in model_cost_ref:
+
+    model_without_prefix = model
+    model_parts = model.split("/")
+    if len(model_parts) > 1:
+        model_without_prefix = model_parts[1]
+    else:
+        model_without_prefix = model
+    """
+    Code block that formats model to lookup in litellm.model_cost
+    Option1. model = "bedrock/ap-northeast-1/anthropic.claude-instant-v1". This is the most accurate since it is region based. Should always be option 1
+    Option2. model = "openai/gpt-4"       - model = provider/model
+    Option3. model = "anthropic.claude-3" - model = model
+    """
+    if (
+        model_with_provider in model_cost_ref
+    ):  # Option 2. use model with provider, model = "openai/gpt-4"
         model = model_with_provider
+    elif model in model_cost_ref:  # Option 1. use model passed, model="gpt-4"
+        model = model
+    elif (
+        model_without_prefix in model_cost_ref
+    ):  # Option 3. if user passed model="bedrock/anthropic.claude-3", use model="anthropic.claude-3"
+        model = model_without_prefix
+
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
     if model in model_cost_ref:
@@ -4817,6 +4846,7 @@ def get_optional_params(
     top_p=None,
     n=None,
     stream=False,
+    stream_options=None,
     stop=None,
     max_tokens=None,
     presence_penalty=None,
@@ -4836,7 +4866,7 @@ def get_optional_params(
     **kwargs,
 ):
     # retrieve all parameters passed to the function
-    passed_params = locals()
+    passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         if k.startswith("aws_") and (
@@ -4886,6 +4916,7 @@ def get_optional_params(
         "top_p": None,
         "n": None,
         "stream": None,
+        "stream_options": None,
         "stop": None,
         "max_tokens": None,
         "presence_penalty": None,
@@ -4929,9 +4960,11 @@ def get_optional_params(
             and custom_llm_provider != "anyscale"
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
+            and custom_llm_provider != "deepseek"
             and custom_llm_provider != "mistral"
             and custom_llm_provider != "anthropic"
             and custom_llm_provider != "cohere_chat"
+            and custom_llm_provider != "cohere"
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
         ):
@@ -4956,7 +4989,7 @@ def get_optional_params(
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
                 optional_params["functions_unsupported_model"] = non_default_params.pop(
-                    "tools", non_default_params.pop("functions")
+                    "tools", non_default_params.pop("functions", None)
                 )
             else:
                 raise UnsupportedParamsError(
@@ -5614,6 +5647,29 @@ def get_optional_params(
         if seed is not None:
             optional_params["seed"] = seed
 
+    elif custom_llm_provider == "deepseek":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+
+        if frequency_penalty is not None:
+            optional_params["frequency_penalty"] = frequency_penalty
+        if max_tokens is not None:
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty is not None:
+            optional_params["presence_penalty"] = presence_penalty
+        if stop is not None:
+            optional_params["stop"] = stop
+        if stream is not None:
+            optional_params["stream"] = stream
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if logprobs is not None:
+            optional_params["logprobs"] = logprobs
+        if top_logprobs is not None:
+            optional_params["top_logprobs"] = top_logprobs
+
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -5732,6 +5788,8 @@ def get_optional_params(
             optional_params["n"] = n
         if stream is not None:
             optional_params["stream"] = stream
+        if stream_options is not None:
+            optional_params["stream_options"] = stream_options
         if stop is not None:
             optional_params["stop"] = stop
         if max_tokens is not None:
@@ -5819,13 +5877,47 @@ def calculate_max_parallel_requests(
     return None
 
 
+def _is_region_eu(model_region: str) -> bool:
+    EU_Regions = ["europe", "sweden", "switzerland", "france", "uk"]
+    for region in EU_Regions:
+        if "europe" in model_region.lower():
+            return True
+    return False
+
+
+def get_model_region(
+    litellm_params: LiteLLM_Params, mode: Optional[str]
+) -> Optional[str]:
+    """
+    Pass the litellm params for an azure model, and get back the region
+    """
+    if (
+        "azure" in litellm_params.model
+        and isinstance(litellm_params.api_key, str)
+        and isinstance(litellm_params.api_base, str)
+    ):
+        _model = litellm_params.model.replace("azure/", "")
+        response: dict = litellm.AzureChatCompletion().get_headers(
+            model=_model,
+            api_key=litellm_params.api_key,
+            api_base=litellm_params.api_base,
+            api_version=litellm_params.api_version or "2023-07-01-preview",
+            timeout=10,
+            mode=mode or "chat",
+        )
+
+        region: Optional[str] = response.get("x-ms-region", None)
+        return region
+    return None
+
+
 def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     """
     Returns the api base used for calling the model.
 
     Parameters:
     - model: str - the model passed to litellm.completion()
-    - optional_params - the additional params passed to litellm.completion - eg. api_base, api_key, etc. See `LiteLLM_Params` - https://github.com/BerriAI/litellm/blob/f09e6ba98d65e035a79f73bc069145002ceafd36/litellm/router.py#L67
+    - optional_params - the 'litellm_params' in router.completion *OR* additional params passed to litellm.completion - eg. api_base, api_key, etc. See `LiteLLM_Params` - https://github.com/BerriAI/litellm/blob/f09e6ba98d65e035a79f73bc069145002ceafd36/litellm/router.py#L67
 
     Returns:
     - string (api_base) or None
@@ -5846,13 +5938,15 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
                 model=model, **optional_params
             )  # convert to pydantic object
     except Exception as e:
-        verbose_logger.error("Error occurred in getting api base - {}".format(str(e)))
+        verbose_logger.debug("Error occurred in getting api base - {}".format(str(e)))
         return None
     # get llm provider
 
     if _optional_params.api_base is not None:
         return _optional_params.api_base
 
+    if litellm.model_alias_map and model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
     try:
         model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
             get_llm_provider(
@@ -5946,6 +6040,19 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "response_format",
             "seed",
         ]
+    elif custom_llm_provider == "deepseek":
+        return [
+            # https://platform.deepseek.com/api-docs/api/create-chat-completion
+            "frequency_penalty",
+            "max_tokens",
+            "presence_penalty",
+            "stop",
+            "stream",
+            "temperature",
+            "top_p",
+            "logprobs",
+            "top_logprobs",
+        ]
     elif custom_llm_provider == "cohere":
         return [
             "stream",
@@ -5989,6 +6096,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "top_p",
             "n",
             "stream",
+            "stream_options",
             "stop",
             "max_tokens",
             "presence_penalty",
@@ -6239,8 +6347,12 @@ def get_llm_provider(
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
+            elif custom_llm_provider == "deepseek":
+                # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
+                api_base = "https://api.deepseek.com/v1"
+                dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
             elif custom_llm_provider == "fireworks_ai":
-                # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
+                # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
                 if not model.startswith("accounts/fireworks/models"):
                     model = f"accounts/fireworks/models/{model}"
                 api_base = "https://api.fireworks.ai/inference/v1"
@@ -6303,6 +6415,9 @@ def get_llm_provider(
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret("GROQ_API_KEY")
+                    elif endpoint == "api.deepseek.com/v1":
+                        custom_llm_provider = "deepseek"
+                        dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -6901,6 +7016,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("GROQ_API_KEY")
+        elif custom_llm_provider == "deepseek":
+            if "DEEPSEEK_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DEEPSEEK_API_KEY")
         elif custom_llm_provider == "mistral":
             if "MISTRAL_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7682,11 +7802,11 @@ def _calculate_retry_after(
             try:
                 retry_after = int(retry_header)
             except Exception:
-                retry_date_tuple = email.utils.parsedate_tz(retry_header)
+                retry_date_tuple = email.utils.parsedate_tz(retry_header)  # type: ignore
                 if retry_date_tuple is None:
                     retry_after = -1
                 else:
-                    retry_date = email.utils.mktime_tz(retry_date_tuple)
+                    retry_date = email.utils.mktime_tz(retry_date_tuple)  # type: ignore
                     retry_after = int(retry_date - time.time())
         else:
             retry_after = -1
@@ -7913,6 +8033,11 @@ def exception_type(
                 extra_information += f"\nvertex_project: {_vertex_project}\n"
             if _vertex_location is not None:
                 extra_information += f"\nvertex_location: {_vertex_location}\n"
+
+            # on litellm proxy add key name + team to exceptions
+            extra_information = _add_key_name_and_team_to_alert(
+                request_info=extra_information, metadata=_metadata
+            )
 
             ################################################################################
             # End of Common Extra information Needed for all providers
@@ -9368,7 +9493,9 @@ def get_secret(
         else:
             secret = os.environ.get(secret_name)
             try:
-                secret_value_as_bool = ast.literal_eval(secret)
+                secret_value_as_bool = (
+                    ast.literal_eval(secret) if secret is not None else None
+                )
                 if isinstance(secret_value_as_bool, bool):
                     return secret_value_as_bool
                 else:
@@ -9387,7 +9514,12 @@ def get_secret(
 # replicate/anthropic/cohere
 class CustomStreamWrapper:
     def __init__(
-        self, completion_stream, model, custom_llm_provider=None, logging_obj=None
+        self,
+        completion_stream,
+        model,
+        custom_llm_provider=None,
+        logging_obj=None,
+        stream_options=None,
     ):
         self.model = model
         self.custom_llm_provider = custom_llm_provider
@@ -9413,6 +9545,7 @@ class CustomStreamWrapper:
         self.response_id = None
         self.logging_loop = None
         self.rules = Rules()
+        self.stream_options = stream_options
 
     def __iter__(self):
         return self
@@ -9853,6 +9986,7 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             logprobs = None
+            usage = None
             original_chunk = None  # this is used for function/tool calling
             if len(str_line.choices) > 0:
                 if (
@@ -9887,12 +10021,15 @@ class CustomStreamWrapper:
                 else:
                     logprobs = None
 
+            usage = getattr(str_line, "usage", None)
+
             return {
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
                 "logprobs": logprobs,
                 "original_chunk": str_line,
+                "usage": usage,
             }
         except Exception as e:
             traceback.print_exc()
@@ -10195,7 +10332,9 @@ class CustomStreamWrapper:
             raise e
 
     def model_response_creator(self):
-        model_response = ModelResponse(stream=True, model=self.model)
+        model_response = ModelResponse(
+            stream=True, model=self.model, stream_options=self.stream_options
+        )
         if self.response_id is not None:
             model_response.id = self.response_id
         else:
@@ -10515,6 +10654,12 @@ class CustomStreamWrapper:
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
+                if (
+                    self.stream_options is not None
+                    and self.stream_options["include_usage"] == True
+                ):
+                    model_response.usage = response_obj["usage"]
+
             model_response.model = self.model
             print_verbose(
                 f"model_response finish reason 3: {self.received_finish_reason}; response_obj={response_obj}"
@@ -10602,6 +10747,11 @@ class CustomStreamWrapper:
                         except Exception as e:
                             model_response.choices[0].delta = Delta()
                 else:
+                    if (
+                        self.stream_options is not None
+                        and self.stream_options["include_usage"] == True
+                    ):
+                        return model_response
                     return
             print_verbose(
                 f"model_response.choices[0].delta: {model_response.choices[0].delta}; completion_obj: {completion_obj}"
@@ -11510,3 +11660,25 @@ def _get_base_model_from_metadata(model_call_details=None):
                 if base_model is not None:
                     return base_model
     return None
+
+
+def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
+    """
+    Internal helper function for litellm proxy
+    Add the Key Name + Team Name to the error
+    Only gets added if the metadata contains the user_api_key_alias and user_api_key_team_alias
+
+    [Non-Blocking helper function]
+    """
+    try:
+        _api_key_name = metadata.get("user_api_key_alias", None)
+        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", None)
+        if _api_key_name is not None:
+            request_info = (
+                f"\n\nKey Name: `{_api_key_name}`\nTeam: `{_user_api_key_team_alias}`"
+                + request_info
+            )
+
+        return request_info
+    except:
+        return request_info

@@ -12,9 +12,9 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
-
 import httpx
 import litellm
+
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
@@ -188,6 +188,7 @@ async def acompletion(
     top_p: Optional[float] = None,
     n: Optional[int] = None,
     stream: Optional[bool] = None,
+    stream_options: Optional[dict] = None,
     stop=None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
@@ -207,6 +208,7 @@ async def acompletion(
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     **kwargs,
 ):
@@ -224,6 +226,7 @@ async def acompletion(
         top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
         n (int, optional): The number of completions to generate (default is 1).
         stream (bool, optional): If True, return a streaming response (default is False).
+        stream_options (dict, optional): A dictionary containing options for the streaming response. Only use this if stream is True.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
@@ -261,6 +264,7 @@ async def acompletion(
         "top_p": top_p,
         "n": n,
         "stream": stream,
+        "stream_options": stream_options,
         "stop": stop,
         "max_tokens": max_tokens,
         "presence_penalty": presence_penalty,
@@ -305,6 +309,7 @@ async def acompletion(
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "deepseek"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
@@ -457,6 +462,7 @@ def completion(
     top_p: Optional[float] = None,
     n: Optional[int] = None,
     stream: Optional[bool] = None,
+    stream_options: Optional[dict] = None,
     stop=None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
@@ -496,6 +502,7 @@ def completion(
         top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
         n (int, optional): The number of completions to generate (default is 1).
         stream (bool, optional): If True, return a streaming response (default is False).
+        stream_options (dict, optional): A dictionary containing options for the streaming response. Only set this when you set stream: true.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
@@ -573,6 +580,7 @@ def completion(
         "top_p",
         "n",
         "stream",
+        "stream_options",
         "stop",
         "max_tokens",
         "presence_penalty",
@@ -648,6 +656,8 @@ def completion(
         "base_model",
         "stream_timeout",
         "supports_system_message",
+        "region_name",
+        "allowed_model_region",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -783,6 +793,7 @@ def completion(
             top_p=top_p,
             n=n,
             stream=stream,
+            stream_options=stream_options,
             stop=stop,
             max_tokens=max_tokens,
             presence_penalty=presence_penalty,
@@ -982,6 +993,7 @@ def completion(
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
@@ -2168,7 +2180,7 @@ def completion(
             """
             assume input to custom LLM api bases follow this format:
             resp = requests.post(
-                api_base, 
+                api_base,
                 json={
                     'model': 'meta-llama/Llama-2-13b-hf', # model name
                     'params': {
@@ -2565,6 +2577,7 @@ async def aembedding(*args, **kwargs):
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "deepseek"
             or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
@@ -2714,6 +2727,8 @@ def embedding(
         "ttl",
         "cache",
         "no-log",
+        "region_name",
+        "allowed_model_region",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -2947,16 +2962,18 @@ def embedding(
                     model=model,  # type: ignore
                     llm_provider="ollama",  # type: ignore
                 )
-            if aembedding:
-                response = ollama.ollama_aembeddings(
-                    api_base=api_base,
-                    model=model,
-                    prompts=input,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    model_response=EmbeddingResponse(),
-                )
+            ollama_embeddings_fn = (
+                ollama.ollama_aembeddings if aembedding else ollama.ollama_embeddings
+            )
+            response = ollama_embeddings_fn(
+                api_base=api_base,
+                model=model,
+                prompts=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+            )
         elif custom_llm_provider == "sagemaker":
             response = sagemaker.embedding(
                 model=model,
@@ -3085,11 +3102,13 @@ async def atext_completion(*args, **kwargs):
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "deepseek"
             or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             response = await loop.run_in_executor(None, func_with_context)
@@ -3120,6 +3139,8 @@ async def atext_completion(*args, **kwargs):
             ## TRANSLATE CHAT TO TEXT FORMAT ##
             if isinstance(response, TextCompletionResponse):
                 return response
+            elif asyncio.iscoroutine(response):
+                response = await response
 
             text_completion_response = TextCompletionResponse()
             text_completion_response["id"] = response.get("id", None)
@@ -3581,6 +3602,8 @@ def image_generation(
             "caching_groups",
             "ttl",
             "cache",
+            "region_name",
+            "allowed_model_region",
         ]
         default_params = openai_params + litellm_params
         non_default_params = {

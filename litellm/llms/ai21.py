@@ -1,8 +1,8 @@
 import os, types, traceback
 import json
 from enum import Enum
-import requests
-import time, httpx
+import requests  # type: ignore
+import time, httpx  # type: ignore
 from typing import Callable, Optional
 from litellm.utils import ModelResponse, Choices, Message
 import litellm
