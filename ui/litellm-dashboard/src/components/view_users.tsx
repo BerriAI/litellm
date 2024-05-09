@@ -24,7 +24,7 @@ import {
   Icon,
   TextInput,
 } from "@tremor/react";
-import { userInfoCall, adminTopEndUsersCall } from "./networking";
+import { userInfoCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
@@ -93,16 +93,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   if (!accessToken || !token || !userRole || !userID) {
     return <div>Loading...</div>;
   }
-
-  const onKeyClick = async (keyToken: String) => {
-    try {
-      const topEndUsers = await adminTopEndUsersCall(accessToken, keyToken);
-      console.log("user data response:", topEndUsers);
-      setEndUsers(topEndUsers);
-    } catch (error) {
-      console.error("There was an error fetching the model data", error);
-    }
-  };
 
   function renderPagination() {
     if (!userData) return null;
