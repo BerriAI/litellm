@@ -487,7 +487,7 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
 
 def ibm_granite_pt(messages: list):
     """
-    IBM's Granite models uses the template:
+    IBM's Granite chat models uses the template:
     <|system|> {system_message} <|user|> {user_message} <|assistant|> {assistant_message}
 
     See: https://www.ibm.com/docs/en/watsonx-as-a-service?topic=solutions-supported-foundation-models
@@ -503,12 +503,13 @@ def ibm_granite_pt(messages: list):
                 "pre_message": "<|user|>\n",
                 "post_message": "\n",
             },
-            "assistant": {
-                "pre_message": "<|assistant|>\n",
-                "post_message": "\n",
+            'assistant': {
+                'pre_message': '<|assistant|>\n',
+                'post_message': '\n',
             },
         },
-    ).strip()
+        final_prompt_value='<|assistant|>\n',
+    )
 
 
 ### ANTHROPIC ###
@@ -981,7 +982,7 @@ def anthropic_messages_pt(messages: list):
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages = []
+    new_messages: list = []
     msg_i = 0
     tool_use_param = False
     while msg_i < len(messages):
@@ -1524,24 +1525,9 @@ def prompt_factory(
             return mistral_instruct_pt(messages=messages)
         elif "meta-llama/llama-3" in model and "instruct" in model:
             # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
-            return custom_prompt(
-                role_dict={
-                    "system": {
-                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "user": {
-                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "assistant": {
-                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                },
+            return hf_chat_template(
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
                 messages=messages,
-                initial_prompt_value="<|begin_of_text|>",
-                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
             )
     try:
         if "meta-llama/llama-2" in model and "chat" in model:

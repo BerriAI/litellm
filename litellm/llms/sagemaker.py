@@ -1,14 +1,14 @@
 import os, types, traceback
 from enum import Enum
 import json
-import requests
+import requests  # type: ignore
 import time
 from typing import Callable, Optional, Any
 import litellm
 from litellm.utils import ModelResponse, EmbeddingResponse, get_secret, Usage
 import sys
 from copy import deepcopy
-import httpx
+import httpx  # type: ignore
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
 
@@ -295,7 +295,7 @@ def completion(
                 EndpointName={model},
                 InferenceComponentName={model_id},
                 ContentType="application/json",
-                Body={data},
+                Body={data}, # type: ignore
                 CustomAttributes="accept_eula=true",
             )
             """  # type: ignore
@@ -321,7 +321,7 @@ def completion(
             response = client.invoke_endpoint(
                 EndpointName={model},
                 ContentType="application/json",
-                Body={data},
+                Body={data}, # type: ignore
                 CustomAttributes="accept_eula=true",
             )
             """  # type: ignore
@@ -688,7 +688,7 @@ def embedding(
     response = client.invoke_endpoint(
         EndpointName={model},
         ContentType="application/json",
-        Body={data},
+        Body={data}, # type: ignore
         CustomAttributes="accept_eula=true",
     )"""  # type: ignore
     logging_obj.pre_call(
