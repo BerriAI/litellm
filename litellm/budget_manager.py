@@ -10,7 +10,7 @@
 import os, json, time
 import litellm
 from litellm.utils import ModelResponse
-import requests, threading
+import requests, threading  # type: ignore
 from typing import Optional, Union, Literal
 
 

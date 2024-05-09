@@ -981,7 +981,7 @@ def anthropic_messages_pt(messages: list):
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages = []
+    new_messages: list = []
     msg_i = 0
     tool_use_param = False
     while msg_i < len(messages):

@@ -14,7 +14,7 @@ import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
 import itertools
-import random, uuid, requests
+import random, uuid, requests  # type: ignore
 from functools import wraps
 import datetime, time
 import tiktoken
@@ -36,7 +36,7 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 
 try:
     # this works in python 3.8
-    import pkg_resources
+    import pkg_resources  # type: ignore
 
     filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 # try:
@@ -612,6 +612,7 @@ class ModelResponse(OpenAIObject):
         system_fingerprint=None,
         usage=None,
         stream=None,
+        stream_options=None,
         response_ms=None,
         hidden_params=None,
         **params,
@@ -657,6 +658,12 @@ class ModelResponse(OpenAIObject):
         if usage is not None:
             usage = usage
         elif stream is None or stream == False:
+            usage = Usage()
+        elif (
+            stream == True
+            and stream_options is not None
+            and stream_options.get("include_usage") == True
+        ):
             usage = Usage()
         if hidden_params:
             self._hidden_params = hidden_params
@@ -4161,8 +4168,30 @@ def cost_per_token(
                 model_with_provider_and_region in model_cost_ref
             ):  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
-    if model_with_provider in model_cost_ref:
+
+    model_without_prefix = model
+    model_parts = model.split("/")
+    if len(model_parts) > 1:
+        model_without_prefix = model_parts[1]
+    else:
+        model_without_prefix = model
+    """
+    Code block that formats model to lookup in litellm.model_cost
+    Option1. model = "bedrock/ap-northeast-1/anthropic.claude-instant-v1". This is the most accurate since it is region based. Should always be option 1
+    Option2. model = "openai/gpt-4"       - model = provider/model
+    Option3. model = "anthropic.claude-3" - model = model
+    """
+    if (
+        model_with_provider in model_cost_ref
+    ):  # Option 2. use model with provider, model = "openai/gpt-4"
         model = model_with_provider
+    elif model in model_cost_ref:  # Option 1. use model passed, model="gpt-4"
+        model = model
+    elif (
+        model_without_prefix in model_cost_ref
+    ):  # Option 3. if user passed model="bedrock/anthropic.claude-3", use model="anthropic.claude-3"
+        model = model_without_prefix
+
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
     if model in model_cost_ref:
@@ -4817,6 +4846,7 @@ def get_optional_params(
     top_p=None,
     n=None,
     stream=False,
+    stream_options=None,
     stop=None,
     max_tokens=None,
     presence_penalty=None,
@@ -4886,6 +4916,7 @@ def get_optional_params(
         "top_p": None,
         "n": None,
         "stream": None,
+        "stream_options": None,
         "stop": None,
         "max_tokens": None,
         "presence_penalty": None,
@@ -5757,6 +5788,8 @@ def get_optional_params(
             optional_params["n"] = n
         if stream is not None:
             optional_params["stream"] = stream
+        if stream_options is not None:
+            optional_params["stream_options"] = stream_options
         if stop is not None:
             optional_params["stop"] = stop
         if max_tokens is not None:
@@ -5844,6 +5877,40 @@ def calculate_max_parallel_requests(
     return None
 
 
+def _is_region_eu(model_region: str) -> bool:
+    EU_Regions = ["europe", "sweden", "switzerland", "france", "uk"]
+    for region in EU_Regions:
+        if "europe" in model_region.lower():
+            return True
+    return False
+
+
+def get_model_region(
+    litellm_params: LiteLLM_Params, mode: Optional[str]
+) -> Optional[str]:
+    """
+    Pass the litellm params for an azure model, and get back the region
+    """
+    if (
+        "azure" in litellm_params.model
+        and isinstance(litellm_params.api_key, str)
+        and isinstance(litellm_params.api_base, str)
+    ):
+        _model = litellm_params.model.replace("azure/", "")
+        response: dict = litellm.AzureChatCompletion().get_headers(
+            model=_model,
+            api_key=litellm_params.api_key,
+            api_base=litellm_params.api_base,
+            api_version=litellm_params.api_version or "2023-07-01-preview",
+            timeout=10,
+            mode=mode or "chat",
+        )
+
+        region: Optional[str] = response.get("x-ms-region", None)
+        return region
+    return None
+
+
 def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     """
     Returns the api base used for calling the model.
@@ -5878,6 +5945,8 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     if _optional_params.api_base is not None:
         return _optional_params.api_base
 
+    if litellm.model_alias_map and model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
     try:
         model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
             get_llm_provider(
@@ -6027,6 +6096,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "top_p",
             "n",
             "stream",
+            "stream_options",
             "stop",
             "max_tokens",
             "presence_penalty",
@@ -7732,11 +7802,11 @@ def _calculate_retry_after(
             try:
                 retry_after = int(retry_header)
             except Exception:
-                retry_date_tuple = email.utils.parsedate_tz(retry_header)
+                retry_date_tuple = email.utils.parsedate_tz(retry_header)  # type: ignore
                 if retry_date_tuple is None:
                     retry_after = -1
                 else:
-                    retry_date = email.utils.mktime_tz(retry_date_tuple)
+                    retry_date = email.utils.mktime_tz(retry_date_tuple)  # type: ignore
                     retry_after = int(retry_date - time.time())
         else:
             retry_after = -1
@@ -9423,7 +9493,9 @@ def get_secret(
         else:
             secret = os.environ.get(secret_name)
             try:
-                secret_value_as_bool = ast.literal_eval(secret) if secret is not None else None
+                secret_value_as_bool = (
+                    ast.literal_eval(secret) if secret is not None else None
+                )
                 if isinstance(secret_value_as_bool, bool):
                     return secret_value_as_bool
                 else:
@@ -9442,7 +9514,12 @@ def get_secret(
 # replicate/anthropic/cohere
 class CustomStreamWrapper:
     def __init__(
-        self, completion_stream, model, custom_llm_provider=None, logging_obj=None
+        self,
+        completion_stream,
+        model,
+        custom_llm_provider=None,
+        logging_obj=None,
+        stream_options=None,
     ):
         self.model = model
         self.custom_llm_provider = custom_llm_provider
@@ -9468,6 +9545,7 @@ class CustomStreamWrapper:
         self.response_id = None
         self.logging_loop = None
         self.rules = Rules()
+        self.stream_options = stream_options
 
     def __iter__(self):
         return self
@@ -9908,6 +9986,7 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             logprobs = None
+            usage = None
             original_chunk = None  # this is used for function/tool calling
             if len(str_line.choices) > 0:
                 if (
@@ -9942,12 +10021,15 @@ class CustomStreamWrapper:
                 else:
                     logprobs = None
 
+            usage = getattr(str_line, "usage", None)
+
             return {
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
                 "logprobs": logprobs,
                 "original_chunk": str_line,
+                "usage": usage,
             }
         except Exception as e:
             traceback.print_exc()
@@ -10250,7 +10332,9 @@ class CustomStreamWrapper:
             raise e
 
     def model_response_creator(self):
-        model_response = ModelResponse(stream=True, model=self.model)
+        model_response = ModelResponse(
+            stream=True, model=self.model, stream_options=self.stream_options
+        )
         if self.response_id is not None:
             model_response.id = self.response_id
         else:
@@ -10570,6 +10654,12 @@ class CustomStreamWrapper:
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
+                if (
+                    self.stream_options is not None
+                    and self.stream_options["include_usage"] == True
+                ):
+                    model_response.usage = response_obj["usage"]
+
             model_response.model = self.model
             print_verbose(
                 f"model_response finish reason 3: {self.received_finish_reason}; response_obj={response_obj}"
@@ -10657,6 +10747,11 @@ class CustomStreamWrapper:
                         except Exception as e:
                             model_response.choices[0].delta = Delta()
                 else:
+                    if (
+                        self.stream_options is not None
+                        and self.stream_options["include_usage"] == True
+                    ):
+                        return model_response
                     return
             print_verbose(
                 f"model_response.choices[0].delta: {model_response.choices[0].delta}; completion_obj: {completion_obj}"
