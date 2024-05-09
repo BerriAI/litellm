@@ -12,7 +12,6 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
-
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -2950,7 +2949,9 @@ def embedding(
                     model=model,  # type: ignore
                     llm_provider="ollama",  # type: ignore
                 )
-            ollama_embeddings_fn = ollama.ollama_aembeddings if aembedding else ollama.ollama_embeddings
+            ollama_embeddings_fn = (
+                ollama.ollama_aembeddings if aembedding else ollama.ollama_embeddings
+            )
             response = ollama_embeddings_fn(
                 api_base=api_base,
                 model=model,
@@ -3094,6 +3095,7 @@ async def atext_completion(*args, **kwargs):
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             response = await loop.run_in_executor(None, func_with_context)
@@ -3124,6 +3126,8 @@ async def atext_completion(*args, **kwargs):
             ## TRANSLATE CHAT TO TEXT FORMAT ##
             if isinstance(response, TextCompletionResponse):
                 return response
+            elif asyncio.iscoroutine(response):
+                response = await response
 
             text_completion_response = TextCompletionResponse()
             text_completion_response["id"] = response.get("id", None)

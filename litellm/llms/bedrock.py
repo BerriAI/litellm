@@ -163,9 +163,8 @@ class AmazonAnthropicClaude3Config:
             "stop",
             "temperature",
             "top_p",
-            "extra_headers"
+            "extra_headers",
         ]
-
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
@@ -534,10 +533,12 @@ class AmazonStabilityConfig:
 
 def add_custom_header(headers):
     """Closure to capture the headers and add them."""
+
     def callback(request, **kwargs):
         """Actual callback function that Boto3 will call."""
         for header_name, header_value in headers.items():
             request.headers.add_header(header_name, header_value)
+
     return callback
 
 
@@ -672,7 +673,9 @@ def init_bedrock_client(
             config=config,
         )
     if extra_headers:
-        client.meta.events.register('before-sign.bedrock-runtime.*', add_custom_header(extra_headers))
+        client.meta.events.register(
+            "before-sign.bedrock-runtime.*", add_custom_header(extra_headers)
+        )
 
     return client
 
@@ -1224,7 +1227,7 @@ def _embedding_func_single(
             "input_type", "search_document"
         )  # aws bedrock example default - https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/providers?model=cohere.embed-english-v3
         data = {"texts": [input], **inference_params}  # type: ignore
-    body = json.dumps(data).encode("utf-8")
+    body = json.dumps(data).encode("utf-8")  # type: ignore
     ## LOGGING
     request_str = f"""
     response = client.invoke_model(
@@ -1416,7 +1419,7 @@ def image_generation(
     ## LOGGING
     request_str = f"""
     response = client.invoke_model(
-        body={body},
+        body={body}, # type: ignore
         modelId={modelId},
         accept="application/json",
         contentType="application/json",
