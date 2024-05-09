@@ -437,6 +437,7 @@ class LangFuseLogger:
             generation_params = {
                 "name": generation_name,
                 "id": clean_metadata.pop("generation_id", generation_id),
+                "parent_observation_id": metadata.get("parent_observation_id"),
                 "start_time": start_time,
                 "end_time": end_time,
                 "model": kwargs["model"],
