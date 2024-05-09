@@ -322,9 +322,9 @@ class Huggingface(BaseLLM):
         encoding,
         api_key,
         logging_obj,
+        optional_params: dict,
         custom_prompt_dict={},
         acompletion: bool = False,
-        optional_params=None,
         litellm_params=None,
         logger_fn=None,
     ):
