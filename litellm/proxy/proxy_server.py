@@ -1834,6 +1834,9 @@ async def update_cache(
             )
 
     async def _update_end_user_cache():
+        if end_user_id is None or response_cost is None:
+            return
+
         _id = "end_user_id:{}".format(end_user_id)
         try:
             # Fetch the existing cost for the given user
@@ -1846,7 +1849,7 @@ async def update_cache(
                 if litellm.max_end_user_budget is not None:
                     max_end_user_budget = litellm.max_end_user_budget
                 existing_spend_obj = LiteLLM_EndUserTable(
-                    user_id=_id,
+                    user_id=end_user_id,
                     spend=0,
                     blocked=False,
                     litellm_budget_table=LiteLLM_BudgetTable(
@@ -1874,7 +1877,7 @@ async def update_cache(
                 existing_spend_obj.spend = new_spend
                 user_api_key_cache.set_cache(key=_id, value=existing_spend_obj.json())
         except Exception as e:
-            verbose_proxy_logger.debug(
+            verbose_proxy_logger.error(
                 f"An error occurred updating end user cache: {str(e)}\n\n{traceback.format_exc()}"
             )
 
