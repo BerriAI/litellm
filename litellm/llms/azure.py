@@ -1,5 +1,5 @@
 from typing import Optional, Union, Any
-import types, requests
+import types, requests  # type: ignore
 from .base import BaseLLM
 from litellm.utils import (
     ModelResponse,
@@ -12,7 +12,7 @@ from litellm.utils import (
 from typing import Callable, Optional, BinaryIO
 from litellm import OpenAIConfig
 import litellm, json
-import httpx
+import httpx  # type: ignore
 from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTransport
 from openai import AzureOpenAI, AsyncAzureOpenAI
 import uuid

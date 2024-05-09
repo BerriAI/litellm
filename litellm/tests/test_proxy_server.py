@@ -160,7 +160,40 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
-# Run the test
+@mock_patch_acompletion()
+def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
+    global headers
+    try:
+        # Your test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 10,
+        }
+
+        print("testing proxy server with chat completions")
+        response = client_no_auth.post("/engines/gpt-3.5-turbo/chat/completions", json=test_data)
+        mock_acompletion.assert_called_once_with(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "hi"},
+            ],
+            max_tokens=10,
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
+            request_timeout=mock.ANY,
+            specific_deployment=True,
+            metadata=mock.ANY,
+            proxy_server_request=mock.ANY,
+        )
+        print(f"response - {response.text}")
+        assert response.status_code == 200
+        result = response.json()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
 @mock_patch_acompletion()

@@ -3,7 +3,7 @@
 #    On success, log events to Prometheus
 
 import dotenv, os
-import requests
+import requests  # type: ignore
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -19,7 +19,6 @@ class PrometheusLogger:
         **kwargs,
     ):
         try:
-            print(f"in init prometheus metrics")
             from prometheus_client import Counter
 
             self.litellm_llm_api_failed_requests_metric = Counter(

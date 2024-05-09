@@ -468,7 +468,7 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
-<TabItem value="lowest-cost" label="Lowest Cost Routing">
+<TabItem value="lowest-cost" label="Lowest Cost Routing (Async)">
 
 Picks a deployment based on the lowest cost
 
