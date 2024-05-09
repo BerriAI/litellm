@@ -187,6 +187,7 @@ async def acompletion(
     top_p: Optional[float] = None,
     n: Optional[int] = None,
     stream: Optional[bool] = None,
+    stream_options: Optional[dict] = None,
     stop=None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
@@ -206,6 +207,7 @@ async def acompletion(
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     **kwargs,
 ):
@@ -223,6 +225,7 @@ async def acompletion(
         top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
         n (int, optional): The number of completions to generate (default is 1).
         stream (bool, optional): If True, return a streaming response (default is False).
+        stream_options (dict, optional): A dictionary containing options for the streaming response. Only use this if stream is True.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
@@ -260,6 +263,7 @@ async def acompletion(
         "top_p": top_p,
         "n": n,
         "stream": stream,
+        "stream_options": stream_options,
         "stop": stop,
         "max_tokens": max_tokens,
         "presence_penalty": presence_penalty,
@@ -457,6 +461,7 @@ def completion(
     top_p: Optional[float] = None,
     n: Optional[int] = None,
     stream: Optional[bool] = None,
+    stream_options: Optional[dict] = None,
     stop=None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
@@ -496,6 +501,7 @@ def completion(
         top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
         n (int, optional): The number of completions to generate (default is 1).
         stream (bool, optional): If True, return a streaming response (default is False).
+        stream_options (dict, optional): A dictionary containing options for the streaming response. Only set this when you set stream: true.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
@@ -573,6 +579,7 @@ def completion(
         "top_p",
         "n",
         "stream",
+        "stream_options",
         "stop",
         "max_tokens",
         "presence_penalty",
@@ -785,6 +792,7 @@ def completion(
             top_p=top_p,
             n=n,
             stream=stream,
+            stream_options=stream_options,
             stop=stop,
             max_tokens=max_tokens,
             presence_penalty=presence_penalty,
