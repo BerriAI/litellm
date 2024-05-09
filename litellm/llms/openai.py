@@ -22,7 +22,6 @@ from litellm.utils import (
     TextCompletionResponse,
 )
 from typing import Callable, Optional
-import aiohttp, requests
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
@@ -531,6 +530,7 @@ class OpenAIChatCompletion(BaseLLM):
             model=model,
             custom_llm_provider="openai",
             logging_obj=logging_obj,
+            stream_options=data.get("stream_options", None),
         )
         return streamwrapper
 
@@ -580,6 +580,7 @@ class OpenAIChatCompletion(BaseLLM):
                 model=model,
                 custom_llm_provider="openai",
                 logging_obj=logging_obj,
+                stream_options=data.get("stream_options", None),
             )
             return streamwrapper
         except (
