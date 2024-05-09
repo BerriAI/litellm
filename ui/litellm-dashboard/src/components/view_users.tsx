@@ -157,13 +157,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         <CreateUser userID={userID} accessToken={accessToken} teams={teams}/>
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[80vh] mb-4">
         <div className="mb-4 mt-1">
-        <Text><b>Key Owners: </b> Users on LiteLLM that created API Keys. Automatically tracked by LiteLLM</Text>
+        <Text>These are Users on LiteLLM that created API Keys. Automatically tracked by LiteLLM</Text>
        
         </div>
           <TabGroup>
-            <TabList variant="line" defaultValue="1">
-              <Tab value="1">Key Owners</Tab>
-            </TabList>
+
             <TabPanels>
               <TabPanel>
                 
@@ -189,7 +187,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                             ? user.models
                             : "All Models"}
                         </TableCell>
-                        <TableCell>{user.spend ? user.spend : 0}</TableCell>
+                        <TableCell>{user.spend ? user.spend?.toFixed(2) : 0}</TableCell>
                         <TableCell>
                           {user.max_budget ? user.max_budget : "Unlimited"}
                         </TableCell>
