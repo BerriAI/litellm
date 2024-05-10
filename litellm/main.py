@@ -1810,7 +1810,7 @@ def completion(
                 or get_secret("PREDIBASE_API_KEY")
             )
 
-            model_response = predibase_chat_completions.completion(
+            _model_response = predibase_chat_completions.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -1832,8 +1832,8 @@ def completion(
                 and optional_params["stream"] == True
                 and acompletion == False
             ):
-                return response
-            response = model_response
+                return _model_response
+            response = _model_response
         elif custom_llm_provider == "ai21":
             custom_llm_provider = "ai21"
             ai21_key = (
