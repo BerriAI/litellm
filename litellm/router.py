@@ -2558,20 +2558,23 @@ class Router:
         self.set_client(model=deployment.to_json(exclude_none=True))
 
         # set region (if azure model)
-        # try:
-        #     if "azure" in deployment.litellm_params.model:
-        #         region = litellm.utils.get_model_region(
-        #             litellm_params=deployment.litellm_params, mode=None
-        #         )
+        _auto_infer_region = os.environ.get("AUTO_INFER_REGION", "true")
+        _auto_infer_region_value = bool(_auto_infer_region)
+        if _auto_infer_region_value == True:
+            try:
+                if "azure" in deployment.litellm_params.model:
+                    region = litellm.utils.get_model_region(
+                        litellm_params=deployment.litellm_params, mode=None
+                    )
 
-        #         deployment.litellm_params.region_name = region
-        # except Exception as e:
-        #     verbose_router_logger.error(
-        #         "Unable to get the region for azure model - {}, {}".format(
-        #             deployment.litellm_params.model, str(e)
-        #         )
-        #     )
-        #     pass  # [NON-BLOCKING]
+                    deployment.litellm_params.region_name = region
+            except Exception as e:
+                verbose_router_logger.error(
+                    "Unable to get the region for azure model - {}, {}".format(
+                        deployment.litellm_params.model, str(e)
+                    )
+                )
+                pass  # [NON-BLOCKING]
 
         return deployment
 
