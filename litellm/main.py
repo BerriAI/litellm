@@ -3200,6 +3200,7 @@ def text_completion(
         Union[str, List[str]]
     ] = None,  # Optional: Sequences where the API will stop generating further tokens.
     stream: Optional[bool] = None,  # Optional: Whether to stream back partial progress.
+    stream_options: Optional[dict] = None,
     suffix: Optional[
         str
     ] = None,  # Optional: The suffix that comes after a completion of inserted text.
@@ -3277,6 +3278,8 @@ def text_completion(
         optional_params["stop"] = stop
     if stream is not None:
         optional_params["stream"] = stream
+    if stream_options is not None:
+        optional_params["stream_options"] = stream_options
     if suffix is not None:
         optional_params["suffix"] = suffix
     if temperature is not None:
@@ -3387,7 +3390,9 @@ def text_completion(
     if kwargs.get("acompletion", False) == True:
         return response
     if stream == True or kwargs.get("stream", False) == True:
-        response = TextCompletionStreamWrapper(completion_stream=response, model=model)
+        response = TextCompletionStreamWrapper(
+            completion_stream=response, model=model, stream_options=stream_options
+        )
         return response
     transformed_logprobs = None
     # only supported for TGI models
