@@ -2560,6 +2560,7 @@ class Router:
         # set region (if azure model)
         _auto_infer_region = os.environ.get("AUTO_INFER_REGION", False)
         if _auto_infer_region == True or _auto_infer_region == "True":
+            print("Auto inferring region")  # noqa
             """
             Hiding behind a feature flag
             When there is a large amount of LLM deployments this makes startup times blow up
