@@ -2606,7 +2606,7 @@ class Router:
         self.model_names.append(deployment.model_name)
         return deployment
 
-    def upsert_deployment(self, deployment: Deployment) -> Deployment | None:
+    def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
         Add or update deployment
         Parameters:
