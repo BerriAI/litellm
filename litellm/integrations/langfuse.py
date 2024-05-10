@@ -273,7 +273,6 @@ class LangFuseLogger:
 
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
-            print_verbose(f"response_obj: {response_obj}")
             if supports_tags:
                 metadata_tags = metadata.pop("tags", [])
                 tags = metadata_tags
@@ -418,7 +417,6 @@ class LangFuseLogger:
             usage = None
             if response_obj is not None and response_obj.get("id", None) is not None:
                 generation_id = litellm.utils.get_logging_id(start_time, response_obj)
-                print_verbose(f"getting usage, cost={cost}")
 
                 usage = {
                     "prompt_tokens": response_obj["usage"]["prompt_tokens"],
