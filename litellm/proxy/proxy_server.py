@@ -1086,9 +1086,7 @@ async def user_api_key_auth(
                         user_id_information, list
                     ):
                         _user = user_id_information[0]
-                        user_role = _user.get("user_role", {}).get(
-                            "user_role", "unknown"
-                        )
+                        user_role = _user.get("user_role", "unknown")
                         user_id = _user.get("user_id", "unknown")
                     raise Exception(
                         f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
