@@ -178,6 +178,14 @@ response2 = completion(
 
 ### Quick Start
 
+Install diskcache:
+
+```shell
+pip install diskcache
+```
+
+Then you can use the disk cache as follows.
+
 ```python
 import litellm
 from litellm import completion
@@ -199,6 +207,8 @@ response2 = completion(
 # response1 == response2, response 1 is cached
 
 ```
+
+If you run the code two times, response1 will use the cache from the first run that was stored in a cache file.
 
 </TabItem>
 

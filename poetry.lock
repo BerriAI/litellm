@@ -606,17 +606,6 @@ test = ["certifi", "pretend", "pytest (>=6.2.0)", "pytest-benchmark", "pytest-co
 test-randomorder = ["pytest-randomly"]
 
 [[package]]
-name = "diskcache"
-version = "5.6.3"
-description = "Disk Cache -- Disk and file backed persistent cache."
-optional = true
-python-versions = ">=3"
-files = [
-    {file = "diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19"},
-    {file = "diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc"},
-]
-
-[[package]]
 name = "distro"
 version = "1.9.0"
 description = "Distro - an OS platform information API"
@@ -2679,11 +2668,10 @@ docs = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.link
 testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)", "pytest-ignore-flaky", "pytest-mypy", "pytest-ruff (>=0.2.1)"]
 
 [extras]
-disk-caching = ["diskcache"]
 extra-proxy = ["azure-identity", "azure-keyvault-secrets", "google-cloud-kms", "prisma", "resend"]
 proxy = ["PyJWT", "apscheduler", "backoff", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "orjson", "python-multipart", "pyyaml", "rq", "uvicorn"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "aa6283846b24f5703626c2de10459254166551f469c34e75b229adafb6985eba"
+content-hash = "ff38be297294f084a739ef869d41d3d80f09c80e1d05d2963073d49790f33f37"
