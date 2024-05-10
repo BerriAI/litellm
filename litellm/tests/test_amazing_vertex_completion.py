@@ -113,6 +113,49 @@ async def get_response():
             ],
         )
         return response
+
+    except litellm.UnprocessableEntityError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An error occurred - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_get_router_response():
+    model = "claude-3-sonnet@20240229"
+    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_location = "asia-southeast1"
+    json_obj = get_vertex_ai_creds_json()
+    vertex_credentials = json.dumps(json_obj)
+
+    prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
+    try:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "sonnet",
+                    "litellm_params": {
+                        "model": "vertex_ai/claude-3-sonnet@20240229",
+                        "vertex_ai_project": vertex_ai_project,
+                        "vertex_ai_location": vertex_ai_location,
+                        "vertex_credentials": vertex_credentials,
+                    },
+                }
+            ]
+        )
+        response = await router.acompletion(
+            model="sonnet",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Complete the given code with no more explanation. Remember that there is a 4-space indent before the first line of your generated code.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+
+        print(f"\n\nResponse: {response}\n\n")
+
     except litellm.UnprocessableEntityError as e:
         pass
     except Exception as e:
