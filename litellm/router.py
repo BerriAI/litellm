@@ -2558,20 +2558,20 @@ class Router:
         self.set_client(model=deployment.to_json(exclude_none=True))
 
         # set region (if azure model)
-        try:
-            if "azure" in deployment.litellm_params.model:
-                region = litellm.utils.get_model_region(
-                    litellm_params=deployment.litellm_params, mode=None
-                )
+        # try:
+        #     if "azure" in deployment.litellm_params.model:
+        #         region = litellm.utils.get_model_region(
+        #             litellm_params=deployment.litellm_params, mode=None
+        #         )
 
-                deployment.litellm_params.region_name = region
-        except Exception as e:
-            verbose_router_logger.error(
-                "Unable to get the region for azure model - {}, {}".format(
-                    deployment.litellm_params.model, str(e)
-                )
-            )
-            pass  # [NON-BLOCKING]
+        #         deployment.litellm_params.region_name = region
+        # except Exception as e:
+        #     verbose_router_logger.error(
+        #         "Unable to get the region for azure model - {}, {}".format(
+        #             deployment.litellm_params.model, str(e)
+        #         )
+        #     )
+        #     pass  # [NON-BLOCKING]
 
         return deployment
 
@@ -2610,7 +2610,6 @@ class Router:
         - The added/updated deployment
         """
         # check if deployment already exists
-
         if deployment.model_info.id in self.get_model_ids():
             # remove the previous deployment
             removal_idx: Optional[int] = None
@@ -2620,16 +2619,9 @@ class Router:
 
             if removal_idx is not None:
                 self.model_list.pop(removal_idx)
-
-        # add to model list
-        _deployment = deployment.to_json(exclude_none=True)
-        self.model_list.append(_deployment)
-
-        # initialize client
-        self._add_deployment(deployment=deployment)
-
-        # add to model names
-        self.model_names.append(deployment.model_name)
+        else:
+            # if the model_id is not in router
+            self.add_deployment(deployment=deployment)
         return deployment
 
     def delete_deployment(self, id: str) -> Optional[Deployment]:
