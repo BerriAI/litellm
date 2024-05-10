@@ -135,9 +135,7 @@ class LangFuseLogger:
                 response_obj, litellm.ModelResponse
             ):
                 input = prompt
-                output = response_obj["choices"][0]["message"]
-                if isinstance(output, litellm.Message):
-                    output = output.json()
+                output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
