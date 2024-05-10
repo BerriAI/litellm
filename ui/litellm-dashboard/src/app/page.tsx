@@ -189,6 +189,7 @@ const CreateKeyPage = () => {
               userRole={userRole}
               token={token}
               accessToken={accessToken}
+              keys={keys}
             />
           )}
         </div>
