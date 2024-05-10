@@ -1,3 +1,6 @@
+### Hide pydantic namespace conflict warnings globally ###
+import warnings
+warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
