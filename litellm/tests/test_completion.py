@@ -1291,9 +1291,8 @@ def test_hf_classifier_task():
             user_message = "I like you. I love you"
             messages = [{"content": user_message, "role": "user"}]
             response = completion(
-                model="huggingface/shahrukhx01/question-vs-statement-classifier",
+                model="huggingface/text-classification/shahrukhx01/question-vs-statement-classifier",
                 messages=messages,
-                hf_task="text-classification",
             )
             print(f"response: {response}")
             assert isinstance(response, litellm.ModelResponse)
