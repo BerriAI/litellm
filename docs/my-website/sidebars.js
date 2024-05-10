@@ -50,6 +50,7 @@ const sidebars = {
           items: ["proxy/logging", "proxy/streaming_logging"],
         },
         "proxy/team_based_routing",
+        "proxy/customer_routing",
         "proxy/ui",
         "proxy/cost_tracking",
         "proxy/token_auth",

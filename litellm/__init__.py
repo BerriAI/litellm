@@ -1,3 +1,6 @@
+### Hide pydantic namespace conflict warnings globally ###
+import warnings
+warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
@@ -71,9 +74,11 @@ maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
+predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
+predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
@@ -532,6 +537,7 @@ provider_list: List = [
     "xinference",
     "fireworks_ai",
     "watsonx",
+    "predibase",
     "custom",  # custom apis
 ]
 
@@ -644,6 +650,7 @@ from .utils import (
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.predibase import PredibaseConfig
 from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
