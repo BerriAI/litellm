@@ -129,7 +129,7 @@ class PredibaseChatCompletion(BaseLLM):
         )
         super().__init__()
 
-    def validate_environment(self, api_key: Optional[str], user_headers: dict) -> dict:
+    def _validate_environment(self, api_key: Optional[str], user_headers: dict) -> dict:
         if api_key is None:
             raise ValueError(
                 "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"
@@ -309,7 +309,7 @@ class PredibaseChatCompletion(BaseLLM):
         logger_fn=None,
         headers: dict = {},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        headers = self.validate_environment(api_key, headers)
+        headers = self._validate_environment(api_key, headers)
         completion_url = ""
         input_text = ""
         base_url = "https://serving.app.predibase.com"
@@ -411,13 +411,13 @@ class PredibaseChatCompletion(BaseLLM):
                 data=json.dumps(data),
                 stream=stream,
             )
-            response = CustomStreamWrapper(
+            _response = CustomStreamWrapper(
                 response.iter_lines(),
                 model,
                 custom_llm_provider="predibase",
                 logging_obj=logging_obj,
             )
-            return response
+            return _response
         ### SYNC COMPLETION
         else:
             response = requests.post(
