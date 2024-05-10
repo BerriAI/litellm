@@ -85,20 +85,33 @@ def test_completion_azure_command_r():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="local test")
-def test_completion_predibase():
+# @pytest.mark.skip(reason="local test")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_predibase(sync_mode):
     try:
         litellm.set_verbose = True
 
-        response = completion(
-            model="predibase/llama-3-8b-instruct",
-            tenant_id="c4768f95",
-            api_base="https://serving.app.predibase.com",
-            api_key=os.getenv("PREDIBASE_API_KEY"),
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
-        )
+        if sync_mode:
+            response = completion(
+                model="predibase/llama-3-8b-instruct",
+                tenant_id="c4768f95",
+                api_base="https://serving.app.predibase.com",
+                api_key=os.getenv("PREDIBASE_API_KEY"),
+                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            )
 
-        print(response)
+            print(response)
+        else:
+            response = await litellm.acompletion(
+                model="predibase/llama-3-8b-instruct",
+                tenant_id="c4768f95",
+                api_base="https://serving.app.predibase.com",
+                api_key=os.getenv("PREDIBASE_API_KEY"),
+                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            )
+
+            print(response)
     except litellm.Timeout as e:
         pass
     except Exception as e:

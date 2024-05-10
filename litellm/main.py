@@ -320,6 +320,7 @@ async def acompletion(
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
+            or custom_llm_provider == "predibase"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -1831,12 +1832,6 @@ def completion(
                 and optional_params["stream"] == True
                 and acompletion == False
             ):
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="predibase",
-                    logging_obj=logging,
-                )
                 return response
             response = model_response
         elif custom_llm_provider == "ai21":
