@@ -96,7 +96,6 @@ async def test_completion_predibase(sync_mode):
             response = completion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
-                api_base="https://serving.app.predibase.com",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
                 messages=[{"role": "user", "content": "What is the meaning of life?"}],
             )
