@@ -132,6 +132,8 @@ const sidebars = {
         "providers/cohere", 
         "providers/anyscale",
         "providers/huggingface", 
+        "providers/watsonx",
+        "providers/predibase",
         "providers/ollama", 
         "providers/perplexity", 
         "providers/groq", 
@@ -151,7 +153,7 @@ const sidebars = {
         "providers/openrouter", 
         "providers/custom_openai_proxy",
         "providers/petals",
-        "providers/watsonx",
+        
       ],
     },
     "proxy/custom_pricing",
