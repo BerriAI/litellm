@@ -1086,9 +1086,7 @@ async def user_api_key_auth(
                         user_id_information, list
                     ):
                         _user = user_id_information[0]
-                        user_role = _user.get("user_role", {}).get(
-                            "user_role", "unknown"
-                        )
+                        user_role = _user.get("user_role", "unknown")
                         user_id = _user.get("user_id", "unknown")
                     raise Exception(
                         f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
@@ -1834,6 +1832,9 @@ async def update_cache(
             )
 
     async def _update_end_user_cache():
+        if end_user_id is None or response_cost is None:
+            return
+
         _id = "end_user_id:{}".format(end_user_id)
         try:
             # Fetch the existing cost for the given user
@@ -1846,7 +1847,7 @@ async def update_cache(
                 if litellm.max_end_user_budget is not None:
                     max_end_user_budget = litellm.max_end_user_budget
                 existing_spend_obj = LiteLLM_EndUserTable(
-                    user_id=_id,
+                    user_id=end_user_id,
                     spend=0,
                     blocked=False,
                     litellm_budget_table=LiteLLM_BudgetTable(
@@ -1874,7 +1875,7 @@ async def update_cache(
                 existing_spend_obj.spend = new_spend
                 user_api_key_cache.set_cache(key=_id, value=existing_spend_obj.json())
         except Exception as e:
-            verbose_proxy_logger.debug(
+            verbose_proxy_logger.error(
                 f"An error occurred updating end user cache: {str(e)}\n\n{traceback.format_exc()}"
             )
 
@@ -7308,6 +7309,43 @@ async def unblock_team(
     )
 
     return record
+
+
+@router.get(
+    "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def list_team(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [Admin-only] List all available teams
+
+    ```
+    curl --location --request GET 'http://0.0.0.0:4000/team/list' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    global prisma_client
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Admin-only endpoint. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    response = await prisma_client.db.litellm_teamtable.find_many()
+
+    return response
 
 
 #### ORGANIZATION MANAGEMENT ####

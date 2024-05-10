@@ -16,7 +16,7 @@ litellm.set_verbose = True
 model_alias_map = {"good-model": "anyscale/meta-llama/Llama-2-7b-chat-hf"}
 
 
-def test_model_alias_map():
+def test_model_alias_map(caplog):
     try:
         litellm.model_alias_map = model_alias_map
         response = completion(
@@ -27,9 +27,15 @@ def test_model_alias_map():
             max_tokens=10,
         )
         print(response.model)
+
+        captured_logs = [rec.levelname for rec in caplog.records]
+
+        for log in captured_logs:
+            assert "ERROR" not in log
+
         assert "Llama-2-7b-chat-hf" in response.model
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-test_model_alias_map()
+# test_model_alias_map()
