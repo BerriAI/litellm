@@ -399,10 +399,11 @@ class Huggingface(BaseLLM):
                 data = {
                     "inputs": prompt,
                     "parameters": optional_params,
-                    "stream": (
+                    "stream": (  # type: ignore
                         True
                         if "stream" in optional_params
-                        and optional_params["stream"] == True
+                        and isinstance(optional_params["stream"], bool)
+                        and optional_params["stream"] == True  # type: ignore
                         else False
                     ),
                 }
@@ -433,7 +434,7 @@ class Huggingface(BaseLLM):
                 data = {
                     "inputs": prompt,
                     "parameters": inference_params,
-                    "stream": (
+                    "stream": (  # type: ignore
                         True
                         if "stream" in optional_params
                         and optional_params["stream"] == True
