@@ -390,7 +390,7 @@ class PredibaseChatCompletion(BaseLLM):
                     model=model,
                     messages=messages,
                     data=data,
-                    api_base=api_base,
+                    api_base=completion_url,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
