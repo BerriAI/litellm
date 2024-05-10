@@ -1138,7 +1138,7 @@ def test_get_hf_task_for_model():
     model = "roneneldan/TinyStories-3M"
     model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert model_type == None
+    assert model_type == "text-generation"
 
 
 # test_get_hf_task_for_model()
