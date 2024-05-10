@@ -662,6 +662,7 @@ def completion(
         "region_name",
         "allowed_model_region",
     ]
+
     default_params = openai_params + litellm_params
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
