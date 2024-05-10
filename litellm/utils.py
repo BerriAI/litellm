@@ -2713,6 +2713,7 @@ def function_setup(
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks = None
         dynamic_async_success_callbacks = None
+        dyanmic_failure_callbacks = None
         if kwargs.get("success_callback", None) is not None and isinstance(
             kwargs["success_callback"], list
         ):
@@ -2734,6 +2735,7 @@ def function_setup(
             for index in reversed(removed_async_items):
                 kwargs["success_callback"].pop(index)
             dynamic_success_callbacks = kwargs.pop("success_callback")
+            dyanmic_failure_callbacks = kwargs.pop("failure_callback")
 
         if add_breadcrumb:
             try:
@@ -2818,7 +2820,8 @@ def function_setup(
             dynamic_success_callbacks=dynamic_success_callbacks,
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,
             langfuse_public_key=kwargs.pop("langfuse_public_key", None),
-            langfuse_secret=kwargs.pop("langfuse_secret", None),
+            langfuse_secret=kwargs.pop("langfuse_secret", None)
+            or kwargs.pop("langfuse_secret_key", None),
         )
         ## check if metadata is passed in
         litellm_params = {"api_base": ""}
