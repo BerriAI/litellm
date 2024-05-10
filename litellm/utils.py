@@ -369,7 +369,7 @@ class ChatCompletionMessageToolCall(OpenAIObject):
 class Message(OpenAIObject):
     def __init__(
         self,
-        content="default",
+        content: Optional[str] = "default",
         role="assistant",
         logprobs=None,
         function_call=None,
@@ -9757,6 +9757,50 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
 
+    def handle_predibase_chunk(self, chunk):
+        try:
+            if type(chunk) != str:
+                chunk = chunk.decode(
+                    "utf-8"
+                )  # DO NOT REMOVE this: This is required for HF inference API + Streaming
+            text = ""
+            is_finished = False
+            finish_reason = ""
+            print_verbose(f"chunk: {chunk}")
+            if chunk.startswith("data:"):
+                data_json = json.loads(chunk[5:])
+                print_verbose(f"data json: {data_json}")
+                if "token" in data_json and "text" in data_json["token"]:
+                    text = data_json["token"]["text"]
+                if data_json.get("details", False) and data_json["details"].get(
+                    "finish_reason", False
+                ):
+                    is_finished = True
+                    finish_reason = data_json["details"]["finish_reason"]
+                elif data_json.get(
+                    "generated_text", False
+                ):  # if full generated text exists, then stream is complete
+                    text = ""  # don't return the final bos token
+                    is_finished = True
+                    finish_reason = "stop"
+                elif data_json.get("error", False):
+                    raise Exception(data_json.get("error"))
+                return {
+                    "text": text,
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                }
+            elif "error" in chunk:
+                raise ValueError(chunk)
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+        except Exception as e:
+            traceback.print_exc()
+            raise e
+
     def handle_huggingface_chunk(self, chunk):
         try:
             if type(chunk) != str:
@@ -10394,6 +10438,11 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+            elif self.custom_llm_provider and self.custom_llm_provider == "predibase":
+                response_obj = self.handle_predibase_chunk(chunk)
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif (
                 self.custom_llm_provider and self.custom_llm_provider == "baseten"
             ):  # baseten doesn't provide streaming
@@ -11016,6 +11065,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "sagemaker"
                 or self.custom_llm_provider == "gemini"
                 or self.custom_llm_provider == "cached_response"
+                or self.custom_llm_provider == "predibase"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:
