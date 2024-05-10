@@ -3089,6 +3089,24 @@ def test_completion_watsonx():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+            stream=True
+        )
+        for chunk in response:
+            print(chunk)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.parametrize(
     "provider, model, project, region_name, token",
@@ -3150,6 +3168,25 @@ async def test_acompletion_watsonx():
         )
         # Add any assertions here to check the response
         print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True
+        )
+        # Add any assertions here to check the response
+        async for chunk in response:
+            print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
