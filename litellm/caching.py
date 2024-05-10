@@ -15,7 +15,6 @@ from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 import traceback
-import diskcache as dc
 
 
 def print_verbose(print_statement):
@@ -1919,6 +1918,7 @@ class Cache:
 
 class DiskCache(BaseCache):
     def __init__(self, cache_dir: str = ".litellm_cache"):
+        import diskcache as dc
         # if users don't provider one, use the default litellm cache
         self.disk_cache = dc.Cache(cache_dir)
 
