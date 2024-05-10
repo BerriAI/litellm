@@ -2606,7 +2606,7 @@ class Router:
         self.model_names.append(deployment.model_name)
         return deployment
 
-    def upsert_deployment(self, deployment: Deployment) -> Deployment:
+    def upsert_deployment(self, deployment: Deployment) -> Deployment | None:
         """
         Add or update deployment
         Parameters:
@@ -2616,7 +2616,17 @@ class Router:
         - The added/updated deployment
         """
         # check if deployment already exists
-        if deployment.model_info.id in self.get_model_ids():
+        _deployment_model_id = deployment.model_info.id or ""
+        _deployment_on_router: Optional[Deployment] = self.get_deployment(
+            model_id=_deployment_model_id
+        )
+        if _deployment_on_router is not None:
+            # deployment with this model_id exists on the router
+            if deployment.litellm_params == _deployment_on_router.litellm_params:
+                # No need to update
+                return None
+
+            # if there is a new litellm param -> then update the deployment
             # remove the previous deployment
             removal_idx: Optional[int] = None
             for idx, model in enumerate(self.model_list):
