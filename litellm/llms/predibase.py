@@ -454,10 +454,10 @@ class PredibaseChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ) -> ModelResponse:
-        async_handler = AsyncHTTPHandler(
+        self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
-        response = await async_handler.post(
+        response = await self.async_handler.post(
             api_base, headers=headers, data=json.dumps(data)
         )
         return self.process_response(
@@ -490,12 +490,12 @@ class PredibaseChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ) -> CustomStreamWrapper:
-        async_handler = AsyncHTTPHandler(
+        self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
         data["stream"] = True
-        response = await async_handler.post(
-            url="https://serving.app.predibase.com/c4768f95/deployments/v2/llms/llama-3-8b-instruct/generate_stream",
+        response = await self.async_handler.post(
+            url=api_base,
             headers=headers,
             data=json.dumps(data),
             stream=True,
