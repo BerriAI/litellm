@@ -599,7 +599,10 @@ def test_redis_cache_completion():
     )
     print("test2 for Redis Caching - non streaming")
     response1 = completion(
-        model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20
+        model="gpt-3.5-turbo",
+        messages=messages,
+        caching=True,
+        max_tokens=20,
     )
     response2 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20
@@ -652,7 +655,6 @@ def test_redis_cache_completion():
     assert response1.id == response2.id
     assert response1.created == response2.created
     assert response1.choices[0].message.content == response2.choices[0].message.content
-
 
 # test_redis_cache_completion()
 
@@ -887,15 +889,32 @@ def test_disk_cache_completion():
     litellm.cache = Cache(
         type="disk",
     )
-    print("test2 for Redis Caching - non streaming")
+
     response1 = completion(
-        model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20
+        model="gpt-3.5-turbo",
+        messages=messages,
+        caching=True,
+        max_tokens=20,
+        mock_response="This number is so great!",
     )
+    # response2 is mocked to a different response from response1,
+    # but the completion from the cache should be used instead of the mock
+    # response since the input is the same as response1
     response2 = completion(
-        model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20
+        model="gpt-3.5-turbo",
+        messages=messages,
+        caching=True,
+        max_tokens=20,
+        mock_response="This number is awful!",
     )
+    # Since the parameters are not the same as response1, response3 should actually
+    # be the mock response
     response3 = completion(
-        model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
+        model="gpt-3.5-turbo",
+        messages=messages,
+        caching=True,
+        temperature=0.5,
+        mock_response="This number is awful!",
     )
 
     print("\nresponse 1", response1)
@@ -906,11 +925,8 @@ def test_disk_cache_completion():
     litellm.success_callback = []
     litellm._async_success_callback = []
 
-    """
-    1 & 2 should be exactly the same 
-    1 & 3 should be different, since input params are diff
-    1 & 4 should be diff, since models are diff
-    """
+    # 1 & 2 should be exactly the same 
+    # 1 & 3 should be different, since input params are diff
     if (
         response1["choices"][0]["message"]["content"]
         != response2["choices"][0]["message"]["content"]
@@ -923,7 +939,7 @@ def test_disk_cache_completion():
         response1["choices"][0]["message"]["content"]
         == response3["choices"][0]["message"]["content"]
     ):
-        # if input params like seed, max_tokens are diff it should NOT be a cache hit
+        # if input params like max_tokens, temperature are diff it should NOT be a cache hit
         print(f"response1: {response1}")
         print(f"response3: {response3}")
         pytest.fail(
