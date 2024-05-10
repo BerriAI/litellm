@@ -2561,6 +2561,10 @@ class Router:
         _auto_infer_region = os.environ.get("AUTO_INFER_REGION", "true")
         _auto_infer_region_value = bool(_auto_infer_region)
         if _auto_infer_region_value == True:
+            """
+            Hiding behind a feature flag
+            When there is a large amount of LLM deployments this makes startup times blow up
+            """
             try:
                 if "azure" in deployment.litellm_params.model:
                     region = litellm.utils.get_model_region(
