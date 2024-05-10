@@ -1079,6 +1079,7 @@ class Logging:
         litellm_call_id,
         function_id,
         dynamic_success_callbacks=None,
+        dynamic_failure_callbacks=None,
         dynamic_async_success_callbacks=None,
         langfuse_public_key=None,
         langfuse_secret=None,
@@ -1113,7 +1114,7 @@ class Logging:
         self.sync_streaming_chunks = []  # for generating complete stream response
         self.model_call_details = {}
         self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
-        self.dynamic_failure_callbacks = []  # [TODO] callbacks set for just that call
+        self.dynamic_failure_callbacks = dynamic_failure_callbacks
         self.dynamic_success_callbacks = (
             dynamic_success_callbacks  # callbacks set for just that call
         )
@@ -2334,11 +2335,26 @@ class Logging:
                 start_time=start_time,
                 end_time=end_time,
             )
+            callbacks = []  # init this to empty incase it's not created
+
+            if self.dynamic_failure_callbacks is not None and isinstance(
+                self.dynamic_failure_callbacks, list
+            ):
+                callbacks = self.dynamic_failure_callbacks
+                ## keep the internal functions ##
+                for callback in litellm.failure_callback:
+                    if (
+                        isinstance(callback, CustomLogger)
+                        and "_PROXY_" in callback.__class__.__name__
+                    ):
+                        callbacks.append(callback)
+            else:
+                callbacks = litellm.failure_callback
 
             result = None  # result sent to all loggers, init this to None incase it's not created
 
             self.redact_message_input_output_from_logging(result=result)
-            for callback in litellm.failure_callback:
+            for callback in callbacks:
                 try:
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
@@ -2713,7 +2729,7 @@ def function_setup(
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks = None
         dynamic_async_success_callbacks = None
-        dyanmic_failure_callbacks = None
+        dynamic_failure_callbacks = None
         if kwargs.get("success_callback", None) is not None and isinstance(
             kwargs["success_callback"], list
         ):
@@ -2735,7 +2751,10 @@ def function_setup(
             for index in reversed(removed_async_items):
                 kwargs["success_callback"].pop(index)
             dynamic_success_callbacks = kwargs.pop("success_callback")
-            dyanmic_failure_callbacks = kwargs.pop("failure_callback")
+        if kwargs.get("failure_callback", None) is not None and isinstance(
+            kwargs["failure_callback"], list
+        ):
+            dynamic_failure_callbacks = kwargs.pop("failure_callback")
 
         if add_breadcrumb:
             try:
@@ -2818,6 +2837,7 @@ def function_setup(
             call_type=call_type,
             start_time=start_time,
             dynamic_success_callbacks=dynamic_success_callbacks,
+            dynamic_failure_callbacks=dynamic_failure_callbacks,
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,
             langfuse_public_key=kwargs.pop("langfuse_public_key", None),
             langfuse_secret=kwargs.pop("langfuse_secret", None)
