@@ -516,9 +516,7 @@ class PrismaClient:
 
             try:
                 subprocess.run(["prisma", "generate"])
-                subprocess.run(
-                    ["prisma", "db", "push", "--accept-data-loss"]
-                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+                subprocess.run(["prisma", "db", "push"])
             except:
                 raise Exception(
                     f"Unable to run prisma commands. Run `pip install prisma`"

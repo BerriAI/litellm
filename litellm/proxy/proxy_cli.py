@@ -488,7 +488,7 @@ def run_server(
                     dname = os.path.dirname(abspath)
                     os.chdir(dname)
                     try:
-                        subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
+                        subprocess.run(["prisma", "db", "push"])
                         break  # Exit the loop if the subprocess succeeds
                     except subprocess.CalledProcessError as e:
                         print(f"Error: {e}")

@@ -29,7 +29,7 @@ do
     echo "Attempt $retry_count..."
 
     # Run the Prisma db push command
-    prisma db push --accept-data-loss
+    prisma db push
 
     exit_code=$?
 
