@@ -2558,20 +2558,27 @@ class Router:
         self.set_client(model=deployment.to_json(exclude_none=True))
 
         # set region (if azure model)
-        try:
-            if "azure" in deployment.litellm_params.model:
-                region = litellm.utils.get_model_region(
-                    litellm_params=deployment.litellm_params, mode=None
-                )
+        _auto_infer_region = os.environ.get("AUTO_INFER_REGION", False)
+        if _auto_infer_region == True or _auto_infer_region == "True":
+            print("Auto inferring region")  # noqa
+            """
+            Hiding behind a feature flag
+            When there is a large amount of LLM deployments this makes startup times blow up
+            """
+            try:
+                if "azure" in deployment.litellm_params.model:
+                    region = litellm.utils.get_model_region(
+                        litellm_params=deployment.litellm_params, mode=None
+                    )
 
-                deployment.litellm_params.region_name = region
-        except Exception as e:
-            verbose_router_logger.error(
-                "Unable to get the region for azure model - {}, {}".format(
-                    deployment.litellm_params.model, str(e)
+                    deployment.litellm_params.region_name = region
+            except Exception as e:
+                verbose_router_logger.error(
+                    "Unable to get the region for azure model - {}, {}".format(
+                        deployment.litellm_params.model, str(e)
+                    )
                 )
-            )
-            pass  # [NON-BLOCKING]
+                pass  # [NON-BLOCKING]
 
         return deployment
 
@@ -2600,7 +2607,7 @@ class Router:
         self.model_names.append(deployment.model_name)
         return deployment
 
-    def upsert_deployment(self, deployment: Deployment) -> Deployment:
+    def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
         Add or update deployment
         Parameters:
@@ -2610,8 +2617,17 @@ class Router:
         - The added/updated deployment
         """
         # check if deployment already exists
+        _deployment_model_id = deployment.model_info.id or ""
+        _deployment_on_router: Optional[Deployment] = self.get_deployment(
+            model_id=_deployment_model_id
+        )
+        if _deployment_on_router is not None:
+            # deployment with this model_id exists on the router
+            if deployment.litellm_params == _deployment_on_router.litellm_params:
+                # No need to update
+                return None
 
-        if deployment.model_info.id in self.get_model_ids():
+            # if there is a new litellm param -> then update the deployment
             # remove the previous deployment
             removal_idx: Optional[int] = None
             for idx, model in enumerate(self.model_list):
@@ -2620,16 +2636,9 @@ class Router:
 
             if removal_idx is not None:
                 self.model_list.pop(removal_idx)
-
-        # add to model list
-        _deployment = deployment.to_json(exclude_none=True)
-        self.model_list.append(_deployment)
-
-        # initialize client
-        self._add_deployment(deployment=deployment)
-
-        # add to model names
-        self.model_names.append(deployment.model_name)
+        else:
+            # if the model_id is not in router
+            self.add_deployment(deployment=deployment)
         return deployment
 
     def delete_deployment(self, id: str) -> Optional[Deployment]:
