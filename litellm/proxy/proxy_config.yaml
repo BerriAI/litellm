@@ -21,5 +21,5 @@ litellm_settings:
     - team_id: 7bf09cd5-217a-40d4-8634-fc31d9b88bf4
       success_callback: ["langfuse"]
       failure_callback: ["langfuse"]
-      langfuse_public_key: "os.environ/LANGFUSE_DEVELOPMENT_PUBLIC_KEY"
-      langfuse_secret_key: "os.environ/LANGFUSE_DEVELOPMENT_SECRET_KEY"
+      langfuse_public_key: "os.environ/LANGFUSE_DEV_PUBLIC_KEY"
+      langfuse_secret_key: "os.environ/LANGFUSE_DEV_SK_KEY"
