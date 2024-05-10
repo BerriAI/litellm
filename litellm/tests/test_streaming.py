@@ -5,6 +5,7 @@ import sys, os, asyncio
 import traceback
 import time, pytest
 from pydantic import BaseModel
+from typing import Tuple
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -142,7 +143,7 @@ def validate_last_format(chunk):
         ), "'finish_reason' should be a string."
 
 
-def streaming_format_tests(idx, chunk):
+def streaming_format_tests(idx, chunk) -> Tuple[str, bool]:
     extracted_chunk = ""
     finished = False
     print(f"chunk: {chunk}")
@@ -306,6 +307,70 @@ def test_completion_azure_stream():
 
 
 # test_completion_azure_stream()
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_predibase_streaming(sync_mode):
+    try:
+        litellm.set_verbose = True
+
+        if sync_mode:
+            response = completion(
+                model="predibase/llama-3-8b-instruct",
+                tenant_id="c4768f95",
+                api_base="https://serving.app.predibase.com",
+                api_key=os.getenv("PREDIBASE_API_KEY"),
+                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+                stream=True,
+            )
+
+            complete_response = ""
+            for idx, init_chunk in enumerate(response):
+                chunk, finished = streaming_format_tests(idx, init_chunk)
+                complete_response += chunk
+                custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
+                print(f"custom_llm_provider: {custom_llm_provider}")
+                assert custom_llm_provider == "predibase"
+                if finished:
+                    assert isinstance(
+                        init_chunk.choices[0], litellm.utils.StreamingChoices
+                    )
+                    break
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+        else:
+            response = await litellm.acompletion(
+                model="predibase/llama-3-8b-instruct",
+                tenant_id="c4768f95",
+                api_base="https://serving.app.predibase.com",
+                api_key=os.getenv("PREDIBASE_API_KEY"),
+                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+                stream=True,
+            )
+
+            # await response
+
+            complete_response = ""
+            idx = 0
+            async for init_chunk in response:
+                chunk, finished = streaming_format_tests(idx, init_chunk)
+                complete_response += chunk
+                custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
+                print(f"custom_llm_provider: {custom_llm_provider}")
+                assert custom_llm_provider == "predibase"
+                idx += 1
+                if finished:
+                    assert isinstance(
+                        init_chunk.choices[0], litellm.utils.StreamingChoices
+                    )
+                    break
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+
+        print(f"complete_response: {complete_response}")
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_azure_function_calling_stream():
@@ -1501,6 +1566,70 @@ def test_openai_chat_completion_complete_response_call():
 
 
 # test_openai_chat_completion_complete_response_call()
+def test_openai_stream_options_call():
+    litellm.set_verbose = False
+    response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "system", "content": "say GM - we're going to make it "}],
+        stream=True,
+        stream_options={"include_usage": True},
+        max_tokens=10,
+    )
+    usage = None
+    chunks = []
+    for chunk in response:
+        print("chunk: ", chunk)
+        chunks.append(chunk)
+
+    last_chunk = chunks[-1]
+    print("last chunk: ", last_chunk)
+
+    """
+    Assert that:
+    - Last Chunk includes Usage
+    - All chunks prior to last chunk have usage=None
+    """
+
+    assert last_chunk.usage is not None
+    assert last_chunk.usage.total_tokens > 0
+    assert last_chunk.usage.prompt_tokens > 0
+    assert last_chunk.usage.completion_tokens > 0
+
+    # assert all non last chunks have usage=None
+    assert all(chunk.usage is None for chunk in chunks[:-1])
+
+
+def test_openai_stream_options_call_text_completion():
+    litellm.set_verbose = False
+    response = litellm.text_completion(
+        model="gpt-3.5-turbo-instruct",
+        prompt="say GM - we're going to make it ",
+        stream=True,
+        stream_options={"include_usage": True},
+        max_tokens=10,
+    )
+    usage = None
+    chunks = []
+    for chunk in response:
+        print("chunk: ", chunk)
+        chunks.append(chunk)
+
+    last_chunk = chunks[-1]
+    print("last chunk: ", last_chunk)
+
+    """
+    Assert that:
+    - Last Chunk includes Usage
+    - All chunks prior to last chunk have usage=None
+    """
+
+    assert last_chunk.usage is not None
+    assert last_chunk.usage.total_tokens > 0
+    assert last_chunk.usage.prompt_tokens > 0
+    assert last_chunk.usage.completion_tokens > 0
+
+    # assert all non last chunks have usage=None
+    assert all(chunk.usage is None for chunk in chunks[:-1])
 
 
 def test_openai_text_completion_call():
