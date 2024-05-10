@@ -1491,6 +1491,7 @@ class Cache:
         redis_semantic_cache_use_async=False,
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
         redis_flush_size=None,
+        disk_cache_dir=None,
         **kwargs,
     ):
         """
@@ -1544,7 +1545,7 @@ class Cache:
                 **kwargs,
             )
         elif type == "disk":
-            self.cache = DiskCache()
+            self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
@@ -1917,10 +1918,14 @@ class Cache:
 
 
 class DiskCache(BaseCache):
-    def __init__(self, cache_dir: str = ".litellm_cache"):
+    def __init__(self, disk_cache_dir: Optional[str] = None):
         import diskcache as dc
+
         # if users don't provider one, use the default litellm cache
-        self.disk_cache = dc.Cache(cache_dir)
+        if disk_cache_dir is None:
+            self.disk_cache = dc.Cache(".litellm_cache")
+        else:
+            self.disk_cache = dc.Cache(disk_cache_dir)
 
     def set_cache(self, key, value, **kwargs):
         print_verbose("DiskCache: set_cache")
