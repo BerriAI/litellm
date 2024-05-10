@@ -5769,9 +5769,7 @@ def get_optional_params(
             extra_body  # openai client supports `extra_body` param
         )
     else:  # assume passing in params for openai/azure openai
-        print_verbose(
-            f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZURE - model={model}, custom_llm_provider={custom_llm_provider}"
-        )
+
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="openai"
         )
