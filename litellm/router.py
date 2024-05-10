@@ -2558,9 +2558,8 @@ class Router:
         self.set_client(model=deployment.to_json(exclude_none=True))
 
         # set region (if azure model)
-        _auto_infer_region = os.environ.get("AUTO_INFER_REGION", "true")
-        _auto_infer_region_value = bool(_auto_infer_region)
-        if _auto_infer_region_value == True:
+        _auto_infer_region = os.environ.get("AUTO_INFER_REGION", False)
+        if _auto_infer_region == True:
             """
             Hiding behind a feature flag
             When there is a large amount of LLM deployments this makes startup times blow up
