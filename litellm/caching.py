@@ -1449,7 +1449,7 @@ class DualCache(BaseCache):
 class Cache:
     def __init__(
         self,
-        type: Optional[Literal["local", "redis", "redis-semantic", "s3"]] = "local",
+        type: Optional[Literal["local", "redis", "redis-semantic", "s3", "disk"]] = "local",
         host: Optional[str] = None,
         port: Optional[str] = None,
         password: Optional[str] = None,
@@ -1498,7 +1498,7 @@ class Cache:
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", or "s3". Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "s3" or "disk". Defaults to "local".
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
             port (int, optional): The port number for the Redis cache. Required if type is "redis".
             password (str, optional): The password for the Redis cache. Required if type is "redis".
@@ -1544,6 +1544,8 @@ class Cache:
                 s3_path=s3_path,
                 **kwargs,
             )
+        elif type == "disk":
+            self.cache = DiskCache()
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
@@ -1916,7 +1918,7 @@ class Cache:
 
 
 class DiskCache(BaseCache):
-    def __init__(self, cache_dir: str = ".cache"):
+    def __init__(self, cache_dir: str = ".litellm_cache"):
         # if users don't provider one, use the default litellm cache
         self.disk_cache = dc.Cache(cache_dir)
 
@@ -1989,7 +1991,7 @@ class DiskCache(BaseCache):
 
 
 def enable_cache(
-    type: Optional[Literal["local", "redis", "s3"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
@@ -2018,7 +2020,7 @@ def enable_cache(
     Enable cache with the specified configuration.
 
     Args:
-        type (Optional[Literal["local", "redis"]]): The type of cache to enable. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache to enable. Defaults to "local".
         host (Optional[str]): The host address of the cache server. Defaults to None.
         port (Optional[str]): The port number of the cache server. Defaults to None.
         password (Optional[str]): The password for the cache server. Defaults to None.
@@ -2054,7 +2056,7 @@ def enable_cache(
 
 
 def update_cache(
-    type: Optional[Literal["local", "redis"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
@@ -2083,7 +2085,7 @@ def update_cache(
     Update the cache for LiteLLM.
 
     Args:
-        type (Optional[Literal["local", "redis"]]): The type of cache. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache. Defaults to "local".
         host (Optional[str]): The host of the cache. Defaults to None.
         port (Optional[str]): The port of the cache. Defaults to None.
         password (Optional[str]): The password for the cache. Defaults to None.
