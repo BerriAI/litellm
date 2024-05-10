@@ -2679,10 +2679,11 @@ docs = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.link
 testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)", "pytest-ignore-flaky", "pytest-mypy", "pytest-ruff (>=0.2.1)"]
 
 [extras]
+extra-cache = ["diskcache"]
 extra-proxy = ["azure-identity", "azure-keyvault-secrets", "google-cloud-kms", "prisma", "resend"]
 proxy = ["PyJWT", "apscheduler", "backoff", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "orjson", "python-multipart", "pyyaml", "rq", "uvicorn"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "9d2c78a508742a83a9dce1f3f55f8ef9cac8a453a863eaa91a179f031894be1b"
+content-hash = "a21a41c1f683d7cb9a07fa76ee396b7da95cebf8c82d44de92e318916436a506"

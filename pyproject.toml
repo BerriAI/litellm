@@ -66,6 +66,9 @@ extra_proxy = [
     "resend"
 ]
 
+extra_cache = [
+    "diskcache"
+]
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
