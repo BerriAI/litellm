@@ -9554,78 +9554,69 @@ def get_secret(
         secret_name_split = secret_name.replace("oidc/", "")
         oidc_provider, oidc_aud = secret_name_split.split("/", 1)
         # TODO: Add caching for HTTP requests
-        match oidc_provider:
-            case "google":
-                oidc_token = oidc_cache.get_cache(key=secret_name)
-                if oidc_token is not None:
-                    return oidc_token
+        if oidc_provider == "google":
+            oidc_token = oidc_cache.get_cache(key=secret_name)
+            if oidc_token is not None:
+                return oidc_token
 
-                oidc_client = HTTPHandler(
-                    timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
+            response = oidc_client.get(
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
+                params={"audience": oidc_aud},
+                headers={"Metadata-Flavor": "Google"},
+            )
+            if response.status_code == 200:
+                oidc_token = response.text
+                oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
+                return oidc_token
+            else:
+                raise ValueError("Google OIDC provider failed")
+        elif oidc_provider == "circleci":
+            # https://circleci.com/docs/openid-connect-tokens/
+            env_secret = os.getenv("CIRCLE_OIDC_TOKEN")
+            if env_secret is None:
+                raise ValueError("CIRCLE_OIDC_TOKEN not found in environment")
+            return env_secret
+        elif oidc_provider == "circleci_v2":
+            # https://circleci.com/docs/openid-connect-tokens/
+            env_secret = os.getenv("CIRCLE_OIDC_TOKEN_V2")
+            if env_secret is None:
+                raise ValueError("CIRCLE_OIDC_TOKEN_V2 not found in environment")
+            return env_secret
+        elif oidc_provider == "github":
+            # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
+            actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+            actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+            if (
+                actions_id_token_request_url is None
+                or actions_id_token_request_token is None
+            ):
+                raise ValueError(
+                    "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
                 )
-                # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
-                response = oidc_client.get(
-                    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
-                    params={"audience": oidc_aud},
-                    headers={"Metadata-Flavor": "Google"},
-                )
-                if response.status_code == 200:
-                    oidc_token = response.text
-                    oidc_cache.set_cache(
-                        key=secret_name, value=oidc_token, ttl=3600 - 60
-                    )
-                    return oidc_token
-                else:
-                    raise ValueError("Google OIDC provider failed")
-            case "circleci":
-                # https://circleci.com/docs/openid-connect-tokens/
-                env_secret = os.getenv("CIRCLE_OIDC_TOKEN")
-                if env_secret is None:
-                    raise ValueError("CIRCLE_OIDC_TOKEN not found in environment")
-                return env_secret
-            case "circleci_v2":
-                # https://circleci.com/docs/openid-connect-tokens/
-                env_secret = os.getenv("CIRCLE_OIDC_TOKEN_V2")
-                if env_secret is None:
-                    raise ValueError("CIRCLE_OIDC_TOKEN_V2 not found in environment")
-                return env_secret
-            case "github":
-                # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
-                actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
-                actions_id_token_request_token = os.getenv(
-                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
-                )
-                if (
-                    actions_id_token_request_url is None
-                    or actions_id_token_request_token is None
-                ):
-                    raise ValueError(
-                        "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
-                    )
 
-                oidc_token = oidc_cache.get_cache(key=secret_name)
-                if oidc_token is not None:
-                    return oidc_token
+            oidc_token = oidc_cache.get_cache(key=secret_name)
+            if oidc_token is not None:
+                return oidc_token
 
-                oidc_client = HTTPHandler(
-                    timeout=httpx.Timeout(timeout=600.0, connect=5.0)
-                )
-                response = oidc_client.get(
-                    actions_id_token_request_url,
-                    params={"audience": oidc_aud},
-                    headers={
-                        "Authorization": f"Bearer {actions_id_token_request_token}",
-                        "Accept": "application/json; api-version=2.0",
-                    },
-                )
-                if response.status_code == 200:
-                    oidc_token = response.text["value"]
-                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
-                    return oidc_token
-                else:
-                    raise ValueError("Github OIDC provider failed")
-            case _:
-                raise ValueError("Unsupported OIDC provider")
+            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            response = oidc_client.get(
+                actions_id_token_request_url,
+                params={"audience": oidc_aud},
+                headers={
+                    "Authorization": f"Bearer {actions_id_token_request_token}",
+                    "Accept": "application/json; api-version=2.0",
+                },
+            )
+            if response.status_code == 200:
+                oidc_token = response.text["value"]
+                oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
+                return oidc_token
+            else:
+                raise ValueError("Github OIDC provider failed")
+        else:
+            raise ValueError("Unsupported OIDC provider")
 
     try:
         if litellm.secret_manager_client is not None:
