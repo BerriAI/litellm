@@ -419,6 +419,7 @@ def completion(
         from google.protobuf.struct_pb2 import Value  # type: ignore
         from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
         import google.auth  # type: ignore
+        import proto  # type: ignore
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
@@ -605,9 +606,21 @@ def completion(
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
-                for k, v in function_call.args.items():
-                    args_dict[k] = v
-                args_str = json.dumps(args_dict)
+
+                # Check if it's a RepeatedComposite instance
+                for key, val in function_call.args.items():
+                    if isinstance(
+                        val, proto.marshal.collections.repeated.RepeatedComposite
+                    ):
+                        # If so, convert to list
+                        args_dict[key] = [v for v in val]
+                    else:
+                        args_dict[key] = val
+
+                try:
+                    args_str = json.dumps(args_dict)
+                except Exception as e:
+                    raise VertexAIError(status_code=422, message=str(e))
                 message = litellm.Message(
                     content=None,
                     tool_calls=[
@@ -810,6 +823,8 @@ def completion(
         setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
+        if isinstance(e, VertexAIError):
+            raise e
         raise VertexAIError(status_code=500, message=str(e))
 
 

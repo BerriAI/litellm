@@ -33,6 +33,9 @@ from dataclasses import (
 )
 
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.caching import DualCache
+oidc_cache = DualCache()
 
 try:
     # this works in python 3.8
@@ -1079,6 +1082,7 @@ class Logging:
         litellm_call_id,
         function_id,
         dynamic_success_callbacks=None,
+        dynamic_failure_callbacks=None,
         dynamic_async_success_callbacks=None,
         langfuse_public_key=None,
         langfuse_secret=None,
@@ -1113,7 +1117,7 @@ class Logging:
         self.sync_streaming_chunks = []  # for generating complete stream response
         self.model_call_details = {}
         self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
-        self.dynamic_failure_callbacks = []  # [TODO] callbacks set for just that call
+        self.dynamic_failure_callbacks = dynamic_failure_callbacks
         self.dynamic_success_callbacks = (
             dynamic_success_callbacks  # callbacks set for just that call
         )
@@ -2334,11 +2338,26 @@ class Logging:
                 start_time=start_time,
                 end_time=end_time,
             )
+            callbacks = []  # init this to empty incase it's not created
+
+            if self.dynamic_failure_callbacks is not None and isinstance(
+                self.dynamic_failure_callbacks, list
+            ):
+                callbacks = self.dynamic_failure_callbacks
+                ## keep the internal functions ##
+                for callback in litellm.failure_callback:
+                    if (
+                        isinstance(callback, CustomLogger)
+                        and "_PROXY_" in callback.__class__.__name__
+                    ):
+                        callbacks.append(callback)
+            else:
+                callbacks = litellm.failure_callback
 
             result = None  # result sent to all loggers, init this to None incase it's not created
 
             self.redact_message_input_output_from_logging(result=result)
-            for callback in litellm.failure_callback:
+            for callback in callbacks:
                 try:
                     if callback == "lite_debugger":
                         print_verbose("reaches lite_debugger for logging!")
@@ -2427,7 +2446,7 @@ class Logging:
                         )
                     elif callback == "langfuse":
                         global langFuseLogger
-                        verbose_logger.debug("reaches langfuse for logging!")
+                        verbose_logger.debug("reaches langfuse for logging failure")
                         kwargs = {}
                         for k, v in self.model_call_details.items():
                             if (
@@ -2436,8 +2455,16 @@ class Logging:
                                 kwargs[k] = v
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if langFuseLogger is None or (
-                            self.langfuse_public_key != langFuseLogger.public_key
-                            and self.langfuse_secret != langFuseLogger.secret_key
+                            (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
+                            and (
+                                self.langfuse_public_key is not None
+                                and self.langfuse_public_key
+                                != langFuseLogger.public_key
+                            )
                         ):
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
@@ -2713,6 +2740,7 @@ def function_setup(
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks = None
         dynamic_async_success_callbacks = None
+        dynamic_failure_callbacks = None
         if kwargs.get("success_callback", None) is not None and isinstance(
             kwargs["success_callback"], list
         ):
@@ -2734,6 +2762,10 @@ def function_setup(
             for index in reversed(removed_async_items):
                 kwargs["success_callback"].pop(index)
             dynamic_success_callbacks = kwargs.pop("success_callback")
+        if kwargs.get("failure_callback", None) is not None and isinstance(
+            kwargs["failure_callback"], list
+        ):
+            dynamic_failure_callbacks = kwargs.pop("failure_callback")
 
         if add_breadcrumb:
             try:
@@ -2816,9 +2848,11 @@ def function_setup(
             call_type=call_type,
             start_time=start_time,
             dynamic_success_callbacks=dynamic_success_callbacks,
+            dynamic_failure_callbacks=dynamic_failure_callbacks,
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,
             langfuse_public_key=kwargs.pop("langfuse_public_key", None),
-            langfuse_secret=kwargs.pop("langfuse_secret", None),
+            langfuse_secret=kwargs.pop("langfuse_secret", None)
+            or kwargs.pop("langfuse_secret_key", None),
         )
         ## check if metadata is passed in
         litellm_params = {"api_base": ""}
@@ -4783,6 +4817,12 @@ def get_optional_params_embeddings(
                 status_code=500,
                 message=f"Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
             )
+    if custom_llm_provider == "triton":
+        keys = list(non_default_params.keys())
+        for k in keys:
+            non_default_params.pop(k, None)
+        final_params = {**non_default_params, **kwargs}
+        return final_params
     if custom_llm_provider == "vertex_ai":
         if len(non_default_params.keys()) > 0:
             if litellm.drop_params is True:  # drop the unsupported non-default values
@@ -4840,6 +4880,7 @@ def get_optional_params_embeddings(
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
+    model: str,
     functions=None,
     function_call=None,
     temperature=None,
@@ -4853,7 +4894,6 @@ def get_optional_params(
     frequency_penalty=None,
     logit_bias=None,
     user=None,
-    model=None,
     custom_llm_provider="",
     response_format=None,
     seed=None,
@@ -4882,7 +4922,7 @@ def get_optional_params(
 
         passed_params[k] = v
 
-    optional_params = {}
+    optional_params: Dict = {}
 
     common_auth_dict = litellm.common_cloud_provider_auth_params
     if custom_llm_provider in common_auth_dict["providers"]:
@@ -5156,41 +5196,9 @@ def get_optional_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
-        if temperature is not None:
-            if temperature == 0.0 or temperature == 0:
-                # hugging face exception raised when temp==0
-                # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
-                temperature = 0.01
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if n is not None:
-            optional_params["best_of"] = n
-            optional_params["do_sample"] = (
-                True  # Need to sample if you want best of for hf inference endpoints
-            )
-        if stream is not None:
-            optional_params["stream"] = stream
-        if stop is not None:
-            optional_params["stop"] = stop
-        if max_tokens is not None:
-            # HF TGI raises the following exception when max_new_tokens==0
-            # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
-            if max_tokens == 0:
-                max_tokens = 1
-            optional_params["max_new_tokens"] = max_tokens
-        if n is not None:
-            optional_params["best_of"] = n
-        if presence_penalty is not None:
-            optional_params["repetition_penalty"] = presence_penalty
-        if "echo" in passed_params:
-            # https://huggingface.co/docs/huggingface_hub/main/en/package_reference/inference_client#huggingface_hub.InferenceClient.text_generation.decoder_input_details
-            #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
-            optional_params["decoder_input_details"] = special_params["echo"]
-            passed_params.pop(
-                "echo", None
-            )  # since we handle translating echo, we should not send it to TGI request
+        optional_params = litellm.HuggingfaceConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
     elif custom_llm_provider == "together_ai":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -5769,9 +5777,7 @@ def get_optional_params(
             extra_body  # openai client supports `extra_body` param
         )
     else:  # assume passing in params for openai/azure openai
-        print_verbose(
-            f"UNMAPPED PROVIDER, ASSUMING IT'S OPENAI/AZURE - model={model}, custom_llm_provider={custom_llm_provider}"
-        )
+
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="openai"
         )
@@ -6152,7 +6158,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "seed",
         ]
     elif custom_llm_provider == "huggingface":
-        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+        return litellm.HuggingfaceConfig().get_supported_openai_params()
     elif custom_llm_provider == "together_ai":
         return [
             "stream",
@@ -9407,6 +9413,72 @@ def get_secret(
     key_management_settings = litellm._key_management_settings
     if secret_name.startswith("os.environ/"):
         secret_name = secret_name.replace("os.environ/", "")
+
+    # Example: oidc/google/https://bedrock-runtime.us-east-1.amazonaws.com/model/stability.stable-diffusion-xl-v1/invoke
+    if secret_name.startswith("oidc/"):
+        secret_name_split = secret_name.replace("oidc/", "")
+        oidc_provider, oidc_aud = secret_name_split.split("/", 1)
+        # TODO: Add caching for HTTP requests
+        match oidc_provider:
+            case "google":
+                oidc_token = oidc_cache.get_cache(key=secret_name)
+                if oidc_token is not None:
+                    return oidc_token
+
+                client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+                # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
+                response = client.get(
+                    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
+                    params={"audience": oidc_aud},
+                    headers={"Metadata-Flavor": "Google"},
+                )
+                if response.status_code == 200:
+                    oidc_token = response.text
+                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
+                    return oidc_token
+                else:
+                    raise ValueError("Google OIDC provider failed")
+            case "circleci":
+                # https://circleci.com/docs/openid-connect-tokens/
+                env_secret = os.getenv("CIRCLE_OIDC_TOKEN")
+                if env_secret is None:
+                    raise ValueError("CIRCLE_OIDC_TOKEN not found in environment")
+                return env_secret
+            case "circleci_v2":
+                # https://circleci.com/docs/openid-connect-tokens/
+                env_secret = os.getenv("CIRCLE_OIDC_TOKEN_V2")
+                if env_secret is None:
+                    raise ValueError("CIRCLE_OIDC_TOKEN_V2 not found in environment")
+                return env_secret
+            case "github":
+                # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
+                actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+                actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+                if actions_id_token_request_url is None or actions_id_token_request_token is None:
+                    raise ValueError("ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment")
+
+                oidc_token = oidc_cache.get_cache(key=secret_name)
+                if oidc_token is not None:
+                    return oidc_token
+
+                client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+                response = client.get(
+                    actions_id_token_request_url,
+                    params={"audience": oidc_aud},
+                    headers={
+                        "Authorization": f"Bearer {actions_id_token_request_token}",
+                        "Accept": "application/json; api-version=2.0",
+                        },
+                )
+                if response.status_code == 200:
+                    oidc_token = response.text['value']
+                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
+                    return oidc_token
+                else:
+                    raise ValueError("Github OIDC provider failed")
+            case _:
+                raise ValueError("Unsupported OIDC provider")
+
 
     try:
         if litellm.secret_manager_client is not None:
