@@ -367,7 +367,7 @@ class LangFuseLogger:
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
                     "user_id": user_id,
-                    "metadata": metadata,
+                    "metadata": clean_metadata,
                 }
                 for key in list(
                     filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
