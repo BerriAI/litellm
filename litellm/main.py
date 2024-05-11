@@ -75,6 +75,7 @@ from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.predibase import PredibaseChatCompletion
+from .llms.bedrock_httpx import BedrockLLM
 from .llms.triton import TritonChatCompletion
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -104,7 +105,6 @@ from litellm.utils import (
 )
 
 ####### ENVIRONMENT VARIABLES ###################
-dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
@@ -114,6 +114,7 @@ azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 triton_chat_completions = TritonChatCompletion()
+bedrock_chat_completion = BedrockLLM()
 ####### COMPLETION ENDPOINTS ################
 
 
