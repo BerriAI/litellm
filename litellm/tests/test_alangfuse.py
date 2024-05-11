@@ -248,12 +248,14 @@ async def test_langfuse_logging_metadata(langfuse_client):
         "trace_name",
         "trace_id",
         "existing_trace_id",
+        "update_trace_keys",
         "trace_user_id",
         "session_id",
         "tags",
         "generation_name",
         "generation_id",
         "prompt",
+        "cache_hit",
     }
     trace_metadata = {
         "trace_actual_metadata_key": "trace_actual_metadata_value"
@@ -339,6 +341,13 @@ async def test_langfuse_logging_metadata(langfuse_client):
         for generation_id, generation in zip(generation_ids, generations):
             assert generation.id == generation_id
             assert generation.trace_id == trace_id
+            print(
+                "diff in generation keys",
+                set(generation.metadata.keys()).difference(
+                    expected_filtered_metadata_keys
+                ),
+            )
+
             assert set(generation.metadata.keys()).isdisjoint(
                 expected_filtered_metadata_keys
             )
