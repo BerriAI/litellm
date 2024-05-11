@@ -109,7 +109,17 @@ def mock_patch_aimage_generation():
 
 
 @pytest.fixture(scope="function")
-def client_no_auth():
+def fake_env_vars(monkeypatch):
+    # Set some fake environment variables
+    monkeypatch.setenv("OPENAI_API_KEY", "fake_openai_api_key")
+    monkeypatch.setenv("OPENAI_API_BASE", "http://fake-openai-api-base")
+    monkeypatch.setenv("AZURE_API_BASE", "http://fake-azure-api-base")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "fake_azure_openai_api_key")
+    monkeypatch.setenv("AZURE_SWEDEN_API_BASE", "http://fake-azure-sweden-api-base")
+
+
+@pytest.fixture(scope="function")
+def client_no_auth(fake_env_vars):
     # Assuming litellm.proxy.proxy_server is an object
     from litellm.proxy.proxy_server import cleanup_router_config_variables
 
