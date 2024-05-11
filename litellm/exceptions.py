@@ -202,13 +202,11 @@ class BudgetExceededError(Exception):
 
 ## DEPRECATED ##
 class InvalidRequestError(openai.BadRequestError):  # type: ignore
-    def __init__(
-        self, message, model, llm_provider, response: Optional[httpx.Response] = None
-    ):
+    def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
         super().__init__(
-            self.message, response=response, body=None
+            self.message, f"{self.model}"
         )  # Call the base class constructor with the parameters it needs
