@@ -754,6 +754,9 @@ async def test_async_fallbacks_max_retries_per_request():
 
 def test_ausage_based_routing_fallbacks():
     try:
+        import litellm
+
+        litellm.set_verbose = False
         # [Prod Test]
         # IT tests Usage Based Routing with fallbacks
         # The Request should fail azure/gpt-4-fast. Then fallback -> "azure/gpt-4-basic" -> "openai-gpt-4"
@@ -766,10 +769,10 @@ def test_ausage_based_routing_fallbacks():
         load_dotenv()
 
         # Constants for TPM and RPM allocation
-        AZURE_FAST_RPM = 0
-        AZURE_BASIC_RPM = 0
+        AZURE_FAST_RPM = 1
+        AZURE_BASIC_RPM = 1
         OPENAI_RPM = 0
-        ANTHROPIC_RPM = 2
+        ANTHROPIC_RPM = 10
 
         def get_azure_params(deployment_name: str):
             params = {
@@ -832,9 +835,9 @@ def test_ausage_based_routing_fallbacks():
             fallbacks=fallbacks_list,
             set_verbose=True,
             debug_level="DEBUG",
-            routing_strategy="usage-based-routing",
+            routing_strategy="usage-based-routing-v2",
             redis_host=os.environ["REDIS_HOST"],
-            redis_port=os.environ["REDIS_PORT"],
+            redis_port=int(os.environ["REDIS_PORT"]),
             num_retries=0,
         )
 
@@ -853,8 +856,8 @@ def test_ausage_based_routing_fallbacks():
         # the token count of this message is > AZURE_FAST_TPM, > AZURE_BASIC_TPM
         assert response._hidden_params["model_id"] == "1"
 
-        # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
-        for i in range(3):
+        for i in range(10):
+            # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
             response = router.completion(
                 model="azure/gpt-4-fast",
                 messages=messages,
@@ -863,8 +866,7 @@ def test_ausage_based_routing_fallbacks():
             )
             print("response: ", response)
             print("response._hidden_params: ", response._hidden_params)
-            if i == 2:
-                # by the 19th call we should have hit TPM LIMIT for OpenAI, it should fallback to anthropic-claude-instant-1.2
+            if i == 9:
                 assert response._hidden_params["model_id"] == "4"
 
     except Exception as e:

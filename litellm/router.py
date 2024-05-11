@@ -9,7 +9,7 @@
 
 import copy, httpx
 from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO
+from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO, Tuple
 import random, threading, time, traceback, uuid
 import litellm, openai, hashlib, json
 from litellm.caching import RedisCache, InMemoryCache, DualCache
@@ -48,6 +48,7 @@ from litellm.types.router import (
     AlertingConfig,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.azure import get_azure_ad_token_from_oidc
 
 
 class Router:
@@ -102,6 +103,7 @@ class Router:
             "usage-based-routing",
             "latency-based-routing",
             "cost-based-routing",
+            "usage-based-routing-v2",
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based routing
         semaphore: Optional[asyncio.Semaphore] = None,
@@ -2114,6 +2116,10 @@ class Router:
                     raise ValueError(
                         f"api_base is required for Azure OpenAI. Set it on your config. Model - {model}"
                     )
+                azure_ad_token = litellm_params.get("azure_ad_token")
+                if azure_ad_token is not None:
+                    if azure_ad_token.startswith("oidc/"):
+                        azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 if api_version is None:
                     api_version = "2023-07-01-preview"
 
@@ -2125,6 +2131,7 @@ class Router:
                     cache_key = f"{model_id}_async_client"
                     _client = openai.AsyncAzureOpenAI(
                         api_key=api_key,
+                        azure_ad_token=azure_ad_token,
                         base_url=api_base,
                         api_version=api_version,
                         timeout=timeout,
@@ -2149,6 +2156,7 @@ class Router:
                     cache_key = f"{model_id}_client"
                     _client = openai.AzureOpenAI(  # type: ignore
                         api_key=api_key,
+                        azure_ad_token=azure_ad_token,
                         base_url=api_base,
                         api_version=api_version,
                         timeout=timeout,
@@ -2173,6 +2181,7 @@ class Router:
                     cache_key = f"{model_id}_stream_async_client"
                     _client = openai.AsyncAzureOpenAI(  # type: ignore
                         api_key=api_key,
+                        azure_ad_token=azure_ad_token,
                         base_url=api_base,
                         api_version=api_version,
                         timeout=stream_timeout,
@@ -2197,6 +2206,7 @@ class Router:
                     cache_key = f"{model_id}_stream_client"
                     _client = openai.AzureOpenAI(  # type: ignore
                         api_key=api_key,
+                        azure_ad_token=azure_ad_token,
                         base_url=api_base,
                         api_version=api_version,
                         timeout=stream_timeout,
@@ -2229,6 +2239,7 @@ class Router:
                         "api_key": api_key,
                         "azure_endpoint": api_base,
                         "api_version": api_version,
+                        "azure_ad_token": azure_ad_token,
                     }
                     from litellm.llms.azure import select_azure_base_url_or_endpoint
 
@@ -2557,20 +2568,27 @@ class Router:
         self.set_client(model=deployment.to_json(exclude_none=True))
 
         # set region (if azure model)
-        try:
-            if "azure" in deployment.litellm_params.model:
-                region = litellm.utils.get_model_region(
-                    litellm_params=deployment.litellm_params, mode=None
-                )
+        _auto_infer_region = os.environ.get("AUTO_INFER_REGION", False)
+        if _auto_infer_region == True or _auto_infer_region == "True":
+            print("Auto inferring region")  # noqa
+            """
+            Hiding behind a feature flag
+            When there is a large amount of LLM deployments this makes startup times blow up
+            """
+            try:
+                if "azure" in deployment.litellm_params.model:
+                    region = litellm.utils.get_model_region(
+                        litellm_params=deployment.litellm_params, mode=None
+                    )
 
-                deployment.litellm_params.region_name = region
-        except Exception as e:
-            verbose_router_logger.error(
-                "Unable to get the region for azure model - {}, {}".format(
-                    deployment.litellm_params.model, str(e)
+                    deployment.litellm_params.region_name = region
+            except Exception as e:
+                verbose_router_logger.error(
+                    "Unable to get the region for azure model - {}, {}".format(
+                        deployment.litellm_params.model, str(e)
+                    )
                 )
-            )
-            pass  # [NON-BLOCKING]
+                pass  # [NON-BLOCKING]
 
         return deployment
 
@@ -2599,7 +2617,7 @@ class Router:
         self.model_names.append(deployment.model_name)
         return deployment
 
-    def upsert_deployment(self, deployment: Deployment) -> Deployment:
+    def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
         Add or update deployment
         Parameters:
@@ -2609,8 +2627,17 @@ class Router:
         - The added/updated deployment
         """
         # check if deployment already exists
+        _deployment_model_id = deployment.model_info.id or ""
+        _deployment_on_router: Optional[Deployment] = self.get_deployment(
+            model_id=_deployment_model_id
+        )
+        if _deployment_on_router is not None:
+            # deployment with this model_id exists on the router
+            if deployment.litellm_params == _deployment_on_router.litellm_params:
+                # No need to update
+                return None
 
-        if deployment.model_info.id in self.get_model_ids():
+            # if there is a new litellm param -> then update the deployment
             # remove the previous deployment
             removal_idx: Optional[int] = None
             for idx, model in enumerate(self.model_list):
@@ -2619,16 +2646,9 @@ class Router:
 
             if removal_idx is not None:
                 self.model_list.pop(removal_idx)
-
-        # add to model list
-        _deployment = deployment.to_json(exclude_none=True)
-        self.model_list.append(_deployment)
-
-        # initialize client
-        self._add_deployment(deployment=deployment)
-
-        # add to model names
-        self.model_names.append(deployment.model_name)
+        else:
+            # if the model_id is not in router
+            self.add_deployment(deployment=deployment)
         return deployment
 
     def delete_deployment(self, id: str) -> Optional[Deployment]:
@@ -2989,11 +3009,15 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
-    ):
+    ) -> Tuple[str, Union[list, dict]]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
 
         If 'healthy_deployments' returned is None, this means the user chose a specific deployment
+
+        Returns
+        - Dict, if specific model chosen
+        - List, if multiple models chosen
         """
         # check if aliases set on litellm model alias map
         if specific_deployment == True:
@@ -3003,7 +3027,7 @@ class Router:
                 if deployment_model == model:
                     # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
                     # return the first deployment where the `model` matches the specificed deployment name
-                    return deployment, None
+                    return deployment_model, deployment
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
             )
@@ -3019,7 +3043,7 @@ class Router:
                 self.default_deployment
             )  # self.default_deployment
             updated_deployment["litellm_params"]["model"] = model
-            return updated_deployment, None
+            return model, updated_deployment
 
         ## get healthy deployments
         ### get all deployments
@@ -3072,10 +3096,10 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
-        )
+        )  # type: ignore
 
-        if healthy_deployments is None:
-            return model
+        if isinstance(healthy_deployments, dict):
+            return healthy_deployments
 
         # filter out the deployments currently cooling down
         deployments_to_remove = []
@@ -3131,7 +3155,7 @@ class Router:
         ):
             deployment = await self.lowesttpm_logger_v2.async_get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )
@@ -3141,7 +3165,7 @@ class Router:
         ):
             deployment = await self.lowestcost_logger.async_get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )
@@ -3219,8 +3243,8 @@ class Router:
             specific_deployment=specific_deployment,
         )
 
-        if healthy_deployments is None:
-            return model
+        if isinstance(healthy_deployments, dict):
+            return healthy_deployments
 
         # filter out the deployments currently cooling down
         deployments_to_remove = []
@@ -3244,7 +3268,7 @@ class Router:
 
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
-                model_group=model, healthy_deployments=healthy_deployments
+                model_group=model, healthy_deployments=healthy_deployments  # type: ignore
             )
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
@@ -3292,7 +3316,7 @@ class Router:
         ):
             deployment = self.lowestlatency_logger.get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 request_kwargs=request_kwargs,
             )
         elif (
@@ -3301,7 +3325,7 @@ class Router:
         ):
             deployment = self.lowesttpm_logger.get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )
@@ -3311,7 +3335,7 @@ class Router:
         ):
             deployment = self.lowesttpm_logger_v2.get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )

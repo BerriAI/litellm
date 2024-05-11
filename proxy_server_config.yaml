@@ -92,10 +92,12 @@ litellm_settings:
   default_team_settings: 
     - team_id: team-1
       success_callback: ["langfuse"]
+      failure_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PROJECT1_PUBLIC # Project 1
       langfuse_secret: os.environ/LANGFUSE_PROJECT1_SECRET # Project 1
     - team_id: team-2
       success_callback: ["langfuse"]
+      failure_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
 
