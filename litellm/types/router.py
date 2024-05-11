@@ -132,6 +132,8 @@ class GenericLiteLLMParams(BaseModel):
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
+    ## IBM WATSONX ##
+    watsonx_region_name: Optional[str] = None
     ## CUSTOM PRICING ##
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
@@ -161,6 +163,8 @@ class GenericLiteLLMParams(BaseModel):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
+        ## IBM WATSONX ##
+        watsonx_region_name: Optional[str] = None,
         input_cost_per_token: Optional[float] = None,
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,

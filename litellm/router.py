@@ -2339,7 +2339,7 @@ class Router:
                     )  # cache for 1 hr
 
             else:
-                _api_key = api_key
+                _api_key = api_key  # type: ignore
                 if _api_key is not None and isinstance(_api_key, str):
                     # only show first 5 chars of api_key
                     _api_key = _api_key[:8] + "*" * 15
@@ -2567,23 +2567,25 @@ class Router:
         # init OpenAI, Azure clients
         self.set_client(model=deployment.to_json(exclude_none=True))
 
-        # set region (if azure model)
-        _auto_infer_region = os.environ.get("AUTO_INFER_REGION", False)
-        if _auto_infer_region == True or _auto_infer_region == "True":
+        # set region (if azure model) ## PREVIEW FEATURE ##
+        if litellm.enable_preview_features == True:
             print("Auto inferring region")  # noqa
             """
             Hiding behind a feature flag
             When there is a large amount of LLM deployments this makes startup times blow up
             """
             try:
-                if "azure" in deployment.litellm_params.model:
+                if (
+                    "azure" in deployment.litellm_params.model
+                    and deployment.litellm_params.region_name is None
+                ):
                     region = litellm.utils.get_model_region(
                         litellm_params=deployment.litellm_params, mode=None
                     )
 
                     deployment.litellm_params.region_name = region
             except Exception as e:
-                verbose_router_logger.error(
+                verbose_router_logger.debug(
                     "Unable to get the region for azure model - {}, {}".format(
                         deployment.litellm_params.model, str(e)
                     )
@@ -2961,7 +2963,7 @@ class Router:
                 ):
                     # check if in allowed_model_region
                     if (
-                        _is_region_eu(model_region=_litellm_params["region_name"])
+                        _is_region_eu(litellm_params=LiteLLM_Params(**_litellm_params))
                         == False
                     ):
                         invalid_model_indices.append(idx)
