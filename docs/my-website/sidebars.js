@@ -134,6 +134,7 @@ const sidebars = {
         "providers/huggingface", 
         "providers/watsonx",
         "providers/predibase",
+        "providers/triton-inference-server",
         "providers/ollama", 
         "providers/perplexity", 
         "providers/groq", 
