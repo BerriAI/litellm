@@ -323,6 +323,7 @@ class LangFuseLogger:
             trace_id = clean_metadata.pop("trace_id", None)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
             update_trace_keys = clean_metadata.pop("update_trace_keys", [])
+            debug = clean_metadata.pop("debug_langfuse", None)
 
             if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name
@@ -376,6 +377,13 @@ class LangFuseLogger:
                 else:
                     trace_params["output"] = output
 
+            if debug == True or (isinstance(debug, str) and debug.lower() == "true"):
+                if "metadata" in trace_params:
+                    # log the raw_metadata in the trace
+                    trace_params["metadata"]["metadata_passed_to_litellm"] = metadata
+                else:
+                    trace_params["metadata"] = {"metadata_passed_to_litellm": metadata}
+
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
 
@@ -426,7 +434,6 @@ class LangFuseLogger:
                     "url": url,
                     "headers": clean_headers,
                 }
-
             trace = self.Langfuse.trace(**trace_params)
 
             generation_id = None
