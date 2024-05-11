@@ -365,11 +365,13 @@ curl --location 'http://0.0.0.0:4000/moderations' \
 
 ## Advanced
 
-### (BETA) Batch Completions - pass `model` as List
+### (BETA) Batch Completions - pass multiple models
 
 Use this when you want to send 1 request to N Models
 
 #### Expected Request Format
+
+Pass model as a string of comma separated value of models. Example `"model"="llama3,gpt-3.5-turbo"`
 
 This same request will be sent to the following model groups on the [litellm proxy config.yaml](https://docs.litellm.ai/docs/proxy/configs)
 - `model_name="llama3"`
@@ -380,7 +382,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": ["llama3", "gpt-3.5-turbo"],
+    "model": "llama3,gpt-3.5-turbo",
     "max_tokens": 10,
     "user": "litellm2",
     "messages": [
