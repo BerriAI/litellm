@@ -3,8 +3,6 @@
 import dotenv, os  # type: ignore
 import requests  # type: ignore
 from datetime import datetime
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import asyncio
 import types

@@ -8,8 +8,6 @@
 
 import dotenv, os, requests, random  # type: ignore
 from typing import Optional
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger

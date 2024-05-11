@@ -2,13 +2,10 @@
 #    On success + failure, log events to lunary.ai
 from datetime import datetime, timezone
 import traceback
-import dotenv
 import importlib
 import sys
 
 import packaging
-
-dotenv.load_dotenv()
 
 
 # convert to {completion: xx, tokens: xx}
@@ -62,14 +59,16 @@ class LunaryLogger:
             version = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
             if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
-                print(
+                print(  # noqa
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
                 raise ImportError
 
             self.lunary_client = lunary
         except ImportError:
-            print("Lunary not installed. Please install it using 'pip install lunary'")
+            print(  # noqa
+                "Lunary not installed. Please install it using 'pip install lunary'"
+            )  # noqa
             raise ImportError
 
     def log_event(
