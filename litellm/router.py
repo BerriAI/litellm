@@ -2557,23 +2557,25 @@ class Router:
         # init OpenAI, Azure clients
         self.set_client(model=deployment.to_json(exclude_none=True))
 
-        # set region (if azure model)
-        _auto_infer_region = os.environ.get("AUTO_INFER_REGION", False)
-        if _auto_infer_region == True or _auto_infer_region == "True":
+        # set region (if azure model) ## PREVIEW FEATURE ##
+        if litellm.enable_preview_features == True:
             print("Auto inferring region")  # noqa
             """
             Hiding behind a feature flag
             When there is a large amount of LLM deployments this makes startup times blow up
             """
             try:
-                if "azure" in deployment.litellm_params.model:
+                if (
+                    "azure" in deployment.litellm_params.model
+                    and deployment.litellm_params.region_name is None
+                ):
                     region = litellm.utils.get_model_region(
                         litellm_params=deployment.litellm_params, mode=None
                     )
 
                     deployment.litellm_params.region_name = region
             except Exception as e:
-                verbose_router_logger.error(
+                verbose_router_logger.debug(
                     "Unable to get the region for azure model - {}, {}".format(
                         deployment.litellm_params.model, str(e)
                     )
