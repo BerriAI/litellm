@@ -168,7 +168,7 @@ class PredibaseChatCompletion(BaseLLM):
         logging_obj: litellm.utils.Logging,
         optional_params: dict,
         api_key: str,
-        data: dict,
+        data: Union[dict, str],
         messages: list,
         print_verbose,
         encoding,
@@ -185,9 +185,7 @@ class PredibaseChatCompletion(BaseLLM):
         try:
             completion_response = response.json()
         except:
-            raise PredibaseError(
-                message=response.text, status_code=response.status_code
-            )
+            raise PredibaseError(message=response.text, status_code=422)
         if "error" in completion_response:
             raise PredibaseError(
                 message=str(completion_response["error"]),
@@ -363,7 +361,7 @@ class PredibaseChatCompletion(BaseLLM):
             },
         )
         ## COMPLETION CALL
-        if acompletion is True:
+        if acompletion == True:
             ### ASYNC STREAMING
             if stream == True:
                 return self.async_streaming(

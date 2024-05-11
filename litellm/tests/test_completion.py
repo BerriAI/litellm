@@ -2584,12 +2584,65 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
-def test_completion_bedrock_command_r():
+def response_format_tests(response: litellm.ModelResponse):
+    assert isinstance(response.id, str)
+    assert response.id != ""
+
+    assert isinstance(response.object, str)
+    assert response.object != ""
+
+    assert isinstance(response.created, int)
+
+    assert isinstance(response.model, str)
+    assert response.model != ""
+
+    assert isinstance(response.choices, list)
+    assert len(response.choices) == 1
+    choice = response.choices[0]
+    assert isinstance(choice, litellm.Choices)
+    assert isinstance(choice.get("index"), int)
+
+    message = choice.get("message")
+    assert isinstance(message, litellm.Message)
+    assert isinstance(message.get("role"), str)
+    assert message.get("role") != ""
+    assert isinstance(message.get("content"), str)
+    assert message.get("content") != ""
+
+    assert choice.get("logprobs") is None
+    assert isinstance(choice.get("finish_reason"), str)
+    assert choice.get("finish_reason") != ""
+
+    assert isinstance(response.usage, litellm.Usage)  # type: ignore
+    assert isinstance(response.usage.prompt_tokens, int)  # type: ignore
+    assert isinstance(response.usage.completion_tokens, int)  # type: ignore
+    assert isinstance(response.usage.total_tokens, int)  # type: ignore
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_bedrock_command_r(sync_mode):
     litellm.set_verbose = True
-    response = completion(
-        model="bedrock/cohere.command-r-plus-v1:0",
-        messages=[{"role": "user", "content": "Hey! how's it going?"}],
-    )
+
+    if sync_mode:
+        response = completion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        response_format_tests(response=response)
+    else:
+        response = await litellm.acompletion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        print(f"response: {response}")
+        response_format_tests(response=response)
 
     print(f"response: {response}")
 
