@@ -9,7 +9,7 @@ from litellm.utils import (
     convert_to_model_response_object,
     TranscriptionResponse,
 )
-from typing import Callable, Optional, BinaryIO
+from typing import Callable, Optional, BinaryIO, List
 from litellm import OpenAIConfig
 import litellm, json
 import httpx  # type: ignore
@@ -104,6 +104,12 @@ class AzureOpenAIConfig(OpenAIConfig):
             if param == "token":
                 optional_params["azure_ad_token"] = value
         return optional_params
+
+    def get_eu_regions(self) -> List[str]:
+        """
+        Source: https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#gpt-4-and-gpt-4-turbo-model-availability
+        """
+        return ["europe", "sweden", "switzerland", "france", "uk"]
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
