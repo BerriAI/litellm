@@ -116,6 +116,7 @@ def fake_env_vars(monkeypatch):
     monkeypatch.setenv("AZURE_API_BASE", "http://fake-azure-api-base")
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "fake_azure_openai_api_key")
     monkeypatch.setenv("AZURE_SWEDEN_API_BASE", "http://fake-azure-sweden-api-base")
+    monkeypatch.setenv("REDIS_HOST", "localhost")
 
 
 @pytest.fixture(scope="function")
@@ -505,7 +506,18 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
 from litellm.proxy.proxy_server import ProxyConfig
 
 
-def test_load_router_config():
+@mock.patch("litellm.proxy.proxy_server.litellm.Cache")
+def test_load_router_config(mock_cache, fake_env_vars):
+    mock_cache.return_value.cache.__dict__ = {"redis_client": None}
+    mock_cache.return_value.supported_call_types = [
+        "completion",
+        "acompletion",
+        "embedding",
+        "aembedding",
+        "atranscription",
+        "transcription",
+    ]
+
     try:
         import asyncio
 
@@ -567,6 +579,10 @@ def test_load_router_config():
         litellm.disable_cache()
 
         print("testing reading proxy config for cache with params")
+        mock_cache.return_value.supported_call_types = [
+            "embedding",
+            "aembedding",
+        ]
         asyncio.run(
             proxy_config.load_config(
                 router=None,
