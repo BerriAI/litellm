@@ -1479,6 +1479,11 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
+            """
+            - Check if available deployments - 'get_healthy_deployments() -> List`
+            - if no, Check if available fallbacks - `is_fallback(model_group: str, exception) -> bool`
+            - if no, back-off and retry up till num_retries - `_router_should_retry -> float` 
+            """
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
