@@ -5881,6 +5881,9 @@ def calculate_max_parallel_requests(
 
 
 def _is_region_eu(model_region: str) -> bool:
+    if model_region == "eu":
+        return True
+
     EU_Regions = ["europe", "sweden", "switzerland", "france", "uk"]
     for region in EU_Regions:
         if "europe" in model_region.lower():
