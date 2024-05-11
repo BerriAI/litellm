@@ -2443,7 +2443,7 @@ class Logging:
                         )
                     elif callback == "langfuse":
                         global langFuseLogger
-                        verbose_logger.debug("reaches langfuse for logging!")
+                        verbose_logger.debug("reaches langfuse for logging failure")
                         kwargs = {}
                         for k, v in self.model_call_details.items():
                             if (
