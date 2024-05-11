@@ -247,7 +247,9 @@ async def test_langfuse_logging_metadata(langfuse_client):
     expected_filtered_metadata_keys = {
         "trace_name",
         "trace_id",
+        "existing_trace_id",
         "trace_user_id",
+        "session_id",
         "tags",
         "generation_name",
         "generation_id",
