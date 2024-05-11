@@ -2,7 +2,7 @@
 #    On success + failure, log events to Supabase
 
 import dotenv, os
-import requests
+import requests  # type: ignore
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback

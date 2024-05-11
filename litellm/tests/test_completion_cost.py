@@ -231,14 +231,17 @@ def test_cost_bedrock_pricing():
     assert cost == predicted_cost
 
 
-@pytest.mark.skip(reason="AWS disabled our access")
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
     model = "anthropic.claude-instant-v1"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    response = litellm.completion(model=model, messages=messages)
-    assert response._hidden_params["region_name"] is not None
+    response = litellm.completion(
+        model=model, messages=messages, mock_response="hello cool one"
+    )
+
+    print("response", response)
     cost = litellm.completion_cost(
+        model="bedrock/anthropic.claude-instant-v1",
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )

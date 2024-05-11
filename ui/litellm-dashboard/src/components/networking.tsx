@@ -441,6 +441,8 @@ export const modelMetricsCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
@@ -448,7 +450,7 @@ export const modelMetricsCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics` : `/model/metrics`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}`
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
     }
     // message.info("Requesting model data");
     const response = await fetch(url, {
@@ -481,6 +483,8 @@ export const modelMetricsSlowResponsesCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
@@ -488,8 +492,9 @@ export const modelMetricsSlowResponsesCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/slow_responses` : `/model/metrics/slow_responses`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}`
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
     }
+    
     // message.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
@@ -520,6 +525,8 @@ export const modelExceptionsCall = async (
   userID: String,
   userRole: String, 
   modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   /**
    * Get all models on proxy
@@ -527,6 +534,9 @@ export const modelExceptionsCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/exceptions` : `/model/metrics/exceptions`;
 
+    if (modelGroup) {
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -776,7 +786,9 @@ export const adminTopKeysCall = async (accessToken: String) => {
 
 export const adminTopEndUsersCall = async (
   accessToken: String,
-  keyToken: String | null
+  keyToken: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
 ) => {
   try {
     let url = proxyBaseUrl
@@ -785,8 +797,11 @@ export const adminTopEndUsersCall = async (
 
     let body = "";
     if (keyToken) {
-      body = JSON.stringify({ api_key: keyToken });
+      body = JSON.stringify({ api_key: keyToken, startTime: startTime, endTime: endTime });
+    } else {
+      body = JSON.stringify({ startTime: startTime, endTime: endTime });
     }
+    
     //message.info("Making top end users request");
 
     // Define requestOptions with body as an optional property
@@ -805,9 +820,7 @@ export const adminTopEndUsersCall = async (
       },
     };
 
-    if (keyToken) {
-      requestOptions.body = JSON.stringify({ api_key: keyToken });
-    }
+    requestOptions.body = body;
 
     const response = await fetch(url, requestOptions);
     if (!response.ok) {
