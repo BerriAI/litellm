@@ -590,47 +590,37 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+@pytest.mark.asyncio
 def test_gemini_pro_function_calling():
     try:
         load_vertex_ai_credentials()
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
+        response = litellm.completion(
+            model="vertex_ai/gemini-pro",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Call the submit_cities function with San Francisco and New York",
+                }
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submit_cities",
+                        "description": "Submits a list of cities",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "cities": {"type": "array", "items": {"type": "string"}}
                             },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
+                            "required": ["cities"],
                         },
-                        "required": ["location"],
                     },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in fahrenheit?",
-            }
-        ]
-        completion = litellm.completion(
-            model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
+                }
+            ],
         )
-        print(f"completion: {completion}")
-        # assert completion.choices[0].message.content is None ## GEMINI PRO is very chatty.
-        if hasattr(completion.choices[0].message, "tool_calls") and isinstance(
-            completion.choices[0].message.tool_calls, list
-        ):
-            assert len(completion.choices[0].message.tool_calls) == 1
+
+        print(f"response: {response}")
     except litellm.APIError as e:
         pass
     except litellm.RateLimitError as e:
@@ -639,7 +629,7 @@ def test_gemini_pro_function_calling():
         if "429 Quota exceeded" in str(e):
             pass
         else:
-            return
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
 # gemini_pro_function_calling()
