@@ -2329,7 +2329,7 @@ class Router:
                     )  # cache for 1 hr
 
             else:
-                _api_key = api_key
+                _api_key = api_key  # type: ignore
                 if _api_key is not None and isinstance(_api_key, str):
                     # only show first 5 chars of api_key
                     _api_key = _api_key[:8] + "*" * 15
@@ -2953,7 +2953,7 @@ class Router:
                 ):
                     # check if in allowed_model_region
                     if (
-                        _is_region_eu(model_region=_litellm_params["region_name"])
+                        _is_region_eu(litellm_params=LiteLLM_Params(**_litellm_params))
                         == False
                     ):
                         invalid_model_indices.append(idx)
