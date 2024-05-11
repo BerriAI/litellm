@@ -163,6 +163,15 @@ class IBMWatsonXAIConfig:
                 optional_params[mapped_params[param]] = value
         return optional_params
 
+    def get_eu_regions(self) -> List[str]:
+        """
+        Source: https://www.ibm.com/docs/en/watsonx/saas?topic=integrations-regional-availability
+        """
+        return [
+            "eu-de",
+            "eu-gb",
+        ]
+
 
 def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
     # handle anthropic prompts and amazon titan prompts
