@@ -1142,7 +1142,7 @@ def test_get_hf_task_for_model():
 
 
 # test_get_hf_task_for_model()
-# litellm.set_verbose = False
+# litellm.set_verbose=False
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
