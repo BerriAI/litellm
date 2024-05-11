@@ -3639,7 +3639,7 @@ async def chat_completion(
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if data["model"] in litellm.model_alias_map:
+        if isinstance(data["model"], str) and data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -3673,6 +3673,9 @@ async def chat_completion(
         # skip router if user passed their key
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
+        elif isinstance(data["model"], list) and llm_router is not None:
+            _models = data.pop("model")
+            tasks.append(llm_router.abatch_completion(models=_models, **data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
             router_config = data.pop("user_config")
