@@ -6,7 +6,7 @@
 #   - use litellm.success + failure callbacks to log when a request completed
 #   - in get_available_deployment, for a given model group name -> pick based on traffic
 
-import dotenv, os, requests, random
+import dotenv, os, requests, random  # type: ignore
 from typing import Optional
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
