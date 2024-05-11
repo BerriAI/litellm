@@ -417,10 +417,9 @@ def completion(
         from google.cloud import aiplatform  # type: ignore
         from google.protobuf import json_format  # type: ignore
         from google.protobuf.struct_pb2 import Value  # type: ignore
-        from google.protobuf.json_format import MessageToDict
         from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
         import google.auth  # type: ignore
-        import proto
+        import proto  # type: ignore
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
