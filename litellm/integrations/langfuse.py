@@ -323,7 +323,7 @@ class LangFuseLogger:
             trace_id = clean_metadata.pop("trace_id", None)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
             update_trace_keys = clean_metadata.pop("update_trace_keys", [])
-            debug = clean_metadata.pop("debug", None)
+            debug = clean_metadata.pop("debug_langfuse", None)
 
             if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name
