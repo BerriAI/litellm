@@ -1922,20 +1922,37 @@ def completion(
         elif custom_llm_provider == "bedrock":
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = bedrock.completion(
-                model=model,
-                messages=messages,
-                custom_prompt_dict=litellm.custom_prompt_dict,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                logging_obj=logging,
-                extra_headers=extra_headers,
-                timeout=timeout,
-            )
+
+            if "cohere" in model:
+                response = bedrock_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                )
+            else:
+                response = bedrock.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                )
 
             if (
                 "stream" in optional_params

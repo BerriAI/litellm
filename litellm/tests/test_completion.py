@@ -2585,6 +2585,7 @@ def test_completion_chat_sagemaker_mistral():
 
 
 def test_completion_bedrock_command_r():
+    litellm.set_verbose = True
     response = completion(
         model="bedrock/cohere.command-r-plus-v1:0",
         messages=[{"role": "user", "content": "Hey! how's it going?"}],
