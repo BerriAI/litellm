@@ -4,6 +4,12 @@ LiteLLM allows you to:
 * Send 1 completion call to many models: Return Fastest Response
 * Send 1 completion call to many models: Return All Responses
 
+:::info
+
+Trying to do batch completion on LiteLLM Proxy ? Go here: https://docs.litellm.ai/docs/proxy/user_keys#beta-batch-completions---pass-model-as-list
+
+:::
+
 ## Send multiple completion calls to 1 model
 
 In the batch_completion method, you provide a list of `messages` where each sub-list of messages is passed to `litellm.completion()`, allowing you to process multiple prompts efficiently in a single API call.
