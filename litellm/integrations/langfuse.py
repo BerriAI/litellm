@@ -377,7 +377,7 @@ class LangFuseLogger:
                 else:
                     trace_params["output"] = output
 
-            if debug == True:
+            if debug == True or (isinstance(debug, str) and debug.lower() == "true"):
                 if "metadata" in trace_params:
                     # log the raw_metadata in the trace
                     trace_params["metadata"]["metadata_passed_to_litellm"] = metadata
