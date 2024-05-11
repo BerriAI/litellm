@@ -1,7 +1,7 @@
 import os, types
 import json
 from enum import Enum
-import requests, copy
+import requests, copy  # type: ignore
 import time
 from typing import Callable, Optional, List
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
@@ -9,7 +9,7 @@ import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from .base import BaseLLM
-import httpx
+import httpx  # type: ignore
 
 
 class AnthropicConstants(Enum):
@@ -84,6 +84,51 @@ class AnthropicConfig:
             and v is not None
         }
 
+    def get_supported_openai_params(self):
+        return [
+            "stream",
+            "stop",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if param == "tools":
+                optional_params["tools"] = value
+            if param == "stream" and value == True:
+                optional_params["stream"] = value
+            if param == "stop":
+                if isinstance(value, str):
+                    if (
+                        value == "\n"
+                    ) and litellm.drop_params == True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                        continue
+                    value = [value]
+                elif isinstance(value, list):
+                    new_v = []
+                    for v in value:
+                        if (
+                            v == "\n"
+                        ) and litellm.drop_params == True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                            continue
+                        new_v.append(v)
+                    if len(new_v) > 0:
+                        value = new_v
+                    else:
+                        continue
+                optional_params["stop_sequences"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+        return optional_params
+
 
 # makes headers for API call
 def validate_environment(api_key, user_headers):
@@ -137,11 +182,6 @@ class AnthropicChatCompletion(BaseLLM):
         if "error" in completion_response:
             raise AnthropicError(
                 message=str(completion_response["error"]),
-                status_code=response.status_code,
-            )
-        elif len(completion_response["content"]) == 0:
-            raise AnthropicError(
-                message="No content in response",
                 status_code=response.status_code,
             )
         else:

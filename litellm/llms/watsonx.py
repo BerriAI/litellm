@@ -3,8 +3,8 @@ import json, types, time  # noqa: E401
 from contextlib import contextmanager
 from typing import Callable, Dict, Optional, Any, Union, List
 
-import httpx
-import requests
+import httpx  # type: ignore
+import requests  # type: ignore
 import litellm
 from litellm.utils import ModelResponse, get_secret, Usage
 

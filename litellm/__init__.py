@@ -1,3 +1,7 @@
+### Hide pydantic namespace conflict warnings globally ###
+import warnings
+
+warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
@@ -71,9 +75,11 @@ maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
+predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
+predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
@@ -361,6 +367,7 @@ openai_compatible_endpoints: List = [
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
     "api.groq.com/openai/v1",
+    "api.deepseek.com/v1",
     "api.together.xyz/v1",
 ]
 
@@ -369,6 +376,7 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "groq",
+    "deepseek",
     "deepinfra",
     "perplexity",
     "xinference",
@@ -523,12 +531,15 @@ provider_list: List = [
     "anyscale",
     "mistral",
     "groq",
+    "deepseek",
     "maritalk",
     "voyage",
     "cloudflare",
     "xinference",
     "fireworks_ai",
     "watsonx",
+    "triton",
+    "predibase",
     "custom",  # custom apis
 ]
 
@@ -605,7 +616,6 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
-
 from .timeout import timeout
 from .utils import (
     client,
@@ -613,6 +623,8 @@ from .utils import (
     get_optional_params,
     modify_integration,
     token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
     cost_per_token,
     completion_cost,
     supports_function_calling,
@@ -636,9 +648,11 @@ from .utils import (
     get_secret,
     get_supported_openai_params,
     get_api_base,
+    get_first_chars_messages,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.predibase import PredibaseConfig
 from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
@@ -692,3 +706,4 @@ from .exceptions import (
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
+from .assistants.main import *
