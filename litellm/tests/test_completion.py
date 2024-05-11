@@ -2584,6 +2584,15 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
+def test_completion_bedrock_command_r():
+    response = completion(
+        model="bedrock/cohere.command-r-plus-v1:0",
+        messages=[{"role": "user", "content": "Hey! how's it going?"}],
+    )
+
+    print(f"response: {response}")
+
+
 def test_completion_bedrock_titan_null_response():
     try:
         response = completion(

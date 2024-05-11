@@ -1,8 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
-import dotenv, os
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import os
 import copy
 import traceback
 from packaging.version import Version
