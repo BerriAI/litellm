@@ -8,6 +8,10 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: my-triton-model
+    litellm_params:
+      model: triton/any"
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings
 
 general_settings:
   store_model_in_db: true
