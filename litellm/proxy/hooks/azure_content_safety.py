@@ -4,6 +4,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 import litellm, traceback, sys, uuid
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
+from typing import Optional
 
 
 class _PROXY_AzureContentSafety(
@@ -71,7 +72,7 @@ class _PROXY_AzureContentSafety(
 
         return result
 
-    async def test_violation(self, content: str, source: str = None):
+    async def test_violation(self, content: str, source: Optional[str] = None):
         verbose_proxy_logger.debug("Testing Azure Content-Safety for: %s", content)
 
         # Construct a request
