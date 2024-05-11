@@ -206,7 +206,7 @@ def test_completion_bedrock_claude_sts_client_auth():
 
 # test_completion_bedrock_claude_sts_client_auth()
 
-@pytest.mark.skipif(os.environ.get('CIRCLE_OIDC_TOKEN_V2') is None, reason="CIRCLE_OIDC_TOKEN_V2 is not set")
+@pytest.mark.skip(reason="We don't have Circle CI OIDC credentials as yet")
 def test_completion_bedrock_claude_sts_oidc_auth():
     print("\ncalling bedrock claude with oidc auth")
     import os
