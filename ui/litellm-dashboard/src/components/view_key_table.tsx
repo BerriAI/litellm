@@ -17,6 +17,7 @@ import {
   DialogPanel,
   Text,
   Title,
+  Subtitle,
   Icon,
   BarChart,
 } from "@tremor/react";
@@ -31,8 +32,6 @@ import {
   message,
   Select,
 } from "antd";
-
-import ViewKeySpendReport from "./view_key_spend_report";
 
 const { Option } = Select;
 
@@ -570,6 +569,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                       icon={InformationCircleIcon}
                       size="sm"
                     />
+                    
                 
                 <Dialog
   open={openDialogId !== null}
@@ -577,6 +577,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setOpenDialogId(null);
     setSelectedItem(null);
   }}
+  static={true}
 
 >
   <DialogPanel>
@@ -639,22 +640,14 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           </Card>
       </div>
 
-        <Card className="mt-6 mb-6">
-          {spendData && (
-            <BarChart
-              className="mt-6"
-              data={spendData}
-              colors={["blue", "amber"]}
-              index="date"
-              categories={["spend", "predicted_spend"]}
-              yAxisWidth={80}
-            />
-          )}
-        </Card>
-
+      <Card className="my-4">
+        <Title>Token Name</Title>
+        <Text className="my-1">{selectedItem.key_alias ? selectedItem.key_alias : selectedItem.key_name}</Text>
+        <Title>Token ID</Title>
+        <Text className="my-1">{selectedItem.token}</Text>
         <Title>Metadata</Title>
-
-        <Text>{JSON.stringify(selectedItem.metadata)}</Text>
+        <Text className="my-1"><pre>{JSON.stringify(selectedItem.metadata)} </pre></Text>
+      </Card>
 
 
         <Button
