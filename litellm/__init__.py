@@ -1,5 +1,6 @@
 ### Hide pydantic namespace conflict warnings globally ###
 import warnings
+
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
 import threading, requests, os
@@ -537,6 +538,7 @@ provider_list: List = [
     "xinference",
     "fireworks_ai",
     "watsonx",
+    "triton",
     "predibase",
     "custom",  # custom apis
 ]
