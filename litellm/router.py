@@ -9,7 +9,7 @@
 
 import copy, httpx
 from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO
+from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO, Tuple
 import random, threading, time, traceback, uuid
 import litellm, openai, hashlib, json
 from litellm.caching import RedisCache, InMemoryCache, DualCache
@@ -2999,11 +2999,15 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
-    ):
+    ) -> Tuple[str, Union[list, dict]]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
 
         If 'healthy_deployments' returned is None, this means the user chose a specific deployment
+
+        Returns
+        - Dict, if specific model chosen
+        - List, if multiple models chosen
         """
         # check if aliases set on litellm model alias map
         if specific_deployment == True:
@@ -3013,7 +3017,7 @@ class Router:
                 if deployment_model == model:
                     # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
                     # return the first deployment where the `model` matches the specificed deployment name
-                    return deployment, None
+                    return deployment_model, deployment
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
             )
@@ -3029,7 +3033,7 @@ class Router:
                 self.default_deployment
             )  # self.default_deployment
             updated_deployment["litellm_params"]["model"] = model
-            return updated_deployment, None
+            return model, updated_deployment
 
         ## get healthy deployments
         ### get all deployments
@@ -3082,10 +3086,10 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
-        )
+        )  # type: ignore
 
-        if healthy_deployments is None:
-            return model
+        if isinstance(healthy_deployments, dict):
+            return healthy_deployments
 
         # filter out the deployments currently cooling down
         deployments_to_remove = []
@@ -3141,7 +3145,7 @@ class Router:
         ):
             deployment = await self.lowesttpm_logger_v2.async_get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )
@@ -3151,7 +3155,7 @@ class Router:
         ):
             deployment = await self.lowestcost_logger.async_get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )
@@ -3229,8 +3233,8 @@ class Router:
             specific_deployment=specific_deployment,
         )
 
-        if healthy_deployments is None:
-            return model
+        if isinstance(healthy_deployments, dict):
+            return healthy_deployments
 
         # filter out the deployments currently cooling down
         deployments_to_remove = []
@@ -3254,7 +3258,7 @@ class Router:
 
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
-                model_group=model, healthy_deployments=healthy_deployments
+                model_group=model, healthy_deployments=healthy_deployments  # type: ignore
             )
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
@@ -3302,7 +3306,7 @@ class Router:
         ):
             deployment = self.lowestlatency_logger.get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 request_kwargs=request_kwargs,
             )
         elif (
@@ -3311,7 +3315,7 @@ class Router:
         ):
             deployment = self.lowesttpm_logger.get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )
@@ -3321,7 +3325,7 @@ class Router:
         ):
             deployment = self.lowesttpm_logger_v2.get_available_deployments(
                 model_group=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
             )
