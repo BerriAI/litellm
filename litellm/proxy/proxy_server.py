@@ -7795,11 +7795,15 @@ async def update_model(
 )
 async def model_info_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    model: Optional[str] = fastapi.Query(
+        None, description="Specify the model name (optional)"
+    ),
+    debug: Optional[bool] = False,
 ):
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
     if llm_model_list is None or not isinstance(llm_model_list, list):
         raise HTTPException(
@@ -7822,19 +7826,35 @@ async def model_info_v2(
     if len(user_api_key_dict.models) > 0:
         user_models = user_api_key_dict.models
 
+    if model is not None:
+        all_models = [m for m in all_models if m["model_name"] == model]
+
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
-    for model in all_models:
+    for _model in all_models:
         # provided model_info in config.yaml
-        model_info = model.get("model_info", {})
+        model_info = _model.get("model_info", {})
+        if debug == True:
+            _openai_client = "None"
+            if llm_router is not None:
+                _openai_client = (
+                    llm_router._get_client(
+                        deployment=_model, kwargs={}, client_type="async"
+                    )
+                    or "None"
+                )
+            else:
+                _openai_client = "llm_router_is_None"
+            openai_client = str(_openai_client)
+            _model["openai_client"] = openai_client
 
         # read litellm model_prices_and_context_window.json to get the following:
         # input_cost_per_token, output_cost_per_token, max_tokens
-        litellm_model_info = get_litellm_model_info(model=model)
+        litellm_model_info = get_litellm_model_info(model=_model)
 
         # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
         if litellm_model_info == {}:
             # use litellm_param model_name to get model_info
-            litellm_params = model.get("litellm_params", {})
+            litellm_params = _model.get("litellm_params", {})
             litellm_model = litellm_params.get("model", None)
             try:
                 litellm_model_info = litellm.get_model_info(model=litellm_model)
@@ -7843,7 +7863,7 @@ async def model_info_v2(
         # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
         if litellm_model_info == {}:
             # use litellm_param model_name to get model_info
-            litellm_params = model.get("litellm_params", {})
+            litellm_params = _model.get("litellm_params", {})
             litellm_model = litellm_params.get("model", None)
             split_model = litellm_model.split("/")
             if len(split_model) > 0:
@@ -7855,10 +7875,10 @@ async def model_info_v2(
         for k, v in litellm_model_info.items():
             if k not in model_info:
                 model_info[k] = v
-        model["model_info"] = model_info
+        _model["model_info"] = model_info
         # don't return the api key / vertex credentials
-        model["litellm_params"].pop("api_key", None)
-        model["litellm_params"].pop("vertex_credentials", None)
+        _model["litellm_params"].pop("api_key", None)
+        _model["litellm_params"].pop("vertex_credentials", None)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
