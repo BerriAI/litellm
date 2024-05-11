@@ -580,7 +580,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   static={true}
 
 >
-  <DialogPanel>
+  <DialogPanel style={{ width: "600px", maxWidth: "600px" }}>
     {selectedItem && (
       <>
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -644,7 +644,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Title>Token Name</Title>
         <Text className="my-1">{selectedItem.key_alias ? selectedItem.key_alias : selectedItem.key_name}</Text>
         <Title>Token ID</Title>
-        <Text className="my-1">{selectedItem.token}</Text>
+        <Text className="my-1 text-[12px]">{selectedItem.token}</Text>
         <Title>Metadata</Title>
         <Text className="my-1"><pre>{JSON.stringify(selectedItem.metadata)} </pre></Text>
       </Card>
