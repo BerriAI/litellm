@@ -160,7 +160,7 @@ class AnthropicChatCompletion(BaseLLM):
         logging_obj: litellm.utils.Logging,
         optional_params: dict,
         api_key: str,
-        data: dict | str,
+        data: Union[dict, str],
         messages: List,
         print_verbose,
         encoding,
