@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import requests, copy  # type: ignore
 import time
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Union
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
@@ -154,7 +154,7 @@ class AnthropicChatCompletion(BaseLLM):
     def process_streaming_response(
         self,
         model: str,
-        response: requests.Response | httpx.Response,
+        response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
         logging_obj: litellm.utils.Logging,
