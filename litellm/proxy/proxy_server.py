@@ -425,7 +425,7 @@ async def user_api_key_auth(
                     litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                 )
                 if is_allowed == False:
-                    allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes
+                    allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes  # type: ignore
                     actual_routes = get_actual_routes(allowed_routes=allowed_routes)
                     raise Exception(
                         f"Team not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
@@ -2263,10 +2263,18 @@ class ProxyConfig:
                                     _PROXY_AzureContentSafety,
                                 )
 
-                                azure_content_safety_params = litellm_settings["azure_content_safety_params"]
+                                azure_content_safety_params = litellm_settings[
+                                    "azure_content_safety_params"
+                                ]
                                 for k, v in azure_content_safety_params.items():
-                                    if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
-                                        azure_content_safety_params[k] = litellm.get_secret(v)
+                                    if (
+                                        v is not None
+                                        and isinstance(v, str)
+                                        and v.startswith("os.environ/")
+                                    ):
+                                        azure_content_safety_params[k] = (
+                                            litellm.get_secret(v)
+                                        )
 
                                 azure_content_safety_obj = _PROXY_AzureContentSafety(
                                     **azure_content_safety_params,
