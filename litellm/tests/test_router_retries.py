@@ -12,6 +12,7 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+import openai, httpx
 
 
 class MyCustomHandler(CustomLogger):
@@ -243,3 +244,179 @@ async def test_dynamic_router_retry_policy(model_group):
         assert customHandler.previous_models == 4
     elif model_group == "gpt-3.5-turbo":
         assert customHandler.previous_models == 0
+
+
+"""
+Unit Tests for Router Retry Logic
+
+Test 1. Retry Rate Limit Errors when there are other healthy deployments
+
+Test 2. Do not retry rate limit errors when - there are no fallbacks and no healthy deployments
+
+"""
+
+rate_limit_error = openai.RateLimitError(
+    message="Rate limit exceeded",
+    response=httpx.Response(
+        status_code=429,
+        request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+    ),
+    body={
+        "error": {
+            "type": "rate_limit_exceeded",
+            "param": None,
+            "code": "rate_limit_exceeded",
+        }
+    },
+)
+
+
+def test_retry_rate_limit_error_with_healthy_deployments():
+    """
+    Test 1. It SHOULD retry when there is a rate limit error and len(healthy_deployments) > 0
+    """
+    healthy_deployments = [
+        "deployment1",
+        "deployment2",
+    ]  # multiple healthy deployments mocked up
+    fallbacks = None
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    # Act & Assert
+    try:
+        response = router.should_retry_this_error(
+            rate_limit_error, healthy_deployments, fallbacks
+        )
+        print("response from should_retry_this_error: ", response)
+    except Exception as e:
+        pytest.fail(
+            "Should not have raised an error, since there are healthy deployments. Raises",
+            e,
+        )
+
+
+def test_do_not_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments():
+    """
+    Test 2. It SHOULD NOT Retry, when healthy_deployments is [] and fallbacks is None
+    """
+    healthy_deployments = []
+    fallbacks = None
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    # Act & Assert
+    try:
+        response = router.should_retry_this_error(
+            rate_limit_error, healthy_deployments, fallbacks
+        )
+        assert response != True, "Should have raised RateLimitError"
+    except openai.RateLimitError:
+        pass
+
+
+def test_raise_context_window_exceeded_error():
+    """
+    Retry Context Window Exceeded Error, when context_window_fallbacks is not None
+    """
+    context_window_error = litellm.ContextWindowExceededError(
+        message="Context window exceeded",
+        response=httpx.Response(
+            status_code=400,
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+        ),
+        llm_provider="azure",
+        model="gpt-3.5-turbo",
+    )
+    context_window_fallbacks = ["fallback1", "fallback2"]
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    response = router.should_retry_this_error(
+        error=context_window_error,
+        healthy_deployments=None,
+        fallbacks=None,
+        context_window_fallbacks=context_window_fallbacks,
+    )
+    assert (
+        response == True
+    ), "Should not have raised exception since we have context window fallbacks"
+
+
+def test_raise_context_window_exceeded_error_no_retry():
+    """
+    Do not Retry Context Window Exceeded Error, when context_window_fallbacks is None
+    """
+    context_window_error = litellm.ContextWindowExceededError(
+        message="Context window exceeded",
+        response=httpx.Response(
+            status_code=400,
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+        ),
+        llm_provider="azure",
+        model="gpt-3.5-turbo",
+    )
+    context_window_fallbacks = None
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    try:
+        response = router.should_retry_this_error(
+            error=context_window_error,
+            healthy_deployments=None,
+            fallbacks=None,
+            context_window_fallbacks=context_window_fallbacks,
+        )
+        assert (
+            response != True
+        ), "Should have raised exception since we do not have context window fallbacks"
+    except litellm.ContextWindowExceededError:
+        pass
