@@ -1,4 +1,4 @@
-from typing import TypedDict, Any
+from typing import TypedDict, Any, Union, Optional
 import json
 from typing_extensions import (
     Self,
@@ -26,10 +26,10 @@ class ServerSentEvent:
     def __init__(
         self,
         *,
-        event: str | None = None,
-        data: str | None = None,
-        id: str | None = None,
-        retry: int | None = None,
+        event: Optional[str] = None,
+        data: Optional[str] = None,
+        id: Optional[str] = None,
+        retry: Optional[int] = None,
     ) -> None:
         if data is None:
             data = ""
@@ -40,15 +40,15 @@ class ServerSentEvent:
         self._retry = retry
 
     @property
-    def event(self) -> str | None:
+    def event(self) -> Optional[str]:
         return self._event
 
     @property
-    def id(self) -> str | None:
+    def id(self) -> Optional[str]:
         return self._id
 
     @property
-    def retry(self) -> int | None:
+    def retry(self) -> Optional[int]:
         return self._retry
 
     @property
