@@ -91,11 +91,15 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: Optional[dict] = None,
+        data: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
+        stream: bool = False,
     ):
-        response = self.client.post(url, data=data, params=params, headers=headers)
+        req = self.client.build_request(
+            "POST", url, data=data, params=params, headers=headers  # type: ignore
+        )
+        response = self.client.send(req, stream=stream)
         return response
 
     def __del__(self) -> None:
