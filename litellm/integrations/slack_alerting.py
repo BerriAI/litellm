@@ -393,7 +393,7 @@ class SlackAlerting(CustomLogger):
         # format alert -> return the litellm model name + api base
         message = f"\n\nHere are today's key metrics 📈: \n\n"
 
-        message += "\n\n*❗️ Top 5 Deployments with Most Failed Requests:*\n\n"
+        message += "\n\n*❗️ Top Deployments with Most Failed Requests:*\n\n"
         if not top_5_failed:
             message += "\tNone\n"
         for i in range(len(top_5_failed)):
@@ -415,7 +415,7 @@ class SlackAlerting(CustomLogger):
             value = replaced_failed_values[top_5_failed[i]]
             message += f"\t{i+1}. Deployment: `{deployment_name}`, Failed Requests: `{value}`,  API Base: `{api_base}`\n"
 
-        message += "\n\n*😅 Top 5 Slowest Deployments:*\n\n"
+        message += "\n\n*😅 Top Slowest Deployments:*\n\n"
         if not top_5_slowest:
             message += "\tNone\n"
         for i in range(len(top_5_slowest)):
