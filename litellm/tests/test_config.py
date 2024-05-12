@@ -5,6 +5,7 @@
 import sys, os
 import traceback
 from dotenv import load_dotenv
+from pydantic import ConfigDict
 
 load_dotenv()
 import os, io
@@ -25,9 +26,7 @@ class DBModel(BaseModel):
     model_name: str
     model_info: dict
     litellm_params: dict
-
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 @pytest.mark.asyncio
