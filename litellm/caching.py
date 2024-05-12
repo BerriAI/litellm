@@ -374,10 +374,11 @@ class RedisCache(BaseCache):
                             f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
                         )
                         # Set the value with a TTL if it's provided.
+                        json_cache_value = json.dumps(cache_value)
                         if ttl is not None:
-                            pipe.setex(cache_key, ttl, json.dumps(cache_value))
+                            pipe.setex(cache_key, ttl, json_cache_value)
                         else:
-                            pipe.set(cache_key, json.dumps(cache_value))
+                            pipe.set(cache_key, json_cache_value)
                     # Execute the pipeline and return the results.
                     results = await pipe.execute()
 
@@ -810,9 +811,7 @@ class RedisSemanticCache(BaseCache):
 
         # get the prompt
         messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        prompt = "".join(message["content"] for message in messages)
 
         # create an embedding for prompt
         embedding_response = litellm.embedding(
@@ -847,9 +846,7 @@ class RedisSemanticCache(BaseCache):
 
         # get the messages
         messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        prompt = "".join(message["content"] for message in messages)
 
         # convert to embedding
         embedding_response = litellm.embedding(
@@ -909,9 +906,7 @@ class RedisSemanticCache(BaseCache):
 
         # get the prompt
         messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        prompt = "".join(message["content"] for message in messages)
         # create an embedding for prompt
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
@@ -964,9 +959,7 @@ class RedisSemanticCache(BaseCache):
 
         # get the messages
         messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        prompt = "".join(message["content"] for message in messages)
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
