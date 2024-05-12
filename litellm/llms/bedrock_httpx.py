@@ -7,7 +7,18 @@ import json
 from enum import Enum
 import requests, copy  # type: ignore
 import time
-from typing import Callable, Optional, List, Literal, Union, Any, TypedDict, Tuple
+from typing import (
+    Callable,
+    Optional,
+    List,
+    Literal,
+    Union,
+    Any,
+    TypedDict,
+    Tuple,
+    Iterator,
+    AsyncIterator,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -330,10 +341,10 @@ class BedrockLLM(BaseLLM):
         encoding,
         logging_obj,
         optional_params: dict,
+        acompletion: bool,
         timeout: Optional[Union[float, httpx.Timeout]],
         litellm_params=None,
         logger_fn=None,
-        acompletion: bool = False,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
@@ -345,6 +356,9 @@ class BedrockLLM(BaseLLM):
             from botocore.credentials import Credentials
         except ImportError as e:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        ## SETUP ##
+        stream = optional_params.pop("stream", None)
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
@@ -400,7 +414,10 @@ class BedrockLLM(BaseLLM):
         else:
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-        endpoint_url = f"{endpoint_url}/model/{model}/invoke"
+        if stream is not None and stream == True:
+            endpoint_url = f"{endpoint_url}/model/{model}/invoke-with-response-stream"
+        else:
+            endpoint_url = f"{endpoint_url}/model/{model}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -409,7 +426,6 @@ class BedrockLLM(BaseLLM):
             model, messages, provider, custom_prompt_dict
         )
         inference_params = copy.deepcopy(optional_params)
-        stream = inference_params.pop("stream", False)
 
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
@@ -420,11 +436,6 @@ class BedrockLLM(BaseLLM):
                         k not in inference_params
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
-                if optional_params.get("stream", False) == True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
-
                 _data = {"message": prompt, **inference_params}
                 if chat_history is not None:
                     _data["chat_history"] = chat_history
@@ -437,7 +448,7 @@ class BedrockLLM(BaseLLM):
                         k not in inference_params
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
-                if optional_params.get("stream", False) == True:
+                if stream == True:
                     inference_params["stream"] = (
                         True  # cohere requires stream = True in inference params
                     )
@@ -446,6 +457,7 @@ class BedrockLLM(BaseLLM):
             raise Exception("UNSUPPORTED PROVIDER")
 
         ## COMPLETION CALL
+
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
@@ -455,11 +467,39 @@ class BedrockLLM(BaseLLM):
         sigv4.add_auth(request)
         prepped = request.prepare()
 
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": prepped.url,
+                "headers": prepped.headers,
+            },
+        )
+
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             if isinstance(client, HTTPHandler):
                 client = None
-
+            if stream:
+                return self.async_streaming(
+                    model=model,
+                    messages=messages,
+                    data=data,
+                    api_base=prepped.url,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    encoding=encoding,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    stream=True,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    headers=prepped.headers,
+                    timeout=timeout,
+                    client=client,
+                )  # type: ignore
             ### ASYNC COMPLETION
             return self.async_completion(
                 model=model,
@@ -488,17 +528,29 @@ class BedrockLLM(BaseLLM):
             self.client = HTTPHandler(**_params)  # type: ignore
         else:
             self.client = client
+        if stream is not None and stream == True:
+            response = self.client.post(
+                url=prepped.url,
+                headers=prepped.headers,  # type: ignore
+                data=data,
+                stream=stream,
+            )
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": prepped.url,
-                "headers": prepped.headers,
-            },
-        )
+            if response.status_code != 200:
+                raise BedrockError(
+                    status_code=response.status_code, message=response.text
+                )
+
+            decoder = AWSEventStreamDecoder()
+
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            streaming_response = CustomStreamWrapper(
+                completion_stream=completion_stream,
+                model=model,
+                custom_llm_provider="bedrock",
+                logging_obj=logging_obj,
+            )
+            return streaming_response
 
         response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
 
@@ -565,5 +617,117 @@ class BedrockLLM(BaseLLM):
             encoding=encoding,
         )
 
+    async def async_streaming(
+        self,
+        model: str,
+        messages: list,
+        api_base: str,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        data: str,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        encoding,
+        logging_obj,
+        stream,
+        optional_params: dict,
+        litellm_params=None,
+        logger_fn=None,
+        headers={},
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> CustomStreamWrapper:
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
+            self.client = AsyncHTTPHandler(**_params)  # type: ignore
+        else:
+            self.client = client  # type: ignore
+
+        response = await self.client.post(api_base, headers=headers, data=data, stream=True)  # type: ignore
+
+        if response.status_code != 200:
+            raise BedrockError(status_code=response.status_code, message=response.text)
+
+        decoder = AWSEventStreamDecoder()
+
+        completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="bedrock",
+            logging_obj=logging_obj,
+        )
+        return streaming_response
+
     def embedding(self, *args, **kwargs):
         return super().embedding(*args, **kwargs)
+
+
+def get_response_stream_shape():
+    from botocore.model import ServiceModel
+    from botocore.loaders import Loader
+
+    loader = Loader()
+    bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+    bedrock_service_model = ServiceModel(bedrock_service_dict)
+    return bedrock_service_model.shape_for("ResponseStream")
+
+
+class AWSEventStreamDecoder:
+    def __init__(self) -> None:
+        from botocore.parsers import EventStreamJSONParser
+
+        self.parser = EventStreamJSONParser()
+
+    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GenericStreamingChunk]:
+        """Given an iterator that yields lines, iterate over it & yield every event encountered"""
+        from botocore.eventstream import EventStreamBuffer
+
+        event_stream_buffer = EventStreamBuffer()
+        for chunk in iterator:
+            event_stream_buffer.add_data(chunk)
+            for event in event_stream_buffer:
+                message = self._parse_message_from_event(event)
+                if message:
+                    # sse_event = ServerSentEvent(data=message, event="completion")
+                    _data = json.loads(message)
+                    streaming_chunk: GenericStreamingChunk = GenericStreamingChunk(
+                        text=_data.get("text", ""),
+                        is_finished=_data.get("is_finished", False),
+                        finish_reason=_data.get("finish_reason", ""),
+                    )
+                    yield streaming_chunk
+
+    async def aiter_bytes(
+        self, iterator: AsyncIterator[bytes]
+    ) -> AsyncIterator[GenericStreamingChunk]:
+        """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
+        from botocore.eventstream import EventStreamBuffer
+
+        event_stream_buffer = EventStreamBuffer()
+        async for chunk in iterator:
+            event_stream_buffer.add_data(chunk)
+            for event in event_stream_buffer:
+                message = self._parse_message_from_event(event)
+                if message:
+                    _data = json.loads(message)
+                    streaming_chunk: GenericStreamingChunk = GenericStreamingChunk(
+                        text=_data.get("text", ""),
+                        is_finished=_data.get("is_finished", False),
+                        finish_reason=_data.get("finish_reason", ""),
+                    )
+                    yield streaming_chunk
+
+    def _parse_message_from_event(self, event) -> str | None:
+        response_dict = event.to_response_dict()
+        parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
+        if response_dict["status_code"] != 200:
+            raise ValueError(f"Bad response code, expected 200: {response_dict}")
+
+        chunk = parsed_response.get("chunk")
+        if not chunk:
+            return None
+
+        return chunk.get("bytes").decode()  # type: ignore[no-any-return]
