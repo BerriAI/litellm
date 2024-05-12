@@ -14,6 +14,7 @@ import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
+
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
@@ -1213,11 +1214,12 @@ def completion(
                 )
 
             response = model_response
-        elif ("clarifai" in model 
-              or custom_llm_provider == "clarifai"
-              or model in litellm.clarifai_models
-              ):
-            clarifai_key =  None
+        elif (
+            "clarifai" in model
+            or custom_llm_provider == "clarifai"
+            or model in litellm.clarifai_models
+        ):
+            clarifai_key = None
             clarifai_key = (
                 api_key
                 or litellm.clarifai_key
@@ -1225,14 +1227,14 @@ def completion(
                 or get_secret("CLARIFAI_API_KEY")
                 or get_secret("CLARIFAI_API_TOKEN")
             )
-            
+
             api_base = (
                 api_base
                 or litellm.api_base
                 or get_secret("CLARIFAI_API_BASE")
                 or "https://api.clarifai.com/v2"
             )
-            
+
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             model_response = clarifai.completion(
                 model=model,
@@ -1249,7 +1251,7 @@ def completion(
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
             )
-            
+
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
                 ## LOGGING
@@ -1258,7 +1260,7 @@ def completion(
                     api_key=api_key,
                     original_response=model_response,
                 )
-            
+
             if optional_params.get("stream", False) or acompletion == True:
                 ## LOGGING
                 logging.post_call(
