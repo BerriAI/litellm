@@ -192,8 +192,8 @@ async def test_dynamic_router_retry_policy(model_group):
     from litellm.router import RetryPolicy
 
     model_group_retry_policy = {
-        "gpt-3.5-turbo": RetryPolicy(ContentPolicyViolationErrorRetries=0),
-        "bad-model": RetryPolicy(AuthenticationErrorRetries=4),
+        "gpt-3.5-turbo": RetryPolicy(ContentPolicyViolationErrorRetries=2),
+        "bad-model": RetryPolicy(AuthenticationErrorRetries=0),
     }
 
     router = litellm.Router(
@@ -205,6 +205,33 @@ async def test_dynamic_router_retry_policy(model_group):
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "model_info": {
+                    "id": "model-0",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "model_info": {
+                    "id": "model-1",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "model_info": {
+                    "id": "model-2",
                 },
             },
             {
@@ -241,9 +268,9 @@ async def test_dynamic_router_retry_policy(model_group):
     print("customHandler.previous_models: ", customHandler.previous_models)
 
     if model_group == "bad-model":
-        assert customHandler.previous_models == 4
-    elif model_group == "gpt-3.5-turbo":
         assert customHandler.previous_models == 0
+    elif model_group == "gpt-3.5-turbo":
+        assert customHandler.previous_models == 2
 
 
 """
