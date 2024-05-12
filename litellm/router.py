@@ -1565,7 +1565,7 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    _, _healthy_deployments = self._common_checks_available_deployment(
+                    _healthy_deployments = await self._async_get_healthy_deployments(
                         model=kwargs.get("model"),
                     )
                     _timeout = self._time_to_sleep_before_retry(
@@ -1796,7 +1796,7 @@ class Router:
                 except Exception as e:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
-                    _, _healthy_deployments = self._common_checks_available_deployment(
+                    _healthy_deployments = self._get_healthy_deployments(
                         model=kwargs.get("model"),
                     )
                     remaining_retries = num_retries - current_attempt
@@ -2008,12 +2008,18 @@ class Router:
         return cooldown_models
 
     def _get_healthy_deployments(self, model: str):
-        _, _all_deployments = self._common_checks_available_deployment(
-            model=model,
-        )
+        _all_deployments: list = []
+        try:
+            _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
+                model=model,
+            )
+            if type(_all_deployments) == dict:
+                return []
+        except:
+            pass
 
         unhealthy_deployments = self._get_cooldown_deployments()
-        healthy_deployments = []
+        healthy_deployments: list = []
         for deployment in _all_deployments:
             if deployment["model_info"]["id"] in unhealthy_deployments:
                 continue
@@ -2023,12 +2029,18 @@ class Router:
         return healthy_deployments
 
     async def _async_get_healthy_deployments(self, model: str):
-        _, _all_deployments = self._common_checks_available_deployment(
-            model=model,
-        )
+        _all_deployments: list = []
+        try:
+            _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
+                model=model,
+            )
+            if type(_all_deployments) == dict:
+                return []
+        except:
+            pass
 
         unhealthy_deployments = await self._async_get_cooldown_deployments()
-        healthy_deployments = []
+        healthy_deployments: list = []
         for deployment in _all_deployments:
             if deployment["model_info"]["id"] in unhealthy_deployments:
                 continue
