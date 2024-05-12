@@ -8220,10 +8220,7 @@ def exception_type(
                         + "Exception"
                     )
 
-                if (
-                    "This model's maximum context length is" in error_str
-                    or "Request too large" in error_str
-                ):
+                if "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"{exception_provider} - {message} {extra_information}",
@@ -8262,6 +8259,13 @@ def exception_type(
                         message=f"{exception_provider} - {message} {extra_information}",
                         llm_provider=custom_llm_provider,
                         model=model,
+                        response=original_exception.response,
+                    )
+                elif "Request too large" in error_str:
+                    raise RateLimitError(
+                        message=f"{exception_provider} - {message} {extra_information}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
                         response=original_exception.response,
                     )
                 elif (
