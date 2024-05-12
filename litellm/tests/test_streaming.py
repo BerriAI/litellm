@@ -1036,7 +1036,6 @@ async def test_bedrock_cohere_command_r_streaming(sync_mode):
             if complete_response.strip() == "":
                 raise Exception("Empty response received")
         print(f"completion_response: {complete_response}\n\nFinalChunk: {final_chunk}")
-        raise Exception("it worked!")
     except RateLimitError:
         pass
     except Exception as e:
