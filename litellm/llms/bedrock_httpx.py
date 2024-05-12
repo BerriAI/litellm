@@ -270,7 +270,7 @@ class BedrockLLM(BaseLLM):
     def process_response(
         self,
         model: str,
-        response: requests.Response | httpx.Response,
+        response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
         logging_obj: Logging,
@@ -720,7 +720,7 @@ class AWSEventStreamDecoder:
                     )
                     yield streaming_chunk
 
-    def _parse_message_from_event(self, event) -> str | None:
+    def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
         if response_dict["status_code"] != 200:
