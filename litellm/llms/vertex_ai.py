@@ -198,6 +198,23 @@ class VertexAIConfig:
                 optional_params[mapped_params[param]] = value
         return optional_params
 
+    def get_eu_regions(self) -> List[str]:
+        """
+        Source: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#available-regions
+        """
+        return [
+            "europe-central2",
+            "europe-north1",
+            "europe-southwest1",
+            "europe-west1",
+            "europe-west2",
+            "europe-west3",
+            "europe-west4",
+            "europe-west6",
+            "europe-west8",
+            "europe-west9",
+        ]
+
 
 import asyncio
 
