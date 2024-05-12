@@ -420,3 +420,131 @@ def test_raise_context_window_exceeded_error_no_retry():
         ), "Should have raised exception since we do not have context window fallbacks"
     except litellm.ContextWindowExceededError:
         pass
+
+
+## Unit test time to back off for router retries
+
+"""
+1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
+2. Timeout is 0.0 when RateLimit Error and fallbacks are > 0
+3. Timeout is > 0.0 when RateLimit Error and healthy deployments == 0 and fallbacks == None
+"""
+
+
+def test_timeout_for_rate_limit_error_with_healthy_deployments():
+    """
+    Test 1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
+    """
+    healthy_deployments = [
+        "deployment1",
+        "deployment2",
+    ]  # multiple healthy deployments mocked up
+    fallbacks = None
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    _timeout = router._time_to_sleep_before_retry(
+        e=rate_limit_error,
+        remaining_retries=4,
+        num_retries=4,
+        healthy_deployments=healthy_deployments,
+        fallbacks=fallbacks,
+    )
+
+    print(
+        "timeout=",
+        _timeout,
+        "error is rate_limit_error and there are healthy deployments=",
+        healthy_deployments,
+    )
+
+    assert _timeout == 0.0
+
+
+def test_timeout_for_rate_limit_error_with_fallbacks():
+    """
+    Test 2. Timeout is 0.0 when RateLimit Error and fallbacks are > 0
+    """
+    healthy_deployments = None
+    fallbacks = ["fallback1", "fallback2"]
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    _timeout = router._time_to_sleep_before_retry(
+        e=rate_limit_error,
+        remaining_retries=4,
+        num_retries=4,
+        healthy_deployments=healthy_deployments,
+        fallbacks=fallbacks,
+    )
+
+    print(
+        "timeout=",
+        _timeout,
+        "error is rate_limit_error and there are fallbacks=",
+        fallbacks,
+    )
+
+    assert _timeout == 0.0
+
+
+def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
+    """
+    Test 3. Timeout is > 0.0 when RateLimit Error and healthy deployments == 0 and fallbacks == None
+    """
+    healthy_deployments = []
+    fallbacks = None
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    _timeout = router._time_to_sleep_before_retry(
+        e=rate_limit_error,
+        remaining_retries=4,
+        num_retries=4,
+        healthy_deployments=healthy_deployments,
+        fallbacks=fallbacks,
+    )
+
+    print(
+        "timeout=",
+        _timeout,
+        "error is rate_limit_error and there are no healthy deployments",
+    )
+
+    assert _timeout > 0.0
