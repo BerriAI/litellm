@@ -1512,11 +1512,11 @@ class Router:
             Retry Logic
              
             """
-            # raises an exception if this error should not be retries
             _, _healthy_deployments = self._common_checks_available_deployment(
                 model=kwargs.get("model"),
             )
 
+            # raises an exception if this error should not be retries
             self.should_retry_this_error(
                 error=e,
                 healthy_deployments=_healthy_deployments,
@@ -1524,6 +1524,7 @@ class Router:
                 context_window_fallbacks=context_window_fallbacks,
             )
 
+            # decides how long to sleep before retry
             _timeout = self._time_to_sleep_before_retry(
                 e=original_exception,
                 remaining_retries=num_retries,
@@ -1532,7 +1533,7 @@ class Router:
                 fallbacks=fallbacks,
             )
 
-            ### RETRY
+            # sleeps for the length of the timeout
             await asyncio.sleep(_timeout)
 
             if (
@@ -1566,10 +1567,15 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
+                    _, _healthy_deployments = self._common_checks_available_deployment(
+                        model=kwargs.get("model"),
+                    )
                     _timeout = self._time_to_sleep_before_retry(
                         e=original_exception,
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
+                        healthy_deployments=_healthy_deployments,
+                        fallbacks=fallbacks,
                     )
                     await asyncio.sleep(_timeout)
             try:
