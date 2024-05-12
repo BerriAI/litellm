@@ -50,7 +50,7 @@ class DeploymentMetrics(LiteLLMBase):
     failed_request: bool
     """did it fail the request?"""
 
-    latency_per_output_token: Optional[float]
+    latency_per_output_token: Optional[float] = None
     """latency/output token of deployment"""
 
     updated_at: dt
