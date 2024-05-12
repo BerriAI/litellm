@@ -1594,16 +1594,20 @@ class Router:
         _num_healthy_deployments = 0
         if healthy_deployments is not None and isinstance(healthy_deployments, list):
             _num_healthy_deployments = len(healthy_deployments)
+
         ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
+
         if (
             isinstance(error, litellm.ContextWindowExceededError)
-            and context_window_fallbacks is not None
-        ) or (
-            isinstance(error, openai.RateLimitError)
-            and fallbacks is not None
-            and _num_healthy_deployments <= 0
+            and context_window_fallbacks is None
         ):
             raise error
+
+        if isinstance(error, openai.RateLimitError):
+            if fallbacks is None and _num_healthy_deployments <= 0:
+                raise error
+
+        return True
 
     def function_with_fallbacks(self, *args, **kwargs):
         """
