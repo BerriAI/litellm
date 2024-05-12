@@ -1507,7 +1507,6 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-
             """
             Retry Logic
              
