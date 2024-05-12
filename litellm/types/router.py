@@ -1,6 +1,6 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 import httpx
-from pydantic import BaseModel, validator, Field
+from pydantic import ConfigDict, BaseModel, validator, Field
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 import uuid, enum
@@ -11,9 +11,7 @@ class ModelConfig(BaseModel):
     litellm_params: Union[CompletionRequest, EmbeddingRequest]
     tpm: int
     rpm: int
-
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class RouterConfig(BaseModel):
@@ -43,9 +41,7 @@ class RouterConfig(BaseModel):
         "usage-based-routing",
         "latency-based-routing",
     ] = "simple-shuffle"
-
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class UpdateRouterConfig(BaseModel):
@@ -64,15 +60,13 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
-
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class ModelInfo(BaseModel):
     id: Optional[
         str
-    ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
+    ] = None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = (
         False  # used for proxy - to separate models which are stored in the db vs. config.
     )
@@ -83,9 +77,7 @@ class ModelInfo(BaseModel):
         elif isinstance(id, int):
             id = str(id)
         super().__init__(id=id, **params)
-
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -179,10 +171,7 @@ class GenericLiteLLMParams(BaseModel):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
-
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -240,10 +229,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
-
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -272,9 +258,7 @@ class updateDeployment(BaseModel):
     model_name: Optional[str] = None
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
-
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class Deployment(BaseModel):
@@ -306,10 +290,7 @@ class Deployment(BaseModel):
         except Exception as e:
             # if using pydantic v1
             return self.dict(**kwargs)
-
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
