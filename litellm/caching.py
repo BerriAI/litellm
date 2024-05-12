@@ -374,11 +374,10 @@ class RedisCache(BaseCache):
                             f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
                         )
                         # Set the value with a TTL if it's provided.
-                        json_cache_value = json.dumps(cache_value)
                         if ttl is not None:
-                            pipe.setex(cache_key, ttl, json_cache_value)
+                            pipe.setex(cache_key, ttl, json.dumps(cache_value))
                         else:
-                            pipe.set(cache_key, json_cache_value)
+                            pipe.set(cache_key, json.dumps(cache_value))
                     # Execute the pipeline and return the results.
                     results = await pipe.execute()
 
