@@ -687,6 +687,55 @@ def test_router_context_window_check_pre_call_check_out_group():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
+@pytest.mark.parametrize("allowed_model_region", ["eu", None])
+def test_router_region_pre_call_check(allowed_model_region):
+    """
+    If region based routing set
+    - check if only model in allowed region is allowed by '_pre_call_checks'
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "base_model": "azure/gpt-35-turbo",
+                "region_name": "eu",
+            },
+            "model_info": {"id": "1"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo-large",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "gpt-3.5-turbo-1106",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+            "model_info": {"id": "2"},
+        },
+    ]
+
+    router = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    _healthy_deployments = router._pre_call_checks(
+        model="gpt-3.5-turbo",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "Hey!"}],
+        allowed_model_region=allowed_model_region,
+    )
+
+    if allowed_model_region is None:
+        assert len(_healthy_deployments) == 2
+    else:
+        assert len(_healthy_deployments) == 1, "No models selected as healthy"
+        assert (
+            _healthy_deployments[0]["model_info"]["id"] == "1"
+        ), "Incorrect model id picked. Got id={}, expected id=1".format(
+            _healthy_deployments[0]["model_info"]["id"]
+        )
+
+
 ### FUNCTION CALLING
 
 

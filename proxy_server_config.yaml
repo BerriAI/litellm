@@ -83,6 +83,7 @@ model_list:
       model: text-completion-openai/gpt-3.5-turbo-instruct
 litellm_settings:
   drop_params: True
+  enable_preview_features: True
   # max_budget: 100 
   # budget_duration: 30d
   num_retries: 5

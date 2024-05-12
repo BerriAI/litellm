@@ -312,7 +312,7 @@ async def test_langfuse_logging_metadata(langfuse_client):
             metadata["existing_trace_id"] = trace_id
 
     langfuse_client.flush()
-    await asyncio.sleep(2)
+    await asyncio.sleep(10)
 
     # Tests the metadata filtering and the override of the output to be the last generation
     for trace_id, generation_ids in trace_identifiers.items():
@@ -339,6 +339,13 @@ async def test_langfuse_logging_metadata(langfuse_client):
         for generation_id, generation in zip(generation_ids, generations):
             assert generation.id == generation_id
             assert generation.trace_id == trace_id
+            print(
+                "common keys in trace",
+                set(generation.metadata.keys()).intersection(
+                    expected_filtered_metadata_keys
+                ),
+            )
+
             assert set(generation.metadata.keys()).isdisjoint(
                 expected_filtered_metadata_keys
             )

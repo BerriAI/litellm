@@ -2255,6 +2255,23 @@ class ProxyConfig:
 
                                 batch_redis_obj = _PROXY_BatchRedisRequests()
                                 imported_list.append(batch_redis_obj)
+                            elif (
+                                isinstance(callback, str)
+                                and callback == "azure_content_safety"
+                            ):
+                                from litellm.proxy.hooks.azure_content_safety import (
+                                    _PROXY_AzureContentSafety,
+                                )
+
+                                azure_content_safety_params = litellm_settings["azure_content_safety_params"]
+                                for k, v in azure_content_safety_params.items():
+                                    if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
+                                        azure_content_safety_params[k] = litellm.get_secret(v)
+
+                                azure_content_safety_obj = _PROXY_AzureContentSafety(
+                                    **azure_content_safety_params,
+                                )
+                                imported_list.append(azure_content_safety_obj)
                             else:
                                 imported_list.append(
                                     get_instance_fn(
@@ -3639,7 +3656,7 @@ async def chat_completion(
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if data["model"] in litellm.model_alias_map:
+        if isinstance(data["model"], str) and data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -3673,6 +3690,9 @@ async def chat_completion(
         # skip router if user passed their key
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
+        elif isinstance(data["model"], list) and llm_router is not None:
+            _models = data.pop("model")
+            tasks.append(llm_router.abatch_completion(models=_models, **data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
             router_config = data.pop("user_config")
