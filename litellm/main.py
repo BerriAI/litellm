@@ -76,6 +76,7 @@ from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.predibase import PredibaseChatCompletion
+from .llms.bedrock_httpx import BedrockLLM
 from .llms.triton import TritonChatCompletion
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -105,7 +106,6 @@ from litellm.utils import (
 )
 
 ####### ENVIRONMENT VARIABLES ###################
-dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
@@ -115,6 +115,7 @@ azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 triton_chat_completions = TritonChatCompletion()
+bedrock_chat_completion = BedrockLLM()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -257,7 +258,7 @@ async def acompletion(
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
     loop = asyncio.get_event_loop()
-    custom_llm_provider = None
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
     # Adjusted to use explicit arguments instead of *args and **kwargs
     completion_kwargs = {
         "model": model,
@@ -289,9 +290,10 @@ async def acompletion(
         "model_list": model_list,
         "acompletion": True,  # assuming this is a required parameter
     }
-    _, custom_llm_provider, _, _ = get_llm_provider(
-        model=model, api_base=completion_kwargs.get("base_url", None)
-    )
+    if custom_llm_provider is None:
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, api_base=completion_kwargs.get("base_url", None)
+        )
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(completion, **completion_kwargs, **kwargs)
@@ -300,9 +302,6 @@ async def acompletion(
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
-        )
         if (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
@@ -324,6 +323,7 @@ async def acompletion(
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
+            or (custom_llm_provider == "bedrock" and "cohere" in model)
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -1976,41 +1976,59 @@ def completion(
         elif custom_llm_provider == "bedrock":
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = bedrock.completion(
-                model=model,
-                messages=messages,
-                custom_prompt_dict=litellm.custom_prompt_dict,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                logging_obj=logging,
-                extra_headers=extra_headers,
-                timeout=timeout,
-            )
 
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] == True
-                and not isinstance(response, CustomStreamWrapper)
-            ):
-                # don't try to access stream object,
-                if "ai21" in model:
-                    response = CustomStreamWrapper(
-                        response,
-                        model,
-                        custom_llm_provider="bedrock",
-                        logging_obj=logging,
-                    )
-                else:
-                    response = CustomStreamWrapper(
-                        iter(response),
-                        model,
-                        custom_llm_provider="bedrock",
-                        logging_obj=logging,
-                    )
+            if "cohere" in model:
+                response = bedrock_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                )
+            else:
+                response = bedrock.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                )
+
+                if (
+                    "stream" in optional_params
+                    and optional_params["stream"] == True
+                    and not isinstance(response, CustomStreamWrapper)
+                ):
+                    # don't try to access stream object,
+                    if "ai21" in model:
+                        response = CustomStreamWrapper(
+                            response,
+                            model,
+                            custom_llm_provider="bedrock",
+                            logging_obj=logging,
+                        )
+                    else:
+                        response = CustomStreamWrapper(
+                            iter(response),
+                            model,
+                            custom_llm_provider="bedrock",
+                            logging_obj=logging,
+                        )
 
             if optional_params.get("stream", False):
                 ## LOGGING
