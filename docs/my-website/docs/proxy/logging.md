@@ -17,7 +17,7 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
 - [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
 - [Logging to Athina](#logging-proxy-inputoutput-athina)
-- [Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
+- [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -1039,7 +1039,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }'
 ```
 
-## Moderation with Azure Content Safety
+## (BETA) Moderation with Azure Content Safety
 
 [Azure Content-Safety](https://azure.microsoft.com/en-us/products/ai-services/ai-content-safety) is a Microsoft Azure service that provides content moderation APIs to detect potential offensive, harmful, or risky content in text.
 
