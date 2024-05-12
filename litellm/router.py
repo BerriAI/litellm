@@ -1507,22 +1507,30 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-            ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
-            if (
-                isinstance(original_exception, litellm.ContextWindowExceededError)
-                and context_window_fallbacks is not None
-            ) or (
-                isinstance(original_exception, openai.RateLimitError)
-                and fallbacks is not None
-            ):
-                raise original_exception
-            ### RETRY
+
+            """
+            Retry Logic
+             
+            """
+            # raises an exception if this error should not be retries
+            _, _healthy_deployments = self._common_checks_available_deployment(
+                model=kwargs.get("model"),
+            )
+
+            self.should_retry_this_error(
+                error=e,
+                healthy_deployments=_healthy_deployments,
+                fallbacks=fallbacks,
+                context_window_fallbacks=context_window_fallbacks,
+            )
 
             _timeout = self._router_should_retry(
                 e=original_exception,
                 remaining_retries=num_retries,
                 num_retries=num_retries,
             )
+
+            ### RETRY
             await asyncio.sleep(_timeout)
 
             if (
@@ -1567,6 +1575,35 @@ class Router:
             except:
                 pass
             raise original_exception
+
+    def should_retry_this_error(
+        self,
+        error: Exception,
+        healthy_deployments: Optional[List] = None,
+        fallbacks: Optional[List] = None,
+        context_window_fallbacks: Optional[List] = None,
+    ):
+        """
+        1. raise an exception for ContextWindowExceededError if context_window_fallbacks is not None
+
+        2. raise an exception for RateLimitError if
+            - there are no fallbacks
+            - there are no healthy deployments in the same model group
+        """
+
+        _num_healthy_deployments = 0
+        if healthy_deployments is not None and isinstance(healthy_deployments, list):
+            _num_healthy_deployments = len(healthy_deployments)
+        ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
+        if (
+            isinstance(error, litellm.ContextWindowExceededError)
+            and context_window_fallbacks is not None
+        ) or (
+            isinstance(error, openai.RateLimitError)
+            and fallbacks is not None
+            and _num_healthy_deployments <= 0
+        ):
+            raise error
 
     def function_with_fallbacks(self, *args, **kwargs):
         """
