@@ -382,7 +382,7 @@ class SlackAlerting(CustomLogger):
             for value in latency_values
         ]
 
-        # Get the indices of top 5 values with the highest numerical values (ignoring None values)
+        # Get the indices of top 5 values with the highest numerical values (ignoring None and 0 values)
         top_5_slowest = sorted(
             range(len(replaced_slowest_values)),
             key=lambda i: replaced_slowest_values[i],
