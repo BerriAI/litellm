@@ -1528,7 +1528,7 @@ class Router:
                 e=original_exception,
                 remaining_retries=num_retries,
                 num_retries=num_retries,
-                _healthy_deployments=_healthy_deployments,
+                healthy_deployments=_healthy_deployments,
             )
 
             # sleeps for the length of the timeout
@@ -1776,7 +1776,7 @@ class Router:
                 e=original_exception,
                 remaining_retries=num_retries,
                 num_retries=num_retries,
-                _healthy_deployments=_healthy_deployments,
+                healthy_deployments=_healthy_deployments,
             )
 
             ## LOGGING
