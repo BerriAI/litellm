@@ -100,7 +100,7 @@ class AnthropicTextCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def process_response(
+    def _process_response(
         self, model_response: ModelResponse, response, encoding, prompt: str, model: str
     ):
         ## RESPONSE OBJECT
@@ -171,7 +171,7 @@ class AnthropicTextCompletion(BaseLLM):
             additional_args={"complete_input_dict": data},
         )
 
-        response = self.process_response(
+        response = self._process_response(
             model_response=model_response,
             response=response,
             encoding=encoding,
@@ -330,7 +330,7 @@ class AnthropicTextCompletion(BaseLLM):
             )
             print_verbose(f"raw model_response: {response.text}")
 
-            response = self.process_response(
+            response = self._process_response(
                 model_response=model_response,
                 response=response,
                 encoding=encoding,
