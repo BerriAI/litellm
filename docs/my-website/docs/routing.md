@@ -879,13 +879,11 @@ router = Router(model_list: Optional[list] = None,
 				 cache_responses=True)
 ```
 
-## Pre-Call Checks (Context Window)
+## Pre-Call Checks (Context Window, EU-Regions)
 
 Enable pre-call checks to filter out:
 1. deployments with context window limit < messages for a call.
-2. deployments that have exceeded rate limits when making concurrent calls. (eg. `asyncio.gather(*[
-        router.acompletion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
-    ])`)
+2. deployments outside of eu-region
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -900,10 +898,14 @@ router = Router(model_list=model_list, enable_pre_call_checks=True) # 👈 Set t
 
 **2. Set Model List**
 
-For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with `azure/`. 
+For context window checks on azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with `azure/`. 
 
-<Tabs>
-<TabItem value="same-group" label="Same Group">
+For 'eu-region' filtering, Set 'region_name' of deployment. 
+
+**Note:** We automatically infer region_name for Vertex AI, Bedrock, and IBM WatsonxAI based on your litellm params. For Azure, set `litellm.enable_preview = True`.
+
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/d33e49411d6503cb634f9652873160cd534dec96/litellm/router.py#L2958)
 
 ```python
 model_list = [
@@ -914,10 +916,9 @@ model_list = [
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
-                },
-				"model_info": {
+					"region_name": "eu" # 👈 SET 'EU' REGION NAME
 					"base_model": "azure/gpt-35-turbo", # 👈 (Azure-only) SET BASE MODEL
-				}
+                },
             },
             {
                 "model_name": "gpt-3.5-turbo", # model group name
@@ -926,53 +927,25 @@ model_list = [
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
+			{
+				"model_name": "gemini-pro",
+				"litellm_params: {
+					"model": "vertex_ai/gemini-pro-1.5", 
+					"vertex_project": "adroit-crow-1234",
+					"vertex_location": "us-east1" # 👈 AUTOMATICALLY INFERS 'region_name'
+				}
+			}
         ]
 
 router = Router(model_list=model_list, enable_pre_call_checks=True) 
 ```
 
-</TabItem>
-
-<TabItem value="different-group" label="Context Window Fallbacks (Different Groups)">
-
-```python
-model_list = [
-            {
-                "model_name": "gpt-3.5-turbo-small", # model group name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                },
-				"model_info": {
-					"base_model": "azure/gpt-35-turbo", # 👈 (Azure-only) SET BASE MODEL
-				}
-            },
-            {
-                "model_name": "gpt-3.5-turbo-large", # model group name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "gpt-3.5-turbo-1106",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
-            },
-            {
-                "model_name": "claude-opus", 
-                "litellm_params": {  call
-                    "model": "claude-3-opus-20240229",
-                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                },
-            },
-        ]
-
-router = Router(model_list=model_list, enable_pre_call_checks=True, context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}]) 
-```
-
-</TabItem>
-
-</Tabs>
 
 **3. Test it!**
+
+
+<Tabs>
+<TabItem value="context-window-check" label="Context Window Check">
 
 ```python
 """
@@ -983,7 +956,6 @@ router = Router(model_list=model_list, enable_pre_call_checks=True, context_wind
 from litellm import Router
 import os
 
-try:
 model_list = [
 	{
 		"model_name": "gpt-3.5-turbo",  # model group name
@@ -992,6 +964,7 @@ model_list = [
 			"api_key": os.getenv("AZURE_API_KEY"),
 			"api_version": os.getenv("AZURE_API_VERSION"),
 			"api_base": os.getenv("AZURE_API_BASE"),
+			"base_model": "azure/gpt-35-turbo",
 		},
 		"model_info": {
 			"base_model": "azure/gpt-35-turbo", 
@@ -1020,6 +993,59 @@ response = router.completion(
 
 print(f"response: {response}")
 ```
+</TabItem>
+<TabItem value="eu-region-check" label="EU Region Check">
+
+```python
+"""
+- Give 2 gpt-3.5-turbo deployments, in eu + non-eu regions
+- Make a call
+- Assert it picks the eu-region model
+"""
+
+from litellm import Router
+import os
+
+model_list = [
+	{
+		"model_name": "gpt-3.5-turbo",  # model group name
+		"litellm_params": {  # params for litellm completion/embedding call
+			"model": "azure/chatgpt-v-2",
+			"api_key": os.getenv("AZURE_API_KEY"),
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE"),
+			"region_name": "eu"
+		},
+		"model_info": {
+			"id": "1"
+		}
+	},
+	{
+		"model_name": "gpt-3.5-turbo",  # model group name
+		"litellm_params": {  # params for litellm completion/embedding call
+			"model": "gpt-3.5-turbo-1106",
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+		"model_info": {
+			"id": "2"
+		}
+	},
+]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True) 
+
+response = router.completion(
+	model="gpt-3.5-turbo",
+	messages=[{"role": "user", "content": "Who was Alexander?"}],
+)
+
+print(f"response: {response}")
+
+print(f"response id: {response._hidden_params['model_id']}")
+```
+
+</TabItem>
+</Tabs>
 </TabItem>
 <TabItem value="proxy" label="Proxy">
 
