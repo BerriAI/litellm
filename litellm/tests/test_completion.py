@@ -1305,7 +1305,7 @@ def test_hf_classifier_task():
 
 ########################### End of Hugging Face Tests ##############################################
 # def test_completion_hf_api():
-# # failing on circle ci commenting out
+# # failing on circle-ci commenting out
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
@@ -3236,6 +3236,7 @@ def test_completion_watsonx():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_stream_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3245,7 +3246,7 @@ def test_completion_stream_watsonx():
             messages=messages,
             stop=["stop"],
             max_tokens=20,
-            stream=True
+            stream=True,
         )
         for chunk in response:
             print(chunk)
@@ -3318,6 +3319,7 @@ async def test_acompletion_watsonx():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.mark.asyncio
 async def test_acompletion_stream_watsonx():
     litellm.set_verbose = True
@@ -3329,7 +3331,7 @@ async def test_acompletion_stream_watsonx():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            stream=True
+            stream=True,
         )
         # Add any assertions here to check the response
         async for chunk in response:
