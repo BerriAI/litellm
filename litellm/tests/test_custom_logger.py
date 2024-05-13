@@ -437,8 +437,9 @@ async def test_cost_tracking_with_caching():
         max_tokens=40,
         temperature=0.2,
         caching=True,
+        mock_response="Hey, i'm doing well!",
     )
-    await asyncio.sleep(1)  # success callback is async
+    await asyncio.sleep(3)  # success callback is async
     response_cost = customHandler_optional_params.response_cost
     assert response_cost > 0
     response2 = await litellm.acompletion(

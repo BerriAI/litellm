@@ -136,6 +136,7 @@ response = completion(
       "existing_trace_id": "trace-id22",
       "trace_metadata": {"key": "updated_trace_value"},            # The new value to use for the langfuse Trace Metadata
       "update_trace_keys": ["input", "output", "trace_metadata"],  # Updates the trace input & output to be this generations input & output also updates the Trace Metadata to match the passed in value
+      "debug_langfuse": True,                                      # Will log the exact metadata sent to litellm for the trace/generation as `metadata_passed_to_litellm` 
   },
 )
 
