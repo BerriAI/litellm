@@ -82,6 +82,7 @@ class LiteLLMRoutes(enum.Enum):
     info_routes: List = [
         "/key/info",
         "/team/info",
+        "/team/list",
         "/user/info",
         "/model/info",
         "/v2/model/info",
@@ -110,6 +111,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/new",
         "/team/update",
         "/team/delete",
+        "/team/list",
         "/team/info",
         "/team/block",
         "/team/unblock",
@@ -189,7 +191,12 @@ class LiteLLM_JWTAuth(LiteLLMBase):
             "spend_tracking_routes",
             "global_spend_tracking_routes",
         ]
-    ] = ["management_routes", "spend_tracking_routes", "global_spend_tracking_routes"]
+    ] = [
+        "management_routes",
+        "spend_tracking_routes",
+        "global_spend_tracking_routes",
+        "info_routes",
+    ]
     team_jwt_scope: str = "litellm_team"
     team_id_jwt_field: str = "client_id"
     team_allowed_routes: List[
