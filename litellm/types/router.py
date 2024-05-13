@@ -1,6 +1,6 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 import httpx
-from pydantic import ConfigDict, BaseModel, validator, Field
+from pydantic import ConfigDict, BaseModel, validator, Field, __version__ as pydantic_version
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 import uuid, enum
@@ -184,9 +184,18 @@ class GenericLiteLLMParams(BaseModel):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        extra = "allow",
+        arbitrary_types_allowed = True,
+    )
+    if pydantic_version.startswith("1"):
+        # pydantic v2 warns about using a Config class.
+        # But without this, pydantic v1 will raise an error:
+        #     RuntimeError: no validator found for <class 'openai.Timeout'>,
+        #     see `arbitrary_types_allowed` in Config
+        # Putting arbitrary_types_allowed = True in the ConfigDict doesn't work in pydantic v1.
+        class Config:
+            arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -245,9 +254,18 @@ class LiteLLM_Params(GenericLiteLLMParams):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        extra = "allow",
+        arbitrary_types_allowed = True,
+    )
+    if pydantic_version.startswith("1"):
+        # pydantic v2 warns about using a Config class.
+        # But without this, pydantic v1 will raise an error:
+        #     RuntimeError: no validator found for <class 'openai.Timeout'>,
+        #     see `arbitrary_types_allowed` in Config
+        # Putting arbitrary_types_allowed = True in the ConfigDict doesn't work in pydantic v1.
+        class Config:
+            arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
