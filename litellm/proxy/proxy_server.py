@@ -3479,6 +3479,25 @@ async def startup_event():
             await proxy_config.add_deployment(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
+
+        if (
+            proxy_logging_obj is not None
+            and proxy_logging_obj.slack_alerting_instance is not None
+        ):
+            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
+            ### Schedule weekly/monhtly spend reports ###
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
+                "cron",
+                day_of_week="mon",
+            )
+
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
+                "cron",
+                day=1,
+            )
+
         scheduler.start()
 
 
