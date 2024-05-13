@@ -5448,26 +5448,70 @@ async def get_global_spend_report(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
+        # first get data from spend logs -> SpendByModelApiKey
+        # then read data from "SpendByModelApiKey" to format the response obj
         sql_query = """
-            SELECT
-            date_trunc('day', sl."startTime") AS group_by_day,
-            COALESCE(tt.team_alias, 'Unassigned Team') AS team_alias,
-            sl.api_key,
-            sl.model,
-            SUM(sl.total_tokens) AS total_tokens,
-            SUM(sl.spend) AS total_spend
-        FROM "LiteLLM_SpendLogs" sl
-        LEFT JOIN "LiteLLM_TeamTable" tt ON sl.team_id = tt.team_id
-        WHERE
-            sl."startTime" BETWEEN $1 AND $2
-        GROUP BY
-            group_by_day,
-            COALESCE(tt.team_alias, 'Unassigned Team'),
-            sl.api_key,
-            sl.model
-        """
 
-        return
+        WITH SpendByModelApiKey AS (
+            SELECT
+                date_trunc('day', sl."startTime") AS group_by_day,
+                COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+                sl.model,
+                sl.api_key,
+                SUM(sl.spend) AS model_api_spend,
+                SUM(sl.total_tokens) AS model_api_tokens
+            FROM 
+                "LiteLLM_SpendLogs" sl
+            LEFT JOIN 
+                "LiteLLM_TeamTable" tt 
+            ON 
+                sl.team_id = tt.team_id
+            WHERE
+                sl."startTime" BETWEEN $1::date AND $2::date
+            GROUP BY
+                date_trunc('day', sl."startTime"),
+                tt.team_alias,
+                sl.model,
+                sl.api_key
+        )
+            SELECT
+                group_by_day,
+                jsonb_agg(jsonb_build_object(
+                    'team_name', team_name,
+                    'total_spend', total_spend,
+                    'metadata', metadata
+                )) AS teams
+            FROM (
+                SELECT
+                    group_by_day,
+                    team_name,
+                    SUM(model_api_spend) AS total_spend,
+                    jsonb_agg(jsonb_build_object(
+                        'model', model,
+                        'api_key', api_key,
+                        'spend', model_api_spend,
+                        'total_tokens', model_api_tokens
+                    )) AS metadata
+                FROM 
+                    SpendByModelApiKey
+                GROUP BY
+                    group_by_day,
+                    team_name
+            ) AS aggregated
+            GROUP BY
+                group_by_day
+            ORDER BY
+                group_by_day;
+            """
+
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj
+        )
+        if db_response is None:
+            return []
+
+        return db_response
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
