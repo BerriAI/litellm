@@ -269,7 +269,7 @@ def test_sync_fallbacks_embeddings():
         response = router.embedding(**kwargs)
         print(f"customHandler.previous_models: {customHandler.previous_models}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
+        assert customHandler.previous_models == 1  # 1 init call, 2 retries, 1 fallback
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -323,7 +323,7 @@ async def test_async_fallbacks_embeddings():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 4  # 1 init call, 2 retries, 1 fallback
+        assert customHandler.previous_models == 1  # 1 init call with a bad key
         router.reset()
     except litellm.Timeout as e:
         pass

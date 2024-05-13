@@ -167,7 +167,4 @@ async def test_end_user_specific_region():
             user=end_user_obj["user_id"],
         )
 
-        assert (
-            result.headers.get("x-litellm-model-api-base")
-            == "https://my-endpoint-europe-berri-992.openai.azure.com/"
-        )
+        assert result.headers.get("x-litellm-model-id") == "1"

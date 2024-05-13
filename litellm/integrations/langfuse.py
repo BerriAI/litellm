@@ -1,8 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
-import dotenv, os
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import os
 import copy
 import traceback
 from packaging.version import Version
@@ -474,7 +472,29 @@ class LangFuseLogger:
             }
 
             if supports_prompt:
-                generation_params["prompt"] = clean_metadata.pop("prompt", None)
+                user_prompt = clean_metadata.pop("prompt", None)
+                if user_prompt is None:
+                    pass
+                elif isinstance(user_prompt, dict):
+                    from langfuse.model import (
+                        TextPromptClient,
+                        ChatPromptClient,
+                        Prompt_Text,
+                        Prompt_Chat,
+                    )
+
+                    if user_prompt.get("type", "") == "chat":
+                        _prompt_chat = Prompt_Chat(**user_prompt)
+                        generation_params["prompt"] = ChatPromptClient(
+                            prompt=_prompt_chat
+                        )
+                    elif user_prompt.get("type", "") == "text":
+                        _prompt_text = Prompt_Text(**user_prompt)
+                        generation_params["prompt"] = TextPromptClient(
+                            prompt=_prompt_text
+                        )
+                else:
+                    generation_params["prompt"] = user_prompt
 
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output

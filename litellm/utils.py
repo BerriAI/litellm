@@ -132,7 +132,6 @@ MAX_THREADS = 100
 
 # Create a ThreadPoolExecutor
 executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
-dotenv.load_dotenv()  # Loading env variables using dotenv
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -8217,10 +8216,7 @@ def exception_type(
                         + "Exception"
                     )
 
-                if (
-                    "This model's maximum context length is" in error_str
-                    or "Request too large" in error_str
-                ):
+                if "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"{exception_provider} - {message} {extra_information}",
@@ -8259,6 +8255,13 @@ def exception_type(
                         message=f"{exception_provider} - {message} {extra_information}",
                         llm_provider=custom_llm_provider,
                         model=model,
+                        response=original_exception.response,
+                    )
+                elif "Request too large" in error_str:
+                    raise RateLimitError(
+                        message=f"{exception_provider} - {message} {extra_information}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
                         response=original_exception.response,
                     )
                 elif (
@@ -10467,6 +10470,12 @@ class CustomStreamWrapper:
             raise e
 
     def handle_bedrock_stream(self, chunk):
+        if "cohere" in self.model:
+            return {
+                "text": chunk["text"],
+                "is_finished": chunk["is_finished"],
+                "finish_reason": chunk["finish_reason"],
+            }
         if hasattr(chunk, "get"):
             chunk = chunk.get("chunk")
             chunk_data = json.loads(chunk.get("bytes").decode())
@@ -11315,6 +11324,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "gemini"
                 or self.custom_llm_provider == "cached_response"
                 or self.custom_llm_provider == "predibase"
+                or (self.custom_llm_provider == "bedrock" and "cohere" in self.model)
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:

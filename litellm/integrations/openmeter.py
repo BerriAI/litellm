@@ -3,8 +3,6 @@
 
 import dotenv, os, json
 import litellm
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
