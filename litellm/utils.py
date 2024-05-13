@@ -10761,6 +10761,8 @@ class CustomStreamWrapper:
                 else:
                     completion_obj["content"] = str(chunk)
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
+                import proto  # type: ignore
+
                 if self.model.startswith("claude-3"):
                     response_obj = self.handle_vertexai_anthropic_chunk(chunk=chunk)
                     if response_obj is None:
@@ -10798,10 +10800,24 @@ class CustomStreamWrapper:
                                 function_call = (
                                     chunk.candidates[0].content.parts[0].function_call
                                 )
+
                                 args_dict = {}
-                                for k, v in function_call.args.items():
-                                    args_dict[k] = v
-                                args_str = json.dumps(args_dict)
+
+                                # Check if it's a RepeatedComposite instance
+                                for key, val in function_call.args.items():
+                                    if isinstance(
+                                        val,
+                                        proto.marshal.collections.repeated.RepeatedComposite,
+                                    ):
+                                        # If so, convert to list
+                                        args_dict[key] = [v for v in val]
+                                    else:
+                                        args_dict[key] = val
+
+                                try:
+                                    args_str = json.dumps(args_dict)
+                                except Exception as e:
+                                    raise e
                                 _delta_obj = litellm.utils.Delta(
                                     content=None,
                                     tool_calls=[
