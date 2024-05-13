@@ -365,6 +365,90 @@ curl --location 'http://0.0.0.0:4000/moderations' \
 
 ## Advanced
 
+### (BETA) Batch Completions - pass `model` as List
+
+Use this when you want to send 1 request to N Models
+
+#### Expected Request Format
+
+This same request will be sent to the following model groups on the [litellm proxy config.yaml](https://docs.litellm.ai/docs/proxy/configs)
+- `model_name="llama3"`
+- `model_name="gpt-3.5-turbo"` 
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": ["llama3", "gpt-3.5-turbo"],
+    "max_tokens": 10,
+    "user": "litellm2",
+    "messages": [
+        {
+        "role": "user",
+        "content": "is litellm getting better"
+        }
+    ]
+}'
+```
+
+
+#### Expected Response Format
+
+Get a list of responses when `model` is passed as a list
+
+```json
+[
+  {
+    "id": "chatcmpl-3dbd5dd8-7c82-4ca3-bf1f-7c26f497cf2b",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "message": {
+          "content": "The Elder Scrolls IV: Oblivion!\n\nReleased",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1715459876,
+    "model": "groq/llama3-8b-8192",
+    "object": "chat.completion",
+    "system_fingerprint": "fp_179b0f92c9",
+    "usage": {
+      "completion_tokens": 10,
+      "prompt_tokens": 12,
+      "total_tokens": 22
+    }
+  },
+  {
+    "id": "chatcmpl-9NnldUfFLmVquFHSX4yAtjCw8PGei",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "message": {
+          "content": "TES4 could refer to The Elder Scrolls IV:",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1715459877,
+    "model": "gpt-3.5-turbo-0125",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 10,
+      "prompt_tokens": 9,
+      "total_tokens": 19
+    }
+  }
+]
+```
+
+
+
+
 ### Pass User LLM API Keys, Fallbacks
 Allow your end-users to pass their model list, api base, OpenAI API key (any LiteLLM supported provider) to make requests 
 

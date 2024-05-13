@@ -1,9 +1,10 @@
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
-      model: azure/gpt-35-turbo
-      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
-      api_key: os.environ/AZURE_EUROPE_API_KEY
+      model: gpt-3.5-turbo
+      region_name: "eu"
+    model_info:
+      id: "1"
   - model_name: gpt-3.5-turbo
     litellm_params:
       model: azure/chatgpt-v-2
@@ -83,6 +84,7 @@ model_list:
       model: text-completion-openai/gpt-3.5-turbo-instruct
 litellm_settings:
   drop_params: True
+  enable_preview_features: True
   # max_budget: 100 
   # budget_duration: 30d
   num_retries: 5
@@ -92,10 +94,12 @@ litellm_settings:
   default_team_settings: 
     - team_id: team-1
       success_callback: ["langfuse"]
+      failure_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PROJECT1_PUBLIC # Project 1
       langfuse_secret: os.environ/LANGFUSE_PROJECT1_SECRET # Project 1
     - team_id: team-2
       success_callback: ["langfuse"]
+      failure_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
 
