@@ -124,6 +124,8 @@ class ProxyLogging:
 
         asyncio.create_task(self.slack_alerting_instance.send_weekly_spend_report())
 
+        asyncio.create_task(self.slack_alerting_instance.send_monthly_spend_report())
+
         if "daily_reports" in self.alert_types:
             litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
