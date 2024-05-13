@@ -1083,6 +1083,8 @@ class CallTypes(Enum):
 class Logging:
     global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb, lunaryLogger
 
+    custom_pricing: bool = False
+
     def __init__(
         self,
         model,
@@ -1164,6 +1166,15 @@ class Logging:
             **self.optional_params,
             **additional_params,
         }
+
+        ## check if custom pricing set ##
+        if (
+            litellm_params.get("input_cost_per_token") is not None
+            or litellm_params.get("input_cost_per_second") is not None
+            or litellm_params.get("output_cost_per_token") is not None
+            or litellm_params.get("output_cost_per_second") is not None
+        ):
+            self.custom_pricing = True
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -1442,10 +1453,18 @@ class Logging:
                                 )
                             )
                         else:
+                            base_model: Optional[str] = None
                             # check if base_model set on azure
                             base_model = _get_base_model_from_metadata(
                                 model_call_details=self.model_call_details
                             )
+                            # litellm model name
+                            litellm_model = self.model_call_details["model"]
+                            if (
+                                litellm_model in litellm.model_cost
+                                and self.custom_pricing == True
+                            ):
+                                base_model = litellm_model
                             # base_model defaults to None if not set on model_info
                             self.model_call_details["response_cost"] = (
                                 litellm.completion_cost(
@@ -4365,7 +4384,7 @@ def completion_cost(
     size=None,
     quality=None,
     n=None,  # number of images
-):
+) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
 
@@ -4386,10 +4405,10 @@ def completion_cost(
         - If completion_response is not provided, the function calculates token counts based on the model and input text.
         - The cost is calculated based on the model, prompt tokens, and completion tokens.
         - For certain models containing "togethercomputer" in the name, prices are based on the model size.
-        - For Replicate models, the cost is calculated based on the total time used for the request.
+        - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
 
     Exceptions:
-        - If an error occurs during execution, the function returns 0.0 without blocking the user's execution path.
+        - If an error occurs during execution, the error is raised
     """
     try:
         if (
@@ -4701,6 +4720,10 @@ def get_litellm_params(
     acompletion=None,
     preset_cache_key=None,
     no_log=None,
+    input_cost_per_second=None,
+    input_cost_per_token=None,
+    output_cost_per_token=None,
+    output_cost_per_second=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -4719,6 +4742,10 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log,
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "input_cost_per_token": input_cost_per_token,
+        "input_cost_per_second": input_cost_per_second,
+        "output_cost_per_token": output_cost_per_token,
+        "output_cost_per_second": output_cost_per_second,
     }
 
     return litellm_params
