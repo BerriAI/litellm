@@ -3259,13 +3259,12 @@ class Router:
             healthy_deployments.remove(deployment)
 
         # filter pre-call checks
+        _allowed_model_region = (
+            request_kwargs.get("allowed_model_region")
+            if request_kwargs is not None
+            else None
+        )
         if self.enable_pre_call_checks and messages is not None:
-            _allowed_model_region = (
-                request_kwargs.get("allowed_model_region")
-                if request_kwargs is not None
-                else None
-            )
-
             if _allowed_model_region == "eu":
                 healthy_deployments = self._pre_call_checks(
                     model=model,
@@ -3286,8 +3285,10 @@ class Router:
                 )
 
         if len(healthy_deployments) == 0:
+            if _allowed_model_region is None:
+                _allowed_model_region = "n/a"
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
             )
 
         if (
