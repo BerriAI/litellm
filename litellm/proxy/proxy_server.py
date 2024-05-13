@@ -5385,6 +5385,141 @@ async def view_spend_tags(
 
 
 @router.get(
+    "/global/spend/report",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def get_global_spend_report(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view spend",
+    ),
+):
+    """
+    Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
+    [
+        {
+            "group-by-day": "2024-05-10",
+            "teams": [
+                {
+                    "team_name": "team-1"
+                    "spend": 10,
+                    "keys": [
+                        "key": "1213",
+                        "usage": {
+                            "model-1": {
+                                    "cost": 12.50,
+                                    "input_tokens": 1000,
+                                    "output_tokens": 5000,
+                                    "requests": 100
+                                },
+                                "audio-modelname1": {
+                                "cost": 25.50,
+                                "seconds": 25,
+                                "requests": 50
+                        },
+                        }
+                    }
+            ]
+        ]
+    }
+    """
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        # first get data from spend logs -> SpendByModelApiKey
+        # then read data from "SpendByModelApiKey" to format the response obj
+        sql_query = """
+
+        WITH SpendByModelApiKey AS (
+            SELECT
+                date_trunc('day', sl."startTime") AS group_by_day,
+                COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+                sl.model,
+                sl.api_key,
+                SUM(sl.spend) AS model_api_spend,
+                SUM(sl.total_tokens) AS model_api_tokens
+            FROM 
+                "LiteLLM_SpendLogs" sl
+            LEFT JOIN 
+                "LiteLLM_TeamTable" tt 
+            ON 
+                sl.team_id = tt.team_id
+            WHERE
+                sl."startTime" BETWEEN $1::date AND $2::date
+            GROUP BY
+                date_trunc('day', sl."startTime"),
+                tt.team_alias,
+                sl.model,
+                sl.api_key
+        )
+            SELECT
+                group_by_day,
+                jsonb_agg(jsonb_build_object(
+                    'team_name', team_name,
+                    'total_spend', total_spend,
+                    'metadata', metadata
+                )) AS teams
+            FROM (
+                SELECT
+                    group_by_day,
+                    team_name,
+                    SUM(model_api_spend) AS total_spend,
+                    jsonb_agg(jsonb_build_object(
+                        'model', model,
+                        'api_key', api_key,
+                        'spend', model_api_spend,
+                        'total_tokens', model_api_tokens
+                    )) AS metadata
+                FROM 
+                    SpendByModelApiKey
+                GROUP BY
+                    group_by_day,
+                    team_name
+            ) AS aggregated
+            GROUP BY
+                group_by_day
+            ORDER BY
+                group_by_day;
+            """
+
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj
+        )
+        if db_response is None:
+            return []
+
+        return db_response
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
     "/global/spend/tags",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
