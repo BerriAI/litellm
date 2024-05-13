@@ -1413,7 +1413,7 @@ class Router:
                 verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
                     hasattr(e, "status_code")
-                    and e.status_code == 400
+                    and e.status_code == 400  # type: ignore
                     and not isinstance(e, litellm.ContextWindowExceededError)
                 ):  # don't retry a malformed request
                     raise e
@@ -3648,7 +3648,7 @@ class Router:
                 )
                 asyncio.create_task(
                     proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}",
+                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}. Change 'cooldown_time' + 'allowed_failes' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
                         alert_type="cooldown_deployment",
                         level="Low",
                     )
