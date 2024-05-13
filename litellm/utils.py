@@ -5617,32 +5617,9 @@ def get_optional_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stream is not None:
-            optional_params["stream"] = stream
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if tools is not None:
-            optional_params["tools"] = tools
-        if tool_choice is not None:
-            optional_params["tool_choice"] = tool_choice
-        if response_format is not None:
-            optional_params["response_format"] = response_format
-        # check safe_mode, random_seed: https://docs.mistral.ai/api/#operation/createChatCompletion
-        safe_mode = passed_params.pop("safe_mode", None)
-        random_seed = passed_params.pop("random_seed", None)
-        extra_body = {}
-        if safe_mode is not None:
-            extra_body["safe_mode"] = safe_mode
-        if random_seed is not None:
-            extra_body["random_seed"] = random_seed
-        optional_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
+        optional_params = litellm.MistralConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
         )
-
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -5843,7 +5820,8 @@ def get_optional_params(
         for k in passed_params.keys():
             if k not in default_params.keys():
                 extra_body[k] = passed_params[k]
-        optional_params["extra_body"] = extra_body
+        optional_params.setdefault("extra_body", {})
+        optional_params["extra_body"] = {**optional_params["extra_body"], **extra_body}
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
@@ -6212,15 +6190,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "max_retries",
         ]
     elif custom_llm_provider == "mistral":
-        return [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "tools",
-            "tool_choice",
-            "response_format",
-        ]
+        return litellm.MistralConfig().get_supported_openai_params()
     elif custom_llm_provider == "replicate":
         return [
             "stream",

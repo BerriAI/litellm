@@ -755,7 +755,7 @@ from .llms.bedrock import (
     AmazonMistralConfig,
     AmazonBedrockGlobalConfig,
 )
-from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
+from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig, MistralConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore

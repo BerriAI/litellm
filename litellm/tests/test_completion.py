@@ -665,6 +665,7 @@ def test_completion_mistral_api():
                     "content": "Hey, how's it going?",
                 }
             ],
+            seed=10,
         )
         # Add any assertions here to check the response
         print(response)
