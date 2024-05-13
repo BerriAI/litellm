@@ -2,8 +2,6 @@
 #    Class for sending Slack Alerts #
 import dotenv, os
 from litellm.proxy._types import UserAPIKeyAuth
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm, threading
 from typing import List, Literal, Any, Union, Optional, Dict

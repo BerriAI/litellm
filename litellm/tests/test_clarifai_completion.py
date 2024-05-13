@@ -11,7 +11,15 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion, acompletion, acreate, completion_cost, Timeout, ModelResponse
+from litellm import (
+    embedding,
+    completion,
+    acompletion,
+    acreate,
+    completion_cost,
+    Timeout,
+    ModelResponse,
+)
 from litellm import RateLimitError
 
 # litellm.num_retries = 3
@@ -20,6 +28,7 @@ litellm.success_callback = []
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
+
 @pytest.fixture(autouse=True)
 def reset_callbacks():
     print("\npytest fixture - resetting callbacks")
@@ -27,28 +36,29 @@ def reset_callbacks():
     litellm._async_success_callback = []
     litellm.failure_callback = []
     litellm.callbacks = []
-    
+
+
 def test_completion_clarifai_claude_2_1():
     print("calling clarifai claude completion")
-    import os 
-    
+    import os
+
     clarifai_pat = os.environ["CLARIFAI_API_KEY"]
-    
+
     try:
-        response =  completion(
+        response = completion(
             model="clarifai/anthropic.completion.claude-2_1",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
         )
         print(response)
-        
+
     except RateLimitError:
         pass
-    
+
     except Exception as e:
         pytest.fail(f"Error occured: {e}")
-        
+
 
 def test_completion_clarifai_mistral_large():
     try:
@@ -66,7 +76,8 @@ def test_completion_clarifai_mistral_large():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-        
+
+
 @pytest.mark.asyncio
 def test_async_completion_clarifai():
     import asyncio
@@ -88,6 +99,5 @@ def test_async_completion_clarifai():
             pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
-            
 
     asyncio.run(test_get_response())

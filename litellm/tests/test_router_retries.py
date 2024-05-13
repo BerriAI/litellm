@@ -12,6 +12,7 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+import openai, httpx
 
 
 class MyCustomHandler(CustomLogger):
@@ -191,8 +192,8 @@ async def test_dynamic_router_retry_policy(model_group):
     from litellm.router import RetryPolicy
 
     model_group_retry_policy = {
-        "gpt-3.5-turbo": RetryPolicy(ContentPolicyViolationErrorRetries=0),
-        "bad-model": RetryPolicy(AuthenticationErrorRetries=4),
+        "gpt-3.5-turbo": RetryPolicy(ContentPolicyViolationErrorRetries=2),
+        "bad-model": RetryPolicy(AuthenticationErrorRetries=0),
     }
 
     router = litellm.Router(
@@ -204,6 +205,33 @@ async def test_dynamic_router_retry_policy(model_group):
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "model_info": {
+                    "id": "model-0",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "model_info": {
+                    "id": "model-1",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "model_info": {
+                    "id": "model-2",
                 },
             },
             {
@@ -240,6 +268,264 @@ async def test_dynamic_router_retry_policy(model_group):
     print("customHandler.previous_models: ", customHandler.previous_models)
 
     if model_group == "bad-model":
-        assert customHandler.previous_models == 4
-    elif model_group == "gpt-3.5-turbo":
         assert customHandler.previous_models == 0
+    elif model_group == "gpt-3.5-turbo":
+        assert customHandler.previous_models == 2
+
+
+"""
+Unit Tests for Router Retry Logic
+
+Test 1. Retry Rate Limit Errors when there are other healthy deployments
+
+Test 2. Do not retry rate limit errors when - there are no fallbacks and no healthy deployments
+
+"""
+
+rate_limit_error = openai.RateLimitError(
+    message="Rate limit exceeded",
+    response=httpx.Response(
+        status_code=429,
+        request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+    ),
+    body={
+        "error": {
+            "type": "rate_limit_exceeded",
+            "param": None,
+            "code": "rate_limit_exceeded",
+        }
+    },
+)
+
+
+def test_retry_rate_limit_error_with_healthy_deployments():
+    """
+    Test 1. It SHOULD retry when there is a rate limit error and len(healthy_deployments) > 0
+    """
+    healthy_deployments = [
+        "deployment1",
+        "deployment2",
+    ]  # multiple healthy deployments mocked up
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    # Act & Assert
+    try:
+        response = router.should_retry_this_error(
+            error=rate_limit_error, healthy_deployments=healthy_deployments
+        )
+        print("response from should_retry_this_error: ", response)
+    except Exception as e:
+        pytest.fail(
+            "Should not have raised an error, since there are healthy deployments. Raises",
+            e,
+        )
+
+
+def test_do_not_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments():
+    """
+    Test 2. It SHOULD NOT Retry, when healthy_deployments is [] and fallbacks is None
+    """
+    healthy_deployments = []
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    # Act & Assert
+    try:
+        response = router.should_retry_this_error(
+            error=rate_limit_error, healthy_deployments=healthy_deployments
+        )
+        assert response != True, "Should have raised RateLimitError"
+    except openai.RateLimitError:
+        pass
+
+
+def test_raise_context_window_exceeded_error():
+    """
+    Retry Context Window Exceeded Error, when context_window_fallbacks is not None
+    """
+    context_window_error = litellm.ContextWindowExceededError(
+        message="Context window exceeded",
+        response=httpx.Response(
+            status_code=400,
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+        ),
+        llm_provider="azure",
+        model="gpt-3.5-turbo",
+    )
+    context_window_fallbacks = [{"gpt-3.5-turbo": ["azure/chatgpt-v-2"]}]
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    response = router.should_retry_this_error(
+        error=context_window_error,
+        healthy_deployments=None,
+        context_window_fallbacks=context_window_fallbacks,
+    )
+    assert (
+        response == True
+    ), "Should not have raised exception since we have context window fallbacks"
+
+
+def test_raise_context_window_exceeded_error_no_retry():
+    """
+    Do not Retry Context Window Exceeded Error, when context_window_fallbacks is None
+    """
+    context_window_error = litellm.ContextWindowExceededError(
+        message="Context window exceeded",
+        response=httpx.Response(
+            status_code=400,
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+        ),
+        llm_provider="azure",
+        model="gpt-3.5-turbo",
+    )
+    context_window_fallbacks = None
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    try:
+        response = router.should_retry_this_error(
+            error=context_window_error,
+            healthy_deployments=None,
+            context_window_fallbacks=context_window_fallbacks,
+        )
+        assert (
+            response != True
+        ), "Should have raised exception since we do not have context window fallbacks"
+    except litellm.ContextWindowExceededError:
+        pass
+
+
+## Unit test time to back off for router retries
+
+"""
+1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
+2. Timeout is 0.0 when RateLimit Error and fallbacks are > 0
+3. Timeout is > 0.0 when RateLimit Error and healthy deployments == 0 and fallbacks == None
+"""
+
+
+def test_timeout_for_rate_limit_error_with_healthy_deployments():
+    """
+    Test 1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
+    """
+    healthy_deployments = [
+        "deployment1",
+        "deployment2",
+    ]  # multiple healthy deployments mocked up
+    fallbacks = None
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    _timeout = router._time_to_sleep_before_retry(
+        e=rate_limit_error,
+        remaining_retries=4,
+        num_retries=4,
+        healthy_deployments=healthy_deployments,
+    )
+
+    print(
+        "timeout=",
+        _timeout,
+        "error is rate_limit_error and there are healthy deployments=",
+        healthy_deployments,
+    )
+
+    assert _timeout == 0.0
+
+
+def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
+    """
+    Test 2. Timeout is > 0.0 when RateLimit Error and healthy deployments == 0
+    """
+    healthy_deployments = []
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    _timeout = router._time_to_sleep_before_retry(
+        e=rate_limit_error,
+        remaining_retries=4,
+        num_retries=4,
+        healthy_deployments=healthy_deployments,
+    )
+
+    print(
+        "timeout=",
+        _timeout,
+        "error is rate_limit_error and there are no healthy deployments",
+    )
+
+    assert _timeout > 0.0

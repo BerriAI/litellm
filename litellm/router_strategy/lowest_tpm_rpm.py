@@ -4,8 +4,6 @@
 import dotenv, os, requests, random
 from typing import Optional, Union, List, Dict
 from datetime import datetime
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm import token_counter
 from litellm.caching import DualCache
