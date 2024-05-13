@@ -590,19 +590,20 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-def test_gemini_pro_function_calling():
+async def test_gemini_pro_function_calling(sync_mode):
     try:
         load_vertex_ai_credentials()
-        response = litellm.completion(
-            model="vertex_ai/gemini-pro",
-            messages=[
+        data = {
+            "model": "vertex_ai/gemini-pro",
+            "messages": [
                 {
                     "role": "user",
                     "content": "Call the submit_cities function with San Francisco and New York",
                 }
             ],
-            tools=[
+            "tools": [
                 {
                     "type": "function",
                     "function": {
@@ -618,11 +619,13 @@ def test_gemini_pro_function_calling():
                     },
                 }
             ],
-        )
+        }
+        if sync_mode:
+            response = litellm.completion(**data)
+        else:
+            response = await litellm.acompletion(**data)
 
         print(f"response: {response}")
-    except litellm.APIError as e:
-        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
