@@ -229,6 +229,40 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
 
 
 @pytest.mark.asyncio
+async def test_langfuse_masked_input_output(langfuse_client):
+    """
+    Test that creates a trace with masked input and output
+    """
+    import uuid
+
+    for mask_value in [True, False]:
+        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
+        litellm.set_verbose = True
+        litellm.success_callback = ["langfuse"]
+        response = await create_async_task(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "This is a test"}],
+            metadata={"trace_id": _unique_trace_name, "mask_input": mask_value, "mask_output": mask_value},
+            mock_response="This is a test response"
+        )
+        print(response)
+        expected_input = "redacted-by-litellm" if mask_value else {'messages': [{'content': 'This is a test', 'role': 'user'}]}
+        expected_output = "redacted-by-litellm" if mask_value else {'content': 'This is a test response', 'role': 'assistant'}
+        langfuse_client.flush()
+        await asyncio.sleep(2)
+
+        # get trace with _unique_trace_name
+        trace = langfuse_client.get_trace(id=_unique_trace_name)
+        generations = list(
+            reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
+        )
+
+        assert trace.input == expected_input
+        assert trace.output == expected_output
+        assert generations[0].input == expected_input
+        assert generations[0].output == expected_output
+
+@pytest.mark.asyncio
 async def test_langfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields
