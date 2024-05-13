@@ -1,6 +1,6 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 import httpx
-from pydantic import BaseModel, validator, Field
+from pydantic import ConfigDict, BaseModel, validator, Field
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 import uuid, enum
@@ -12,8 +12,9 @@ class ModelConfig(BaseModel):
     tpm: int
     rpm: int
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
 
 
 class RouterConfig(BaseModel):
@@ -44,8 +45,9 @@ class RouterConfig(BaseModel):
         "latency-based-routing",
     ] = "simple-shuffle"
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
 
 
 class UpdateRouterConfig(BaseModel):
@@ -65,8 +67,9 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
 
 
 class ModelInfo(BaseModel):
@@ -84,8 +87,9 @@ class ModelInfo(BaseModel):
             id = str(id)
         super().__init__(id=id, **params)
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(
+        extra = "allow",
+    )
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -273,8 +277,9 @@ class updateDeployment(BaseModel):
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
 
 
 class Deployment(BaseModel):
@@ -307,9 +312,10 @@ class Deployment(BaseModel):
             # if using pydantic v1
             return self.dict(**kwargs)
 
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        extra = "allow",
+        protected_namespaces = (),
+    )
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
