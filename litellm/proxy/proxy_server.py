@@ -5415,50 +5415,48 @@ async def global_view_spend_tags(
         )
 
 
-async def _get_weekly_spend_reports():
+async def _get_spend_report_for_time_range(
+    start_date: str,
+    end_date: str,
+):
     global prisma_client
-    todays_date = datetime.now().date()
-    _week_before = todays_date - timedelta(days=7)
-
-    todays_date = todays_date.strftime("%Y-%m-%d")
-    _week_before = _week_before.strftime("%Y-%m-%d")
+    if prisma_client is None:
+        verbose_proxy_logger.error(
+            f"Database not connected. Connect a database to your proxy for weekly, monthly spend reports"
+        )
+        return None
 
     try:
-
         sql_query = """
         SELECT
             t.team_alias,
-            SUM(s.spend) AS total_spend,
-            s."startTime"::DATE AS log_date
+            SUM(s.spend) AS total_spend
         FROM
             "LiteLLM_SpendLogs" s
         LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            s."startTime"::DATE BETWEEN $1::date AND $1::date
+            s."startTime"::DATE >= $1::date AND s."startTime"::DATE <= $2::date
         GROUP BY
-            t.team_alias,
-            log_date
+            t.team_alias
         ORDER BY
             total_spend DESC;
         """
-        response = await prisma_client.db.query_raw(
-            sql_query, todays_date, _week_before
-        )
+        response = await prisma_client.db.query_raw(sql_query, start_date, end_date)
 
         # get spend per tag for today
         sql_query = """
         SELECT 
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        "startTime"::DATE AS log_date,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime"::DATE BETWEEN $1::date AND $1::date
-        GROUP BY individual_request_tag, log_date;
+        WHERE "startTime"::DATE >= $1::date AND "startTime"::DATE <= $2::date
+        GROUP BY individual_request_tag
+        ORDER BY total_spend DESC;
         """
 
         spend_per_tag = await prisma_client.db.query_raw(
-            sql_query, todays_date, _week_before
+            sql_query, start_date, end_date
         )
 
         return response, spend_per_tag
