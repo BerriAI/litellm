@@ -3479,6 +3479,26 @@ async def startup_event():
             await proxy_config.add_deployment(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
+
+        if (
+            proxy_logging_obj is not None
+            and proxy_logging_obj.slack_alerting_instance is not None
+            and prisma_client is not None
+        ):
+            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
+            ### Schedule weekly/monhtly spend reports ###
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
+                "cron",
+                day_of_week="mon",
+            )
+
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
+                "cron",
+                day=1,
+            )
+
         scheduler.start()
 
 
@@ -5431,6 +5451,55 @@ async def global_view_spend_tags(
         )
 
 
+async def _get_spend_report_for_time_range(
+    start_date: str,
+    end_date: str,
+):
+    global prisma_client
+    if prisma_client is None:
+        verbose_proxy_logger.error(
+            f"Database not connected. Connect a database to your proxy for weekly, monthly spend reports"
+        )
+        return None
+
+    try:
+        sql_query = """
+        SELECT
+            t.team_alias,
+            SUM(s.spend) AS total_spend
+        FROM
+            "LiteLLM_SpendLogs" s
+        LEFT JOIN
+            "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+        WHERE
+            s."startTime"::DATE >= $1::date AND s."startTime"::DATE <= $2::date
+        GROUP BY
+            t.team_alias
+        ORDER BY
+            total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(sql_query, start_date, end_date)
+
+        # get spend per tag for today
+        sql_query = """
+        SELECT 
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime"::DATE >= $1::date AND "startTime"::DATE <= $2::date
+        GROUP BY individual_request_tag
+        ORDER BY total_spend DESC;
+        """
+
+        spend_per_tag = await prisma_client.db.query_raw(
+            sql_query, start_date, end_date
+        )
+
+        return response, spend_per_tag
+    except Exception as e:
+        verbose_proxy_logger.error("Exception in _get_daily_spend_reports", e)  # noqa
+
+
 @router.post(
     "/spend/calculate",
     tags=["Budget & Spend Tracking"],
@@ -5818,7 +5887,7 @@ async def global_spend_keys(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def global_spend_per_tea():
+async def global_spend_per_team():
     """
     [BETA] This is a beta endpoint. It will change.
 
@@ -9502,6 +9571,14 @@ async def health_services_endpoint(
                         message="This is a test slack alert message",
                         level="Low",
                         alert_type="budget_alerts",
+                    )
+
+                if prisma_client is not None:
+                    asyncio.create_task(
+                        proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
+                    )
+                    asyncio.create_task(
+                        proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report()
                     )
                 return {
                     "status": "success",
