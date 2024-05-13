@@ -3698,8 +3698,9 @@ async def chat_completion(
         # skip router if user passed their key
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
-        elif isinstance(data["model"], list) and llm_router is not None:
-            _models = data.pop("model")
+        elif "," in data["model"] and llm_router is not None:
+            _models_csv_string = data.pop("model")
+            _models = _models_csv_string.split(",")
             tasks.append(llm_router.abatch_completion(models=_models, **data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
@@ -3761,6 +3762,7 @@ async def chat_completion(
                 "x-litellm-cache-key": cache_key,
                 "x-litellm-model-api-base": api_base,
                 "x-litellm-version": version,
+                "x-litellm-model-region": user_api_key_dict.allowed_model_region or "",
             }
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3777,6 +3779,9 @@ async def chat_completion(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -4161,6 +4166,9 @@ async def embeddings(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
@@ -4330,6 +4338,9 @@ async def image_generation(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
@@ -4523,6 +4534,9 @@ async def audio_transcriptions(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
@@ -4698,6 +4712,9 @@ async def moderations(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
