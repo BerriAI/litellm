@@ -5415,6 +5415,57 @@ async def global_view_spend_tags(
         )
 
 
+async def _get_weekly_spend_reports():
+    global prisma_client
+    todays_date = datetime.now().date()
+    _week_before = todays_date - timedelta(days=7)
+
+    todays_date = todays_date.strftime("%Y-%m-%d")
+    _week_before = _week_before.strftime("%Y-%m-%d")
+
+    try:
+
+        sql_query = """
+        SELECT
+            t.team_alias,
+            SUM(s.spend) AS total_spend,
+            s."startTime"::DATE AS log_date
+        FROM
+            "LiteLLM_SpendLogs" s
+        LEFT JOIN
+            "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+        WHERE
+            s."startTime"::DATE BETWEEN $1::date AND $1::date
+        GROUP BY
+            t.team_alias,
+            log_date
+        ORDER BY
+            total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query, todays_date, _week_before
+        )
+
+        # get spend per tag for today
+        sql_query = """
+        SELECT 
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        "startTime"::DATE AS log_date,
+        SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime"::DATE BETWEEN $1::date AND $1::date
+        GROUP BY individual_request_tag, log_date;
+        """
+
+        spend_per_tag = await prisma_client.db.query_raw(
+            sql_query, todays_date, _week_before
+        )
+
+        return response, spend_per_tag
+    except Exception as e:
+        verbose_proxy_logger.error("Exception in _get_daily_spend_reports", e)  # noqa
+
+
 @router.post(
     "/spend/calculate",
     tags=["Budget & Spend Tracking"],
@@ -5802,7 +5853,7 @@ async def global_spend_keys(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def global_spend_per_tea():
+async def global_spend_per_team():
     """
     [BETA] This is a beta endpoint. It will change.
 
