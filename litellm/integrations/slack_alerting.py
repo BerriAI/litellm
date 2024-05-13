@@ -887,8 +887,6 @@ Model Info:
     async def send_weekly_spend_report(self):
         """ """
         try:
-            await asyncio.sleep(10)
-
             from litellm.proxy.proxy_server import _get_spend_report_for_time_range
 
             todays_date = datetime.datetime.now().date()
@@ -935,8 +933,6 @@ Model Info:
         """ """
         try:
             from calendar import monthrange
-
-            await asyncio.sleep(10)
 
             from litellm.proxy.proxy_server import _get_spend_report_for_time_range
 
