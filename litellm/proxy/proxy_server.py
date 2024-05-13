@@ -3577,12 +3577,10 @@ async def chat_completion(
         if "api-version" in query_params:
             data["api_version"] = query_params["api-version"]
 
-        # Allow OpenAI and Anthropic's auth headers to be used as api_key
+        # Allow OpenAI Spec Auth headers
         if litellm.use_llm_key_in_header or 'api_key' not in data:
-            if auth_bearer := request.headers.get('AUTHORIZATION'):  # OpenAI
+            if auth_bearer := request.headers.get('AUTHORIZATION'):
                 data['api_key'] = _get_bearer_token(auth_bearer)
-            elif value_of_x_api_key := request.headers.get('X-API-KEY'):  # Anthropic
-                data['api_key'] = value_of_x_api_key
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
@@ -6620,9 +6618,9 @@ async def new_end_user(
     """
     [TODO] Needs to be implemented.
 
-    Allow creating a new end-user 
+    Allow creating a new end-user
 
-    - Allow specifying allowed regions 
+    - Allow specifying allowed regions
     - Allow specifying default model
 
     Example curl:
@@ -6632,12 +6630,12 @@ async def new_end_user(
         --header 'Content-Type: application/json' \
         --data '{
             "end_user_id" : "ishaan-jaff-3", <- specific customer
-            
-            "allowed_region": "eu" <- set region for models        
 
-                    + 
+            "allowed_region": "eu" <- set region for models
 
-            "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model? 
+                    +
+
+            "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model?
 
         }'
 
