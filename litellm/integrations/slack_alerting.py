@@ -883,3 +883,51 @@ Model Info:
                 )  # shuffle to prevent collisions
                 await asyncio.sleep(interval)
         return
+
+    async def send_weekly_spend_report(self):
+        """ """
+        try:
+            await asyncio.sleep(10)
+
+            from litellm.proxy.proxy_server import _get_weekly_spend_reports
+
+            weekly_spend_per_team, weekly_spend_per_tag = (
+                await _get_weekly_spend_reports()
+            )
+            todays_date = datetime.datetime.now().date()
+            week_before = todays_date - datetime.timedelta(days=7)
+
+            todays_date = todays_date.strftime("%m-%d-%Y")
+            week_before = week_before.strftime("%m-%d-%Y")
+
+            _weekly_spend_message = (
+                f"*💸 Weekly Spend Report for `{week_before} - {todays_date}` *\n"
+            )
+
+            if weekly_spend_per_team is not None:
+                _weekly_spend_message += "\n*Team Spend Report:*\n"
+                for spend in weekly_spend_per_team:
+                    _team_spend = spend["total_spend"]
+                    _team_spend = float(_team_spend)
+                    # round to 4 decimal places
+                    _team_spend = round(_team_spend, 4)
+                    _weekly_spend_message += (
+                        f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
+                    )
+
+            if weekly_spend_per_tag is not None:
+                _weekly_spend_message += "\n*Tag Spend Report:*\n"
+                for spend in weekly_spend_per_tag:
+                    _tag_spend = spend["total_spend"]
+                    _tag_spend = float(_tag_spend)
+                    # round to 4 decimal places
+                    _tag_spend = round(_tag_spend, 4)
+                    _weekly_spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"
+
+            await self.send_alert(
+                message=_weekly_spend_message,
+                level="Low",
+                alert_type="daily_reports",
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Error sending weekly spend report", e)
