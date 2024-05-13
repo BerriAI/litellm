@@ -5385,6 +5385,97 @@ async def view_spend_tags(
 
 
 @router.get(
+    "/global/spend/report",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def get_global_spend_report(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view spend",
+    ),
+):
+    """
+    Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
+    [
+        {
+            "group-by-day": "2024-05-10",
+            "teams": [
+                {
+                    "team_name": "team-1"
+                    "spend": 10,
+                    "keys": [
+                        "key": "1213",
+                        "usage": {
+                            "model-1": {
+                                    "cost": 12.50,
+                                    "input_tokens": 1000,
+                                    "output_tokens": 5000,
+                                    "requests": 100
+                                },
+                                "audio-modelname1": {
+                                "cost": 25.50,
+                                "seconds": 25,
+                                "requests": 50
+                        },
+                        }
+                    }
+            ]
+        ]
+    }
+    """
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        sql_query = """
+            SELECT
+            date_trunc('day', sl."startTime") AS group_by_day,
+            COALESCE(tt.team_alias, 'Unassigned Team') AS team_alias,
+            sl.api_key,
+            sl.model,
+            SUM(sl.total_tokens) AS total_tokens,
+            SUM(sl.spend) AS total_spend
+        FROM "LiteLLM_SpendLogs" sl
+        LEFT JOIN "LiteLLM_TeamTable" tt ON sl.team_id = tt.team_id
+        WHERE
+            sl."startTime" BETWEEN $1 AND $2
+        GROUP BY
+            group_by_day,
+            COALESCE(tt.team_alias, 'Unassigned Team'),
+            sl.api_key,
+            sl.model
+        """
+
+        return
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
     "/global/spend/tags",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
