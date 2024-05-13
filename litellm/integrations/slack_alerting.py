@@ -76,16 +76,14 @@ class SlackAlerting(CustomLogger):
         internal_usage_cache: Optional[DualCache] = None,
         alerting_threshold: float = 300,  # threshold for slow / hanging llm responses (in seconds)
         alerting: Optional[List] = [],
-        alert_types: Optional[
-            List[
-                Literal[
-                    "llm_exceptions",
-                    "llm_too_slow",
-                    "llm_requests_hanging",
-                    "budget_alerts",
-                    "db_exceptions",
-                    "daily_reports",
-                ]
+        alert_types: List[
+            Literal[
+                "llm_exceptions",
+                "llm_too_slow",
+                "llm_requests_hanging",
+                "budget_alerts",
+                "db_exceptions",
+                "daily_reports",
             ]
         ] = [
             "llm_exceptions",
@@ -811,14 +809,6 @@ Model Info:
                     latency_per_output_token=None,
                     updated_at=litellm.utils.get_utc_datetime(),
                 )
-            )
-        if "llm_exceptions" in self.alert_types:
-            original_exception = kwargs.get("exception", None)
-
-            await self.send_alert(
-                message="LLM API Failure - " + str(original_exception),
-                level="High",
-                alert_type="llm_exceptions",
             )
 
     async def _run_scheduler_helper(self, llm_router) -> bool:
