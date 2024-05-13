@@ -31,7 +31,8 @@ class LiteLLMBase(BaseModel):
 
 
 class SlackAlertingArgs(LiteLLMBase):
-    daily_report_frequency: int = 12 * 60 * 60  # 12 hours
+    default_daily_report_frequency: int = 12 * 60 * 60  # 12 hours
+    daily_report_frequency: int = os.getenv("SLACK_DAILY_REPORT_FREQUENCY", default_daily_report_frequency)
     report_check_interval: int = 5 * 60  # 5 minutes
 
 
