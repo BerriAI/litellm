@@ -5849,6 +5849,7 @@ def get_optional_params(
         for k in passed_params.keys():
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
+    if custom_llm_provider == "openai" and "qwen" in model: optional_params.pop("user", None)
     print_verbose(f"Final returned optional params: {optional_params}")
     return optional_params
 
