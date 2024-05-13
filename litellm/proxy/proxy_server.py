@@ -9555,6 +9555,14 @@ async def health_services_endpoint(
                         level="Low",
                         alert_type="budget_alerts",
                     )
+
+                if prisma_client is not None:
+                    asyncio.create_task(
+                        proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
+                    )
+                    asyncio.create_task(
+                        proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report()
+                    )
                 return {
                     "status": "success",
                     "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
