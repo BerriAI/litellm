@@ -58,16 +58,25 @@ class AsyncHTTPHandler:
 
 class HTTPHandler:
     def __init__(
-        self, timeout: httpx.Timeout = _DEFAULT_TIMEOUT, concurrent_limit=1000
+        self,
+        timeout: Optional[httpx.Timeout] = None,
+        concurrent_limit=1000,
+        client: Optional[httpx.Client] = None,
     ):
-        # Create a client with a connection pool
-        self.client = httpx.Client(
-            timeout=timeout,
-            limits=httpx.Limits(
-                max_connections=concurrent_limit,
-                max_keepalive_connections=concurrent_limit,
-            ),
-        )
+        if timeout is None:
+            timeout = _DEFAULT_TIMEOUT
+
+        if client is None:
+            # Create a client with a connection pool
+            self.client = httpx.Client(
+                timeout=timeout,
+                limits=httpx.Limits(
+                    max_connections=concurrent_limit,
+                    max_keepalive_connections=concurrent_limit,
+                ),
+            )
+        else:
+            self.client = client
 
     def close(self):
         # Close the client when you're done with it
@@ -82,11 +91,15 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: Optional[dict] = None,
+        data: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
+        stream: bool = False,
     ):
-        response = self.client.post(url, data=data, params=params, headers=headers)
+        req = self.client.build_request(
+            "POST", url, data=data, params=params, headers=headers  # type: ignore
+        )
+        response = self.client.send(req, stream=stream)
         return response
 
     def __del__(self) -> None:

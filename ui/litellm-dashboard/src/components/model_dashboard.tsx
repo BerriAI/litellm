@@ -152,7 +152,7 @@ const handleSubmit = async (formValues: Record<string, any>, accessToken: string
               litellmExtraParams = JSON.parse(value);
             }
             catch (error) {
-              message.error("Failed to parse LiteLLM Extra Params: " + error, 20);
+              message.error("Failed to parse LiteLLM Extra Params: " + error, 10);
               throw new Error("Failed to parse litellm_extra_params: " + error);
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
@@ -188,7 +188,7 @@ const handleSubmit = async (formValues: Record<string, any>, accessToken: string
 
     
     } catch (error) {
-      message.error("Failed to create model: " + error, 20);
+      message.error("Failed to create model: " + error, 10);
     }
 }
 
