@@ -889,20 +889,19 @@ Model Info:
         try:
             await asyncio.sleep(10)
 
-            from litellm.proxy.proxy_server import _get_weekly_spend_reports
+            from litellm.proxy.proxy_server import _get_spend_report_for_time_range
 
-            weekly_spend_per_team, weekly_spend_per_tag = (
-                await _get_weekly_spend_reports()
-            )
             todays_date = datetime.datetime.now().date()
             week_before = todays_date - datetime.timedelta(days=7)
 
-            todays_date = todays_date.strftime("%m-%d-%Y")
-            week_before = week_before.strftime("%m-%d-%Y")
-
-            _weekly_spend_message = (
-                f"*💸 Weekly Spend Report for `{week_before} - {todays_date}` *\n"
+            weekly_spend_per_team, weekly_spend_per_tag = (
+                await _get_spend_report_for_time_range(
+                    start_date=week_before.strftime("%Y-%m-%d"),
+                    end_date=todays_date.strftime("%Y-%m-%d"),
+                )
             )
+
+            _weekly_spend_message = f"*💸 Weekly Spend Report for `{week_before.strftime('%m-%d-%Y')} - {todays_date.strftime('%m-%d-%Y')}` *\n"
 
             if weekly_spend_per_team is not None:
                 _weekly_spend_message += "\n*Team Spend Report:*\n"
@@ -926,6 +925,59 @@ Model Info:
 
             await self.send_alert(
                 message=_weekly_spend_message,
+                level="Low",
+                alert_type="daily_reports",
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Error sending weekly spend report", e)
+
+    async def send_monthly_spend_report(self):
+        """ """
+        try:
+            from calendar import monthrange
+
+            await asyncio.sleep(10)
+
+            from litellm.proxy.proxy_server import _get_spend_report_for_time_range
+
+            todays_date = datetime.datetime.now().date()
+            first_day_of_month = todays_date.replace(day=1)
+            _, last_day_of_month = monthrange(todays_date.year, todays_date.month)
+            last_day_of_month = first_day_of_month + datetime.timedelta(
+                days=last_day_of_month - 1
+            )
+
+            monthly_spend_per_team, monthly_spend_per_tag = (
+                await _get_spend_report_for_time_range(
+                    start_date=first_day_of_month.strftime("%Y-%m-%d"),
+                    end_date=last_day_of_month.strftime("%Y-%m-%d"),
+                )
+            )
+
+            _spend_message = f"*💸 Monthly Spend Report for `{first_day_of_month.strftime('%m-%d-%Y')} - {last_day_of_month.strftime('%m-%d-%Y')}` *\n"
+
+            if monthly_spend_per_team is not None:
+                _spend_message += "\n*Team Spend Report:*\n"
+                for spend in monthly_spend_per_team:
+                    _team_spend = spend["total_spend"]
+                    _team_spend = float(_team_spend)
+                    # round to 4 decimal places
+                    _team_spend = round(_team_spend, 4)
+                    _spend_message += (
+                        f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
+                    )
+
+            if monthly_spend_per_tag is not None:
+                _spend_message += "\n*Tag Spend Report:*\n"
+                for spend in monthly_spend_per_tag:
+                    _tag_spend = spend["total_spend"]
+                    _tag_spend = float(_tag_spend)
+                    # round to 4 decimal places
+                    _tag_spend = round(_tag_spend, 4)
+                    _spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"
+
+            await self.send_alert(
+                message=_spend_message,
                 level="Low",
                 alert_type="daily_reports",
             )
