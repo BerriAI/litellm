@@ -2214,15 +2214,15 @@ class ToolCalls(BaseModel):
 
 class Delta(BaseModel):
     role: str
-    content: Optional[str] = None
+    content: Optional[str]
     tool_calls: List[ToolCalls]
 
 
 class Choices(BaseModel):
     index: int
     delta: Delta
-    logprobs: Optional[str] = None
-    finish_reason: Optional[str] = None
+    logprobs: Optional[str]
+    finish_reason: Optional[str]
 
 
 class Chunk(BaseModel):
@@ -2276,7 +2276,7 @@ class Function2(BaseModel):
 
 class ToolCalls2(BaseModel):
     index: int
-    function: Optional[Function2] = None
+    function: Optional[Function2]
 
 
 class Delta2(BaseModel):
@@ -2286,8 +2286,8 @@ class Delta2(BaseModel):
 class Choices2(BaseModel):
     index: int
     delta: Delta2
-    logprobs: Optional[str] = None
-    finish_reason: Optional[str] = None
+    logprobs: Optional[str]
+    finish_reason: Optional[str]
 
 
 class Chunk2(BaseModel):
@@ -2341,7 +2341,7 @@ class Delta3(BaseModel):
 class Choices3(BaseModel):
     index: int
     delta: Delta3
-    logprobs: Optional[str] = None
+    logprobs: Optional[str]
     finish_reason: str
 
 
