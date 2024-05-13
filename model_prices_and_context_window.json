@@ -2,7 +2,7 @@
     "gpt-4o": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 2048,
         "input_cost_per_token": 0.000005,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "openai",
@@ -14,7 +14,7 @@
     "gpt-4o-2024-05-13": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 2048,
         "input_cost_per_token": 0.000005,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "openai",
