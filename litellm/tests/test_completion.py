@@ -1305,7 +1305,7 @@ def test_hf_classifier_task():
 
 ########################### End of Hugging Face Tests ##############################################
 # def test_completion_hf_api():
-# # failing on circle ci commenting out
+# # failing on circle-ci commenting out
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
@@ -2584,6 +2584,69 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
+def response_format_tests(response: litellm.ModelResponse):
+    assert isinstance(response.id, str)
+    assert response.id != ""
+
+    assert isinstance(response.object, str)
+    assert response.object != ""
+
+    assert isinstance(response.created, int)
+
+    assert isinstance(response.model, str)
+    assert response.model != ""
+
+    assert isinstance(response.choices, list)
+    assert len(response.choices) == 1
+    choice = response.choices[0]
+    assert isinstance(choice, litellm.Choices)
+    assert isinstance(choice.get("index"), int)
+
+    message = choice.get("message")
+    assert isinstance(message, litellm.Message)
+    assert isinstance(message.get("role"), str)
+    assert message.get("role") != ""
+    assert isinstance(message.get("content"), str)
+    assert message.get("content") != ""
+
+    assert choice.get("logprobs") is None
+    assert isinstance(choice.get("finish_reason"), str)
+    assert choice.get("finish_reason") != ""
+
+    assert isinstance(response.usage, litellm.Usage)  # type: ignore
+    assert isinstance(response.usage.prompt_tokens, int)  # type: ignore
+    assert isinstance(response.usage.completion_tokens, int)  # type: ignore
+    assert isinstance(response.usage.total_tokens, int)  # type: ignore
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_bedrock_command_r(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        response = completion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        response_format_tests(response=response)
+    else:
+        response = await litellm.acompletion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        print(f"response: {response}")
+        response_format_tests(response=response)
+
+    print(f"response: {response}")
+
+
 def test_completion_bedrock_titan_null_response():
     try:
         response = completion(
@@ -3236,6 +3299,7 @@ def test_completion_watsonx():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_stream_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3245,7 +3309,7 @@ def test_completion_stream_watsonx():
             messages=messages,
             stop=["stop"],
             max_tokens=20,
-            stream=True
+            stream=True,
         )
         for chunk in response:
             print(chunk)
@@ -3318,6 +3382,7 @@ async def test_acompletion_watsonx():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.mark.asyncio
 async def test_acompletion_stream_watsonx():
     litellm.set_verbose = True
@@ -3329,7 +3394,7 @@ async def test_acompletion_stream_watsonx():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            stream=True
+            stream=True,
         )
         # Add any assertions here to check the response
         async for chunk in response:

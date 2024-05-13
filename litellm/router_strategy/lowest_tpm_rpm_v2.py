@@ -5,8 +5,6 @@ import dotenv, os, requests, random
 from typing import Optional, Union, List, Dict
 import datetime as datetime_og
 from datetime import datetime
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback, asyncio, httpx
 import litellm
 from litellm import token_counter
