@@ -3483,6 +3483,7 @@ async def startup_event():
         if (
             proxy_logging_obj is not None
             and proxy_logging_obj.slack_alerting_instance is not None
+            and prisma_client is not None
         ):
             print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
             ### Schedule weekly/monhtly spend reports ###
