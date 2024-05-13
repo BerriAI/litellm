@@ -654,7 +654,7 @@ model_list = [{...}]
 
 router = Router(model_list=model_list, 
                 allowed_fails=1,      # cooldown model if it fails > 1 call in a minute. 
-				cooldown_time=100    # cooldown the deployment for 100 secons if it num_fails > allowed_fails
+				cooldown_time=100    # cooldown the deployment for 100 seconds if it num_fails > allowed_fails
 		)
 
 user_message = "Hello, whats the weather in San Francisco??"
