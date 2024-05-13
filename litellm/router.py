@@ -1444,6 +1444,9 @@ class Router:
                             response = await self.async_function_with_retries(
                                 *args, **kwargs
                             )
+                            verbose_router_logger.info(
+                                "Successful fallback b/w models."
+                            )
                             return response
                         except Exception as e:
                             pass
@@ -1477,6 +1480,9 @@ class Router:
                             )  # update model_group used, if fallbacks are done
                             response = await self.async_function_with_fallbacks(
                                 *args, **kwargs
+                            )
+                            verbose_router_logger.info(
+                                "Successful fallback b/w models."
                             )
                             return response
                         except Exception as e:
