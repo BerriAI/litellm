@@ -5,6 +5,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import time
+from typing import Optional
 import litellm
 from litellm import (
     get_max_tokens,
@@ -12,7 +13,56 @@ from litellm import (
     open_ai_chat_completion_models,
     TranscriptionResponse,
 )
-import pytest
+from litellm.utils import CustomLogger
+import pytest, asyncio
+
+
+class CustomLoggingHandler(CustomLogger):
+    response_cost: Optional[float] = None
+
+    def __init__(self):
+        super().__init__()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.response_cost = kwargs["response_cost"]
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"kwargs - {kwargs}")
+        print(f"kwargs response cost - {kwargs.get('response_cost')}")
+        self.response_cost = kwargs["response_cost"]
+
+        print(f"response_cost: {self.response_cost} ")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_custom_pricing(sync_mode):
+    new_handler = CustomLoggingHandler()
+    litellm.callbacks = [new_handler]
+    if sync_mode:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey!"}],
+            mock_response="What do you want?",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+        )
+        time.sleep(5)
+    else:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey!"}],
+            mock_response="What do you want?",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+        )
+
+        await asyncio.sleep(5)
+
+    print(f"new_handler.response_cost: {new_handler.response_cost}")
+    assert new_handler.response_cost is not None
+
+    assert new_handler.response_cost == 0
 
 
 def test_get_gpt3_tokens():
