@@ -12,7 +12,7 @@ Use the `/global/spend/report` endpoint to get daily spend per team, with a brea
 ### Example Request
 
 ```shell
-curl -X GET 'http://localhost:4000/global/spend/report?start_date=2023-04-01&end_date=2024-06-30' \
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
