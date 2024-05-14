@@ -368,9 +368,10 @@ async def test_send_daily_reports_ignores_zero_values():
     router.get_model_ids.return_value = ['model1', 'model2', 'model3']
     
     slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
-    # model1: failed=None, latency=0; model2: failed=0, latency=0; model3: failed=10, latency=None
-    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(return_value=[None, 0, 0, 0, 10, None])
-    
+    # model1:failed=None, model2:failed=0, model3:failed=10, model1:latency=0; model2:latency=0; model3:latency=None
+    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(return_value=[None, 0, 10, 0, 0, None])
+    slack_alerting.internal_usage_cache.async_batch_set_cache = AsyncMock()
+
     router.get_model_info.side_effect = lambda x: {"litellm_params": {"model": x}}
     
     with patch.object(slack_alerting, 'send_alert', new=AsyncMock()) as mock_send_alert:
