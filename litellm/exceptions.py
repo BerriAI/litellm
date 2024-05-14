@@ -9,25 +9,12 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-from openai import (
-    AuthenticationError,
-    BadRequestError,
-    NotFoundError,
-    RateLimitError,
-    APIStatusError,
-    OpenAIError,
-    APIError,
-    APITimeoutError,
-    APIConnectionError,
-    APIResponseValidationError,
-    UnprocessableEntityError,
-    PermissionDeniedError,
-)
+import openai
 import httpx
 from typing import Optional
 
 
-class AuthenticationError(AuthenticationError):  # type: ignore
+class AuthenticationError(openai.AuthenticationError):  # type: ignore
     def __init__(self, message, llm_provider, model, response: httpx.Response):
         self.status_code = 401
         self.message = message
@@ -39,7 +26,7 @@ class AuthenticationError(AuthenticationError):  # type: ignore
 
 
 # raise when invalid models passed, example gpt-8
-class NotFoundError(NotFoundError):  # type: ignore
+class NotFoundError(openai.NotFoundError):  # type: ignore
     def __init__(self, message, model, llm_provider, response: httpx.Response):
         self.status_code = 404
         self.message = message
@@ -50,7 +37,7 @@ class NotFoundError(NotFoundError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
-class BadRequestError(BadRequestError):  # type: ignore
+class BadRequestError(openai.BadRequestError):  # type: ignore
     def __init__(
         self, message, model, llm_provider, response: Optional[httpx.Response] = None
     ):
@@ -69,7 +56,7 @@ class BadRequestError(BadRequestError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
-class UnprocessableEntityError(UnprocessableEntityError):  # type: ignore
+class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
     def __init__(self, message, model, llm_provider, response: httpx.Response):
         self.status_code = 422
         self.message = message
@@ -80,7 +67,7 @@ class UnprocessableEntityError(UnprocessableEntityError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
-class Timeout(APITimeoutError):  # type: ignore
+class Timeout(openai.APITimeoutError):  # type: ignore
     def __init__(self, message, model, llm_provider):
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(
@@ -96,7 +83,7 @@ class Timeout(APITimeoutError):  # type: ignore
         return str(self.message)
 
 
-class PermissionDeniedError(PermissionDeniedError):  # type:ignore
+class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
     def __init__(self, message, llm_provider, model, response: httpx.Response):
         self.status_code = 403
         self.message = message
@@ -107,7 +94,7 @@ class PermissionDeniedError(PermissionDeniedError):  # type:ignore
         )  # Call the base class constructor with the parameters it needs
 
 
-class RateLimitError(RateLimitError):  # type: ignore
+class RateLimitError(openai.RateLimitError):  # type: ignore
     def __init__(self, message, llm_provider, model, response: httpx.Response):
         self.status_code = 429
         self.message = message
@@ -148,7 +135,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
-class ServiceUnavailableError(APIStatusError):  # type: ignore
+class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
     def __init__(self, message, llm_provider, model, response: httpx.Response):
         self.status_code = 503
         self.message = message
@@ -160,7 +147,7 @@ class ServiceUnavailableError(APIStatusError):  # type: ignore
 
 
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
-class APIError(APIError):  # type: ignore
+class APIError(openai.APIError):  # type: ignore
     def __init__(
         self, status_code, message, llm_provider, model, request: httpx.Request
     ):
@@ -172,7 +159,7 @@ class APIError(APIError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIConnectionError(APIConnectionError):  # type: ignore
+class APIConnectionError(openai.APIConnectionError):  # type: ignore
     def __init__(self, message, llm_provider, model, request: httpx.Request):
         self.message = message
         self.llm_provider = llm_provider
@@ -182,7 +169,7 @@ class APIConnectionError(APIConnectionError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIResponseValidationError(APIResponseValidationError):  # type: ignore
+class APIResponseValidationError(openai.APIResponseValidationError):  # type: ignore
     def __init__(self, message, llm_provider, model):
         self.message = message
         self.llm_provider = llm_provider
@@ -192,7 +179,7 @@ class APIResponseValidationError(APIResponseValidationError):  # type: ignore
         super().__init__(response=response, body=None, message=message)
 
 
-class OpenAIError(OpenAIError):  # type: ignore
+class OpenAIError(openai.OpenAIError):  # type: ignore
     def __init__(self, original_exception):
         self.status_code = original_exception.http_status
         super().__init__(
@@ -214,7 +201,7 @@ class BudgetExceededError(Exception):
 
 
 ## DEPRECATED ##
-class InvalidRequestError(BadRequestError):  # type: ignore
+class InvalidRequestError(openai.BadRequestError):  # type: ignore
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message

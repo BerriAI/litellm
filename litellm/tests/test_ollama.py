@@ -1,3 +1,4 @@
+import asyncio
 import sys, os
 import traceback
 from dotenv import load_dotenv
@@ -10,10 +11,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-
+from unittest import mock
 
 ## for ollama we can't test making the completion call
-from litellm.utils import get_optional_params, get_llm_provider
+from litellm.utils import EmbeddingResponse, get_optional_params, get_llm_provider
 
 
 def test_get_ollama_params():
@@ -58,3 +59,50 @@ def test_ollama_json_mode():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_ollama_json_mode()
+
+
+mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")
+
+@mock.patch(
+    "litellm.llms.ollama.ollama_embeddings",
+    return_value=mock_ollama_embedding_response,
+)
+def test_ollama_embeddings(mock_embeddings):
+    # assert that ollama_embeddings is called with the right parameters
+    try:
+        embeddings = litellm.embedding(model="ollama/nomic-embed-text", input=["hello world"])
+        print(embeddings)
+        mock_embeddings.assert_called_once_with(
+            api_base="http://localhost:11434",
+            model="nomic-embed-text",
+            prompts=["hello world"],
+            optional_params=mock.ANY,
+            logging_obj=mock.ANY,
+            model_response=mock.ANY,
+            encoding=mock.ANY,
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_ollama_embeddings()
+
+@mock.patch(
+    "litellm.llms.ollama.ollama_aembeddings",
+    return_value=mock_ollama_embedding_response,
+)
+def test_ollama_aembeddings(mock_aembeddings):
+    # assert that ollama_aembeddings is called with the right parameters
+    try:
+        embeddings = asyncio.run(litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"]))
+        print(embeddings)
+        mock_aembeddings.assert_called_once_with(
+            api_base="http://localhost:11434",
+            model="nomic-embed-text",
+            prompts=["hello world"],
+            optional_params=mock.ANY,
+            logging_obj=mock.ANY,
+            model_response=mock.ANY,
+            encoding=mock.ANY,
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_ollama_aembeddings()
