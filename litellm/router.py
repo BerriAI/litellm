@@ -263,11 +263,12 @@ class Router:
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
         self.fallbacks = fallbacks or litellm.fallbacks
-        if default_fallbacks is not None:
+        if default_fallbacks is not None or litellm.default_fallbacks is not None:
+            _fallbacks = default_fallbacks or litellm.default_fallbacks
             if self.fallbacks is not None:
-                self.fallbacks.append({"*": default_fallbacks})
+                self.fallbacks.append({"*": _fallbacks})
             else:
-                self.fallbacks = [{"*": default_fallbacks}]
+                self.fallbacks = [{"*": _fallbacks}]
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
