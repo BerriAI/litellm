@@ -6,8 +6,9 @@ Get alerts for:
 - Failed LLM api calls
 - Slow LLM api calls
 - Budget Tracking per key/user:
-  - When a User/Key crosses their Budget
-  - When a User/Key is 15% away from crossing their Budget
+    - When a User/Key crosses their Budget 
+    - When a User/Key is 15% away from crossing their Budget
+- Spend Reports - Weekly & Monthly spend per Team, Tag
 - Failed db read/writes
 
 As a bonus, you can also get "daily reports" posted to your slack channel.

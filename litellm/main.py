@@ -9,12 +9,12 @@
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union, BinaryIO
+from typing_extensions import overload
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
-
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
