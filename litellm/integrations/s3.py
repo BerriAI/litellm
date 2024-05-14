@@ -1,10 +1,7 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import dotenv, os
-import requests
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import os
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid

@@ -1,5 +1,6 @@
 .venv
 .env
+litellm/proxy/myenv/*
 litellm_uuid.txt
 __pycache__/
 *.pyc
@@ -52,3 +53,6 @@ litellm/proxy/_new_secret_config.yaml
 litellm/proxy/_new_secret_config.yaml
 litellm/proxy/_super_secret_config.yaml
 litellm/proxy/_super_secret_config.yaml
+litellm/proxy/myenv/bin/activate
+litellm/proxy/myenv/bin/Activate.ps1
+myenv/*

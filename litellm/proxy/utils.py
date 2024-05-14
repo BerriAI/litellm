@@ -73,6 +73,7 @@ class ProxyLogging:
                 "llm_requests_hanging",
                 "budget_alerts",
                 "db_exceptions",
+                "daily_reports",
             ]
         ] = [
             "llm_exceptions",
@@ -80,11 +81,13 @@ class ProxyLogging:
             "llm_requests_hanging",
             "budget_alerts",
             "db_exceptions",
+            "daily_reports",
         ]
         self.slack_alerting_instance = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
             alert_types=self.alert_types,
+            internal_usage_cache=self.internal_usage_cache,
         )
 
     def update_values(
@@ -100,9 +103,11 @@ class ProxyLogging:
                     "llm_requests_hanging",
                     "budget_alerts",
                     "db_exceptions",
+                    "daily_reports",
                 ]
             ]
         ] = None,
+        alerting_args: Optional[dict] = None,
     ):
         self.alerting = alerting
         if alerting_threshold is not None:
@@ -114,7 +119,11 @@ class ProxyLogging:
             alerting=self.alerting,
             alerting_threshold=self.alerting_threshold,
             alert_types=self.alert_types,
+            alerting_args=alerting_args,
         )
+
+        if "daily_reports" in self.alert_types:
+            litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache
@@ -293,6 +302,7 @@ class ProxyLogging:
             "budget_alerts",
             "db_exceptions",
         ],
+        request_data: Optional[dict] = None,
     ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
@@ -322,10 +332,19 @@ class ProxyLogging:
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
+        extra_kwargs = {}
+        if request_data is not None:
+            _url = self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
+                request_data=request_data
+            )
+            if _url is not None:
+                extra_kwargs["🪢 Langfuse Trace"] = _url
+                formatted_message += "\n\n🪢 Langfuse Trace: {}".format(_url)
+
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
-                    message=message, level=level, alert_type=alert_type
+                    message=message, level=level, alert_type=alert_type, **extra_kwargs
                 )
             elif client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:
@@ -360,6 +379,7 @@ class ProxyLogging:
                 message=f"DB read/write call failed: {error_message}",
                 level="High",
                 alert_type="db_exceptions",
+                request_data={},
             )
         )
 
@@ -375,7 +395,10 @@ class ProxyLogging:
             litellm.utils.capture_exception(error=original_exception)
 
     async def post_call_failure_hook(
-        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+        self,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
     ):
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -400,6 +423,7 @@ class ProxyLogging:
                     message=f"LLM API call failed: {str(original_exception)}",
                     level="High",
                     alert_type="llm_exceptions",
+                    request_data=request_data,
                 )
             )
 
@@ -502,7 +526,7 @@ class PrismaClient:
             finally:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
-            from prisma import Prisma  # type: ignore
+            from prisma import Prisma
 
         self.db = Prisma()  # Client to connect to Prisma db
 
@@ -1665,12 +1689,12 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
             module_file_path = os.path.join(directory, *module_name.split("."))
             module_file_path += ".py"
 
-            spec = importlib.util.spec_from_file_location(module_name, module_file_path)
+            spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
             if spec is None:
                 raise ImportError(
                     f"Could not find a module specification for {module_file_path}"
                 )
-            module = importlib.util.module_from_spec(spec)
+            module = importlib.util.module_from_spec(spec)  # type: ignore
             spec.loader.exec_module(module)  # type: ignore
         else:
             # Dynamically import the module
