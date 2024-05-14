@@ -8513,6 +8513,15 @@ def exception_type(
                     model=model,
                     request=original_exception.request,
                 )
+            elif custom_llm_provider == "watsonx":
+                if "token_quota_reached" in error_response:
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"WatsonxException: Rate Limit Errror - {error_str}",
+                        llm_provider="watsonx",
+                        model=model,
+                        response=original_exception.response,
+                    )
             elif custom_llm_provider == "bedrock":
                 if (
                     "too many tokens" in error_str
