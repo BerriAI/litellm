@@ -1007,3 +1007,50 @@ async def test_service_unavailable_fallbacks(sync_mode):
         )
 
     assert response.model == "gpt-35-turbo"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_default_model_fallbacks(sync_mode):
+    """
+    Related issue - https://github.com/BerriAI/litellm/issues/3623
+
+    If model misconfigured, setup a default model for generic fallback
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        default_fallbacks=["my-good-model"],
+    )
+
+    if sync_mode:
+        response = router.completion(
+            model="bad-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+    else:
+        response = await router.acompletion(
+            model="bad-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.model is not None and response.model == "gpt-4o"
