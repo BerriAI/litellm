@@ -79,6 +79,11 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
     ]
 
+    # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
+    master_key_only_routes: List = [
+        "/global/spend/reset",
+    ]
+
     info_routes: List = [
         "/key/info",
         "/team/info",
