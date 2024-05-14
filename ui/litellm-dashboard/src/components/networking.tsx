@@ -655,11 +655,20 @@ export const teamSpendLogsCall = async (accessToken: String) => {
 };
 
 
-export const tagsSpendLogsCall = async (accessToken: String) => {
+export const tagsSpendLogsCall = async (
+    accessToken: String,
+    startTime: String | undefined,
+    endTime: String | undefined
+  ) => {
   try {
-    const url = proxyBaseUrl
+    let url = proxyBaseUrl
       ? `${proxyBaseUrl}/global/spend/tags`
       : `/global/spend/tags`;
+    
+    if (startTime && endTime) {
+      url = `${url}?start_date=${startTime}&end_date=${endTime}`
+    }
+
     console.log("in tagsSpendLogsCall:", url);
     const response = await fetch(`${url}`, {
       method: "GET",

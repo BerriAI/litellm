@@ -1,8 +1,13 @@
 from typing import List, Optional, Union, Iterable
 
-from pydantic import BaseModel, validator
+from pydantic import ConfigDict, BaseModel, validator, VERSION
 
 from typing_extensions import Literal, Required, TypedDict
+
+
+# Function to get Pydantic version
+def is_pydantic_v2() -> int:
+    return int(VERSION.split(".")[0])
 
 
 class ChatCompletionSystemMessageParam(TypedDict, total=False):
@@ -191,6 +196,8 @@ class CompletionRequest(BaseModel):
     api_key: Optional[str] = None
     model_list: Optional[List[str]] = None
 
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    # Version-specific configuration
+    if is_pydantic_v2() >= 2:
+        model_config = ConfigDict(extra="allow", protected_namespaces=())
+    else:
+        model_config = ConfigDict(extra="allow")  # No protected_namespaces for v1

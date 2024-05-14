@@ -109,6 +109,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     "llm_requests_hanging": "LLM Requests Hanging",
     "budget_alerts": "Budget Alerts (API Keys, Users)",
     "db_exceptions": "Database Exceptions (Read/Write)",
+    "daily_reports": "Weekly/Monthly Spend Reports",
   }
 
   useEffect(() => {

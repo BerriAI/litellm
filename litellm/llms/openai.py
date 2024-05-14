@@ -53,6 +53,113 @@ class OpenAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
+class MistralConfig:
+    """
+    Reference: https://docs.mistral.ai/api/
+
+    The class `MistralConfig` provides configuration for the Mistral's Chat API interface. Below are the parameters:
+
+    - `temperature` (number or null): Defines the sampling temperature to use, varying between 0 and 2. API Default - 0.7.
+
+    - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling. API Default - 1.
+
+    - `max_tokens` (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion. API Default - null.
+
+    - `tools` (list or null): A list of available tools for the model. Use this to specify functions for which the model can generate JSON inputs.
+
+    - `tool_choice` (string - 'auto'/'any'/'none' or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
+
+    - `random_seed` (integer or null): The seed to use for random sampling. If set, different calls will generate deterministic results.
+
+    - `safe_prompt` (boolean): Whether to inject a safety prompt before all conversations. API Default - 'false'.
+
+    - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
+    """
+
+    temperature: Optional[int] = None
+    top_p: Optional[int] = None
+    max_tokens: Optional[int] = None
+    tools: Optional[list] = None
+    tool_choice: Optional[Literal["auto", "any", "none"]] = None
+    random_seed: Optional[int] = None
+    safe_prompt: Optional[bool] = None
+    response_format: Optional[dict] = None
+
+    def __init__(
+        self,
+        temperature: Optional[int] = None,
+        top_p: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        tools: Optional[list] = None,
+        tool_choice: Optional[Literal["auto", "any", "none"]] = None,
+        random_seed: Optional[int] = None,
+        safe_prompt: Optional[bool] = None,
+        response_format: Optional[dict] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "stream",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+            "seed",
+            "response_format",
+        ]
+
+    def _map_tool_choice(self, tool_choice: str) -> str:
+        if tool_choice == "auto" or tool_choice == "none":
+            return tool_choice
+        elif tool_choice == "required":
+            return "any"
+        else:  # openai 'tool_choice' object param not supported by Mistral API
+            return "any"
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if param == "tools":
+                optional_params["tools"] = value
+            if param == "stream" and value == True:
+                optional_params["stream"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "tool_choice" and isinstance(value, str):
+                optional_params["tool_choice"] = self._map_tool_choice(
+                    tool_choice=value
+                )
+            if param == "seed":
+                optional_params["extra_body"] = {"random_seed": value}
+        return optional_params
+
+
 class OpenAIConfig:
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
@@ -1327,8 +1434,8 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(
-            thread_id, **message_data
+        thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore
+            thread_id, **message_data  # type: ignore
         )
 
         response_obj: Optional[OpenAIMessage] = None
@@ -1458,7 +1565,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = openai_client.beta.threads.runs.create_and_poll(
+        response = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,

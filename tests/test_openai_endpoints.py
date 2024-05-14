@@ -424,10 +424,7 @@ async def test_batch_chat_completions():
         response = await chat_completion(
             session=session,
             key="sk-1234",
-            model=[
-                "gpt-3.5-turbo",
-                "fake-openai-endpoint",
-            ],
+            model="gpt-3.5-turbo,fake-openai-endpoint",
         )
 
         print(f"response: {response}")

@@ -115,9 +115,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
 
-                if precise_minute not in request_count_dict[id]:
-                    request_count_dict[id][precise_minute] = {}
-
                 ## TPM
                 request_count_dict[id][precise_minute]["tpm"] = (
                     request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
