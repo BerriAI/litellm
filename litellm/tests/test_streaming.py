@@ -456,7 +456,8 @@ def test_completion_claude_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-    
+
+
 # test_completion_claude_stream()
 def test_completion_claude_2_stream():
     litellm.set_verbose = True
@@ -1416,6 +1417,8 @@ def test_completion_watsonx_stream():
             raise Exception("finish reason not set for last chunk")
         if complete_response.strip() == "":
             raise Exception("Empty response received")
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

@@ -3447,6 +3447,8 @@ async def test_acompletion_stream_watsonx():
         # Add any assertions here to check the response
         async for chunk in response:
             print(chunk)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
