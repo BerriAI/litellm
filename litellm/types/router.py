@@ -200,7 +200,7 @@ class GenericLiteLLMParams(BaseModel):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    model_config = get_model_config()
+    model_config = get_model_config(arbitrary_types_allowed=True)
     if pydantic_version.startswith("1"):
         # pydantic v2 warns about using a Config class.
         # But without this, pydantic v1 will raise an error:
