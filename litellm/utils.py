@@ -13,6 +13,7 @@ import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
+
 import itertools
 import random, uuid, requests  # type: ignore
 from functools import wraps
@@ -1083,6 +1084,8 @@ class CallTypes(Enum):
 class Logging:
     global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb, lunaryLogger
 
+    custom_pricing: bool = False
+
     def __init__(
         self,
         model,
@@ -1164,6 +1167,15 @@ class Logging:
             **self.optional_params,
             **additional_params,
         }
+
+        ## check if custom pricing set ##
+        if (
+            litellm_params.get("input_cost_per_token") is not None
+            or litellm_params.get("input_cost_per_second") is not None
+            or litellm_params.get("output_cost_per_token") is not None
+            or litellm_params.get("output_cost_per_second") is not None
+        ):
+            self.custom_pricing = True
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -1442,10 +1454,18 @@ class Logging:
                                 )
                             )
                         else:
+                            base_model: Optional[str] = None
                             # check if base_model set on azure
                             base_model = _get_base_model_from_metadata(
                                 model_call_details=self.model_call_details
                             )
+                            # litellm model name
+                            litellm_model = self.model_call_details["model"]
+                            if (
+                                litellm_model in litellm.model_cost
+                                and self.custom_pricing == True
+                            ):
+                                base_model = litellm_model
                             # base_model defaults to None if not set on model_info
                             self.model_call_details["response_cost"] = (
                                 litellm.completion_cost(
@@ -4365,7 +4385,7 @@ def completion_cost(
     size=None,
     quality=None,
     n=None,  # number of images
-):
+) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
 
@@ -4386,10 +4406,10 @@ def completion_cost(
         - If completion_response is not provided, the function calculates token counts based on the model and input text.
         - The cost is calculated based on the model, prompt tokens, and completion tokens.
         - For certain models containing "togethercomputer" in the name, prices are based on the model size.
-        - For Replicate models, the cost is calculated based on the total time used for the request.
+        - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
 
     Exceptions:
-        - If an error occurs during execution, the function returns 0.0 without blocking the user's execution path.
+        - If an error occurs during execution, the error is raised
     """
     try:
         if (
@@ -4701,6 +4721,10 @@ def get_litellm_params(
     acompletion=None,
     preset_cache_key=None,
     no_log=None,
+    input_cost_per_second=None,
+    input_cost_per_token=None,
+    output_cost_per_token=None,
+    output_cost_per_second=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -4719,6 +4743,10 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log,
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "input_cost_per_token": input_cost_per_token,
+        "input_cost_per_second": input_cost_per_second,
+        "output_cost_per_token": output_cost_per_token,
+        "output_cost_per_second": output_cost_per_second,
     }
 
     return litellm_params
@@ -5617,32 +5645,9 @@ def get_optional_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stream is not None:
-            optional_params["stream"] = stream
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if tools is not None:
-            optional_params["tools"] = tools
-        if tool_choice is not None:
-            optional_params["tool_choice"] = tool_choice
-        if response_format is not None:
-            optional_params["response_format"] = response_format
-        # check safe_mode, random_seed: https://docs.mistral.ai/api/#operation/createChatCompletion
-        safe_mode = passed_params.pop("safe_mode", None)
-        random_seed = passed_params.pop("random_seed", None)
-        extra_body = {}
-        if safe_mode is not None:
-            extra_body["safe_mode"] = safe_mode
-        if random_seed is not None:
-            extra_body["random_seed"] = random_seed
-        optional_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
+        optional_params = litellm.MistralConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
         )
-
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -5843,7 +5848,8 @@ def get_optional_params(
         for k in passed_params.keys():
             if k not in default_params.keys():
                 extra_body[k] = passed_params[k]
-        optional_params["extra_body"] = extra_body
+        optional_params.setdefault("extra_body", {})
+        optional_params["extra_body"] = {**optional_params["extra_body"], **extra_body}
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
@@ -6212,15 +6218,7 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "max_retries",
         ]
     elif custom_llm_provider == "mistral":
-        return [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "tools",
-            "tool_choice",
-            "response_format",
-        ]
+        return litellm.MistralConfig().get_supported_openai_params()
     elif custom_llm_provider == "replicate":
         return [
             "stream",
@@ -7712,7 +7710,7 @@ def convert_to_model_response_object(
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["message"].get("content", None),
-                    role=choice["message"]["role"],
+                    role=choice["message"]["role"] or "assistant",
                     function_call=choice["message"].get("function_call", None),
                     tool_calls=choice["message"].get("tool_calls", None),
                 )
@@ -8516,6 +8514,15 @@ def exception_type(
                     model=model,
                     request=original_exception.request,
                 )
+            elif custom_llm_provider == "watsonx":
+                if "token_quota_reached" in error_str:
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"WatsonxException: Rate Limit Errror - {error_str}",
+                        llm_provider="watsonx",
+                        model=model,
+                        response=original_exception.response,
+                    )
             elif custom_llm_provider == "bedrock":
                 if (
                     "too many tokens" in error_str
@@ -10761,6 +10768,8 @@ class CustomStreamWrapper:
                 else:
                     completion_obj["content"] = str(chunk)
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
+                import proto  # type: ignore
+
                 if self.model.startswith("claude-3"):
                     response_obj = self.handle_vertexai_anthropic_chunk(chunk=chunk)
                     if response_obj is None:
@@ -10798,10 +10807,24 @@ class CustomStreamWrapper:
                                 function_call = (
                                     chunk.candidates[0].content.parts[0].function_call
                                 )
+
                                 args_dict = {}
-                                for k, v in function_call.args.items():
-                                    args_dict[k] = v
-                                args_str = json.dumps(args_dict)
+
+                                # Check if it's a RepeatedComposite instance
+                                for key, val in function_call.args.items():
+                                    if isinstance(
+                                        val,
+                                        proto.marshal.collections.repeated.RepeatedComposite,
+                                    ):
+                                        # If so, convert to list
+                                        args_dict[key] = [v for v in val]
+                                    else:
+                                        args_dict[key] = val
+
+                                try:
+                                    args_str = json.dumps(args_dict)
+                                except Exception as e:
+                                    raise e
                                 _delta_obj = litellm.utils.Delta(
                                     content=None,
                                     tool_calls=[

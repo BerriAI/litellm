@@ -867,6 +867,8 @@ async def async_completion(
     Add support for acompletion calls for gemini-pro
     """
     try:
+        import proto  # type: ignore
+
         if mode == "vision":
             print_verbose("\nMaking VertexAI Gemini Pro/Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
@@ -901,9 +903,21 @@ async def async_completion(
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
-                for k, v in function_call.args.items():
-                    args_dict[k] = v
-                args_str = json.dumps(args_dict)
+
+                # Check if it's a RepeatedComposite instance
+                for key, val in function_call.args.items():
+                    if isinstance(
+                        val, proto.marshal.collections.repeated.RepeatedComposite
+                    ):
+                        # If so, convert to list
+                        args_dict[key] = [v for v in val]
+                    else:
+                        args_dict[key] = val
+
+                try:
+                    args_str = json.dumps(args_dict)
+                except Exception as e:
+                    raise VertexAIError(status_code=422, message=str(e))
                 message = litellm.Message(
                     content=None,
                     tool_calls=[

@@ -134,10 +134,12 @@ async def test_router_retries(sync_mode):
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
     else:
-        await router.acompletion(
+        response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
+
+        print(response.choices[0].message)
 
 
 @pytest.mark.parametrize(
