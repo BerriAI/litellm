@@ -39,6 +39,7 @@ const sidebars = {
         "proxy/demo",
         "proxy/configs",
         "proxy/reliability",
+        "proxy/cost_tracking",
         "proxy/users",
         "proxy/user_keys",
         "proxy/enterprise",
@@ -52,7 +53,6 @@ const sidebars = {
         "proxy/team_based_routing",
         "proxy/customer_routing",
         "proxy/ui",
-        "proxy/cost_tracking",
         "proxy/token_auth",
         {
           type: "category",
