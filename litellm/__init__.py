@@ -219,6 +219,7 @@ max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
+default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0

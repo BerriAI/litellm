@@ -1010,13 +1010,16 @@ async def test_service_unavailable_fallbacks(sync_mode):
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("litellm_module_fallbacks", [True, False])
 @pytest.mark.asyncio
-async def test_default_model_fallbacks(sync_mode):
+async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
     """
     Related issue - https://github.com/BerriAI/litellm/issues/3623
 
     If model misconfigured, setup a default model for generic fallback
     """
+    if litellm_module_fallbacks:
+        litellm.default_fallbacks = ["my-good-model"]
     router = Router(
         model_list=[
             {
@@ -1034,7 +1037,9 @@ async def test_default_model_fallbacks(sync_mode):
                 },
             },
         ],
-        default_fallbacks=["my-good-model"],
+        default_fallbacks=(
+            ["my-good-model"] if litellm_module_fallbacks == False else None
+        ),
     )
 
     if sync_mode:
