@@ -885,7 +885,7 @@ async def test_acompletion_claude2_1():
             },
             {"role": "user", "content": "Generate a 3 liner joke for me"},
         ]
-        # test without max tokens
+        # test without max-tokens
         response = await litellm.acompletion(model="claude-2.1", messages=messages)
         # Add any assertions here to check the response
         print(response)
