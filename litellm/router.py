@@ -493,6 +493,7 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
+            kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
 
