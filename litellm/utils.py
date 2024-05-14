@@ -43,7 +43,7 @@ try:
     from importlib import resources
 
     filename = str(resources.files(litellm).joinpath("llms/tokenizers"))
-except ImportError:
+except (ImportError, AttributeError):
     # Old way to access resources, which setuptools deprecated some time ago
     import pkg_resources  # type: ignore
 

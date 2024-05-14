@@ -3,19 +3,16 @@
 Get alerts for:
 
 - Hanging LLM api calls
-- Failed LLM api calls
 - Slow LLM api calls
-- Budget Tracking per key/user:
-    - When a User/Key crosses their Budget 
-    - When a User/Key is 15% away from crossing their Budget
+- Failed LLM api calls
+- Budget Tracking per key/user
 - Spend Reports - Weekly & Monthly spend per Team, Tag
 - Failed db read/writes
+- Daily Reports:
+    - **LLM** Top 5 slowest deployments
+    - **LLM** Top 5 deployments with most failed requests
+    - **Spend** Weekly & Monthly spend per Team, Tag
 
-As a bonus, you can also get "daily reports" posted to your slack channel.
-These reports contain key metrics like:
-
-- Top 5 deployments with most failed requests
-- Top 5 slowest deployments
 
 ## Quick Start
 
@@ -52,4 +49,13 @@ environment_variables:
 
 ```bash
 $ litellm --config /path/to/config.yaml
+```
+
+## Testing Alerting is Setup Correctly
+
+Make a GET request to `/health/services`, expect to see a test slack alert in your provided webhook slack channel
+
+```shell
+curl -X GET 'http://localhost:4000/health/services?service=slack' \
+  -H 'Authorization: Bearer sk-1234'
 ```
