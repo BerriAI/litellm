@@ -20,7 +20,8 @@ Get a slack webhook url from https://api.slack.com/messaging/webhooks
 
 ### Step 2: Update config.yaml 
 
-Let's save a bad key to our proxy
+- Set `SLACK_WEBHOOK_URL` in your proxy env to enable Slack alerts.
+- Just for testing purposes, let's save a bad key to our proxy.
 
 ```yaml
 model_list: 
@@ -33,13 +34,11 @@ general_settings:
     alerting: ["slack"]
     alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
 
+environment_variables:
+    SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/<>/<>/<>"
+    SLACK_DAILY_REPORT_FREQUENCY: "86400"  # 24 hours; Optional: defaults to 12 hours
 ```
 
-Set `SLACK_WEBHOOK_URL` in your proxy env
-
-```shell
-SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/<>/<>/<>"
-```
 
 ### Step 3: Start proxy
 
