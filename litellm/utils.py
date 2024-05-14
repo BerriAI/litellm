@@ -2382,7 +2382,7 @@ class Logging:
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         print_verbose(
-            f"eLogging Details LiteLLM-Failure Call: {litellm.failure_callback}"
+            f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}"
         )
         try:
             start_time, end_time = self._failure_handler_helper_fn(
