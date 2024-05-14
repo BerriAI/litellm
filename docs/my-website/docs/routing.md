@@ -653,7 +653,9 @@ from litellm import Router
 model_list = [{...}]
 
 router = Router(model_list=model_list, 
-                allowed_fails=1) # cooldown model if it fails > 1 call in a minute. 
+                allowed_fails=1,      # cooldown model if it fails > 1 call in a minute. 
+				cooldown_time=100    # cooldown the deployment for 100 seconds if it num_fails > allowed_fails
+		)
 
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{"content": user_message, "role": "user"}]
@@ -770,6 +772,8 @@ If the error is a context window exceeded error, fall back to a larger model gro
 
 Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
 
+You can also set 'default_fallbacks', in case a specific model group is misconfigured / bad.
+
 ```python
 from litellm import Router
 
@@ -830,6 +834,7 @@ model_list = [
 
 router = Router(model_list=model_list, 
                 fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
+				default_fallbacks=["gpt-3.5-turbo-16k"],
                 context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
                 set_verbose=True)
 
@@ -1309,10 +1314,11 @@ def __init__(
 	num_retries: int = 0,
 	timeout: Optional[float] = None,
 	default_litellm_params={},  # default params for Router.chat.completion.create
-	fallbacks: List = [],
+	fallbacks: Optional[List] = None,
+	default_fallbacks: Optional[List] = None
 	allowed_fails: Optional[int] = None, # Number of times a deployment can failbefore being added to cooldown
 	cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
-	context_window_fallbacks: List = [],
+	context_window_fallbacks: Optional[List] = None,
 	model_group_alias: Optional[dict] = {},
 	retry_after: int = 0,  # (min) time to wait before retrying a failed request
 	routing_strategy: Literal[

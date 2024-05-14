@@ -9,7 +9,8 @@
 
 import copy, httpx
 from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO, Tuple
+from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO, Tuple, TypedDict
+from typing_extensions import overload
 import random, threading, time, traceback, uuid
 import litellm, openai, hashlib, json
 from litellm.caching import RedisCache, InMemoryCache, DualCache
@@ -46,6 +47,7 @@ from litellm.types.router import (
     updateLiteLLMParams,
     RetryPolicy,
     AlertingConfig,
+    DeploymentTypedDict,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
@@ -61,7 +63,7 @@ class Router:
 
     def __init__(
         self,
-        model_list: Optional[list] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict]]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -82,6 +84,9 @@ class Router:
         default_max_parallel_requests: Optional[int] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
+        default_fallbacks: Optional[
+            List[str]
+        ] = None,  # generic fallbacks, works across all deployments
         fallbacks: List = [],
         context_window_fallbacks: List = [],
         model_group_alias: Optional[dict] = {},
@@ -258,6 +263,11 @@ class Router:
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
         self.fallbacks = fallbacks or litellm.fallbacks
+        if default_fallbacks is not None:
+            if self.fallbacks is not None:
+                self.fallbacks.append({"*": default_fallbacks})
+            else:
+                self.fallbacks = [{"*": default_fallbacks}]
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
@@ -469,12 +479,30 @@ class Router:
             )
             raise e
 
+    # fmt: off
+
+    @overload
     async def acompletion(
-        self, model: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+        self, model: str, messages: List[Dict[str, str]], stream: Literal[True], **kwargs
+    ) -> CustomStreamWrapper: 
+        ...
+
+    @overload
+    async def acompletion(
+        self, model: str, messages: List[Dict[str, str]], stream: Literal[False] = False, **kwargs
+    ) -> ModelResponse: 
+        ...
+
+    # fmt: on
+
+    # The actual implementation of the function
+    async def acompletion(
+        self, model: str, messages: List[Dict[str, str]], stream=False, **kwargs
+    ):
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
+            kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
 
@@ -1413,7 +1441,7 @@ class Router:
                 verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
                     hasattr(e, "status_code")
-                    and e.status_code == 400
+                    and e.status_code == 400  # type: ignore
                     and not isinstance(e, litellm.ContextWindowExceededError)
                 ):  # don't retry a malformed request
                     raise e
@@ -1444,18 +1472,29 @@ class Router:
                             response = await self.async_function_with_retries(
                                 *args, **kwargs
                             )
+                            verbose_router_logger.info(
+                                "Successful fallback b/w models."
+                            )
                             return response
                         except Exception as e:
                             pass
                 elif fallbacks is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
-                    for item in fallbacks:
-                        key_list = list(item.keys())
-                        if len(key_list) == 0:
-                            continue
-                        if key_list[0] == model_group:
+                    generic_fallback_idx: Optional[int] = None
+                    ## check for specific model group-specific fallbacks
+                    for idx, item in enumerate(fallbacks):
+                        if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
+                        elif list(item.keys())[0] == "*":
+                            generic_fallback_idx = idx
+                    ## if none, check for generic fallback
+                    if (
+                        fallback_model_group is None
+                        and generic_fallback_idx is not None
+                    ):
+                        fallback_model_group = fallbacks[generic_fallback_idx]["*"]
+
                     if fallback_model_group is None:
                         verbose_router_logger.info(
                             f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
@@ -1477,6 +1516,9 @@ class Router:
                             )  # update model_group used, if fallbacks are done
                             response = await self.async_function_with_fallbacks(
                                 *args, **kwargs
+                            )
+                            verbose_router_logger.info(
+                                "Successful fallback b/w models."
                             )
                             return response
                         except Exception as e:
@@ -1512,7 +1554,7 @@ class Router:
              
             """
             _healthy_deployments = await self._async_get_healthy_deployments(
-                model=kwargs.get("model"),
+                model=kwargs.get("model") or "",
             )
 
             # raises an exception if this error should not be retries
@@ -1619,12 +1661,18 @@ class Router:
         Try calling the function_with_retries
         If it fails after num_retries, fall back to another model group
         """
+        mock_testing_fallbacks = kwargs.pop("mock_testing_fallbacks", None)
         model_group = kwargs.get("model")
         fallbacks = kwargs.get("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.get(
             "context_window_fallbacks", self.context_window_fallbacks
         )
         try:
+            if mock_testing_fallbacks is not None and mock_testing_fallbacks == True:
+                raise Exception(
+                    f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}"
+                )
+
             response = self.function_with_retries(*args, **kwargs)
             return response
         except Exception as e:
@@ -1633,7 +1681,7 @@ class Router:
             try:
                 if (
                     hasattr(e, "status_code")
-                    and e.status_code == 400
+                    and e.status_code == 400  # type: ignore
                     and not isinstance(e, litellm.ContextWindowExceededError)
                 ):  # don't retry a malformed request
                     raise e
@@ -1675,10 +1723,20 @@ class Router:
                 elif fallbacks is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     fallback_model_group = None
-                    for item in fallbacks:
+                    generic_fallback_idx: Optional[int] = None
+                    ## check for specific model group-specific fallbacks
+                    for idx, item in enumerate(fallbacks):
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
+                        elif list(item.keys())[0] == "*":
+                            generic_fallback_idx = idx
+                    ## if none, check for generic fallback
+                    if (
+                        fallback_model_group is None
+                        and generic_fallback_idx is not None
+                    ):
+                        fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
                     if fallback_model_group is None:
                         raise original_exception
@@ -3259,13 +3317,12 @@ class Router:
             healthy_deployments.remove(deployment)
 
         # filter pre-call checks
+        _allowed_model_region = (
+            request_kwargs.get("allowed_model_region")
+            if request_kwargs is not None
+            else None
+        )
         if self.enable_pre_call_checks and messages is not None:
-            _allowed_model_region = (
-                request_kwargs.get("allowed_model_region")
-                if request_kwargs is not None
-                else None
-            )
-
             if _allowed_model_region == "eu":
                 healthy_deployments = self._pre_call_checks(
                     model=model,
@@ -3286,8 +3343,10 @@ class Router:
                 )
 
         if len(healthy_deployments) == 0:
+            if _allowed_model_region is None:
+                _allowed_model_region = "n/a"
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
             )
 
         if (
@@ -3647,7 +3706,7 @@ class Router:
                 )
                 asyncio.create_task(
                     proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}",
+                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}. Change 'cooldown_time' + 'allowed_failes' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
                         alert_type="cooldown_deployment",
                         level="Low",
                     )

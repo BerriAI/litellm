@@ -961,3 +961,96 @@ def test_custom_cooldown_times():
 
     except Exception as e:
         print(e)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_service_unavailable_fallbacks(sync_mode):
+    """
+    Initial model - openai
+    Fallback - azure
+
+    Error - 503, service unavailable
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo-012",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "anything",
+                    "api_base": "http://0.0.0.0:8080",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo-0125-preview",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
+        ],
+        fallbacks=[{"gpt-3.5-turbo-012": ["gpt-3.5-turbo-0125-preview"]}],
+    )
+
+    if sync_mode:
+        response = router.completion(
+            model="gpt-3.5-turbo-012",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    else:
+        response = await router.acompletion(
+            model="gpt-3.5-turbo-012",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+    assert response.model == "gpt-35-turbo"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_default_model_fallbacks(sync_mode):
+    """
+    Related issue - https://github.com/BerriAI/litellm/issues/3623
+
+    If model misconfigured, setup a default model for generic fallback
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        default_fallbacks=["my-good-model"],
+    )
+
+    if sync_mode:
+        response = router.completion(
+            model="bad-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+    else:
+        response = await router.acompletion(
+            model="bad-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.model is not None and response.model == "gpt-4o"

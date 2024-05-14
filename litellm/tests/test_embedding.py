@@ -494,6 +494,8 @@ def test_watsonx_embeddings():
         )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
