@@ -189,7 +189,7 @@ const sidebars = {
         `observability/telemetry`,
       ],
     },
-    "caching/redis_cache",
+    "caching/all_caches",
     {
       type: "category",
       label: "Tutorials",

@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Caching - In-Memory, Redis, s3,  Redis Semantic Cache
+# Caching - In-Memory, Redis, s3, Redis Semantic Cache, Disk
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching.py)
 
@@ -11,7 +11,7 @@ Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](ht
 
 :::
 
-## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic Cache
+## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic, Disk Cache
 
 
 <Tabs>
@@ -159,7 +159,7 @@ litellm.cache = Cache()
 # Make completion calls
 response1 = completion(
     model="gpt-3.5-turbo", 
-    messages=[{"role": "user", "content": "Tell me a joke."}]
+    messages=[{"role": "user", "content": "Tell me a joke."}],
     caching=True
 )
 response2 = completion(
@@ -174,6 +174,43 @@ response2 = completion(
 
 </TabItem>
 
+<TabItem value="disk" label="disk cache">
+
+### Quick Start
+
+Install diskcache:
+
+```shell
+pip install diskcache
+```
+
+Then you can use the disk cache as follows.
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching import Cache
+litellm.cache = Cache(type="disk")
+
+# Make completion calls
+response1 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}],
+    caching=True
+)
+response2 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}],
+    caching=True
+)
+
+# response1 == response2, response 1 is cached
+
+```
+
+If you run the code two times, response1 will use the cache from the first run that was stored in a cache file.
+
+</TabItem>
 
 </Tabs>
 
@@ -191,13 +228,13 @@ Advanced Params
 
 ```python
 litellm.enable_cache(
-    type: Optional[Literal["local", "redis"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
     supported_call_types: Optional[
-        List[Literal["completion", "acompletion", "embedding", "aembedding"]]
-    ] = ["completion", "acompletion", "embedding", "aembedding"],
+        List[Literal["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"]]
+    ] = ["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"],
     **kwargs,
 )
 ```
@@ -215,13 +252,13 @@ Update the Cache params
 
 ```python
 litellm.update_cache(
-    type: Optional[Literal["local", "redis"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
     supported_call_types: Optional[
-        List[Literal["completion", "acompletion", "embedding", "aembedding"]]
-    ] = ["completion", "acompletion", "embedding", "aembedding"],
+        List[Literal["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"]]
+    ] = ["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"],
     **kwargs,
 )
 ```
@@ -276,22 +313,29 @@ cache.get_cache = get_cache
 ```python
 def __init__(
     self,
-    type: Optional[Literal["local", "redis", "s3"]] = "local",
+    type: Optional[Literal["local", "redis", "redis-semantic", "s3", "disk"]] = "local",
     supported_call_types: Optional[
-        List[Literal["completion", "acompletion", "embedding", "aembedding"]]
-    ] = ["completion", "acompletion", "embedding", "aembedding"], # A list of litellm call types to cache for. Defaults to caching for all litellm call types.
-    
+        List[Literal["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"]]
+    ] = ["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"],
+    ttl: Optional[float] = None,
+    default_in_memory_ttl: Optional[float] = None,
+
     # redis cache params
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
-
+    namespace: Optional[str] = None,
+    default_in_redis_ttl: Optional[float] = None,
+    similarity_threshold: Optional[float] = None,
+    redis_semantic_cache_use_async=False,
+    redis_semantic_cache_embedding_model="text-embedding-ada-002",
+    redis_flush_size=None,
 
     # s3 Bucket, boto3 configuration
     s3_bucket_name: Optional[str] = None,
     s3_region_name: Optional[str] = None,
     s3_api_version: Optional[str] = None,
-    s3_path: Optional[str] = None, # if you wish to save to a spefic path
+    s3_path: Optional[str] = None, # if you wish to save to a specific path
     s3_use_ssl: Optional[bool] = True,
     s3_verify: Optional[Union[bool, str]] = None,
     s3_endpoint_url: Optional[str] = None,
@@ -299,7 +343,11 @@ def __init__(
     s3_aws_secret_access_key: Optional[str] = None,
     s3_aws_session_token: Optional[str] = None,
     s3_config: Optional[Any] = None,
-    **kwargs,
+
+    # disk cache params
+    disk_cache_dir=None,
+
+    **kwargs
 ):
 ```
 
