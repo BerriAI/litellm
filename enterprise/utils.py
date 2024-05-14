@@ -1,6 +1,7 @@
 # Enterprise Proxy Util Endpoints
 from litellm._logging import verbose_logger
 import collections
+from datetime import datetime
 
 
 async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
@@ -18,19 +19,25 @@ async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
     return response
 
 
-async def ui_get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
-    response = await prisma_client.db.query_raw(
-        """
+async def ui_get_spend_by_tags(start_date: str, end_date: str, prisma_client):
+
+    sql_query = """
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         DATE(s."startTime") AS spend_date,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs" s
-        WHERE s."startTime" >= current_date - interval '30 days'
+        WHERE
+            DATE(s."startTime") >= $1::date
+            AND DATE(s."startTime") <= $2::date
         GROUP BY individual_request_tag, spend_date
         ORDER BY spend_date;
-        """
+    """
+    response = await prisma_client.db.query_raw(
+        sql_query,
+        start_date,
+        end_date,
     )
 
     # print("tags - spend")
