@@ -5923,6 +5923,63 @@ async def view_spend_logs(
 
 
 @router.get(
+    "/global/spend/reset",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_reset(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Globally reset spend for All API Keys and Teams, maintain LiteLLM_SpendLogs
+
+    1. LiteLLM_SpendLogs will maintain the logs on spend, no data gets deleted from there
+    2. LiteLLM_VerificationTokens spend will be set = 0
+    3. LiteLLM_TeamTable spend will be set = 0
+
+    """
+    global prisma_client, master_key
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if master_key is None:
+        raise ProxyException(
+            message="Master key is not initialized, please set LITELLM_MASTER_KEY in .env",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if user_api_key_dict.api_key is None:
+        raise ProxyException(
+            message="no api_key passed",
+            type="auth_error",
+            param="master_key",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if not secrets.compare_digest(master_key, user_api_key_dict.api_key):
+        raise ProxyException(
+            message="/global/spend/reset Route only allowed for master key",
+            type="auth_error",
+            param="master_key",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    await prisma_client.db.litellm_verificationtoken.update_many(
+        data={"spend": 0.0}, where={}
+    )
+    await prisma_client.db.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+
+
+@router.get(
     "/global/spend/logs",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
