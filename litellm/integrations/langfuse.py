@@ -322,6 +322,8 @@ class LangFuseLogger:
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
             update_trace_keys = clean_metadata.pop("update_trace_keys", [])
             debug = clean_metadata.pop("debug_langfuse", None)
+            mask_input = clean_metadata.pop("mask_input", False)
+            mask_output = clean_metadata.pop("mask_output", False)
 
             if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name
@@ -349,15 +351,15 @@ class LangFuseLogger:
 
                 # Special keys that are found in the function arguments and not the metadata
                 if "input" in update_trace_keys:
-                    trace_params["input"] = input
+                    trace_params["input"] = input if not mask_input else "redacted-by-litellm"
                 if "output" in update_trace_keys:
-                    trace_params["output"] = output
+                    trace_params["output"] = output if not mask_output else "redacted-by-litellm"
             else:  # don't overwrite an existing trace
                 trace_params = {
                     "id": trace_id,
                     "name": trace_name,
                     "session_id": session_id,
-                    "input": input,
+                    "input": input if not mask_input else "redacted-by-litellm",
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
@@ -373,7 +375,7 @@ class LangFuseLogger:
                 if level == "ERROR":
                     trace_params["status_message"] = output
                 else:
-                    trace_params["output"] = output
+                    trace_params["output"] = output if not mask_output else "redacted-by-litellm"
 
             if debug == True or (isinstance(debug, str) and debug.lower() == "true"):
                 if "metadata" in trace_params:
@@ -463,8 +465,8 @@ class LangFuseLogger:
                 "end_time": end_time,
                 "model": kwargs["model"],
                 "model_parameters": optional_params,
-                "input": input,
-                "output": output,
+                "input": input if not mask_input else "redacted-by-litellm",
+                "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
                 "metadata": clean_metadata,
                 "level": level,

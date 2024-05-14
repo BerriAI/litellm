@@ -3479,6 +3479,26 @@ async def startup_event():
             await proxy_config.add_deployment(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
+
+        if (
+            proxy_logging_obj is not None
+            and proxy_logging_obj.slack_alerting_instance is not None
+            and prisma_client is not None
+        ):
+            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
+            ### Schedule weekly/monhtly spend reports ###
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
+                "cron",
+                day_of_week="mon",
+            )
+
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
+                "cron",
+                day=1,
+            )
+
         scheduler.start()
 
 
@@ -3698,8 +3718,9 @@ async def chat_completion(
         # skip router if user passed their key
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
-        elif isinstance(data["model"], list) and llm_router is not None:
-            _models = data.pop("model")
+        elif "," in data["model"] and llm_router is not None:
+            _models_csv_string = data.pop("model")
+            _models = _models_csv_string.split(",")
             tasks.append(llm_router.abatch_completion(models=_models, **data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
@@ -3761,6 +3782,7 @@ async def chat_completion(
                 "x-litellm-cache-key": cache_key,
                 "x-litellm-model-api-base": api_base,
                 "x-litellm-version": version,
+                "x-litellm-model-region": user_api_key_dict.allowed_model_region or "",
             }
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3777,6 +3799,9 @@ async def chat_completion(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -4161,6 +4186,9 @@ async def embeddings(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
@@ -4330,6 +4358,9 @@ async def image_generation(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
@@ -4523,6 +4554,9 @@ async def audio_transcriptions(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
@@ -4698,6 +4732,9 @@ async def moderations(
         fastapi_response.headers["x-litellm-cache-key"] = cache_key
         fastapi_response.headers["x-litellm-model-api-base"] = api_base
         fastapi_response.headers["x-litellm-version"] = version
+        fastapi_response.headers["x-litellm-model-region"] = (
+            user_api_key_dict.allowed_model_region or ""
+        )
 
         return response
     except Exception as e:
@@ -5348,6 +5385,141 @@ async def view_spend_tags(
 
 
 @router.get(
+    "/global/spend/report",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def get_global_spend_report(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view spend",
+    ),
+):
+    """
+    Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
+    [
+        {
+            "group-by-day": "2024-05-10",
+            "teams": [
+                {
+                    "team_name": "team-1"
+                    "spend": 10,
+                    "keys": [
+                        "key": "1213",
+                        "usage": {
+                            "model-1": {
+                                    "cost": 12.50,
+                                    "input_tokens": 1000,
+                                    "output_tokens": 5000,
+                                    "requests": 100
+                                },
+                                "audio-modelname1": {
+                                "cost": 25.50,
+                                "seconds": 25,
+                                "requests": 50
+                        },
+                        }
+                    }
+            ]
+        ]
+    }
+    """
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        # first get data from spend logs -> SpendByModelApiKey
+        # then read data from "SpendByModelApiKey" to format the response obj
+        sql_query = """
+
+        WITH SpendByModelApiKey AS (
+            SELECT
+                date_trunc('day', sl."startTime") AS group_by_day,
+                COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+                sl.model,
+                sl.api_key,
+                SUM(sl.spend) AS model_api_spend,
+                SUM(sl.total_tokens) AS model_api_tokens
+            FROM 
+                "LiteLLM_SpendLogs" sl
+            LEFT JOIN 
+                "LiteLLM_TeamTable" tt 
+            ON 
+                sl.team_id = tt.team_id
+            WHERE
+                sl."startTime" BETWEEN $1::date AND $2::date
+            GROUP BY
+                date_trunc('day', sl."startTime"),
+                tt.team_alias,
+                sl.model,
+                sl.api_key
+        )
+            SELECT
+                group_by_day,
+                jsonb_agg(jsonb_build_object(
+                    'team_name', team_name,
+                    'total_spend', total_spend,
+                    'metadata', metadata
+                )) AS teams
+            FROM (
+                SELECT
+                    group_by_day,
+                    team_name,
+                    SUM(model_api_spend) AS total_spend,
+                    jsonb_agg(jsonb_build_object(
+                        'model', model,
+                        'api_key', api_key,
+                        'spend', model_api_spend,
+                        'total_tokens', model_api_tokens
+                    )) AS metadata
+                FROM 
+                    SpendByModelApiKey
+                GROUP BY
+                    group_by_day,
+                    team_name
+            ) AS aggregated
+            GROUP BY
+                group_by_day
+            ORDER BY
+                group_by_day;
+            """
+
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj
+        )
+        if db_response is None:
+            return []
+
+        return db_response
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
     "/global/spend/tags",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -5391,6 +5563,13 @@ async def global_view_spend_tags(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
+        if end_date is None or start_date is None:
+            raise ProxyException(
+                message="Please provide start_date and end_date",
+                type="bad_request",
+                param=None,
+                code=status.HTTP_400_BAD_REQUEST,
+            )
         response = await ui_get_spend_by_tags(
             start_date=start_date, end_date=end_date, prisma_client=prisma_client
         )
@@ -5412,6 +5591,55 @@ async def global_view_spend_tags(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+async def _get_spend_report_for_time_range(
+    start_date: str,
+    end_date: str,
+):
+    global prisma_client
+    if prisma_client is None:
+        verbose_proxy_logger.error(
+            f"Database not connected. Connect a database to your proxy for weekly, monthly spend reports"
+        )
+        return None
+
+    try:
+        sql_query = """
+        SELECT
+            t.team_alias,
+            SUM(s.spend) AS total_spend
+        FROM
+            "LiteLLM_SpendLogs" s
+        LEFT JOIN
+            "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+        WHERE
+            s."startTime"::DATE >= $1::date AND s."startTime"::DATE <= $2::date
+        GROUP BY
+            t.team_alias
+        ORDER BY
+            total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(sql_query, start_date, end_date)
+
+        # get spend per tag for today
+        sql_query = """
+        SELECT 
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime"::DATE >= $1::date AND "startTime"::DATE <= $2::date
+        GROUP BY individual_request_tag
+        ORDER BY total_spend DESC;
+        """
+
+        spend_per_tag = await prisma_client.db.query_raw(
+            sql_query, start_date, end_date
+        )
+
+        return response, spend_per_tag
+    except Exception as e:
+        verbose_proxy_logger.error("Exception in _get_daily_spend_reports", e)  # noqa
 
 
 @router.post(
@@ -5801,7 +6029,7 @@ async def global_spend_keys(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def global_spend_per_tea():
+async def global_spend_per_team():
     """
     [BETA] This is a beta endpoint. It will change.
 
@@ -9485,6 +9713,14 @@ async def health_services_endpoint(
                         message="This is a test slack alert message",
                         level="Low",
                         alert_type="budget_alerts",
+                    )
+
+                if prisma_client is not None:
+                    asyncio.create_task(
+                        proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
+                    )
+                    asyncio.create_task(
+                        proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report()
                     )
                 return {
                     "status": "success",

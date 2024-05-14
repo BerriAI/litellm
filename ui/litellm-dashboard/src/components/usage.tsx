@@ -155,6 +155,19 @@ const UsagePage: React.FC<UsagePageProps> = ({
   
   }
 
+  const updateTagSpendData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
+    if (!startTime || !endTime || !accessToken) {
+      return;
+    }
+
+    let top_tags = await tagsSpendLogsCall(accessToken, startTime.toISOString(), endTime.toISOString());
+    setTopTagsData(top_tags.spend_per_tag);
+    console.log("Tag spend data updated successfully");
+
+
+
+  }
+
   function formatDate(date: Date) {
     const year = date.getFullYear();
     let month = date.getMonth() + 1; // JS month index starts from 0
@@ -218,8 +231,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
             setTotalSpendPerTeam(total_spend_per_team);
 
             //get top tags
-            const top_tags = await tagsSpendLogsCall(accessToken);
-            setTopTagsData(top_tags.top_10_tags);
+            const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString());
+            setTopTagsData(top_tags.spend_per_tag);
 
             // get spend per end-user
             let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
@@ -459,38 +472,28 @@ const UsagePage: React.FC<UsagePageProps> = ({
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
             <Col numColSpan={2}>
+            <DateRangePicker 
+                  className="mb-4"
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateTagSpendData(value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+              />
 
               <Card>
-              <Title>Spend Per Tag - Last 30 Days</Title>
-              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>Tag</TableHeaderCell>
-                    <TableHeaderCell>Spend</TableHeaderCell>
-                    <TableHeaderCell>Requests</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {topTagsData.map((tag) => (
-                    <TableRow key={tag.name}>
-                      <TableCell>{tag.name}</TableCell>
-                      <TableCell>{tag.value}</TableCell>
-                      <TableCell>{tag.log_count}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-                {/* <BarChart
-                  className="h-72"
-                  data={teamSpendData}
-                  showLegend={true}
-                  index="date"
-                  categories={uniqueTeamIds}
-                  yAxisWidth={80}
-                  
-                  stack={true}
-                /> */}
+              <Title>Spend Per Tag</Title>
+              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
+             <BarChart
+              className="h-72"
+              data={topTagsData}
+              index="name"
+              categories={["spend"]}
+              colors={["blue"]}
+             >
+
+             </BarChart>
               </Card>
               </Col>
               <Col numColSpan={2}>
