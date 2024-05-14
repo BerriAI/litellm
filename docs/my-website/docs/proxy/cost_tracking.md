@@ -126,6 +126,31 @@ Output from script
 </Tabs>
 
 
+## Reset Team, API Key Spend - MASTER KEY ONLY
+
+Use `/global/spend/reset` if you want to:
+- Reset the Spend for all API Keys, Teams. The `spend` for ALL Teams and Keys in `LiteLLM_TeamTable` and `LiteLLM_VerificationToken` will be set to `spend=0`
+
+- LiteLLM will maintain all the logs in `LiteLLMSpendLogs` for Auditing Purposes
+
+### Request 
+Only the `LITELLM_MASTER_KEY` you set can access this route
+```shell
+curl -X POST \
+  'http://localhost:4000/global/spend/reset' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json'
+```
+
+### Expected Responses
+
+```shell
+{"message":"Spend for all API Keys and Teams reset successfully","status":"success"}
+```
+
+
+
+
 ## Spend Tracking for Azure
 
 Set base model for cost tracking azure image-gen call
