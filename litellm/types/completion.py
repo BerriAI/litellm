@@ -1,4 +1,4 @@
-from typing import List, Optional, Union, Iterable
+from typing import List, Optional, Union, Iterable, cast
 
 from pydantic import ConfigDict, BaseModel, validator, VERSION
 
@@ -15,7 +15,9 @@ def get_model_config() -> ConfigDict:
     if is_pydantic_v2() >= 2:
         model_config = ConfigDict(extra="allow", protected_namespaces=())  # type: ignore
     else:
-        model_config = ConfigDict(extra="allow")  # No protected_namespaces for v1
+        from pydantic import Extra
+
+        model_config = ConfigDict(extra=Extra.allow)  # type: ignore
 
     return model_config
 
