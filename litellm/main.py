@@ -9,12 +9,12 @@
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union, BinaryIO
+from typing_extensions import overload
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
-
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
@@ -727,7 +727,6 @@ def completion(
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
-            print_verbose(f"Registering model={model} in model cost map")
             litellm.register_model(
                 {
                     f"{custom_llm_provider}/{model}": {
@@ -849,6 +848,10 @@ def completion(
             proxy_server_request=proxy_server_request,
             preset_cache_key=preset_cache_key,
             no_log=no_log,
+            input_cost_per_second=input_cost_per_second,
+            input_cost_per_token=input_cost_per_token,
+            output_cost_per_second=output_cost_per_second,
+            output_cost_per_token=output_cost_per_token,
         )
         logging.update_environment_variables(
             model=model,
