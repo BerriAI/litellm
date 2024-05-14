@@ -7,6 +7,7 @@ Get alerts for:
 - Budget Tracking per key/user:
     - When a User/Key crosses their Budget 
     - When a User/Key is 15% away from crossing their Budget
+- Spend Reports - Weekly & Monthly spend per Team, Tag
 - Failed db read/writes
 
 ## Quick Start
