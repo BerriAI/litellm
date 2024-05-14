@@ -25,7 +25,7 @@ def get_model_config(arbitrary_types_allowed: bool = False) -> ConfigDict:
     else:
         from pydantic import Extra
 
-        model_config = ConfigDict(extra=Extra.allow)  # type: ignore
+        model_config = ConfigDict(extra=Extra.allow, arbitrary_types_allowed=arbitrary_types_allowed)  # type: ignore
 
     return model_config
 
