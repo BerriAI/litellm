@@ -12,6 +12,8 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
+from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from unittest.mock import patch, MagicMock
 
 # litellm.num_retries=3
 litellm.cache = None
@@ -57,13 +59,58 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to,check the response
+        # Add any assertions here to, check the response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
+    _data = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1677652288,
+        "model": "gpt-3.5-turbo-0125",
+        "system_fingerprint": "fp_44709d6fcb",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": None,
+                    "content": "\n\nHello there, how may I assist you today?",
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+    }
+    return litellm.ModelResponse(**_data)
+
+
+def test_null_role_response():
+    """
+    Test if api returns 'null' role, 'assistant' role is still returned
+    """
+    import openai
+
+    openai_client = openai.OpenAI()
+    with patch.object(
+        openai_client.chat.completions, "create", side_effect=_openai_mock_response
+    ) as mock_response:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            client=openai_client,
+        )
+        print(f"response: {response}")
+
+        assert response.id == "chatcmpl-123"
+
+        assert response.choices[0].message.role == "assistant"
 
 
 def test_completion_azure_command_r():
@@ -82,6 +129,41 @@ def test_completion_azure_command_r():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+# @pytest.mark.skip(reason="local test")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_predibase(sync_mode):
+    try:
+        litellm.set_verbose = True
+
+        if sync_mode:
+            response = completion(
+                model="predibase/llama-3-8b-instruct",
+                tenant_id="c4768f95",
+                api_key=os.getenv("PREDIBASE_API_KEY"),
+                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            )
+
+            print(response)
+        else:
+            response = await litellm.acompletion(
+                model="predibase/llama-3-8b-instruct",
+                tenant_id="c4768f95",
+                api_base="https://serving.app.predibase.com",
+                api_key=os.getenv("PREDIBASE_API_KEY"),
+                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            )
+
+            print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_completion_predibase()
 
 
 def test_completion_claude():
@@ -117,6 +199,7 @@ def test_completion_claude():
 
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
+
     messages = [
         {
             "role": "system",
@@ -229,6 +312,91 @@ def test_completion_claude_3_function_call():
         print(second_response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_no_content_error():
+    """
+    https://github.com/BerriAI/litellm/discussions/3440#discussioncomment-9323402
+    """
+    try:
+        litellm.drop_params = True
+        response = await litellm.acompletion(
+            model="anthropic/claude-3-opus-20240229",
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You will be given a list of fruits. Use the submitFruit function to submit a fruit. Don't say anything after.",
+                },
+                {"role": "user", "content": "I like apples"},
+                {
+                    "content": "<thinking>The most relevant tool for this request is the submitFruit function.</thinking>",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": '{"name": "Apple"}',
+                                "name": "submitFruit",
+                            },
+                            "id": "toolu_012ZTYKWD4VqrXGXyE7kEnAK",
+                            "type": "function",
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "content": '{"success":true}',
+                    "tool_call_id": "toolu_012ZTYKWD4VqrXGXyE7kEnAK",
+                },
+            ],
+            max_tokens=2000,
+            temperature=1,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submitFruit",
+                        "description": "Submits a fruit",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "The name of the fruit",
+                                }
+                            },
+                            "required": ["name"],
+                        },
+                    },
+                }
+            ],
+            frequency_penalty=0.8,
+        )
+
+        pass
+    except litellm.APIError as e:
+        assert e.status_code == 500
+    except Exception as e:
+        pytest.fail(f"An unexpected error occurred - {str(e)}")
+
+
+def test_gemini_completion_call_error():
+    try:
+        print("test completion + streaming")
+        litellm.set_verbose = True
+        messages = [{"role": "user", "content": "what is the capital of congo?"}]
+        response = completion(
+            model="gemini/gemini-1.5-pro-latest",
+            messages=messages,
+            stream=True,
+            max_tokens=10,
+        )
+        print(f"response: {response}")
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"error occurred: {str(e)}")
 
 
 def test_completion_cohere_command_r_plus_function_call():
@@ -542,6 +710,7 @@ def test_completion_mistral_api():
                     "content": "Hey, how's it going?",
                 }
             ],
+            seed=10,
         )
         # Add any assertions here to check the response
         print(response)
@@ -716,7 +885,7 @@ async def test_acompletion_claude2_1():
             },
             {"role": "user", "content": "Generate a 3 liner joke for me"},
         ]
-        # test without max tokens
+        # test without max-tokens
         response = await litellm.acompletion(model="claude-2.1", messages=messages)
         # Add any assertions here to check the response
         print(response)
@@ -974,16 +1143,16 @@ def test_completion_perplexity_api_2():
 ######### HUGGING FACE TESTS ########################
 #####################################################
 """
-HF Tests we should pass 
-- TGI: 
-    - Pro Inference API 
-    - Deployed Endpoint 
-- Coversational 
-    - Free Inference API 
-    - Deployed Endpoint 
+HF Tests we should pass
+- TGI:
+    - Pro Inference API
+    - Deployed Endpoint
+- Coversational
+    - Free Inference API
+    - Deployed Endpoint
 - Neither TGI or Coversational
-    - Free Inference API 
-    - Deployed Endpoint 
+    - Free Inference API
+    - Deployed Endpoint
 """
 
 
@@ -1015,7 +1184,7 @@ def test_get_hf_task_for_model():
     model = "roneneldan/TinyStories-3M"
     model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert model_type == None
+    assert model_type == "text-generation"
 
 
 # test_get_hf_task_for_model()
@@ -1023,15 +1192,92 @@ def test_get_hf_task_for_model():
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
-def hf_test_completion_tgi():
-    # litellm.set_verbose=True
+def tgi_mock_post(url, data=None, json=None, headers=None):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = [
+        {
+            "generated_text": "<|assistant|>\nI'm",
+            "details": {
+                "finish_reason": "length",
+                "generated_tokens": 10,
+                "seed": None,
+                "prefill": [],
+                "tokens": [
+                    {
+                        "id": 28789,
+                        "text": "<",
+                        "logprob": -0.025222778,
+                        "special": False,
+                    },
+                    {
+                        "id": 28766,
+                        "text": "|",
+                        "logprob": -0.000003695488,
+                        "special": False,
+                    },
+                    {
+                        "id": 489,
+                        "text": "ass",
+                        "logprob": -0.0000019073486,
+                        "special": False,
+                    },
+                    {
+                        "id": 11143,
+                        "text": "istant",
+                        "logprob": -0.000002026558,
+                        "special": False,
+                    },
+                    {
+                        "id": 28766,
+                        "text": "|",
+                        "logprob": -0.0000015497208,
+                        "special": False,
+                    },
+                    {
+                        "id": 28767,
+                        "text": ">",
+                        "logprob": -0.0000011920929,
+                        "special": False,
+                    },
+                    {
+                        "id": 13,
+                        "text": "\n",
+                        "logprob": -0.00009703636,
+                        "special": False,
+                    },
+                    {"id": 28737, "text": "I", "logprob": -0.1953125, "special": False},
+                    {
+                        "id": 28742,
+                        "text": "'",
+                        "logprob": -0.88183594,
+                        "special": False,
+                    },
+                    {
+                        "id": 28719,
+                        "text": "m",
+                        "logprob": -0.00032639503,
+                        "special": False,
+                    },
+                ],
+            },
+        }
+    ]
+    return mock_response
+
+
+def test_hf_test_completion_tgi():
+    litellm.set_verbose = True
     try:
-        response = completion(
-            model="huggingface/HuggingFaceH4/zephyr-7b-beta",
-            messages=[{"content": "Hello, how are you?", "role": "user"}],
-        )
-        # Add any assertions here to check the response
-        print(response)
+        with patch("requests.post", side_effect=tgi_mock_post):
+            response = completion(
+                model="huggingface/HuggingFaceH4/zephyr-7b-beta",
+                messages=[{"content": "Hello, how are you?", "role": "user"}],
+                max_tokens=10,
+            )
+            # Add any assertions here to check the response
+            print(response)
     except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
@@ -1069,9 +1315,43 @@ def hf_test_completion_tgi():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_none_task()
+
+
+def mock_post(url, data=None, json=None, headers=None):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = [
+        [
+            {"label": "LABEL_0", "score": 0.9990691542625427},
+            {"label": "LABEL_1", "score": 0.0009308889275416732},
+        ]
+    ]
+    return mock_response
+
+
+def test_hf_classifier_task():
+    try:
+        with patch("requests.post", side_effect=mock_post):
+            litellm.set_verbose = True
+            user_message = "I like you. I love you"
+            messages = [{"content": user_message, "role": "user"}]
+            response = completion(
+                model="huggingface/text-classification/shahrukhx01/question-vs-statement-classifier",
+                messages=messages,
+            )
+            print(f"response: {response}")
+            assert isinstance(response, litellm.ModelResponse)
+            assert isinstance(response.choices[0], litellm.Choices)
+            assert response.choices[0].message.content is not None
+            assert isinstance(response.choices[0].message.content, str)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {str(e)}")
+
+
 ########################### End of Hugging Face Tests ##############################################
 # def test_completion_hf_api():
-# # failing on circle ci commenting out
+# # failing on circle-ci commenting out
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
@@ -1438,6 +1718,200 @@ def test_completion_ollama_hosted():
 
 
 # test_completion_ollama_hosted()
+
+
+@pytest.mark.skip(reason="Local test")
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+def test_completion_ollama_function_call(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = litellm.completion(model=model, messages=messages, tools=tools)
+        print(response)
+        assert response.choices[0].message.tool_calls
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert response.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skip(reason="Local test")
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+def test_completion_ollama_function_call_stream(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model=model, messages=messages, tools=tools, stream=True
+        )
+        print(response)
+        first_chunk = next(response)
+        assert first_chunk.choices[0].delta.tool_calls
+        assert (
+            first_chunk.choices[0].delta.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert first_chunk.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skip(reason="local test")
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_acompletion_ollama_function_call(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model=model, messages=messages, tools=tools
+        )
+        print(response)
+        assert response.choices[0].message.tool_calls
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert response.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skip(reason="local test")
+@pytest.mark.parametrize(
+    ("model"),
+    [
+        "ollama/llama2",
+        "ollama_chat/llama2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_acompletion_ollama_function_call_stream(model):
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model=model, messages=messages, tools=tools, stream=True
+        )
+        print(response)
+        first_chunk = await anext(response)
+        assert first_chunk.choices[0].delta.tool_calls
+        assert (
+            first_chunk.choices[0].delta.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert first_chunk.choices[0].finish_reason == "tool_calls"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_openrouter1():
@@ -1887,9 +2361,9 @@ def test_completion_replicate_vicuna():
 
 def test_replicate_custom_prompt_dict():
     litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-70b-chat"
+    model_name = "replicate/meta/llama-2-7b"
     litellm.register_prompt_template(
-        model="replicate/meta/llama-2-70b-chat",
+        model="replicate/meta/llama-2-7b",
         initial_prompt_value="You are a good assistant",  # [OPTIONAL]
         roles={
             "system": {
@@ -1919,6 +2393,7 @@ def test_replicate_custom_prompt_dict():
             repetition_penalty=0.1,
             num_retries=3,
         )
+
     except litellm.APIError as e:
         pass
     except litellm.APIConnectionError as e:
@@ -2155,6 +2630,69 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
+def response_format_tests(response: litellm.ModelResponse):
+    assert isinstance(response.id, str)
+    assert response.id != ""
+
+    assert isinstance(response.object, str)
+    assert response.object != ""
+
+    assert isinstance(response.created, int)
+
+    assert isinstance(response.model, str)
+    assert response.model != ""
+
+    assert isinstance(response.choices, list)
+    assert len(response.choices) == 1
+    choice = response.choices[0]
+    assert isinstance(choice, litellm.Choices)
+    assert isinstance(choice.get("index"), int)
+
+    message = choice.get("message")
+    assert isinstance(message, litellm.Message)
+    assert isinstance(message.get("role"), str)
+    assert message.get("role") != ""
+    assert isinstance(message.get("content"), str)
+    assert message.get("content") != ""
+
+    assert choice.get("logprobs") is None
+    assert isinstance(choice.get("finish_reason"), str)
+    assert choice.get("finish_reason") != ""
+
+    assert isinstance(response.usage, litellm.Usage)  # type: ignore
+    assert isinstance(response.usage.prompt_tokens, int)  # type: ignore
+    assert isinstance(response.usage.completion_tokens, int)  # type: ignore
+    assert isinstance(response.usage.total_tokens, int)  # type: ignore
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_bedrock_command_r(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        response = completion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        response_format_tests(response=response)
+    else:
+        response = await litellm.acompletion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        print(f"response: {response}")
+        response_format_tests(response=response)
+
+    print(f"response: {response}")
+
+
 def test_completion_bedrock_titan_null_response():
     try:
         response = completion(
@@ -2355,6 +2893,56 @@ def test_completion_with_fallbacks():
 
 
 # test_completion_with_fallbacks()
+
+
+# @pytest.mark.parametrize(
+#     "function_call",
+#     [
+#         [{"role": "function", "name": "get_capital", "content": "Kokoko"}],
+#         [
+#             {"role": "function", "name": "get_capital", "content": "Kokoko"},
+#             {"role": "function", "name": "get_capital", "content": "Kokoko"},
+#         ],
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "tool_call",
+#     [
+#         [{"role": "tool", "tool_call_id": "1234", "content": "Kokoko"}],
+#         [
+#             {"role": "tool", "tool_call_id": "12344", "content": "Kokoko"},
+#             {"role": "tool", "tool_call_id": "1214", "content": "Kokoko"},
+#         ],
+#     ],
+# )
+def test_completion_anthropic_hanging():
+    litellm.set_verbose = True
+    litellm.modify_params = True
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the capital of fictional country Ubabababababaaba? Use your tools.",
+        },
+        {
+            "role": "assistant",
+            "function_call": {
+                "name": "get_capital",
+                "arguments": '{"country": "Ubabababababaaba"}',
+            },
+        },
+        {"role": "function", "name": "get_capital", "content": "Kokoko"},
+    ]
+
+    converted_messages = anthropic_messages_pt(messages)
+
+    print(f"converted_messages: {converted_messages}")
+
+    ## ENSURE USER / ASSISTANT ALTERNATING
+    for i, msg in enumerate(converted_messages):
+        if i < len(converted_messages) - 1:
+            assert msg["role"] != converted_messages[i + 1]["role"]
+
+
 def test_completion_anyscale_api():
     try:
         # litellm.set_verbose=True
@@ -2686,6 +3274,21 @@ async def test_acompletion_gemini():
             pytest.fail(f"Error occurred: {e}")
 
 
+# Deepseek tests
+def test_completion_deepseek():
+    litellm.set_verbose = True
+    model_name = "deepseek/deepseek-chat"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # Palm tests
 def test_completion_palm():
     litellm.set_verbose = True
@@ -2737,6 +3340,25 @@ def test_completion_watsonx():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+            stream=True,
+        )
+        for chunk in response:
+            print(chunk)
     except litellm.APIError as e:
         pass
     except Exception as e:
@@ -2803,6 +3425,26 @@ async def test_acompletion_watsonx():
         )
         # Add any assertions here to check the response
         print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+        # Add any assertions here to check the response
+        async for chunk in response:
+            print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

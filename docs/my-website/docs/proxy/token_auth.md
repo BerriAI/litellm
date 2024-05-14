@@ -17,6 +17,7 @@ This is a new feature, and subject to changes based on feedback.
 ### Step 1. Setup Proxy
 
 - `JWT_PUBLIC_KEY_URL`: This is the public keys endpoint of your OpenID provider. Typically it's `{openid-provider-base-url}/.well-known/openid-configuration/jwks`. For Keycloak it's `{keycloak_base_url}/realms/{your-realm}/protocol/openid-connect/certs`.
+- `JWT_AUDIENCE`: This is the audience used for decoding the JWT. If not set, the decode step will not verify the audience. 
 
 ```bash
 export JWT_PUBLIC_KEY_URL="" # "https://demo.duendesoftware.com/.well-known/openid-configuration/jwks"
@@ -109,7 +110,7 @@ general_settings:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
 
-## Advanced - Spend Tracking (User / Team / Org)
+## Advanced - Spend Tracking (End-Users / Internal Users / Team / Org)
 
 Set the field in the jwt token, which corresponds to a litellm user / team / org.
 
@@ -122,6 +123,7 @@ general_settings:
     team_id_jwt_field: "client_id" # 👈 CAN BE ANY FIELD
     user_id_jwt_field: "sub" # 👈 CAN BE ANY FIELD
     org_id_jwt_field: "org_id" # 👈 CAN BE ANY FIELD
+    end_user_id_jwt_field: "customer_id" # 👈 CAN BE ANY FIELD
 ```
 
 Expected JWT: 
@@ -130,7 +132,7 @@ Expected JWT:
 {
   "client_id": "my-unique-team",
   "sub": "my-unique-user",
-  "org_id": "my-unique-org"
+  "org_id": "my-unique-org",
 }
 ```
 

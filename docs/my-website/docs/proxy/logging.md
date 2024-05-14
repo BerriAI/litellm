@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina
+# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina, Azure Content-Safety
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
@@ -17,6 +17,7 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
 - [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
 - [Logging to Athina](#logging-proxy-inputoutput-athina)
+- [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -914,39 +915,72 @@ Test Request
 litellm --test
 ```
 
-## Logging Proxy Input/Output Traceloop (OpenTelemetry)
+## Logging Proxy Input/Output in OpenTelemetry format using Traceloop's OpenLLMetry
 
-Traceloop allows you to log LLM Input/Output in the OpenTelemetry format
+[OpenLLMetry](https://github.com/traceloop/openllmetry) _(built and maintained by Traceloop)_ is a set of extensions
+built on top of [OpenTelemetry](https://opentelemetry.io/) that gives you complete observability over your LLM
+application. Because it uses OpenTelemetry under the
+hood, [it can be connected to various observability solutions](https://www.traceloop.com/docs/openllmetry/integrations/introduction)
+like:
 
-We will use the `--config` to set `litellm.success_callback = ["traceloop"]` this will log all successfull LLM calls to traceloop
+* [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop)
+* [Axiom](https://www.traceloop.com/docs/openllmetry/integrations/axiom)
+* [Azure Application Insights](https://www.traceloop.com/docs/openllmetry/integrations/azure)
+* [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
+* [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace)
+* [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana)
+* [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb)
+* [HyperDX](https://www.traceloop.com/docs/openllmetry/integrations/hyperdx)
+* [Instana](https://www.traceloop.com/docs/openllmetry/integrations/instana)
+* [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic)
+* [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
+* [Service Now Cloud Observability](https://www.traceloop.com/docs/openllmetry/integrations/service-now)
+* [Sentry](https://www.traceloop.com/docs/openllmetry/integrations/sentry)
+* [SigNoz](https://www.traceloop.com/docs/openllmetry/integrations/signoz)
+* [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk)
 
-**Step 1** Install traceloop-sdk and set Traceloop API key
+We will use the `--config` to set `litellm.success_callback = ["traceloop"]` to achieve this, steps are listed below.
+
+**Step 1:** Install the SDK
 
 ```shell
-pip install traceloop-sdk -U
+pip install traceloop-sdk
 ```
 
-Traceloop outputs standard OpenTelemetry data that can be connected to your observability stack. Send standard OpenTelemetry from LiteLLM Proxy to [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop), [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace), [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
-, [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic), [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb), [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana), [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk), [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
+**Step 2:** Configure Environment Variable for trace exporting
 
-**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+You will need to configure where to export your traces. Environment variables will control this, example: For Traceloop
+you should use `TRACELOOP_API_KEY`, whereas for Datadog you use `TRACELOOP_BASE_URL`. For more
+visit [the Integrations Catalog](https://www.traceloop.com/docs/openllmetry/integrations/introduction).
+
+If you are using Datadog as the observability solutions then you can set `TRACELOOP_BASE_URL` as:
+
+```shell
+TRACELOOP_BASE_URL=http://<datadog-agent-hostname>:4318
+```
+
+**Step 3**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+  - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
+      api_key: my-fake-key # replace api_key with actual key
 litellm_settings:
-  success_callback: ["traceloop"]
+  success_callback: [ "traceloop" ]
 ```
 
-**Step 3**: Start the proxy, make a test request
+**Step 4**: Start the proxy, make a test request
 
 Start proxy
+
 ```shell
 litellm --config config.yaml --debug
 ```
 
 Test Request
+
 ```
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
@@ -1004,3 +1038,86 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     ]
     }'
 ```
+
+## (BETA) Moderation with Azure Content Safety
+
+[Azure Content-Safety](https://azure.microsoft.com/en-us/products/ai-services/ai-content-safety) is a Microsoft Azure service that provides content moderation APIs to detect potential offensive, harmful, or risky content in text.
+
+We will use the `--config` to set `litellm.success_callback = ["azure_content_safety"]` this will moderate all LLM calls using Azure Content Safety.
+
+**Step 0** Deploy Azure Content Safety
+
+Deploy an Azure Content-Safety instance from the Azure Portal and get the `endpoint` and `key`.
+
+**Step 1** Set Athina API key
+
+```shell
+AZURE_CONTENT_SAFETY_KEY = "<your-azure-content-safety-key>"
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["azure_content_safety"]
+  azure_content_safety_params:
+    endpoint: "<your-azure-content-safety-endpoint>"
+    key: "os.environ/AZURE_CONTENT_SAFETY_KEY"
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hi, how are you?"
+            }
+        ]
+    }'
+```
+
+An HTTP 400 error will be returned if the content is detected with a value greater than the threshold set in the `config.yaml`.
+The details of the response will describe :
+- The `source` : input text or llm generated text
+- The `category` : the category of the content that triggered the moderation
+- The `severity` : the severity from 0 to 10
+
+**Step 4**: Customizing Azure Content Safety Thresholds
+
+You can customize the thresholds for each category by setting the `thresholds` in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["azure_content_safety"]
+  azure_content_safety_params:
+    endpoint: "<your-azure-content-safety-endpoint>"
+    key: "os.environ/AZURE_CONTENT_SAFETY_KEY"
+    thresholds:
+      Hate: 6
+      SelfHarm: 8
+      Sexual: 6
+      Violence: 4
+```
+
+:::info
+`thresholds` are not required by default, but you can tune the values to your needs.
+Default values is `4` for all categories
+:::
