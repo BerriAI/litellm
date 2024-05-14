@@ -13,6 +13,7 @@ import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
+
 import itertools
 import random, uuid, requests  # type: ignore
 from functools import wraps
@@ -8514,7 +8515,7 @@ def exception_type(
                     request=original_exception.request,
                 )
             elif custom_llm_provider == "watsonx":
-                if "token_quota_reached" in error_response:
+                if "token_quota_reached" in error_str:
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"WatsonxException: Rate Limit Errror - {error_str}",
