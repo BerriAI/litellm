@@ -3995,13 +3995,6 @@ def transcription(
             max_retries=max_retries,
         )
     elif custom_llm_provider == "openai":
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret("OPENAI_API_KEY")
-        )
-        
         response = openai_chat_completions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -4010,7 +4003,6 @@ def transcription(
             atranscription=atranscription,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
-            api_key=api_key,
             max_retries=max_retries,
         )
     return response
