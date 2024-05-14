@@ -3427,6 +3427,8 @@ async def test_acompletion_watsonx():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
