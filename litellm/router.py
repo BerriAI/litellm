@@ -263,11 +263,12 @@ class Router:
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
         self.fallbacks = fallbacks or litellm.fallbacks
-        if default_fallbacks is not None:
+        if default_fallbacks is not None or litellm.default_fallbacks is not None:
+            _fallbacks = default_fallbacks or litellm.default_fallbacks
             if self.fallbacks is not None:
-                self.fallbacks.append({"*": default_fallbacks})
+                self.fallbacks.append({"*": _fallbacks})
             else:
-                self.fallbacks = [{"*": default_fallbacks}]
+                self.fallbacks = [{"*": _fallbacks}]
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
@@ -3706,7 +3707,7 @@ class Router:
                 )
                 asyncio.create_task(
                     proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}. Change 'cooldown_time' + 'allowed_failes' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
+                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}. Change 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
                         alert_type="cooldown_deployment",
                         level="Low",
                     )
