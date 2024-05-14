@@ -63,7 +63,7 @@ class Router:
 
     def __init__(
         self,
-        model_list: Optional[List[DeploymentTypedDict]] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict]]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
