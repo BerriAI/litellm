@@ -2,8 +2,6 @@
 #    Class for sending Slack Alerts #
 import dotenv, os
 from litellm.proxy._types import UserAPIKeyAuth
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm, threading
 from typing import List, Literal, Any, Union, Optional, Dict
@@ -33,7 +31,8 @@ class LiteLLMBase(BaseModel):
 
 
 class SlackAlertingArgs(LiteLLMBase):
-    daily_report_frequency: int = 12 * 60 * 60  # 12 hours
+    default_daily_report_frequency: int = 12 * 60 * 60  # 12 hours
+    daily_report_frequency: int = int(os.getenv("SLACK_DAILY_REPORT_FREQUENCY", default_daily_report_frequency))
     report_check_interval: int = 5 * 60  # 5 minutes
 
 
@@ -78,16 +77,14 @@ class SlackAlerting(CustomLogger):
         internal_usage_cache: Optional[DualCache] = None,
         alerting_threshold: float = 300,  # threshold for slow / hanging llm responses (in seconds)
         alerting: Optional[List] = [],
-        alert_types: Optional[
-            List[
-                Literal[
-                    "llm_exceptions",
-                    "llm_too_slow",
-                    "llm_requests_hanging",
-                    "budget_alerts",
-                    "db_exceptions",
-                    "daily_reports",
-                ]
+        alert_types: List[
+            Literal[
+                "llm_exceptions",
+                "llm_too_slow",
+                "llm_requests_hanging",
+                "budget_alerts",
+                "db_exceptions",
+                "daily_reports",
             ]
         ] = [
             "llm_exceptions",
@@ -242,6 +239,8 @@ class SlackAlerting(CustomLogger):
                 end_time=end_time,
             )
         )
+        if litellm.turn_off_message_logging:
+            messages = "Message not logged. `litellm.turn_off_message_logging=True`."
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
         if time_difference_float > self.alerting_threshold:
@@ -464,6 +463,11 @@ class SlackAlerting(CustomLogger):
                 messages = messages[:100]
             except:
                 messages = ""
+
+            if litellm.turn_off_message_logging:
+                messages = (
+                    "Message not logged. `litellm.turn_off_message_logging=True`."
+                )
             request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
         else:
             request_info = ""
@@ -814,14 +818,6 @@ Model Info:
                     updated_at=litellm.utils.get_utc_datetime(),
                 )
             )
-        if "llm_exceptions" in self.alert_types:
-            original_exception = kwargs.get("exception", None)
-
-            await self.send_alert(
-                message="LLM API Failure - " + str(original_exception),
-                level="High",
-                alert_type="llm_exceptions",
-            )
 
     async def _run_scheduler_helper(self, llm_router) -> bool:
         """
@@ -885,3 +881,99 @@ Model Info:
                 )  # shuffle to prevent collisions
                 await asyncio.sleep(interval)
         return
+
+    async def send_weekly_spend_report(self):
+        """ """
+        try:
+            from litellm.proxy.proxy_server import _get_spend_report_for_time_range
+
+            todays_date = datetime.datetime.now().date()
+            week_before = todays_date - datetime.timedelta(days=7)
+
+            weekly_spend_per_team, weekly_spend_per_tag = (
+                await _get_spend_report_for_time_range(
+                    start_date=week_before.strftime("%Y-%m-%d"),
+                    end_date=todays_date.strftime("%Y-%m-%d"),
+                )
+            )
+
+            _weekly_spend_message = f"*💸 Weekly Spend Report for `{week_before.strftime('%m-%d-%Y')} - {todays_date.strftime('%m-%d-%Y')}` *\n"
+
+            if weekly_spend_per_team is not None:
+                _weekly_spend_message += "\n*Team Spend Report:*\n"
+                for spend in weekly_spend_per_team:
+                    _team_spend = spend["total_spend"]
+                    _team_spend = float(_team_spend)
+                    # round to 4 decimal places
+                    _team_spend = round(_team_spend, 4)
+                    _weekly_spend_message += (
+                        f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
+                    )
+
+            if weekly_spend_per_tag is not None:
+                _weekly_spend_message += "\n*Tag Spend Report:*\n"
+                for spend in weekly_spend_per_tag:
+                    _tag_spend = spend["total_spend"]
+                    _tag_spend = float(_tag_spend)
+                    # round to 4 decimal places
+                    _tag_spend = round(_tag_spend, 4)
+                    _weekly_spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"
+
+            await self.send_alert(
+                message=_weekly_spend_message,
+                level="Low",
+                alert_type="daily_reports",
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Error sending weekly spend report", e)
+
+    async def send_monthly_spend_report(self):
+        """ """
+        try:
+            from calendar import monthrange
+
+            from litellm.proxy.proxy_server import _get_spend_report_for_time_range
+
+            todays_date = datetime.datetime.now().date()
+            first_day_of_month = todays_date.replace(day=1)
+            _, last_day_of_month = monthrange(todays_date.year, todays_date.month)
+            last_day_of_month = first_day_of_month + datetime.timedelta(
+                days=last_day_of_month - 1
+            )
+
+            monthly_spend_per_team, monthly_spend_per_tag = (
+                await _get_spend_report_for_time_range(
+                    start_date=first_day_of_month.strftime("%Y-%m-%d"),
+                    end_date=last_day_of_month.strftime("%Y-%m-%d"),
+                )
+            )
+
+            _spend_message = f"*💸 Monthly Spend Report for `{first_day_of_month.strftime('%m-%d-%Y')} - {last_day_of_month.strftime('%m-%d-%Y')}` *\n"
+
+            if monthly_spend_per_team is not None:
+                _spend_message += "\n*Team Spend Report:*\n"
+                for spend in monthly_spend_per_team:
+                    _team_spend = spend["total_spend"]
+                    _team_spend = float(_team_spend)
+                    # round to 4 decimal places
+                    _team_spend = round(_team_spend, 4)
+                    _spend_message += (
+                        f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
+                    )
+
+            if monthly_spend_per_tag is not None:
+                _spend_message += "\n*Tag Spend Report:*\n"
+                for spend in monthly_spend_per_tag:
+                    _tag_spend = spend["total_spend"]
+                    _tag_spend = float(_tag_spend)
+                    # round to 4 decimal places
+                    _tag_spend = round(_tag_spend, 4)
+                    _spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"
+
+            await self.send_alert(
+                message=_spend_message,
+                level="Low",
+                alert_type="daily_reports",
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Error sending weekly spend report", e)
