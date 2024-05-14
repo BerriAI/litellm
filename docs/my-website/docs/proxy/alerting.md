@@ -22,6 +22,7 @@ Set up a slack alert channel to receive alerts from proxy.
 
 Get a slack webhook url from https://api.slack.com/messaging/webhooks
 
+You can also use Discord Webhooks, see [here](#using-discord-webhooks)
 
 ### Step 2: Update config.yaml 
 
@@ -59,3 +60,39 @@ Make a GET request to `/health/services`, expect to see a test slack alert in yo
 curl -X GET 'http://localhost:4000/health/services?service=slack' \
   -H 'Authorization: Bearer sk-1234'
 ```
+
+
+## Extras
+
+### Using Discord Webhooks
+
+Discord provides a slack compatible webhook url that you can use for alerting
+
+##### Quick Start
+
+1. Get a webhook url for your discord channel 
+
+2. Append `/slack` to your discord webhook - it should look like
+
+```
+"https://discord.com/api/webhooks/1240030362193760286/cTLWt5ATn1gKmcy_982rl5xmYHsrM1IWJdmCL1AyOmU9JdQXazrp8L1_PYgUtgxj8x4f/slack"
+```
+
+3. Add it to your litellm config 
+
+```yaml
+model_list: 
+    model_name: "azure-model"
+    litellm_params:
+        model: "azure/gpt-35-turbo"
+        api_key: "my-bad-key" # 👈 bad key
+
+general_settings: 
+    alerting: ["slack"]
+    alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
+
+environment_variables:
+    SLACK_WEBHOOK_URL: "https://discord.com/api/webhooks/1240030362193760286/cTLWt5ATn1gKmcy_982rl5xmYHsrM1IWJdmCL1AyOmU9JdQXazrp8L1_PYgUtgxj8x4f/slack"
+```
+
+That's it ! You're ready to go !
