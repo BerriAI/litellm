@@ -3924,7 +3924,7 @@ def transcription(
     response_format: Optional[
         Literal["json", "text", "srt", "verbose_json", "vtt"]
     ] = None,
-    timestamp_granularities: Optional[List[Literal["sentence", "word"]]] = None,
+    timestamp_granularities: Optional[List[Literal['word', 'segment']]] = None,
     temperature: Optional[int] = None,  # openai defaults this to 0
     ## LITELLM PARAMS ##
     user: Optional[str] = None,
