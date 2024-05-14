@@ -40,21 +40,18 @@ from litellm.caching import DualCache
 oidc_cache = DualCache()
 
 try:
-    # this works in python 3.8
-    import pkg_resources  # type: ignore
-
-    filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
-# try:
-#     filename = str(
-#         resources.files().joinpath("llms/tokenizers")  # type: ignore
-#     )  # for python 3.8 and 3.12
-except:
-    # this works in python 3.9+
+    # New and recommended way to access resources
     from importlib import resources
 
     filename = str(
-        resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
-    )  # for python 3.10+
+        resources.files(litellm).joinpath("llms/tokenizers")
+    )
+except ImportError:
+    # Old way to access resources, which setuptools deprecated some time ago
+    import pkg_resources  # type: ignore
+
+    filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+
 os.environ["TIKTOKEN_CACHE_DIR"] = (
     filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 )
