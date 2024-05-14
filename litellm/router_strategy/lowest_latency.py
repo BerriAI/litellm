@@ -1,12 +1,10 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-from pydantic import BaseModel, Extra, Field, root_validator
-import dotenv, os, requests, random
+from pydantic import BaseModel, Extra, Field, root_validator  # type: ignore
+import dotenv, os, requests, random  # type: ignore
 from typing import Optional, Union, List, Dict
 from datetime import datetime, timedelta
 import random
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -31,6 +29,7 @@ class LiteLLMBase(BaseModel):
 class RoutingArgs(LiteLLMBase):
     ttl: int = 1 * 60 * 60  # 1 hour
     lowest_latency_buffer: float = 0
+    max_latency_list_size: int = 10
 
 
 class LowestLatencyLoggingHandler(CustomLogger):
@@ -103,7 +102,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                request_count_dict[id].setdefault("latency", []).append(final_value)
+                if (
+                    len(request_count_dict[id].get("latency", []))
+                    < self.routing_args.max_latency_list_size
+                ):
+                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                else:
+                    request_count_dict[id]["latency"] = request_count_dict[id][
+                        "latency"
+                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -170,8 +177,17 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if id not in request_count_dict:
                         request_count_dict[id] = {}
 
-                    ## Latency
-                    request_count_dict[id].setdefault("latency", []).append(1000.0)
+                    ## Latency - give 1000s penalty for failing
+                    if (
+                        len(request_count_dict[id].get("latency", []))
+                        < self.routing_args.max_latency_list_size
+                    ):
+                        request_count_dict[id].setdefault("latency", []).append(1000.0)
+                    else:
+                        request_count_dict[id]["latency"] = request_count_dict[id][
+                            "latency"
+                        ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
+
                     self.router_cache.set_cache(
                         key=latency_key,
                         value=request_count_dict,
@@ -242,7 +258,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                request_count_dict[id].setdefault("latency", []).append(final_value)
+                if (
+                    len(request_count_dict[id].get("latency", []))
+                    < self.routing_args.max_latency_list_size
+                ):
+                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                else:
+                    request_count_dict[id]["latency"] = request_count_dict[id][
+                        "latency"
+                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
