@@ -17,6 +17,14 @@ This covers:
 - ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
 
 
+## [COMING SOON] AWS Marketplace Support
+
+Deploy managed LiteLLM Proxy within your VPC.
+
+Includes all enterprise features.
+
+[**Get early access**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
 ## Frequently Asked Questions
 
 ### What topics does Professional support cover and what SLAs do you offer?

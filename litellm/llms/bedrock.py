@@ -4,7 +4,13 @@ from enum import Enum
 import time, uuid
 from typing import Callable, Optional, Any, Union, List
 import litellm
-from litellm.utils import ModelResponse, get_secret, Usage, ImageResponse
+from litellm.utils import (
+    ModelResponse,
+    get_secret,
+    Usage,
+    ImageResponse,
+    map_finish_reason,
+)
 from .prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -45,6 +51,16 @@ class AmazonBedrockGlobalConfig:
             if param in mapped_params:
                 optional_params[mapped_params[param]] = value
         return optional_params
+
+    def get_eu_regions(self) -> List[str]:
+        """
+        Source: https://www.aws-services.info/bedrock.html
+        """
+        return [
+            "eu-west-1",
+            "eu-west-3",
+            "eu-central-1",
+        ]
 
 
 class AmazonTitanConfig:
@@ -157,6 +173,7 @@ class AmazonAnthropicClaude3Config:
             "stop",
             "temperature",
             "top_p",
+            "extra_headers",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -524,6 +541,17 @@ class AmazonStabilityConfig:
         }
 
 
+def add_custom_header(headers):
+    """Closure to capture the headers and add them."""
+
+    def callback(request, **kwargs):
+        """Actual callback function that Boto3 will call."""
+        for header_name, header_value in headers.items():
+            request.headers.add_header(header_name, header_value)
+
+    return callback
+
+
 def init_bedrock_client(
     region_name=None,
     aws_access_key_id: Optional[str] = None,
@@ -533,12 +561,13 @@ def init_bedrock_client(
     aws_session_name: Optional[str] = None,
     aws_profile_name: Optional[str] = None,
     aws_role_name: Optional[str] = None,
-    timeout: Optional[int] = None,
+    aws_web_identity_token: Optional[str] = None,
+    extra_headers: Optional[dict] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
     standard_aws_region_name = get_secret("AWS_REGION", None)
-
     ## CHECK IS  'os.environ/' passed in
     # Define the list of parameters to check
     params_to_check = [
@@ -549,6 +578,7 @@ def init_bedrock_client(
         aws_session_name,
         aws_profile_name,
         aws_role_name,
+        aws_web_identity_token,
     ]
 
     # Iterate over parameters and update if needed
@@ -564,6 +594,7 @@ def init_bedrock_client(
         aws_session_name,
         aws_profile_name,
         aws_role_name,
+        aws_web_identity_token,
     ) = params_to_check
 
     ### SET REGION NAME
@@ -592,10 +623,48 @@ def init_bedrock_client(
 
     import boto3
 
-    config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+    if isinstance(timeout, float):
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+    elif isinstance(timeout, httpx.Timeout):
+        config = boto3.session.Config(
+            connect_timeout=timeout.connect, read_timeout=timeout.read
+        )
+    else:
+        config = boto3.session.Config()
 
     ### CHECK STS ###
-    if aws_role_name is not None and aws_session_name is not None:
+    if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
+        oidc_token = get_secret(aws_web_identity_token)
+
+        if oidc_token is None:
+            raise BedrockError(
+                message="OIDC token could not be retrieved from secret manager.",
+                status_code=401,
+            )
+
+        sts_client = boto3.client(
+            "sts"
+        )
+
+        # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
+        # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+        sts_response = sts_client.assume_role_with_web_identity(
+            RoleArn=aws_role_name,
+            RoleSessionName=aws_session_name,
+            WebIdentityToken=oidc_token,
+            DurationSeconds=3600,
+        )
+
+        client = boto3.client(
+            service_name="bedrock-runtime",
+            aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
+            aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
+            aws_session_token=sts_response["Credentials"]["SessionToken"],
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+        )
+    elif aws_role_name is not None and aws_session_name is not None:
         # use sts if role name passed in
         sts_client = boto3.client(
             "sts",
@@ -646,6 +715,10 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+        )
+    if extra_headers:
+        client.meta.events.register(
+            "before-sign.bedrock-runtime.*", add_custom_header(extra_headers)
         )
 
     return client
@@ -710,6 +783,7 @@ def completion(
     litellm_params=None,
     logger_fn=None,
     timeout=None,
+    extra_headers: Optional[dict] = None,
 ):
     exception_mapping_worked = False
     _is_function_call = False
@@ -725,6 +799,7 @@ def completion(
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )
+        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
 
         # use passed in BedrockRuntime.Client if provided, otherwise create a new one
         client = optional_params.pop("aws_bedrock_client", None)
@@ -739,6 +814,8 @@ def completion(
                 aws_role_name=aws_role_name,
                 aws_session_name=aws_session_name,
                 aws_profile_name=aws_profile_name,
+                aws_web_identity_token=aws_web_identity_token,
+                extra_headers=extra_headers,
                 timeout=timeout,
             )
 
@@ -1043,7 +1120,9 @@ def completion(
                             logging_obj=logging_obj,
                         )
 
-                model_response["finish_reason"] = response_body["stop_reason"]
+                model_response["finish_reason"] = map_finish_reason(
+                    response_body["stop_reason"]
+                )
                 _usage = litellm.Usage(
                     prompt_tokens=response_body["usage"]["input_tokens"],
                     completion_tokens=response_body["usage"]["output_tokens"],
@@ -1194,7 +1273,7 @@ def _embedding_func_single(
             "input_type", "search_document"
         )  # aws bedrock example default - https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/providers?model=cohere.embed-english-v3
         data = {"texts": [input], **inference_params}  # type: ignore
-    body = json.dumps(data).encode("utf-8")
+    body = json.dumps(data).encode("utf-8")  # type: ignore
     ## LOGGING
     request_str = f"""
     response = client.invoke_model(
@@ -1258,6 +1337,7 @@ def embedding(
     aws_bedrock_runtime_endpoint = optional_params.pop(
         "aws_bedrock_runtime_endpoint", None
     )
+    aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
 
     # use passed in BedrockRuntime.Client if provided, otherwise create a new one
     client = init_bedrock_client(
@@ -1265,6 +1345,7 @@ def embedding(
         aws_secret_access_key=aws_secret_access_key,
         aws_region_name=aws_region_name,
         aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+        aws_web_identity_token=aws_web_identity_token,
         aws_role_name=aws_role_name,
         aws_session_name=aws_session_name,
     )
@@ -1347,6 +1428,7 @@ def image_generation(
     aws_bedrock_runtime_endpoint = optional_params.pop(
         "aws_bedrock_runtime_endpoint", None
     )
+    aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
 
     # use passed in BedrockRuntime.Client if provided, otherwise create a new one
     client = init_bedrock_client(
@@ -1354,6 +1436,7 @@ def image_generation(
         aws_secret_access_key=aws_secret_access_key,
         aws_region_name=aws_region_name,
         aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+        aws_web_identity_token=aws_web_identity_token,
         aws_role_name=aws_role_name,
         aws_session_name=aws_session_name,
         timeout=timeout,
@@ -1386,7 +1469,7 @@ def image_generation(
     ## LOGGING
     request_str = f"""
     response = client.invoke_model(
-        body={body},
+        body={body}, # type: ignore
         modelId={modelId},
         accept="application/json",
         contentType="application/json",
