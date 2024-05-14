@@ -68,6 +68,51 @@ def test_completion_custom_provider_model_name():
         pytest.fail(f"Error occurred: {e}")
 
 
+def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
+    _data = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1677652288,
+        "model": "gpt-3.5-turbo-0125",
+        "system_fingerprint": "fp_44709d6fcb",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": None,
+                    "content": "\n\nHello there, how may I assist you today?",
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+    }
+    return litellm.ModelResponse(**_data)
+
+
+def test_null_role_response():
+    """
+    Test if api returns 'null' role, 'assistant' role is still returned
+    """
+    import openai
+
+    openai_client = openai.OpenAI()
+    with patch.object(
+        openai_client.chat.completions, "create", side_effect=_openai_mock_response
+    ) as mock_response:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            client=openai_client,
+        )
+        print(f"response: {response}")
+
+        assert response.id == "chatcmpl-123"
+
+        assert response.choices[0].message.role == "assistant"
+
+
 def test_completion_azure_command_r():
     try:
         litellm.set_verbose = True
@@ -665,6 +710,7 @@ def test_completion_mistral_api():
                     "content": "Hey, how's it going?",
                 }
             ],
+            seed=10,
         )
         # Add any assertions here to check the response
         print(response)
@@ -839,7 +885,7 @@ async def test_acompletion_claude2_1():
             },
             {"role": "user", "content": "Generate a 3 liner joke for me"},
         ]
-        # test without max tokens
+        # test without max-tokens
         response = await litellm.acompletion(model="claude-2.1", messages=messages)
         # Add any assertions here to check the response
         print(response)
@@ -3296,6 +3342,8 @@ def test_completion_watsonx():
         print(response)
     except litellm.APIError as e:
         pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3314,6 +3362,8 @@ def test_completion_stream_watsonx():
         for chunk in response:
             print(chunk)
     except litellm.APIError as e:
+        pass
+    except litellm.RateLimitError as e:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -3379,6 +3429,8 @@ async def test_acompletion_watsonx():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3399,6 +3451,8 @@ async def test_acompletion_stream_watsonx():
         # Add any assertions here to check the response
         async for chunk in response:
             print(chunk)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
