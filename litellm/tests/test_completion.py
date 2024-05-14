@@ -68,6 +68,51 @@ def test_completion_custom_provider_model_name():
         pytest.fail(f"Error occurred: {e}")
 
 
+def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
+    _data = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1677652288,
+        "model": "gpt-3.5-turbo-0125",
+        "system_fingerprint": "fp_44709d6fcb",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": None,
+                    "content": "\n\nHello there, how may I assist you today?",
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+    }
+    return litellm.ModelResponse(**_data)
+
+
+def test_null_role_response():
+    """
+    Test if api returns 'null' role, 'assistant' role is still returned
+    """
+    import openai
+
+    openai_client = openai.OpenAI()
+    with patch.object(
+        openai_client.chat.completions, "create", side_effect=_openai_mock_response
+    ) as mock_response:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            client=openai_client,
+        )
+        print(f"response: {response}")
+
+        assert response.id == "chatcmpl-123"
+
+        assert response.choices[0].message.role == "assistant"
+
+
 def test_completion_azure_command_r():
     try:
         litellm.set_verbose = True
@@ -665,6 +710,7 @@ def test_completion_mistral_api():
                     "content": "Hey, how's it going?",
                 }
             ],
+            seed=10,
         )
         # Add any assertions here to check the response
         print(response)
@@ -839,7 +885,7 @@ async def test_acompletion_claude2_1():
             },
             {"role": "user", "content": "Generate a 3 liner joke for me"},
         ]
-        # test without max tokens
+        # test without max-tokens
         response = await litellm.acompletion(model="claude-2.1", messages=messages)
         # Add any assertions here to check the response
         print(response)
@@ -1305,7 +1351,7 @@ def test_hf_classifier_task():
 
 ########################### End of Hugging Face Tests ##############################################
 # def test_completion_hf_api():
-# # failing on circle ci commenting out
+# # failing on circle-ci commenting out
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
@@ -2584,6 +2630,69 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
+def response_format_tests(response: litellm.ModelResponse):
+    assert isinstance(response.id, str)
+    assert response.id != ""
+
+    assert isinstance(response.object, str)
+    assert response.object != ""
+
+    assert isinstance(response.created, int)
+
+    assert isinstance(response.model, str)
+    assert response.model != ""
+
+    assert isinstance(response.choices, list)
+    assert len(response.choices) == 1
+    choice = response.choices[0]
+    assert isinstance(choice, litellm.Choices)
+    assert isinstance(choice.get("index"), int)
+
+    message = choice.get("message")
+    assert isinstance(message, litellm.Message)
+    assert isinstance(message.get("role"), str)
+    assert message.get("role") != ""
+    assert isinstance(message.get("content"), str)
+    assert message.get("content") != ""
+
+    assert choice.get("logprobs") is None
+    assert isinstance(choice.get("finish_reason"), str)
+    assert choice.get("finish_reason") != ""
+
+    assert isinstance(response.usage, litellm.Usage)  # type: ignore
+    assert isinstance(response.usage.prompt_tokens, int)  # type: ignore
+    assert isinstance(response.usage.completion_tokens, int)  # type: ignore
+    assert isinstance(response.usage.total_tokens, int)  # type: ignore
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_bedrock_command_r(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        response = completion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        response_format_tests(response=response)
+    else:
+        response = await litellm.acompletion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        print(f"response: {response}")
+        response_format_tests(response=response)
+
+    print(f"response: {response}")
+
+
 def test_completion_bedrock_titan_null_response():
     try:
         response = completion(
@@ -3233,6 +3342,29 @@ def test_completion_watsonx():
         print(response)
     except litellm.APIError as e:
         pass
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+            stream=True,
+        )
+        for chunk in response:
+            print(chunk)
+    except litellm.APIError as e:
+        pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3297,6 +3429,30 @@ async def test_acompletion_watsonx():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+        # Add any assertions here to check the response
+        async for chunk in response:
+            print(chunk)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

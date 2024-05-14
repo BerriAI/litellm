@@ -1,6 +1,6 @@
-from typing import List, Optional, Union, Dict, Tuple, Literal
+from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
 import httpx
-from pydantic import BaseModel, validator, Field
+from pydantic import ConfigDict, BaseModel, validator, Field, __version__ as pydantic_version
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 import uuid, enum
@@ -12,8 +12,9 @@ class ModelConfig(BaseModel):
     tpm: int
     rpm: int
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
 
 
 class RouterConfig(BaseModel):
@@ -44,8 +45,9 @@ class RouterConfig(BaseModel):
         "latency-based-routing",
     ] = "simple-shuffle"
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
 
 
 class UpdateRouterConfig(BaseModel):
@@ -65,8 +67,9 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
 
 
 class ModelInfo(BaseModel):
@@ -84,8 +87,9 @@ class ModelInfo(BaseModel):
             id = str(id)
         super().__init__(id=id, **params)
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(
+        extra = "allow",
+    )
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -132,6 +136,8 @@ class GenericLiteLLMParams(BaseModel):
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
+    ## IBM WATSONX ##
+    watsonx_region_name: Optional[str] = None
     ## CUSTOM PRICING ##
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
@@ -161,6 +167,8 @@ class GenericLiteLLMParams(BaseModel):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
+        ## IBM WATSONX ##
+        watsonx_region_name: Optional[str] = None,
         input_cost_per_token: Optional[float] = None,
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
@@ -176,9 +184,18 @@ class GenericLiteLLMParams(BaseModel):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        extra = "allow",
+        arbitrary_types_allowed = True,
+    )
+    if pydantic_version.startswith("1"):
+        # pydantic v2 warns about using a Config class.
+        # But without this, pydantic v1 will raise an error:
+        #     RuntimeError: no validator found for <class 'openai.Timeout'>,
+        #     see `arbitrary_types_allowed` in Config
+        # Putting arbitrary_types_allowed = True in the ConfigDict doesn't work in pydantic v1.
+        class Config:
+            arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -237,9 +254,18 @@ class LiteLLM_Params(GenericLiteLLMParams):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        extra = "allow",
+        arbitrary_types_allowed = True,
+    )
+    if pydantic_version.startswith("1"):
+        # pydantic v2 warns about using a Config class.
+        # But without this, pydantic v1 will raise an error:
+        #     RuntimeError: no validator found for <class 'openai.Timeout'>,
+        #     see `arbitrary_types_allowed` in Config
+        # Putting arbitrary_types_allowed = True in the ConfigDict doesn't work in pydantic v1.
+        class Config:
+            arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -269,8 +295,50 @@ class updateDeployment(BaseModel):
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        protected_namespaces = (),
+    )
+
+
+class LiteLLMParamsTypedDict(TypedDict, total=False):
+    """
+    [TODO]
+    - allow additional params (not in list)
+    - set value to none if not set -> don't raise error if value not set
+    """
+
+    model: str
+    custom_llm_provider: Optional[str]
+    tpm: Optional[int]
+    rpm: Optional[int]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    api_version: Optional[str]
+    timeout: Optional[Union[float, str, httpx.Timeout]]
+    stream_timeout: Optional[Union[float, str]]
+    max_retries: Optional[int]
+    organization: Optional[str]  # for openai orgs
+    ## UNIFIED PROJECT/REGION ##
+    region_name: Optional[str]
+    ## VERTEX AI ##
+    vertex_project: Optional[str]
+    vertex_location: Optional[str]
+    ## AWS BEDROCK / SAGEMAKER ##
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    aws_region_name: Optional[str]
+    ## IBM WATSONX ##
+    watsonx_region_name: Optional[str]
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float]
+    output_cost_per_token: Optional[float]
+    input_cost_per_second: Optional[float]
+    output_cost_per_second: Optional[float]
+
+
+class DeploymentTypedDict(TypedDict):
+    model_name: str
+    litellm_params: LiteLLMParamsTypedDict
 
 
 class Deployment(BaseModel):
@@ -303,9 +371,10 @@ class Deployment(BaseModel):
             # if using pydantic v1
             return self.dict(**kwargs)
 
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    model_config = ConfigDict(
+        extra = "allow",
+        protected_namespaces = (),
+    )
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
