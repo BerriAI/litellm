@@ -12,10 +12,9 @@ import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
-
 import itertools
 import random, uuid, requests  # type: ignore
-from functools import wraps
+from functools import wraps, lru_cache
 import datetime, time
 import tiktoken
 import uuid
@@ -3881,6 +3880,7 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     return a100_80gb_price_per_second_public * total_time / 1000
 
 
+@lru_cache(maxsize=128)
 def _select_tokenizer(model: str):
     from importlib import resources
 
