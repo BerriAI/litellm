@@ -1617,7 +1617,7 @@ class Logging:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
                             if "complete_streaming_response" not in kwargs:
-                                return
+                                continue
                             else:
                                 print_verbose("reaches supabase for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
@@ -1651,7 +1651,7 @@ class Logging:
                         print_verbose("reaches langsmith for logging!")
                         if self.stream:
                             if "complete_streaming_response" not in kwargs:
-                                break
+                                continue
                             else:
                                 print_verbose(
                                     "reaches langsmith for streaming logging!"
@@ -1677,7 +1677,7 @@ class Logging:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
                             if "complete_streaming_response" not in kwargs:
-                                break
+                                continue
                             else:
                                 print_verbose("reaches logfire for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
@@ -1707,7 +1707,7 @@ class Logging:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
                             if "complete_streaming_response" not in kwargs:
-                                break
+                                continue
                             else:
                                 result = kwargs["complete_streaming_response"]
 
@@ -1852,7 +1852,7 @@ class Logging:
                                 f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
                             )
                             if complete_streaming_response is None:
-                                break
+                                continue
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
@@ -1881,7 +1881,7 @@ class Logging:
                                 f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
                             )
                             if complete_streaming_response is None:
-                                break
+                                continue
                             else:
                                 print_verbose(
                                     "reaches clickhouse for streaming logging!"
@@ -1910,7 +1910,7 @@ class Logging:
                                 f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
                             )
                             if complete_streaming_response is None:
-                                break
+                                continue
                             else:
                                 print_verbose(
                                     "reaches greenscale for streaming logging!"
