@@ -10,6 +10,16 @@ def is_pydantic_v2() -> int:
     return int(VERSION.split(".")[0])
 
 
+def get_model_config() -> ConfigDict:
+    # Version-specific configuration
+    if is_pydantic_v2() >= 2:
+        model_config = ConfigDict(extra="allow", protected_namespaces=())  # type: ignore
+    else:
+        model_config = ConfigDict(extra="allow")  # No protected_namespaces for v1
+
+    return model_config
+
+
 class ChatCompletionSystemMessageParam(TypedDict, total=False):
     content: Required[str]
     """The contents of the system message."""
@@ -196,8 +206,4 @@ class CompletionRequest(BaseModel):
     api_key: Optional[str] = None
     model_list: Optional[List[str]] = None
 
-    # Version-specific configuration
-    if is_pydantic_v2() >= 2:
-        model_config = ConfigDict(extra="allow", protected_namespaces=())
-    else:
-        model_config = ConfigDict(extra="allow")  # No protected_namespaces for v1
+    model_config = get_model_config()
