@@ -3,8 +3,6 @@
 import dotenv, os
 import requests  # type: ignore
 from pydantic import BaseModel
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
 
