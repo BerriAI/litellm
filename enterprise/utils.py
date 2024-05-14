@@ -32,7 +32,8 @@ async def ui_get_spend_by_tags(start_date: str, end_date: str, prisma_client):
             DATE(s."startTime") >= $1::date
             AND DATE(s."startTime") <= $2::date
         GROUP BY individual_request_tag, spend_date
-        ORDER BY spend_date;
+        ORDER BY spend_date
+        LIMIT 100;
     """
     response = await prisma_client.db.query_raw(
         sql_query,
@@ -56,15 +57,18 @@ async def ui_get_spend_by_tags(start_date: str, end_date: str, prisma_client):
     # convert to ui format
     ui_tags = []
     for tag in sorted_tags:
+        current_spend = tag[1]
+        if current_spend is not None and isinstance(current_spend, float):
+            current_spend = round(current_spend, 4)
         ui_tags.append(
             {
                 "name": tag[0],
-                "value": tag[1],
+                "spend": current_spend,
                 "log_count": total_requests_per_tag[tag[0]],
             }
         )
 
-    return {"top_10_tags": ui_tags}
+    return {"spend_per_tag": ui_tags}
 
 
 async def view_spend_logs_from_clickhouse(
