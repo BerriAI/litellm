@@ -3342,6 +3342,8 @@ def test_completion_watsonx():
         print(response)
     except litellm.APIError as e:
         pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
