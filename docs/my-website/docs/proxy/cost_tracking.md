@@ -1,7 +1,9 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Spend Tracking
+# 💸 Spend Tracking
+
+Track spend for keys, users, and teams across 100+ LLMs.
 
 ## Getting Spend Reports - To Charge Other Teams, API Keys
 
@@ -27,21 +29,30 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2023-04-01&end
             {
                 "team_name": "Prod Team",
                 "total_spend": 0.0015265,
-                "metadata": [
+                "metadata": [ # see the spend by unique(key + model)
                     {
                         "model": "gpt-4",
                         "spend": 0.00123,
-                        "total_tokens": 28
+                        "total_tokens": 28,
+                        "api_key": "88dc28.." # the hashed api key
+                    },
+                    {
+                        "model": "gpt-4",
+                        "spend": 0.00123,
+                        "total_tokens": 28,
+                        "api_key": "a73dc2.." # the hashed api key
                     },
                     {
                         "model": "chatgpt-v-2",
                         "spend": 0.000214,
-                        "total_tokens": 122
+                        "total_tokens": 122,
+                        "api_key": "898c28.." # the hashed api key
                     },
                     {
                         "model": "gpt-3.5-turbo",
                         "spend": 0.0000825,
-                        "total_tokens": 85
+                        "total_tokens": 85,
+                        "api_key": "84dc28.." # the hashed api key
                     }
                 ]
             }

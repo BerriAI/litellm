@@ -13,13 +13,14 @@ import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
+
 import itertools
 import random, uuid, requests  # type: ignore
 from functools import wraps
 import datetime, time
 import tiktoken
 import uuid
-from pydantic import BaseModel
+from pydantic import ConfigDict, BaseModel
 import aiohttp
 import textwrap
 import logging
@@ -39,21 +40,18 @@ from litellm.caching import DualCache
 oidc_cache = DualCache()
 
 try:
-    # this works in python 3.8
-    import pkg_resources  # type: ignore
-
-    filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
-# try:
-#     filename = str(
-#         resources.files().joinpath("llms/tokenizers")  # type: ignore
-#     )  # for python 3.8 and 3.12
-except:
-    # this works in python 3.9+
+    # New and recommended way to access resources
     from importlib import resources
 
     filename = str(
-        resources.files(litellm).joinpath("llms/tokenizers")  # for python 3.10
-    )  # for python 3.10+
+        resources.files(litellm).joinpath("llms/tokenizers")
+    )
+except ImportError:
+    # Old way to access resources, which setuptools deprecated some time ago
+    import pkg_resources  # type: ignore
+
+    filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+
 os.environ["TIKTOKEN_CACHE_DIR"] = (
     filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 )
@@ -330,10 +328,7 @@ class HiddenParams(OpenAIObject):
     original_response: Optional[str] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
-
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -7709,7 +7704,7 @@ def convert_to_model_response_object(
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["message"].get("content", None),
-                    role=choice["message"]["role"],
+                    role=choice["message"]["role"] or "assistant",
                     function_call=choice["message"].get("function_call", None),
                     tool_calls=choice["message"].get("tool_calls", None),
                 )
@@ -8513,6 +8508,15 @@ def exception_type(
                     model=model,
                     request=original_exception.request,
                 )
+            elif custom_llm_provider == "watsonx":
+                if "token_quota_reached" in error_str:
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"WatsonxException: Rate Limit Errror - {error_str}",
+                        llm_provider="watsonx",
+                        model=model,
+                        response=original_exception.response,
+                    )
             elif custom_llm_provider == "bedrock":
                 if (
                     "too many tokens" in error_str
