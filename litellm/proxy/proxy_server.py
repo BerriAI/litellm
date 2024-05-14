@@ -5931,7 +5931,7 @@ async def view_spend_logs(
         )
 
 
-@router.get(
+@router.post(
     "/global/spend/reset",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -5960,6 +5960,11 @@ async def global_spend_reset():
         data={"spend": 0.0}, where={}
     )
     await prisma_client.db.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+
+    return {
+        "message": "Spend for all API Keys and Teams reset successfully",
+        "status": "success",
+    }
 
 
 @router.get(
