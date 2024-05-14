@@ -161,13 +161,14 @@ async def test_completion_caching_on_router():
             redis_port=os.environ["REDIS_PORT"],
             cache_responses=True,
             timeout=30,
+            routing_strategy_args={"ttl": 10},
             routing_strategy="usage-based-routing",
         )
         response1 = await router.completion(
             model="gpt-3.5-turbo", messages=messages, temperature=1
         )
         print(f"response1: {response1}")
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)
         response2 = await router.completion(
             model="gpt-3.5-turbo", messages=messages, temperature=1
         )
