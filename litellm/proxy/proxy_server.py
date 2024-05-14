@@ -589,6 +589,15 @@ async def user_api_key_auth(
             )
 
             return _user_api_key_obj
+
+        ## IF it's not a master key
+        ## Route should not be in master_key_only_routes
+        if route in LiteLLMRoutes.master_key_only_routes.value:
+            raise Exception(
+                f"Tried to access route={route}, which is only for MASTER KEY"
+            )
+
+        ## Check DB
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
@@ -5920,6 +5929,42 @@ async def view_spend_logs(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.post(
+    "/global/spend/reset",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_reset():
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Globally reset spend for All API Keys and Teams, maintain LiteLLM_SpendLogs
+
+    1. LiteLLM_SpendLogs will maintain the logs on spend, no data gets deleted from there
+    2. LiteLLM_VerificationTokens spend will be set = 0
+    3. LiteLLM_TeamTable spend will be set = 0
+
+    """
+    global prisma_client
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    await prisma_client.db.litellm_verificationtoken.update_many(
+        data={"spend": 0.0}, where={}
+    )
+    await prisma_client.db.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+
+    return {
+        "message": "Spend for all API Keys and Teams reset successfully",
+        "status": "success",
+    }
 
 
 @router.get(
