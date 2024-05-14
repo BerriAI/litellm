@@ -24,6 +24,14 @@
 
 # asyncio.run(test_ollama_aembeddings())
 
+# def test_ollama_embeddings():
+#     litellm.set_verbose = True
+#     input = "The food was delicious and the waiter..."
+#     response = litellm.embedding(model="ollama/mistral", input=input)
+#     print(response)
+
+# test_ollama_embeddings()
+
 # def test_ollama_streaming():
 #     try:
 #         litellm.set_verbose = False

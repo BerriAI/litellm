@@ -3,14 +3,11 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import dotenv, os
-import requests
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
 from typing import Literal, Union
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
 
@@ -19,8 +16,6 @@ import traceback
 
 import dotenv, os
 import requests
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid
