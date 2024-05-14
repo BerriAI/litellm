@@ -1,4 +1,4 @@
-from typing import List, Optional, Union, Dict, Tuple, Literal
+from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
 import httpx
 from pydantic import BaseModel, validator, Field
 from .completion import CompletionRequest
@@ -275,6 +275,47 @@ class updateDeployment(BaseModel):
 
     class Config:
         protected_namespaces = ()
+
+
+class LiteLLMParamsTypedDict(TypedDict, total=False):
+    """
+    [TODO]
+    - allow additional params (not in list)
+    - set value to none if not set -> don't raise error if value not set
+    """
+
+    model: str
+    custom_llm_provider: Optional[str]
+    tpm: Optional[int]
+    rpm: Optional[int]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    api_version: Optional[str]
+    timeout: Optional[Union[float, str, httpx.Timeout]]
+    stream_timeout: Optional[Union[float, str]]
+    max_retries: Optional[int]
+    organization: Optional[str]  # for openai orgs
+    ## UNIFIED PROJECT/REGION ##
+    region_name: Optional[str]
+    ## VERTEX AI ##
+    vertex_project: Optional[str]
+    vertex_location: Optional[str]
+    ## AWS BEDROCK / SAGEMAKER ##
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    aws_region_name: Optional[str]
+    ## IBM WATSONX ##
+    watsonx_region_name: Optional[str]
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float]
+    output_cost_per_token: Optional[float]
+    input_cost_per_second: Optional[float]
+    output_cost_per_second: Optional[float]
+
+
+class DeploymentTypedDict(TypedDict):
+    model_name: str
+    litellm_params: LiteLLMParamsTypedDict
 
 
 class Deployment(BaseModel):
