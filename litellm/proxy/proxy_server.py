@@ -5563,6 +5563,13 @@ async def global_view_spend_tags(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
+        if end_date is None or start_date is None:
+            raise ProxyException(
+                message="Please provide start_date and end_date",
+                type="bad_request",
+                param=None,
+                code=status.HTTP_400_BAD_REQUEST,
+            )
         response = await ui_get_spend_by_tags(
             start_date=start_date, end_date=end_date, prisma_client=prisma_client
         )
