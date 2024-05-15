@@ -1318,6 +1318,10 @@ def test_hf_test_completion_tgi():
 
 
 def mock_post(url, data=None, json=None, headers=None):
+
+    print(f"url={url}")
+    if "text-classification" in url:
+        raise Exception("Model not found")
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
