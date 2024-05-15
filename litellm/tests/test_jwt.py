@@ -18,6 +18,7 @@ from litellm.caching import DualCache
 from datetime import datetime, timedelta
 
 public_key = {
+    "kid": "test-kid2",
     "kty": "RSA",
     "e": "AQAB",
     "n": "qIgOQfEVrrErJC0E7gsHXi6rs_V0nyFY5qPFui2-tv0o4CwpwDzgfBtLO7o_wLiguq0lnu54sMT2eLNoRiiPuLvv6bg7Iy1H9yc5_4Jf5oYEOrqN5o9ZBOoYp1q68Pv0oNJYyZdGu5ZJfd7V4y953vB2XfEKgXCsAkhVhlvIUMiDNKWoMDWsyb2xela5tRURZ2mJAXcHfSC_sYdZxIA2YYrIHfoevq_vTlaz0qVSe_uOKjEpgOAS08UUrgda4CQL11nzICiIQzc6qmjIQt2cjzB2D_9zb4BYndzEtfl0kwAT0z_I85S3mkwTqHU-1BvKe_4MG4VG3dAAeffLPXJyXQ",
@@ -69,6 +70,50 @@ async def test_token_single_public_key():
     jwt_handler.user_api_key_cache = cache
 
     public_key = await jwt_handler.get_public_key(kid=None)
+
+    assert public_key is not None
+    assert isinstance(public_key, dict)
+    assert (
+        public_key["n"]
+        == "qIgOQfEVrrErJC0E7gsHXi6rs_V0nyFY5qPFui2-tv0o4CwpwDzgfBtLO7o_wLiguq0lnu54sMT2eLNoRiiPuLvv6bg7Iy1H9yc5_4Jf5oYEOrqN5o9ZBOoYp1q68Pv0oNJYyZdGu5ZJfd7V4y953vB2XfEKgXCsAkhVhlvIUMiDNKWoMDWsyb2xela5tRURZ2mJAXcHfSC_sYdZxIA2YYrIHfoevq_vTlaz0qVSe_uOKjEpgOAS08UUrgda4CQL11nzICiIQzc6qmjIQt2cjzB2D_9zb4BYndzEtfl0kwAT0z_I85S3mkwTqHU-1BvKe_4MG4VG3dAAeffLPXJyXQ"
+    )
+
+
+@pytest.mark.asyncio
+async def test_token_multiple_public_keys():
+    import jwt
+
+    jwt_handler = JWTHandler()
+
+    backend_keys = {
+        "keys": [
+            {
+                "kid": "test-kid1",
+                "kty": "RSA",
+                "use": "sig",
+                "e": "AQAB",
+                "n": "qIgOQfEVrrErJC0E7gsHXi6rs_V0nyFY5qPFui2-tv0o4CwpwDzgfBtLO7o_wLiguq0lnu54sMT2eLNoRiiPuLvv6bg7Iy1H9yc5_4Jf5oYEOrqN5o9ZBOoYp1q68Pv0oNJYyZdGu5ZJfd7V4y953vB2XfEKgXCsAkhVhlvIUMiDNKWoMDWsyb2xela5tRURZ2mJAXcHfSC_sYdZxIA2YYrIHfoevq_vTlaz0qVSe_uOKjEpgOAS08UUrgda4CQL11nzICiIQzc6qmjIQt2cjzB2D_9zb4BYndzEtfl0kwAT0z_I85S3mkwTqHU-1BvKe_4MG4VG3dAAeffLPXJyXQ",
+                "alg": "RS256",
+            },
+            {
+                "kid": "test-kid2",
+                "kty": "RSA",
+                "use": "sig",
+                "e": "AQAB",
+                "n": "qIgOQfEVrrErJC0E7gsHXi6rs_V0nyFY5qPFui2-tv0o4CwpwDzgfBtLO7o_wLiguq0lnu54sMT2eLNoRiiPuLvv6bg7Iy1H9yc5_4Jf5oYEOrqN5o9ZBOoYp1q68Pv0oNJYyZdGu5ZJfd7V4y953vB2XfEKgXCsAkhVhlvIUMiDNKWoMDWsyb2xela5tRURZ2mJAXcHfSC_sYdZxIA2YYrIHfoevq_vTlaz0qVSe_uOKjEpgOAS08UUrgda4CQL11nzICiIQzc6qmjIQt2cjzB2D_9zb4BYndzEtfl0kwAT0z_I85S3mkwTqHU-1BvKe_4MG4VG3dAAeffLPXJyXQ",
+                "alg": "RS256",
+            }
+        ]
+    }
+
+    # set cache
+    cache = DualCache()
+
+    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=backend_keys["keys"])
+
+    jwt_handler.user_api_key_cache = cache
+
+    public_key = await jwt_handler.get_public_key(kid="test-kid2")
 
     assert public_key is not None
     assert isinstance(public_key, dict)
