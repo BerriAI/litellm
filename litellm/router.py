@@ -1962,6 +1962,45 @@ class Router:
                 key=rpm_key, value=request_count, local_only=True
             )  # don't change existing ttl
 
+    def _is_cooldown_required(self, exception_status: Union[str, int]):
+        """
+        A function to determine if a cooldown is required based on the exception status.
+
+        Parameters:
+            exception_status (Union[str, int]): The status of the exception.
+
+        Returns:
+            bool: True if a cooldown is required, False otherwise.
+        """
+        try:
+
+            if isinstance(exception_status, str):
+                exception_status = int(exception_status)
+
+            if exception_status >= 400 and exception_status < 500:
+                if exception_status == 429:
+                    # Cool down 429 Rate Limit Errors
+                    return True
+
+                elif exception_status == 401:
+                    # Cool down 401 Auth Errors
+                    return True
+
+                elif exception_status == 408:
+                    return True
+
+                else:
+                    # Do NOT cool down all other 4XX Errors
+                    return False
+
+            else:
+                # should cool down for all other errors
+                return True
+
+        except:
+            # Catch all - if any exceptions default to cooling down
+            return True
+
     def _set_cooldown_deployments(
         self, exception_status: Union[str, int], deployment: Optional[str] = None
     ):
@@ -1973,6 +2012,9 @@ class Router:
         the exception is not one that should be immediately retried (e.g. 401)
         """
         if deployment is None:
+            return
+
+        if self._is_cooldown_required(exception_status=exception_status) == False:
             return
 
         dt = get_utc_datetime()
