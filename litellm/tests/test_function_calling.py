@@ -124,7 +124,6 @@ def test_parallel_function_call(model):
                 model=model, messages=messages, temperature=0.2, seed=22
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
-            return second_response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
