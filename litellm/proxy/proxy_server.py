@@ -438,11 +438,12 @@ async def user_api_key_auth(
                             f"Admin not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
                         )
                 # get team id
-                team_id = jwt_handler.get_team_id(token=valid_token, default_value=None)
+                team_id = jwt_handler.get_team_id(token=valid_token, default_value=jwt_handler.litellm_jwtauth.team_id_default)
 
                 if team_id is None:
                     raise Exception(
-                        f"No team id passed in. Field checked in jwt token - '{jwt_handler.litellm_jwtauth.team_id_jwt_field}'"
+                        f"No team id passed in and no 'team_id_default' value configured. "
+                        f"Field checked in jwt token - '{jwt_handler.litellm_jwtauth.team_id_jwt_field}'"
                     )
                 # check allowed team routes
                 is_allowed = allowed_routes_check(
@@ -492,6 +493,7 @@ async def user_api_key_auth(
                     token=valid_token, default_value=None
                 )
                 if end_user_id is not None:
+                    print("sup5")
                     # get the end-user object
                     end_user_object = await get_end_user_object(
                         end_user_id=end_user_id,

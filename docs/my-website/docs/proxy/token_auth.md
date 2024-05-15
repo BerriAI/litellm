@@ -121,6 +121,7 @@ general_settings:
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
     team_id_jwt_field: "client_id" # 👈 CAN BE ANY FIELD
+    team_id_default: "01c2ddd5-29e6-4280-817b-81ba2b75c07d" # 👈 OPTIONAL (set to the id of an existing team)
     user_id_jwt_field: "sub" # 👈 CAN BE ANY FIELD
     org_id_jwt_field: "org_id" # 👈 CAN BE ANY FIELD
     end_user_id_jwt_field: "customer_id" # 👈 CAN BE ANY FIELD
@@ -181,6 +182,7 @@ general_settings:
   litellm_jwtauth:
     ...
     team_id_jwt_field: "litellm-team" # 👈 Set field in the JWT token that stores the team ID
+    team_id_default: "01c2ddd5-29e6-4280-817b-81ba2b75c07d" # 👈 OPTIONAL (set to the id of an existing team)
     team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
 ```
 
@@ -208,6 +210,7 @@ general_settings:
   enable_jwt_auth: True
   litellm_jwtauth:
     team_id_jwt_field: "client_id" # 👈 KEY CHANGE
+    team_id_default: "01c2ddd5-29e6-4280-817b-81ba2b75c07d" # 👈 OPTIONAL (set to the id of an existing team)
 ```
 
 ## All Params

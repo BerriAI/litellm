@@ -204,6 +204,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     - admin_allowed_routes: list of allowed routes for proxy admin roles.
     - team_jwt_scope: The JWT scope required for proxy team roles.
     - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
+    - team_id_default: Value to use when the field specified by `team_id_jwt_field` is not provided in the JWT token
     - team_allowed_routes: list of allowed routes for proxy team roles.
     - user_id_jwt_field: The field in the JWT token that stores the user id (maps to `LiteLLMUserTable`). Use this for internal employees.
     - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
@@ -229,6 +230,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     ]
     team_jwt_scope: str = "litellm_team"
     team_id_jwt_field: str = "client_id"
+    team_id_default: Optional[str] = None
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
