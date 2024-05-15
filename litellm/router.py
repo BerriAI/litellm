@@ -1975,6 +1975,11 @@ class Router:
         if deployment is None:
             return
 
+        if exception_status == 400 or exception_status == "400":
+            # the user sent a BadRequest -> the Deployment is not unhealthy here
+            # Do NOT Cooldown
+            return
+
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
         # get current fails for deployment
