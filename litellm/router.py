@@ -273,7 +273,6 @@ class Router:
 
         if default_fallbacks is not None or litellm.default_fallbacks is not None:
             _fallbacks = default_fallbacks or litellm.default_fallbacks
-            self.validate_fallbacks(fallback_param=_fallbacks)
             if self.fallbacks is not None:
                 self.fallbacks.append({"*": _fallbacks})
             else:
