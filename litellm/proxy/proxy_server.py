@@ -351,6 +351,26 @@ def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
         return pydantic_obj.dict()
 
 
+async def check_request_disconnection(request: Request):
+    """
+    Asynchronously checks if the request is disconnected at regular intervals.
+    If the request is disconnected, raises an HTTPException with status code 499 and detail "Client disconnected the request".
+
+    Parameters:
+    - request: Request: The request object to check for disconnection.
+
+    Returns:
+    - None
+    """
+    while True:
+        await asyncio.sleep(1)
+        if await request.is_disconnected():
+            raise HTTPException(
+                status_code=499,
+                detail="Client disconnected the request",
+            )
+
+
 async def user_api_key_auth(
     request: Request, api_key: str = fastapi.Security(api_key_header)
 ) -> UserAPIKeyAuth:
@@ -3766,6 +3786,11 @@ async def chat_completion(
                     + data.get("model", "")
                 },
             )
+
+        # Check if request cancelled client side :) - this will raise an exception when client side requests are cancelled
+        check_request_disconnected = asyncio.create_task(
+            check_request_disconnection(request=request)
+        )
 
         # wait for call to end
         responses = await asyncio.gather(

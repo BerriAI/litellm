@@ -11,7 +11,7 @@ try:
 except ImportError:
     from pydantic import root_validator  # pydantic v1
 
-    def model_validator(mode):
+    def model_validator(mode):  # type: ignore
         pre = mode == "before"
         return root_validator(pre=pre)
 
@@ -45,7 +45,7 @@ class LiteLLMBase(BaseModel):
             return self.__fields_set__
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -303,7 +303,7 @@ class ProxyChatCompletionRequest(LiteLLMBase):
     request_timeout: Optional[int] = None
 
     model_config = ConfigDict(
-        extra = "allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
+        extra="allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
     )
 
 
@@ -332,8 +332,8 @@ class ModelInfo(LiteLLMBase):
     ]
 
     model_config = ConfigDict(
-        extra = "allow",  # Allow extra fields
-        protected_namespaces = (),
+        extra="allow",  # Allow extra fields
+        protected_namespaces=(),
     )
 
     @model_validator(mode="before")
@@ -363,7 +363,7 @@ class ModelParams(LiteLLMBase):
     model_info: ModelInfo
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
     @model_validator(mode="before")
@@ -403,7 +403,7 @@ class GenerateKeyRequest(GenerateRequestBase):
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -455,7 +455,7 @@ class LiteLLM_ModelTable(LiteLLMBase):
     updated_by: str
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -543,7 +543,7 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -598,7 +598,7 @@ class LiteLLM_TeamTable(TeamBase):
     model_id: Optional[int] = None
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
     @model_validator(mode="before")
@@ -638,7 +638,7 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     budget_duration: Optional[str] = None
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -690,7 +690,7 @@ class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
     model_config = ConfigDict(
-        extra = "allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
+        extra="allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
     )
 
 
@@ -833,7 +833,7 @@ class ConfigYAML(LiteLLMBase):
     )
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -869,7 +869,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     team_id_rate_limits: Optional[dict] = None
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -936,7 +936,7 @@ class LiteLLM_UserTable(LiteLLMBase):
         return values
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
@@ -956,7 +956,7 @@ class LiteLLM_EndUserTable(LiteLLMBase):
         return values
 
     model_config = ConfigDict(
-        protected_namespaces = (),
+        protected_namespaces=(),
     )
 
 
