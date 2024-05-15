@@ -140,13 +140,15 @@ class JWTHandler:
 
         public_key: Optional[dict] = None
 
-        if len(keys) == 1:
-            if kid is None or keys["kid"] == kid:
-                public_key = keys[0]
-        elif len(keys) > 1:
-            for key in keys:
-                if kid is not None and key == kid:
-                    public_key = keys[key]
+        # Test mode key finder
+        if kid is None and len(keys) == 1:
+            public_key = keys[0]
+
+        # Non-test key finder
+        for key in keys:
+            if kid is not None and key["kid"] == kid:
+                public_key = key
+                break
 
         if public_key is None:
             raise Exception(
