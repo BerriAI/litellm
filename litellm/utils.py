@@ -54,6 +54,14 @@ os.environ["TIKTOKEN_CACHE_DIR"] = (
 )
 
 encoding = tiktoken.get_encoding("cl100k_base")
+from importlib import resources
+
+with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
+    json_data = json.load(f)
+# Convert to str (if necessary)
+json_str = json.dumps(json_data)
+claude_tokenizer = Tokenizer.from_str(json_str)
+cohere_tokenizer = Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
 import importlib.metadata
 from ._logging import verbose_logger
 from .types.router import LiteLLM_Params
@@ -3848,23 +3856,13 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
 
 @lru_cache(maxsize=128)
 def _select_tokenizer(model: str):
-    from importlib import resources
-
-    if model in litellm.cohere_models:
+    global claude_tokenizer, cohere_tokenizer
+    if model in litellm.cohere_models and "command-r" in model:
         # cohere
-        tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+        return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
-    elif model in litellm.anthropic_models:
-        with resources.open_text(
-            "litellm.llms.tokenizers", "anthropic_tokenizer.json"
-        ) as f:
-            json_data = json.load(f)
-        # Convert to str (if necessary)
-        json_str = json.dumps(json_data)
-        # load tokenizer
-        tokenizer = Tokenizer.from_str(json_str)
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    elif model in litellm.anthropic_models and "claude-3" not in model:
+        return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
     elif "llama-2" in model.lower() or "replicate" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
@@ -4170,9 +4168,6 @@ def token_counter(
     if model is not None or custom_tokenizer is not None:
         tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
-            print_verbose(
-                f"Token Counter - using hugging face token counter, for model={model}"
-            )
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer":
@@ -4207,6 +4202,7 @@ def token_counter(
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
+
     return num_tokens
 
 
