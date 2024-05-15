@@ -43,6 +43,10 @@ RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
 RUN pip install PyJWT --no-cache-dir
 
+# Install wandb package for Weights & Biases integration
+# https://docs.litellm.ai/docs/observability/wandb_integration
+RUN pip install wandb --no-cache-dir
+
 # Build Admin UI
 RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 
