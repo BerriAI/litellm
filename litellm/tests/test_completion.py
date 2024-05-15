@@ -93,7 +93,7 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
 
 def test_null_role_response():
     """
-    Test if api returns 'null' role, 'assistant' role is still returned
+    Test if the api returns 'null' role, 'assistant' role is still returned
     """
     import openai
 
