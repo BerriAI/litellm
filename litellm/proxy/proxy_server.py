@@ -351,7 +351,7 @@ def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
         return pydantic_obj.dict()
 
 
-async def check_request_disconnection(request: Request):
+async def check_request_disconnection(request: Request, llm_api_call_task):
     """
     Asynchronously checks if the request is disconnected at regular intervals.
     If the request is disconnected, raises an HTTPException with status code 499 and detail "Client disconnected the request".
@@ -365,6 +365,11 @@ async def check_request_disconnection(request: Request):
     while True:
         await asyncio.sleep(1)
         if await request.is_disconnected():
+
+            # cancel the LLM API Call task if any passed - this is passed from individual providers
+            # Example OpenAI, Azure, VertexAI etc
+            llm_api_call_task.cancel()
+
             raise HTTPException(
                 status_code=499,
                 detail="Client disconnected the request",
@@ -3787,15 +3792,13 @@ async def chat_completion(
                 },
             )
 
-        # Check if request cancelled client side :) - this will raise an exception when client side requests are cancelled
-        check_request_disconnected = asyncio.create_task(
-            check_request_disconnection(request=request)
-        )
-
         # wait for call to end
-        responses = await asyncio.gather(
+        llm_api_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
+
+        asyncio.create_task(check_request_disconnection(request, llm_api_responses))
+        responses = await llm_api_responses
         response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
