@@ -665,6 +665,7 @@ def completion(
         "supports_system_message",
         "region_name",
         "allowed_model_region",
+        "model_config",
     ]
 
     default_params = openai_params + litellm_params
@@ -2860,6 +2861,7 @@ def embedding(
         "no-log",
         "region_name",
         "allowed_model_region",
+        "model_config",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -3760,6 +3762,7 @@ def image_generation(
             "cache",
             "region_name",
             "allowed_model_region",
+            "model_config",
         ]
         default_params = openai_params + litellm_params
         non_default_params = {
