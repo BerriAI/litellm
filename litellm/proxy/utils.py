@@ -1787,7 +1787,9 @@ def hash_token(token: str):
     return hashed_token
 
 
-def get_logging_payload(kwargs, response_obj, start_time, end_time):
+def get_logging_payload(
+    kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
+):
     from litellm.proxy._types import LiteLLM_SpendLogs
     from pydantic import Json
     import uuid
@@ -1865,7 +1867,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
         "request_tags": metadata.get("tags", []),
-        "end_user": kwargs.get("user", ""),
+        "end_user": end_user_id or "",
         "api_base": litellm_params.get("api_base", ""),
     }
 
@@ -2028,6 +2030,11 @@ async def update_spend(
                 raise e
 
     ### UPDATE END-USER TABLE ###
+    verbose_proxy_logger.debug(
+        "End-User Spend transactions: {}".format(
+            len(prisma_client.end_user_list_transactons.keys())
+        )
+    )
     if len(prisma_client.end_user_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
             start_time = time.time()
@@ -2043,13 +2050,18 @@ async def update_spend(
                             max_end_user_budget = None
                             if litellm.max_end_user_budget is not None:
                                 max_end_user_budget = litellm.max_end_user_budget
-                            new_user_obj = LiteLLM_EndUserTable(
-                                user_id=end_user_id, spend=response_cost, blocked=False
-                            )
-                            batcher.litellm_endusertable.update_many(
+                            batcher.litellm_endusertable.upsert(
                                 where={"user_id": end_user_id},
-                                data={"spend": {"increment": response_cost}},
+                                data={
+                                    "create": {
+                                        "user_id": end_user_id,
+                                        "spend": response_cost,
+                                        "blocked": False,
+                                    },
+                                    "update": {"spend": {"increment": response_cost}},
+                                },
                             )
+
                 prisma_client.end_user_list_transactons = (
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
