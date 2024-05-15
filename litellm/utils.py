@@ -59,9 +59,7 @@ from importlib import resources
 with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
     json_data = json.load(f)
 # Convert to str (if necessary)
-json_str = json.dumps(json_data)
-claude_tokenizer = Tokenizer.from_str(json_str)
-cohere_tokenizer = Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
+claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from ._logging import verbose_logger
 from .types.router import LiteLLM_Params
@@ -3856,12 +3854,15 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
 
 @lru_cache(maxsize=128)
 def _select_tokenizer(model: str):
-    global claude_tokenizer, cohere_tokenizer
     if model in litellm.cohere_models and "command-r" in model:
         # cohere
+        cohere_tokenizer = Tokenizer.from_pretrained(
+            "Xenova/c4ai-command-r-v01-tokenizer"
+        )
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
     elif model in litellm.anthropic_models and "claude-3" not in model:
+        claude_tokenizer = Tokenizer.from_str(claude_json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
     elif "llama-2" in model.lower() or "replicate" in model.lower():
