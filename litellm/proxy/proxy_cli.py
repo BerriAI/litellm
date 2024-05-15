@@ -11,7 +11,7 @@ sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
 
-litellm_mode = os.getenv("LITELLM_PRODUCTION_MODE", "DEV")  # "PRODUCTION", "DEV"
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
 from importlib import resources
