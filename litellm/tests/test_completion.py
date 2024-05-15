@@ -1161,28 +1161,28 @@ HF Tests we should pass
 # Test util to sort models to TGI, conv, None
 def test_get_hf_task_for_model():
     model = "glaiveai/glaive-coder-7b"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "meta-llama/Llama-2-7b-hf"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "facebook/blenderbot-400M-distill"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     model = "facebook/blenderbot-3B"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     # neither Conv or None
     model = "roneneldan/TinyStories-3M"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation"
 
