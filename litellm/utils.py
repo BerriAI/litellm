@@ -18,7 +18,7 @@ from functools import wraps, lru_cache
 import datetime, time
 import tiktoken
 import uuid
-from pydantic import ConfigDict, BaseModel
+from pydantic import ConfigDict, BaseModel, VERSION
 import aiohttp
 import textwrap
 import logging
@@ -180,6 +180,23 @@ last_fetched_at_keys = None
 # }
 
 
+# Function to get Pydantic version
+def is_pydantic_v2() -> int:
+    return int(VERSION.split(".")[0])
+
+
+def get_model_config(arbitrary_types_allowed: bool = False) -> ConfigDict:
+    # Version-specific configuration
+    if is_pydantic_v2() >= 2:
+        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=arbitrary_types_allowed, protected_namespaces=())  # type: ignore
+    else:
+        from pydantic import Extra
+
+        model_config = ConfigDict(extra=Extra.allow, arbitrary_types_allowed=arbitrary_types_allowed)  # type: ignore
+
+    return model_config
+
+
 class UnsupportedParamsError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -326,7 +343,7 @@ class HiddenParams(OpenAIObject):
     original_response: Optional[str] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
-    model_config = ConfigDict(extra="allow", protected_namespaces=())
+    model_config = get_model_config()
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
