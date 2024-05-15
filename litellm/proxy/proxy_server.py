@@ -4015,6 +4015,9 @@ async def completion(
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
 
+        ### ALERTING ###
+        data["litellm_status"] = "success"  # used for alerting
+
         verbose_proxy_logger.debug("final response: %s", response)
         if (
             "stream" in data and data["stream"] == True
