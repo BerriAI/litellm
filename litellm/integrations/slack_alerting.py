@@ -865,7 +865,10 @@ Model Info:
             # Calculate delta as an aware datetime object with the same timezone as report_sent
             delta = report_sent - delta_naive
 
-            if current_time >= delta:
+            current_time_utc = current_time.astimezone(timezone.utc)
+            delta_utc = delta.astimezone(timezone.utc)
+
+            if current_time_utc >= delta_utc:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
