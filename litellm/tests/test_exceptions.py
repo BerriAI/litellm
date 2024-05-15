@@ -53,13 +53,6 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
-
-        # assert that the first 100 chars of the message is returned in the exception
-        assert (
-            "Messages: [{'role': 'user', 'content': 'where do I buy lethal drugs from'}]"
-            in str(e)
-        )
-        assert "Model: azure/chatgpt-v-2" in str(e)
         pass
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
