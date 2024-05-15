@@ -4015,9 +4015,6 @@ async def completion(
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
 
-        ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
-
         verbose_proxy_logger.debug("final response: %s", response)
         if (
             "stream" in data and data["stream"] == True
@@ -4048,6 +4045,9 @@ async def completion(
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
         verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
         verbose_proxy_logger.debug(
             "\033[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
