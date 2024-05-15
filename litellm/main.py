@@ -14,6 +14,7 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
+
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -665,6 +666,7 @@ def completion(
         "supports_system_message",
         "region_name",
         "allowed_model_region",
+        "model_config",
     ]
 
     default_params = openai_params + litellm_params
@@ -2860,6 +2862,7 @@ def embedding(
         "no-log",
         "region_name",
         "allowed_model_region",
+        "model_config",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -3760,6 +3763,7 @@ def image_generation(
             "cache",
             "region_name",
             "allowed_model_region",
+            "model_config",
         ]
         default_params = openai_params + litellm_params
         non_default_params = {
