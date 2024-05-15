@@ -13,14 +13,13 @@ import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 from os.path import abspath, join, dirname
 import litellm, openai
-
 import itertools
 import random, uuid, requests  # type: ignore
-from functools import wraps
+from functools import wraps, lru_cache
 import datetime, time
 import tiktoken
 import uuid
-from pydantic import ConfigDict, BaseModel
+from pydantic import ConfigDict, BaseModel, VERSION
 import aiohttp
 import textwrap
 import logging
@@ -43,10 +42,8 @@ try:
     # New and recommended way to access resources
     from importlib import resources
 
-    filename = str(
-        resources.files(litellm).joinpath("llms/tokenizers")
-    )
-except ImportError:
+    filename = str(resources.files(litellm).joinpath("llms/tokenizers"))
+except (ImportError, AttributeError):
     # Old way to access resources, which setuptools deprecated some time ago
     import pkg_resources  # type: ignore
 
@@ -57,6 +54,12 @@ os.environ["TIKTOKEN_CACHE_DIR"] = (
 )
 
 encoding = tiktoken.get_encoding("cl100k_base")
+from importlib import resources
+
+with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
+    json_data = json.load(f)
+# Convert to str (if necessary)
+claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from ._logging import verbose_logger
 from .types.router import LiteLLM_Params
@@ -180,6 +183,23 @@ last_fetched_at_keys = None
 #  'model': 'claude-instant-1',
 #  'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
 # }
+
+
+# Function to get Pydantic version
+def is_pydantic_v2() -> int:
+    return int(VERSION.split(".")[0])
+
+
+def get_model_config(arbitrary_types_allowed: bool = False) -> ConfigDict:
+    # Version-specific configuration
+    if is_pydantic_v2() >= 2:
+        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=arbitrary_types_allowed, protected_namespaces=())  # type: ignore
+    else:
+        from pydantic import Extra
+
+        model_config = ConfigDict(extra=Extra.allow, arbitrary_types_allowed=arbitrary_types_allowed)  # type: ignore
+
+    return model_config
 
 
 class UnsupportedParamsError(Exception):
@@ -328,7 +348,7 @@ class HiddenParams(OpenAIObject):
     original_response: Optional[str] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
-    model_config = ConfigDict(extra="allow", protected_namespaces=())
+    model_config = get_model_config()
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -3832,24 +3852,18 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     return a100_80gb_price_per_second_public * total_time / 1000
 
 
+@lru_cache(maxsize=128)
 def _select_tokenizer(model: str):
-    from importlib import resources
-
-    if model in litellm.cohere_models:
+    if model in litellm.cohere_models and "command-r" in model:
         # cohere
-        tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+        cohere_tokenizer = Tokenizer.from_pretrained(
+            "Xenova/c4ai-command-r-v01-tokenizer"
+        )
+        return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
-    elif model in litellm.anthropic_models:
-        with resources.open_text(
-            "litellm.llms.tokenizers", "anthropic_tokenizer.json"
-        ) as f:
-            json_data = json.load(f)
-        # Convert to str (if necessary)
-        json_str = json.dumps(json_data)
-        # load tokenizer
-        tokenizer = Tokenizer.from_str(json_str)
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    elif model in litellm.anthropic_models and "claude-3" not in model:
+        claude_tokenizer = Tokenizer.from_str(claude_json_str)
+        return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
     elif "llama-2" in model.lower() or "replicate" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
@@ -4155,9 +4169,6 @@ def token_counter(
     if model is not None or custom_tokenizer is not None:
         tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
-            print_verbose(
-                f"Token Counter - using hugging face token counter, for model={model}"
-            )
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer":
@@ -4192,6 +4203,7 @@ def token_counter(
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
+
     return num_tokens
 
 
