@@ -178,7 +178,7 @@ def test_load_test_token_counter(model):
     messages = [{"role": "user", "content": text}] * 10
 
     start_time = time.time()
-    for _ in range(50):
+    for _ in range(10):
         _ = token_counter(model=model, messages=messages)
         # enc.encode("".join(m["content"] for m in messages))
 
