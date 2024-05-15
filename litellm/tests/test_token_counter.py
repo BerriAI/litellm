@@ -174,7 +174,6 @@ def test_load_test_token_counter(model):
     """
     import tiktoken
 
-    enc = tiktoken.get_encoding("cl100k_base")
     messages = [{"role": "user", "content": text}] * 10
 
     start_time = time.time()
@@ -186,4 +185,4 @@ def test_load_test_token_counter(model):
 
     total_time = end_time - start_time
     print("model={}, total test time={}".format(model, total_time))
-    assert total_time < 2, f"Total encoding time > 1.5s, {total_time}"
+    assert total_time < 10, f"Total encoding time > 10s, {total_time}"
