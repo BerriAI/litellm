@@ -15,7 +15,7 @@ from litellm.proxy._types import (
 import httpx
 import dotenv
 
-litellm_mode = os.getenv("LITELLM_PRODUCTION_MODE", "DEV")  # "PRODUCTION", "DEV"
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
 #############################################
