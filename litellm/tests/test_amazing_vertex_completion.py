@@ -508,7 +508,7 @@ def test_gemini_pro_vision():
         litellm.set_verbose = True
         litellm.num_retries = 3
         resp = litellm.completion(
-            model="vertex_ai/gemini-pro-vision",
+            model="vertex_ai/gemini-1.5-flash-preview-0514",
             messages=[
                 {
                     "role": "user",
