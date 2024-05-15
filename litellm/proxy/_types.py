@@ -1,4 +1,4 @@
-from pydantic import ConfigDict, BaseModel, Field, root_validator, Json
+from pydantic import ConfigDict, BaseModel, Field, root_validator, Json, VERSION
 import enum
 from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
@@ -7,13 +7,30 @@ import json
 from litellm.types.router import UpdateRouterConfig
 
 try:
-    from pydantic import model_validator  # pydantic v2
+    from pydantic import model_validator  # type: ignore
 except ImportError:
     from pydantic import root_validator  # pydantic v1
 
-    def model_validator(mode):
+    def model_validator(mode):  # type: ignore
         pre = mode == "before"
         return root_validator(pre=pre)
+
+
+# Function to get Pydantic version
+def is_pydantic_v2() -> int:
+    return int(VERSION.split(".")[0])
+
+
+def get_model_config(arbitrary_types_allowed: bool = False) -> ConfigDict:
+    # Version-specific configuration
+    if is_pydantic_v2() >= 2:
+        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=arbitrary_types_allowed, protected_namespaces=())  # type: ignore
+    else:
+        from pydantic import Extra
+
+        model_config = ConfigDict(extra=Extra.allow, arbitrary_types_allowed=arbitrary_types_allowed)  # type: ignore
+
+    return model_config
 
 
 def hash_token(token: str):
@@ -44,9 +61,7 @@ class LiteLLMBase(BaseModel):
             # if using pydantic v1
             return self.__fields_set__
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
@@ -302,9 +317,7 @@ class ProxyChatCompletionRequest(LiteLLMBase):
     deployment_id: Optional[str] = None
     request_timeout: Optional[int] = None
 
-    model_config = ConfigDict(
-        extra = "allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
-    )
+    model_config = get_model_config()
 
 
 class ModelInfoDelete(LiteLLMBase):
@@ -331,10 +344,7 @@ class ModelInfo(LiteLLMBase):
         ]
     ]
 
-    model_config = ConfigDict(
-        extra = "allow",  # Allow extra fields
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
     @model_validator(mode="before")
     def set_model_info(cls, values):
@@ -362,9 +372,7 @@ class ModelParams(LiteLLMBase):
     litellm_params: dict
     model_info: ModelInfo
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
     @model_validator(mode="before")
     def set_model_info(cls, values):
@@ -402,9 +410,7 @@ class GenerateKeyRequest(GenerateRequestBase):
         {}
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -454,9 +460,7 @@ class LiteLLM_ModelTable(LiteLLMBase):
     created_by: str
     updated_by: str
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class NewUserRequest(GenerateKeyRequest):
@@ -542,9 +546,7 @@ class TeamBase(LiteLLMBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class GlobalEndUsersSpend(LiteLLMBase):
@@ -597,9 +599,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
     @model_validator(mode="before")
     def set_model_info(cls, values):
@@ -637,9 +637,7 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -690,7 +688,7 @@ class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
     model_config = ConfigDict(
-        extra = "allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
+        extra="allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
     )
 
 
@@ -832,9 +830,7 @@ class ConfigYAML(LiteLLMBase):
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
     )
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class LiteLLM_VerificationToken(LiteLLMBase):
@@ -868,9 +864,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     user_id_rate_limits: Optional[dict] = None
     team_id_rate_limits: Optional[dict] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
@@ -935,9 +929,7 @@ class LiteLLM_UserTable(LiteLLMBase):
             values.update({"models": []})
         return values
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class LiteLLM_EndUserTable(LiteLLMBase):
@@ -955,9 +947,7 @@ class LiteLLM_EndUserTable(LiteLLMBase):
             values.update({"spend": 0.0})
         return values
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    model_config = get_model_config()
 
 
 class LiteLLM_SpendLogs(LiteLLMBase):
