@@ -711,6 +711,11 @@ class DynamoDBArgs(LiteLLMBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
+class ConfigFieldUpdate(LiteLLMBase):
+    field_name: str
+    field_value: Any
+
+
 class ConfigGeneralSettings(LiteLLMBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
