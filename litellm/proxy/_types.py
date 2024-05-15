@@ -687,9 +687,7 @@ class KeyManagementSettings(LiteLLMBase):
 class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
-    model_config = ConfigDict(
-        extra="allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
-    )
+    model_config = get_model_config()
 
 
 class DynamoDBArgs(LiteLLMBase):
