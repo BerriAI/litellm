@@ -12,7 +12,7 @@ Use the `/global/spend/report` endpoint to get daily spend per team, with a brea
 ### Example Request
 
 ```shell
-curl -X GET 'http://localhost:4000/global/spend/report?start_date=2023-04-01&end_date=2024-06-30' \
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
@@ -124,6 +124,31 @@ Output from script
 </TabItem>
 
 </Tabs>
+
+
+## Reset Team, API Key Spend - MASTER KEY ONLY
+
+Use `/global/spend/reset` if you want to:
+- Reset the Spend for all API Keys, Teams. The `spend` for ALL Teams and Keys in `LiteLLM_TeamTable` and `LiteLLM_VerificationToken` will be set to `spend=0`
+
+- LiteLLM will maintain all the logs in `LiteLLMSpendLogs` for Auditing Purposes
+
+### Request 
+Only the `LITELLM_MASTER_KEY` you set can access this route
+```shell
+curl -X POST \
+  'http://localhost:4000/global/spend/reset' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json'
+```
+
+### Expected Responses
+
+```shell
+{"message":"Spend for all API Keys and Teams reset successfully","status":"success"}
+```
+
+
 
 
 ## Spend Tracking for Azure

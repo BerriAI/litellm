@@ -15,7 +15,9 @@ from litellm.proxy._types import (
 import httpx
 import dotenv
 
-dotenv.load_dotenv()
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
+if litellm_mode == "DEV":
+    dotenv.load_dotenv()
 #############################################
 if set_verbose == True:
     _turn_on_debug()
@@ -219,6 +221,7 @@ max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
+default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0

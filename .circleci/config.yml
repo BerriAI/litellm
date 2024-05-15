@@ -58,6 +58,8 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
+            pip install "pydantic==2.7.1"
+            pip install "diskcache==5.6.1"
       - save_cache:
           paths:
             - ./venv

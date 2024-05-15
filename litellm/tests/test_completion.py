@@ -59,7 +59,7 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to, check the response
+        # Add assertions here to check the-response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
@@ -93,7 +93,7 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
 
 def test_null_role_response():
     """
-    Test if api returns 'null' role, 'assistant' role is still returned
+    Test if the api returns 'null' role, 'assistant' role is still returned
     """
     import openai
 
@@ -1318,6 +1318,10 @@ def test_hf_test_completion_tgi():
 
 
 def mock_post(url, data=None, json=None, headers=None):
+
+    print(f"url={url}")
+    if "text-classification" in url:
+        raise Exception("Model not found")
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}

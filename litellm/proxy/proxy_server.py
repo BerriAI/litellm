@@ -351,6 +351,32 @@ def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
         return pydantic_obj.dict()
 
 
+async def check_request_disconnection(request: Request, llm_api_call_task):
+    """
+    Asynchronously checks if the request is disconnected at regular intervals.
+    If the request is disconnected
+    - cancel the litellm.router task
+    - raises an HTTPException with status code 499 and detail "Client disconnected the request".
+
+    Parameters:
+    - request: Request: The request object to check for disconnection.
+    Returns:
+    - None
+    """
+    while True:
+        await asyncio.sleep(1)
+        if await request.is_disconnected():
+
+            # cancel the LLM API Call task if any passed - this is passed from individual providers
+            # Example OpenAI, Azure, VertexAI etc
+            llm_api_call_task.cancel()
+
+            raise HTTPException(
+                status_code=499,
+                detail="Client disconnected the request",
+            )
+
+
 async def user_api_key_auth(
     request: Request, api_key: str = fastapi.Security(api_key_header)
 ) -> UserAPIKeyAuth:
@@ -589,6 +615,15 @@ async def user_api_key_auth(
             )
 
             return _user_api_key_obj
+
+        ## IF it's not a master key
+        ## Route should not be in master_key_only_routes
+        if route in LiteLLMRoutes.master_key_only_routes.value:
+            raise Exception(
+                f"Tried to access route={route}, which is only for MASTER KEY"
+            )
+
+        ## Check DB
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
@@ -3584,6 +3619,7 @@ async def chat_completion(
 ):
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     data = {}
+    check_request_disconnected = None
     try:
         body = await request.body()
         body_str = body.decode()
@@ -3759,9 +3795,15 @@ async def chat_completion(
             )
 
         # wait for call to end
-        responses = await asyncio.gather(
+        llm_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
+
+        check_request_disconnected = asyncio.create_task(
+            check_request_disconnection(request, llm_responses)
+        )
+        responses = await llm_responses
+
         response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -3836,6 +3878,9 @@ async def chat_completion(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
+    finally:
+        if check_request_disconnected is not None:
+            check_request_disconnected.cancel()
 
 
 @router.post(
@@ -3861,6 +3906,7 @@ async def completion(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+    check_request_disconnected = None
     try:
         body = await request.body()
         body_str = body.decode()
@@ -3924,31 +3970,31 @@ async def completion(
         router_model_names = llm_router.model_names if llm_router is not None else []
         # skip router if user passed their key
         if "api_key" in data:
-            response = await litellm.atext_completion(**data)
+            llm_response = asyncio.create_task(litellm.atext_completion(**data))
         elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            response = await llm_router.atext_completion(**data)
+            llm_response = asyncio.create_task(llm_router.atext_completion(**data))
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            response = await llm_router.atext_completion(**data)
+            llm_response = asyncio.create_task(llm_router.atext_completion(**data))
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.atext_completion(
-                **data, specific_deployment=True
+            llm_response = asyncio.create_task(
+                llm_router.atext_completion(**data, specific_deployment=True)
             )
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.atext_completion(**data)
+            llm_response = asyncio.create_task(llm_router.atext_completion(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            response = await litellm.atext_completion(**data)
+            llm_response = asyncio.create_task(litellm.atext_completion(**data))
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3957,6 +4003,12 @@ async def completion(
                     + data.get("model", "")
                 },
             )
+        check_request_disconnected = asyncio.create_task(
+            check_request_disconnection(request, llm_response)
+        )
+
+        # Await the llm_response task
+        response = await llm_response
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -4007,6 +4059,9 @@ async def completion(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
+    finally:
+        if check_request_disconnected is not None:
+            check_request_disconnected.cancel()
 
 
 @router.post(
@@ -5920,6 +5975,42 @@ async def view_spend_logs(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.post(
+    "/global/spend/reset",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def global_spend_reset():
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Globally reset spend for All API Keys and Teams, maintain LiteLLM_SpendLogs
+
+    1. LiteLLM_SpendLogs will maintain the logs on spend, no data gets deleted from there
+    2. LiteLLM_VerificationTokens spend will be set = 0
+    3. LiteLLM_TeamTable spend will be set = 0
+
+    """
+    global prisma_client
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    await prisma_client.db.litellm_verificationtoken.update_many(
+        data={"spend": 0.0}, where={}
+    )
+    await prisma_client.db.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+
+    return {
+        "message": "Spend for all API Keys and Teams reset successfully",
+        "status": "success",
+    }
 
 
 @router.get(
