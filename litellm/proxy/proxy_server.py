@@ -3857,8 +3857,11 @@ async def chat_completion(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
+        litellm_debug_info = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
-            f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            e,
+            litellm_debug_info,
         )
         router_model_names = llm_router.model_names if llm_router is not None else []
         if user_debug:
@@ -4046,9 +4049,11 @@ async def completion(
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
+        litellm_debug_info = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
             e,
+            litellm_debug_info,
         )
         traceback.print_exc()
         error_traceback = traceback.format_exc()
@@ -4250,6 +4255,12 @@ async def embeddings(
         data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        litellm_debug_info = getattr(e, "litellm_debug_info", "")
+        verbose_proxy_logger.debug(
+            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            e,
+            litellm_debug_info,
         )
         traceback.print_exc()
         if isinstance(e, HTTPException):
