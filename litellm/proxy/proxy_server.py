@@ -6622,7 +6622,19 @@ async def user_info(
 )
 async def user_update(data: UpdateUserRequest):
     """
-    [TODO]: Use this to update user budget
+    Example curl 
+
+    ```
+    curl --location 'http://0.0.0.0:4000/user/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "test-litellm-user-4",
+        "user_role": "proxy_admin_viewer"
+    }'
+
+    See below for all params 
+    ```
     """
     global prisma_client
     try:
