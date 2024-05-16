@@ -3935,6 +3935,7 @@ async def completion(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+    data = {}
     check_request_disconnected = None
     try:
         body = await request.body()
@@ -4080,6 +4081,9 @@ async def completion(
         return response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
         verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
         litellm_debug_info = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
