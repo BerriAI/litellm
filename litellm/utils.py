@@ -4422,15 +4422,17 @@ def completion_cost(
     Returns:
         float: The cost in USD dollars for the completion based on the provided parameters.
 
+    Exceptions:
+        Raises exception if model not in the litellm model cost map. Register model, via custom pricing or PR - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+
+
     Note:
+        - For custom pricing, see this - https://docs.litellm.ai/docs/proxy/custom_pricing
         - If completion_response is provided, the function extracts token information and the model name from it.
         - If completion_response is not provided, the function calculates token counts based on the model and input text.
         - The cost is calculated based on the model, prompt tokens, and completion tokens.
         - For certain models containing "togethercomputer" in the name, prices are based on the model size.
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
-
-    Exceptions:
-        - If an error occurs during execution, the error is raised
     """
     try:
         if (
