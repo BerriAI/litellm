@@ -10171,8 +10171,14 @@ async def health_services_endpoint(
                     asyncio.create_task(
                         proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report()
                     )
+
+                alert_types = (
+                    proxy_logging_obj.slack_alerting_instance.alert_types or []
+                )
+                alert_types = list(alert_types)
                 return {
                     "status": "success",
+                    "alert_types": alert_types,
                     "message": "Mock Slack Alert sent, verify Slack Alert Received on your channel",
                 }
             else:

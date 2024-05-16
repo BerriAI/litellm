@@ -87,6 +87,9 @@ class SlackAlerting(CustomLogger):
                 "budget_alerts",
                 "db_exceptions",
                 "daily_reports",
+                "spend_reports",
+                "cooldown_deployment",
+                "new_model_added",
             ]
         ] = [
             "llm_exceptions",
@@ -95,6 +98,9 @@ class SlackAlerting(CustomLogger):
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
+            "cooldown_deployment",
+            "new_model_added",
         ],
         alert_to_webhook_url: Optional[
             Dict
@@ -726,6 +732,7 @@ Model Info:
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
             "new_model_added",
             "cooldown_deployment",
         ],
@@ -746,6 +753,9 @@ Model Info:
             message: str - what is the alert about
         """
         if self.alerting is None:
+            return
+
+        if alert_type not in self.alert_types:
             return
 
         from datetime import datetime
@@ -942,7 +952,7 @@ Model Info:
             await self.send_alert(
                 message=_weekly_spend_message,
                 level="Low",
-                alert_type="daily_reports",
+                alert_type="spend_reports",
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)
@@ -993,7 +1003,7 @@ Model Info:
             await self.send_alert(
                 message=_spend_message,
                 level="Low",
-                alert_type="daily_reports",
+                alert_type="spend_reports",
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)
