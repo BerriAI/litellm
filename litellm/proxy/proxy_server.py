@@ -2848,6 +2848,7 @@ class ProxyConfig:
         """
         Pull from DB, read general settings value
         """
+        global general_settings
         if db_general_settings is None:
             return
         _general_settings = dict(db_general_settings)
@@ -3690,6 +3691,9 @@ async def chat_completion(
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
+        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
+            "global_max_parallel_requests", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
         data["metadata"]["user_api_key_team_id"] = getattr(
@@ -3957,6 +3961,9 @@ async def completion(
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
         )
+        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
+            "global_max_parallel_requests", None
+        )
         data["metadata"]["user_api_key_team_alias"] = getattr(
             user_api_key_dict, "team_alias", None
         )
@@ -4150,6 +4157,9 @@ async def embeddings(
         data["metadata"]["headers"] = _headers
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
+        )
+        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
+            "global_max_parallel_requests", None
         )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
@@ -4349,6 +4359,9 @@ async def image_generation(
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
+        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
+            "global_max_parallel_requests", None
+        )
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -4528,6 +4541,9 @@ async def audio_transcriptions(
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
+        )
+        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
+            "global_max_parallel_requests", None
         )
         data["metadata"]["user_api_key_team_alias"] = getattr(
             user_api_key_dict, "team_alias", None
@@ -4726,6 +4742,9 @@ async def moderations(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
+            "global_max_parallel_requests", None
+        )
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
