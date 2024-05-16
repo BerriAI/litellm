@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Extra, Field, model_validator, Json, validator
+from pydantic import BaseModel, Extra, Field, model_validator, Json, ConfigDict
 from dataclasses import fields
 import enum
 from typing import Optional, List, Union, Dict, Literal, Any
@@ -35,8 +35,7 @@ class LiteLLMBase(BaseModel):
             # if using pydantic v1
             return self.__fields_set__
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
@@ -299,8 +298,7 @@ class ProxyChatCompletionRequest(LiteLLMBase):
     deployment_id: Optional[str] = None
     request_timeout: Optional[int] = None
 
-    class Config:
-        extra = "allow"  # allow params not defined here, these fall in litellm.completion(**kwargs)
+    model_config: ConfigDict = ConfigDict(extra="allow")  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class ModelInfoDelete(LiteLLMBase):
@@ -327,9 +325,7 @@ class ModelInfo(LiteLLMBase):
         ]
     ]
 
-    class Config:
-        extra = Extra.allow  # Allow extra fields
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=(), extra="allow")
 
     @model_validator(mode="before")
     @classmethod
@@ -358,8 +354,7 @@ class ModelParams(LiteLLMBase):
     litellm_params: dict
     model_info: ModelInfo
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
     @model_validator(mode="before")
     @classmethod
@@ -398,8 +393,7 @@ class GenerateKeyRequest(GenerateRequestBase):
         {}
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -450,8 +444,7 @@ class LiteLLM_ModelTable(LiteLLMBase):
     created_by: str
     updated_by: str
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class NewUserRequest(GenerateKeyRequest):
@@ -540,8 +533,7 @@ class TeamBase(LiteLLMBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class GlobalEndUsersSpend(LiteLLMBase):
@@ -595,8 +587,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
     @model_validator(mode="before")
     @classmethod
@@ -635,8 +626,7 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -686,8 +676,7 @@ class KeyManagementSettings(LiteLLMBase):
 class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
-    class Config:
-        extra = "allow"  # allow params not defined here, these fall in litellm.completion(**kwargs)
+    model_config: ConfigDict = ConfigDict(extra="allow")  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class DynamoDBArgs(LiteLLMBase):
@@ -851,8 +840,7 @@ class ConfigYAML(LiteLLMBase):
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
     )
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_VerificationToken(LiteLLMBase):
@@ -886,8 +874,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     user_id_rate_limits: Optional[dict] = None
     team_id_rate_limits: Optional[dict] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
@@ -954,8 +941,7 @@ class LiteLLM_UserTable(LiteLLMBase):
             values.update({"models": []})
         return values
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_EndUserTable(LiteLLMBase):
@@ -974,8 +960,7 @@ class LiteLLM_EndUserTable(LiteLLMBase):
             values.update({"spend": 0.0})
         return values
 
-    class Config:
-        protected_namespaces = ()
+    model_config: ConfigDict = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_SpendLogs(LiteLLMBase):
