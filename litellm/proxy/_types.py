@@ -77,6 +77,16 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
 
 
 class LiteLLMRoutes(enum.Enum):
+    openai_route_names: List = [
+        "chat_completion",
+        "completion",
+        "embeddings",
+        "image_generation",
+        "audio_transcriptions",
+        "moderations",
+        "model_info_v1",
+        "model_info_v2",
+    ]
     openai_routes: List = [
         # chat completions
         "/openai/deployments/{model}/chat/completions",
