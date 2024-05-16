@@ -4766,25 +4766,24 @@ async def moderations(
 
 
 @router.post(
-    "/dev/token_counter ",
-    tags=["LLM Utils"],
-    dependencies=[Depends(user_api_key_auth)],
-    responses={
-        200: {
-            "cost": {
-                "description": "The calculated cost",
-                "example": 0.0,
-                "type": "float",
-            }
-        }
-    },
+    "/dev/token_counter", tags=["LLM Utils"], dependencies=[Depends(user_api_key_auth)]
 )
-async def token_counter(request: Request):
+async def token_counter(request: TokenCountRequest):
     """ """
     from litellm import token_counter
 
-    data = await request.json()
-    total_tokens = token_counter(**data)
+    prompt = request.prompt
+    messages = request.messages
+
+    if prompt is None and messages is None:
+        raise HTTPException(
+            status_code=400, detail="prompt or messages must be provided"
+        )
+    total_tokens = token_counter(
+        model=request.model,
+        text=prompt,
+        messages=messages,
+    )
     return {"total_tokens": total_tokens}
 
 
