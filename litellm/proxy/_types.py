@@ -1013,6 +1013,6 @@ class TokenCountRequest(LiteLLMBase):
 
 class TokenCountResponse(LiteLLMBase):
     total_tokens: int
-    model: str
-    base_model: str
+    request_model: str
+    model_used: str
     tokenizer_type: str
