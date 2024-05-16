@@ -677,6 +677,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     modelData.data[i].provider = provider;
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
+    
+
+    // Convert Cost in terms of Cost per 1M tokens 
+    if (modelData.data[i].input_cost) {
+      modelData.data[i].input_cost = (Number(modelData.data[i].input_cost) * 1000000).toFixed(2);
+    }
+
+    if (modelData.data[i].output_cost) {
+      modelData.data[i].output_cost = (Number(modelData.data[i].output_cost) * 1000000).toFixed(2);
+    }
+    
     modelData.data[i].max_tokens = max_tokens;
     modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
     modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
@@ -932,8 +943,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 <TableHeaderCell>
                   Extra litellm Params
                 </TableHeaderCell>
-                <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
-                <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
+                <TableHeaderCell>Input Price/1M Tokens ($)</TableHeaderCell>
+                <TableHeaderCell>Output Price/1M Tokens ($)</TableHeaderCell>
                 <TableHeaderCell>Max Tokens</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
               </TableRow>
