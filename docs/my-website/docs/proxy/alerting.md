@@ -11,7 +11,7 @@ Get alerts for:
 - Daily Reports:
     - **LLM** Top 5 slowest deployments
     - **LLM** Top 5 deployments with most failed requests
-    - **Spend** Weekly & Monthly spend per Team, Tag
+- **Spend** Weekly & Monthly spend per Team, Tag
 
 
 ## Quick Start
