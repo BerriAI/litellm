@@ -376,9 +376,8 @@ def test_vertex_ai_stream():
             print("making request", model)
             response = completion(
                 model=model,
-                messages=[
-                    {"role": "user", "content": "write 10 line code code for saying hi"}
-                ],
+                messages=[{"role": "user", "content": "hello tell me a short story"}],
+                max_tokens=15,
                 stream=True,
             )
             completed_str = ""
@@ -508,7 +507,7 @@ def test_gemini_pro_vision():
         litellm.set_verbose = True
         litellm.num_retries = 3
         resp = litellm.completion(
-            model="vertex_ai/gemini-pro-vision",
+            model="vertex_ai/gemini-1.5-flash-preview-0514",
             messages=[
                 {
                     "role": "user",
@@ -590,128 +589,114 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_gemini_pro_function_calling():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_pro_function_calling(sync_mode):
     try:
         load_vertex_ai_credentials()
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
+        data = {
+            "model": "vertex_ai/gemini-pro",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Call the submit_cities function with San Francisco and New York",
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submit_cities",
+                        "description": "Submits a list of cities",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "cities": {"type": "array", "items": {"type": "string"}}
                             },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
+                            "required": ["cities"],
                         },
-                        "required": ["location"],
                     },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in fahrenheit?",
-            }
-        ]
-        completion = litellm.completion(
-            model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
-        )
-        print(f"completion: {completion}")
-        # assert completion.choices[0].message.content is None ## GEMINI PRO is very chatty.
-        if hasattr(completion.choices[0].message, "tool_calls") and isinstance(
-            completion.choices[0].message.tool_calls, list
-        ):
-            assert len(completion.choices[0].message.tool_calls) == 1
-    except litellm.APIError as e:
-        pass
+                }
+            ],
+        }
+        if sync_mode:
+            response = litellm.completion(**data)
+        else:
+            response = await litellm.acompletion(**data)
+
+        print(f"response: {response}")
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
             pass
         else:
-            return
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
 # gemini_pro_function_calling()
 
 
-@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
-async def test_gemini_pro_function_calling_streaming(stream, sync_mode):
+async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
+    data = {
+        "model": "vertex_ai/gemini-pro",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Call the submit_cities function with San Francisco and New York",
+            }
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "submit_cities",
+                    "description": "Submits a list of cities",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "cities": {"type": "array", "items": {"type": "string"}}
                         },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                        "required": ["cities"],
                     },
-                    "required": ["location"],
                 },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in fahrenheit?",
-        }
-    ]
-    optional_params = {
-        "tools": tools,
+            }
+        ],
         "tool_choice": "auto",
         "n": 1,
-        "stream": stream,
+        "stream": True,
         "temperature": 0.1,
     }
+    chunks = []
     try:
         if sync_mode == True:
-            response = litellm.completion(
-                model="gemini-pro", messages=messages, **optional_params
-            )
+            response = litellm.completion(**data)
             print(f"completion: {response}")
 
-            if stream == True:
-                # assert completion.choices[0].message.content is None
-                # assert len(completion.choices[0].message.tool_calls) == 1
-                for chunk in response:
-                    assert isinstance(chunk, litellm.ModelResponse)
-            else:
-                assert isinstance(response, litellm.ModelResponse)
+            for chunk in response:
+                chunks.append(chunk)
+                assert isinstance(chunk, litellm.ModelResponse)
         else:
-            response = await litellm.acompletion(
-                model="gemini-pro", messages=messages, **optional_params
-            )
+            response = await litellm.acompletion(**data)
             print(f"completion: {response}")
 
-            if stream == True:
-                # assert completion.choices[0].message.content is None
-                # assert len(completion.choices[0].message.tool_calls) == 1
-                async for chunk in response:
-                    print(f"chunk: {chunk}")
-                    assert isinstance(chunk, litellm.ModelResponse)
-            else:
-                assert isinstance(response, litellm.ModelResponse)
+            assert isinstance(response, litellm.CustomStreamWrapper)
+
+            async for chunk in response:
+                print(f"chunk: {chunk}")
+                chunks.append(chunk)
+                assert isinstance(chunk, litellm.ModelResponse)
+
+        complete_response = litellm.stream_chunk_builder(chunks=chunks)
+        assert (
+            complete_response.choices[0].message.content is not None
+            or len(complete_response.choices[0].message.tool_calls) > 0
+        )
+        print(f"complete_response: {complete_response}")
     except litellm.APIError as e:
         pass
     except litellm.RateLimitError as e:

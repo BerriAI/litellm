@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina
+# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina, Azure Content-Safety
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
@@ -17,6 +17,7 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
 - [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
 - [Logging to Athina](#logging-proxy-inputoutput-athina)
+- [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -1037,3 +1038,86 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     ]
     }'
 ```
+
+## (BETA) Moderation with Azure Content Safety
+
+[Azure Content-Safety](https://azure.microsoft.com/en-us/products/ai-services/ai-content-safety) is a Microsoft Azure service that provides content moderation APIs to detect potential offensive, harmful, or risky content in text.
+
+We will use the `--config` to set `litellm.success_callback = ["azure_content_safety"]` this will moderate all LLM calls using Azure Content Safety.
+
+**Step 0** Deploy Azure Content Safety
+
+Deploy an Azure Content-Safety instance from the Azure Portal and get the `endpoint` and `key`.
+
+**Step 1** Set Athina API key
+
+```shell
+AZURE_CONTENT_SAFETY_KEY = "<your-azure-content-safety-key>"
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["azure_content_safety"]
+  azure_content_safety_params:
+    endpoint: "<your-azure-content-safety-endpoint>"
+    key: "os.environ/AZURE_CONTENT_SAFETY_KEY"
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hi, how are you?"
+            }
+        ]
+    }'
+```
+
+An HTTP 400 error will be returned if the content is detected with a value greater than the threshold set in the `config.yaml`.
+The details of the response will describe :
+- The `source` : input text or llm generated text
+- The `category` : the category of the content that triggered the moderation
+- The `severity` : the severity from 0 to 10
+
+**Step 4**: Customizing Azure Content Safety Thresholds
+
+You can customize the thresholds for each category by setting the `thresholds` in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["azure_content_safety"]
+  azure_content_safety_params:
+    endpoint: "<your-azure-content-safety-endpoint>"
+    key: "os.environ/AZURE_CONTENT_SAFETY_KEY"
+    thresholds:
+      Hate: 6
+      SelfHarm: 8
+      Sexual: 6
+      Violence: 4
+```
+
+:::info
+`thresholds` are not required by default, but you can tune the values to your needs.
+Default values is `4` for all categories
+:::

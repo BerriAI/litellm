@@ -1,6 +1,3 @@
-<!-- This is just examples. You can remove all items if you want. -->
-<!-- Please remove all comments. -->
-
 ## Title
 
 <!-- e.g. "Implement user authentication feature" -->
@@ -18,7 +15,6 @@
 🐛 Bug Fix
 🧹 Refactoring
 📖 Documentation
-💻 Development Environment
 🚄 Infrastructure
 ✅ Test
 
@@ -26,22 +22,8 @@
 
 <!-- List of changes -->
 
-## Testing
+## [REQUIRED] Testing - Attach a screenshot of any new tests passing locall
+If UI changes, send a screenshot/GIF of working UI fixes
 
 <!-- Test procedure -->
 
-## Notes
-
-<!-- Test results -->
-
-<!-- Points to note for the reviewer, consultation content, concerns -->
-
-## Pre-Submission Checklist (optional but appreciated):
-
-- [ ] I have included relevant documentation updates (stored in /docs/my-website)
-
-## OS Tests (optional but appreciated):
-
-- [ ] Tested on Windows
-- [ ] Tested on MacOS
-- [ ] Tested on Linux

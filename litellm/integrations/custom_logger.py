@@ -6,8 +6,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
 from typing import Literal, Union, Optional
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
 

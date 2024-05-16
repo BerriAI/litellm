@@ -1509,6 +1509,11 @@ def prompt_factory(
                 model="meta-llama/Meta-Llama-3-8B-Instruct",
                 messages=messages,
             )
+
+    elif custom_llm_provider == "clarifai":
+        if "claude" in model:
+            return anthropic_pt(messages=messages)
+        
     elif custom_llm_provider == "perplexity":
         for message in messages:
             message.pop("name", None)

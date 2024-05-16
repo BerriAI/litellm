@@ -1,12 +1,11 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 from pydantic import BaseModel, Extra, Field, root_validator
-import dotenv, os, requests, random  # type: ignore
+import os, requests, random  # type: ignore
 from typing import Optional, Union, List, Dict
 from datetime import datetime, timedelta
 import random
 
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -98,9 +97,6 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
-
-                if precise_minute not in request_count_dict[id]:
-                    request_count_dict[id][precise_minute] = {}
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}

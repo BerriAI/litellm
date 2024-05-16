@@ -359,3 +359,49 @@ async def test_send_llm_exception_to_slack():
     )
 
     await asyncio.sleep(3)
+
+
+# test models with 0 metrics are ignored
+@pytest.mark.asyncio
+async def test_send_daily_reports_ignores_zero_values():
+    router = MagicMock()
+    router.get_model_ids.return_value = ['model1', 'model2', 'model3']
+    
+    slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
+    # model1:failed=None, model2:failed=0, model3:failed=10, model1:latency=0; model2:latency=0; model3:latency=None
+    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(return_value=[None, 0, 10, 0, 0, None])
+    slack_alerting.internal_usage_cache.async_batch_set_cache = AsyncMock()
+
+    router.get_model_info.side_effect = lambda x: {"litellm_params": {"model": x}}
+    
+    with patch.object(slack_alerting, 'send_alert', new=AsyncMock()) as mock_send_alert:
+        result = await slack_alerting.send_daily_reports(router)
+        
+        # Check that the send_alert method was called
+        mock_send_alert.assert_called_once()
+        message = mock_send_alert.call_args[1]['message']
+        
+        # Ensure the message includes only the non-zero, non-None metrics
+        assert "model3" in message
+        assert "model2" not in message
+        assert "model1" not in message
+    
+    assert result == True
+
+
+# test no alert is sent if all None or 0 metrics
+@pytest.mark.asyncio
+async def test_send_daily_reports_all_zero_or_none():
+    router = MagicMock()
+    router.get_model_ids.return_value = ['model1', 'model2', 'model3']
+    
+    slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
+    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(return_value=[None, 0, None, 0, None, 0])
+    
+    with patch.object(slack_alerting, 'send_alert', new=AsyncMock()) as mock_send_alert:
+        result = await slack_alerting.send_daily_reports(router)
+        
+        # Check that the send_alert method was not called
+        mock_send_alert.assert_not_called()
+    
+    assert result == False

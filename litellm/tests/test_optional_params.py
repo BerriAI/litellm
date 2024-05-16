@@ -86,6 +86,7 @@ def test_azure_optional_params_embeddings():
 def test_azure_gpt_optional_params_gpt_vision():
     # for OpenAI, Azure all extra params need to get passed as extra_body to OpenAI python. We assert we actually set extra_body here
     optional_params = litellm.utils.get_optional_params(
+        model="",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,
@@ -125,6 +126,7 @@ def test_azure_gpt_optional_params_gpt_vision():
 def test_azure_gpt_optional_params_gpt_vision_with_extra_body():
     # if user passes extra_body, we should not over write it, we should pass it along to OpenAI python
     optional_params = litellm.utils.get_optional_params(
+        model="",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,
@@ -167,6 +169,7 @@ def test_azure_gpt_optional_params_gpt_vision_with_extra_body():
 
 def test_openai_extra_headers():
     optional_params = litellm.utils.get_optional_params(
+        model="",
         user="John",
         custom_llm_provider="openai",
         max_tokens=10,
