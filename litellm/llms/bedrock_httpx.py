@@ -730,12 +730,15 @@ class BedrockLLM(BaseLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
+        signing_only_endpoint_url = None
         endpoint_url = ""
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if aws_bedrock_runtime_endpoint is not None and isinstance(
             aws_bedrock_runtime_endpoint, str
         ):
             endpoint_url = aws_bedrock_runtime_endpoint
+            if "gateway.ai.cloudflare.com" in endpoint_url:
+                signing_only_endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
         elif env_aws_bedrock_runtime_endpoint and isinstance(
             env_aws_bedrock_runtime_endpoint, str
         ):
@@ -745,8 +748,15 @@ class BedrockLLM(BaseLLM):
 
         if (stream is not None and stream == True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            if signing_only_endpoint_url:
+                signing_only_endpoint_url = f"{signing_only_endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
+            if signing_only_endpoint_url:
+                signing_only_endpoint_url = f"{signing_only_endpoint_url}/model/{modelId}/invoke"
+
+        if signing_only_endpoint_url is None:
+            signing_only_endpoint_url = endpoint_url
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -896,7 +906,7 @@ class BedrockLLM(BaseLLM):
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
         request = AWSRequest(
-            method="POST", url=endpoint_url, data=data, headers=headers
+            method="POST", url=signing_only_endpoint_url, data=data, headers=headers
         )
         sigv4.add_auth(request)
         prepped = request.prepare()
@@ -907,7 +917,7 @@ class BedrockLLM(BaseLLM):
             api_key="",
             additional_args={
                 "complete_input_dict": data,
-                "api_base": prepped.url,
+                "api_base": endpoint_url,
                 "headers": prepped.headers,
             },
         )
@@ -921,7 +931,7 @@ class BedrockLLM(BaseLLM):
                     model=model,
                     messages=messages,
                     data=data,
-                    api_base=prepped.url,
+                    api_base=endpoint_url,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -939,7 +949,7 @@ class BedrockLLM(BaseLLM):
                 model=model,
                 messages=messages,
                 data=data,
-                api_base=prepped.url,
+                api_base=endpoint_url,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 encoding=encoding,
@@ -964,7 +974,7 @@ class BedrockLLM(BaseLLM):
             self.client = client
         if (stream is not None and stream == True) and provider != "ai21":
             response = self.client.post(
-                url=prepped.url,
+                url=endpoint_url,
                 headers=prepped.headers,  # type: ignore
                 data=data,
                 stream=stream,
@@ -995,7 +1005,7 @@ class BedrockLLM(BaseLLM):
             return streaming_response
 
         try:
-            response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
+            response = self.client.post(url=endpoint_url, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1649,12 +1659,15 @@ class BedrockConverseLLM(BaseLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
+        signing_only_endpoint_url = None
         endpoint_url = ""
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if aws_bedrock_runtime_endpoint is not None and isinstance(
             aws_bedrock_runtime_endpoint, str
         ):
             endpoint_url = aws_bedrock_runtime_endpoint
+            if "gateway.ai.cloudflare.com" in endpoint_url:
+                signing_only_endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
         elif env_aws_bedrock_runtime_endpoint and isinstance(
             env_aws_bedrock_runtime_endpoint, str
         ):
@@ -1664,8 +1677,15 @@ class BedrockConverseLLM(BaseLLM):
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
+            if signing_only_endpoint_url:
+                signing_only_endpoint_url = f"{signing_only_endpoint_url}/model/{modelId}/converse-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse"
+            if signing_only_endpoint_url:
+                signing_only_endpoint_url = f"{signing_only_endpoint_url}/model/{modelId}/converse"
+
+        if signing_only_endpoint_url is None:
+            signing_only_endpoint_url = endpoint_url
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -1730,7 +1750,7 @@ class BedrockConverseLLM(BaseLLM):
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
         request = AWSRequest(
-            method="POST", url=endpoint_url, data=data, headers=headers
+            method="POST", url=signing_only_endpoint_url, data=data, headers=headers
         )
         sigv4.add_auth(request)
         prepped = request.prepare()
@@ -1741,7 +1761,7 @@ class BedrockConverseLLM(BaseLLM):
             api_key="",
             additional_args={
                 "complete_input_dict": data,
-                "api_base": prepped.url,
+                "api_base": endpoint_url,
                 "headers": prepped.headers,
             },
         )
@@ -1755,7 +1775,7 @@ class BedrockConverseLLM(BaseLLM):
                     model=model,
                     messages=messages,
                     data=data,
-                    api_base=prepped.url,
+                    api_base=endpoint_url,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -1773,7 +1793,7 @@ class BedrockConverseLLM(BaseLLM):
                 model=model,
                 messages=messages,
                 data=data,
-                api_base=prepped.url,
+                api_base=endpoint_url,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 encoding=encoding,
@@ -1794,7 +1814,7 @@ class BedrockConverseLLM(BaseLLM):
                 make_call=partial(
                     make_sync_call,
                     client=None,
-                    api_base=prepped.url,
+                    api_base=endpoint_url,
                     headers=prepped.headers,  # type: ignore
                     data=data,
                     model=model,
@@ -1819,7 +1839,7 @@ class BedrockConverseLLM(BaseLLM):
         else:
             client = client
         try:
-            response = client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
+            response = client.post(url=endpoint_url, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
