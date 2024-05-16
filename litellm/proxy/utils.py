@@ -252,8 +252,8 @@ class ProxyLogging:
         """
         Runs the CustomLogger's async_moderation_hook()
         """
+        new_data = copy.deepcopy(data)
         for callback in litellm.callbacks:
-            new_data = copy.deepcopy(data)
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_moderation_hook(
