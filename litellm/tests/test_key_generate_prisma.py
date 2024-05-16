@@ -183,6 +183,7 @@ async def test_new_user_response(prisma_client):
         APIRoute(path= "/v1/models", endpoint=model_list),
         APIRoute(path= "/models", endpoint=model_list),
     ],
+    ids=lambda route: str(dict(route=route.endpoint.__name__, path=route.path)),
 )
 def test_generate_and_call_with_valid_key(prisma_client, api_route):
     # 1. Generate a Key, and use it to make a call
