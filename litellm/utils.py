@@ -19,7 +19,7 @@ from functools import wraps, lru_cache
 import datetime, time
 import tiktoken
 import uuid
-from pydantic import ConfigDict, BaseModel, VERSION
+from pydantic import BaseModel
 import aiohttp
 import textwrap
 import logging
@@ -185,23 +185,6 @@ last_fetched_at_keys = None
 # }
 
 
-# Function to get Pydantic version
-def is_pydantic_v2() -> int:
-    return int(VERSION.split(".")[0])
-
-
-def get_model_config(arbitrary_types_allowed: bool = False) -> ConfigDict:
-    # Version-specific configuration
-    if is_pydantic_v2() >= 2:
-        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=arbitrary_types_allowed, protected_namespaces=())  # type: ignore
-    else:
-        from pydantic import Extra
-
-        model_config = ConfigDict(extra=Extra.allow, arbitrary_types_allowed=arbitrary_types_allowed)  # type: ignore
-
-    return model_config
-
-
 class UnsupportedParamsError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -348,7 +331,10 @@ class HiddenParams(OpenAIObject):
     original_response: Optional[str] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
-    model_config = get_model_config()
+
+    class Config:
+        extra = "allow"
+        protected_namespaces = ()
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -2579,7 +2565,7 @@ class Logging:
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
-                    )
+                    )  # type: ignore
                 if callable(callback):  # custom logger functions
                     await customLogger.async_log_event(
                         kwargs=self.model_call_details,
@@ -6778,7 +6764,7 @@ def get_max_tokens(model: str):
             raise Exception()
     except:
         raise Exception(
-            "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+            f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
         )
 
 
@@ -8155,33 +8141,39 @@ def exception_type(
             # Common Extra information needed for all providers
             # We pass num retries, api_base, vertex_deployment etc to the exception here
             ################################################################################
+            extra_information = ""
+            try:
+                _api_base = litellm.get_api_base(
+                    model=model, optional_params=extra_kwargs
+                )
+                messages = litellm.get_first_chars_messages(kwargs=completion_kwargs)
+                _vertex_project = extra_kwargs.get("vertex_project")
+                _vertex_location = extra_kwargs.get("vertex_location")
+                _metadata = extra_kwargs.get("metadata", {}) or {}
+                _model_group = _metadata.get("model_group")
+                _deployment = _metadata.get("deployment")
+                extra_information = f"\nModel: {model}"
+                if _api_base:
+                    extra_information += f"\nAPI Base: {_api_base}"
+                if messages and len(messages) > 0:
+                    extra_information += f"\nMessages: {messages}"
 
-            _api_base = litellm.get_api_base(model=model, optional_params=extra_kwargs)
-            messages = litellm.get_first_chars_messages(kwargs=completion_kwargs)
-            _vertex_project = extra_kwargs.get("vertex_project")
-            _vertex_location = extra_kwargs.get("vertex_location")
-            _metadata = extra_kwargs.get("metadata", {}) or {}
-            _model_group = _metadata.get("model_group")
-            _deployment = _metadata.get("deployment")
-            extra_information = f"\nModel: {model}"
-            if _api_base:
-                extra_information += f"\nAPI Base: {_api_base}"
-            if messages and len(messages) > 0:
-                extra_information += f"\nMessages: {messages}"
+                if _model_group is not None:
+                    extra_information += f"\nmodel_group: {_model_group}\n"
+                if _deployment is not None:
+                    extra_information += f"\ndeployment: {_deployment}\n"
+                if _vertex_project is not None:
+                    extra_information += f"\nvertex_project: {_vertex_project}\n"
+                if _vertex_location is not None:
+                    extra_information += f"\nvertex_location: {_vertex_location}\n"
 
-            if _model_group is not None:
-                extra_information += f"\nmodel_group: {_model_group}\n"
-            if _deployment is not None:
-                extra_information += f"\ndeployment: {_deployment}\n"
-            if _vertex_project is not None:
-                extra_information += f"\nvertex_project: {_vertex_project}\n"
-            if _vertex_location is not None:
-                extra_information += f"\nvertex_location: {_vertex_location}\n"
-
-            # on litellm proxy add key name + team to exceptions
-            extra_information = _add_key_name_and_team_to_alert(
-                request_info=extra_information, metadata=_metadata
-            )
+                # on litellm proxy add key name + team to exceptions
+                extra_information = _add_key_name_and_team_to_alert(
+                    request_info=extra_information, metadata=_metadata
+                )
+            except:
+                # DO NOT LET this Block raising the original exception
+                pass
 
             ################################################################################
             # End of Common Extra information Needed for all providers
@@ -8194,9 +8186,10 @@ def exception_type(
             if "Request Timeout Error" in error_str or "Request timed out" in error_str:
                 exception_mapping_worked = True
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. {extra_information} \n error_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
                     model=model,
                     llm_provider=custom_llm_provider,
+                    litellm_debug_info=extra_information,
                 )
 
             if (
@@ -8226,10 +8219,11 @@ def exception_type(
                 if "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif (
                     "invalid_request_error" in error_str
@@ -8237,10 +8231,11 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise NotFoundError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif (
                     "invalid_request_error" in error_str
@@ -8248,10 +8243,11 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif (
                     "invalid_request_error" in error_str
@@ -8259,17 +8255,19 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif "Request too large" in error_str:
                     raise RateLimitError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         model=model,
                         llm_provider=custom_llm_provider,
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif (
                     "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
@@ -8277,10 +8275,11 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif "Mistral API raised a streaming error" in error_str:
                     exception_mapping_worked = True
@@ -8289,82 +8288,92 @@ def exception_type(
                     )
                     raise APIError(
                         status_code=500,
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         request=_request,
+                        litellm_debug_info=extra_information,
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             response=original_exception.response,
+                            litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
+                            litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
+                            litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
+                            litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
+                            litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
                         )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"{exception_provider} - {message} {extra_information}",
+                            message=f"{exception_provider} - {message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             request=original_exception.request,
+                            litellm_debug_info=extra_information,
                         )
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
+                        litellm_debug_info=extra_information,
                         request=httpx.Request(
                             method="POST", url="https://api.openai.com/v1/"
                         ),
@@ -8529,6 +8538,28 @@ def exception_type(
                         model=model,
                         response=original_exception.response,
                     )
+            elif custom_llm_provider == "predibase":
+                if "authorization denied for" in error_str:
+                    exception_mapping_worked = True
+
+                    # Predibase returns the raw API Key in the response - this block ensures it's not returned in the exception
+                    if (
+                        error_str is not None
+                        and isinstance(error_str, str)
+                        and "bearer" in error_str.lower()
+                    ):
+                        # only keep the first 10 chars after the occurnence of "bearer"
+                        _bearer_token_start_index = error_str.lower().find("bearer")
+                        error_str = error_str[: _bearer_token_start_index + 14]
+                        error_str += "XXXXXXX" + '"'
+
+                    raise AuthenticationError(
+                        message=f"PredibaseException: Authentication Error - {error_str}",
+                        llm_provider="predibase",
+                        model=model,
+                        response=original_exception.response,
+                        litellm_debug_info=extra_information,
+                    )
             elif custom_llm_provider == "bedrock":
                 if (
                     "too many tokens" in error_str
@@ -8666,10 +8697,11 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"VertexAIException - {error_str} {extra_information}",
+                        message=f"VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif (
                     "None Unknown Error." in error_str
@@ -8677,26 +8709,29 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise APIError(
-                        message=f"VertexAIException - {error_str} {extra_information}",
+                        message=f"VertexAIException - {error_str}",
                         status_code=500,
                         model=model,
                         llm_provider="vertex_ai",
                         request=original_exception.request,
+                        litellm_debug_info=extra_information,
                     )
                 elif "403" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"VertexAIException - {error_str} {extra_information}",
+                        message=f"VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
                 elif "The response was blocked." in error_str:
                     exception_mapping_worked = True
                     raise UnprocessableEntityError(
-                        message=f"VertexAIException - {error_str} {extra_information}",
+                        message=f"VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
+                        litellm_debug_info=extra_information,
                         response=httpx.Response(
                             status_code=429,
                             request=httpx.Request(
@@ -8713,9 +8748,10 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"VertexAIException - {error_str} {extra_information}",
+                        message=f"VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
+                        litellm_debug_info=extra_information,
                         response=httpx.Response(
                             status_code=429,
                             request=httpx.Request(
@@ -8728,18 +8764,20 @@ def exception_type(
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"VertexAIException - {error_str} {extra_information}",
+                            message=f"VertexAIException - {error_str}",
                             model=model,
                             llm_provider="vertex_ai",
+                            litellm_debug_info=extra_information,
                             response=original_exception.response,
                         )
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise APIError(
-                            message=f"VertexAIException - {error_str} {extra_information}",
+                            message=f"VertexAIException - {error_str}",
                             status_code=500,
                             model=model,
                             llm_provider="vertex_ai",
+                            litellm_debug_info=extra_information,
                             request=original_exception.request,
                         )
             elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
@@ -9340,25 +9378,28 @@ def exception_type(
                     exception_mapping_worked = True
                     raise APIError(
                         status_code=500,
-                        message=f"AzureException - {original_exception.message} {extra_information}",
+                        message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
+                        litellm_debug_info=extra_information,
                         request=httpx.Request(method="POST", url="https://openai.com/"),
                     )
                 elif "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"AzureException - {original_exception.message} {extra_information}",
+                        message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
+                        litellm_debug_info=extra_information,
                         response=original_exception.response,
                     )
                 elif "DeploymentNotFound" in error_str:
                     exception_mapping_worked = True
                     raise NotFoundError(
-                        message=f"AzureException - {original_exception.message} {extra_information}",
+                        message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
+                        litellm_debug_info=extra_information,
                         response=original_exception.response,
                     )
                 elif (
@@ -9370,17 +9411,19 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"AzureException - {original_exception.message} {extra_information}",
+                        message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
+                        litellm_debug_info=extra_information,
                         response=original_exception.response,
                     )
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"AzureException - {original_exception.message} {extra_information}",
+                        message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
+                        litellm_debug_info=extra_information,
                         response=original_exception.response,
                     )
                 elif (
@@ -9389,9 +9432,10 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"{exception_provider} - {original_exception.message} {extra_information}",
+                        message=f"{exception_provider} - {original_exception.message}",
                         llm_provider=custom_llm_provider,
                         model=model,
+                        litellm_debug_info=extra_information,
                         response=original_exception.response,
                     )
                 elif hasattr(original_exception, "status_code"):
@@ -9399,55 +9443,62 @@ def exception_type(
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"AzureException - {original_exception.message} {extra_information}",
+                            message=f"AzureException - {original_exception.message}",
                             llm_provider="azure",
                             model=model,
+                            litellm_debug_info=extra_information,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"AzureException - {original_exception.message} {extra_information}",
+                            message=f"AzureException - {original_exception.message}",
                             model=model,
+                            litellm_debug_info=extra_information,
                             llm_provider="azure",
                         )
                     if original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"AzureException - {original_exception.message} {extra_information}",
+                            message=f"AzureException - {original_exception.message}",
                             model=model,
                             llm_provider="azure",
+                            litellm_debug_info=extra_information,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"AzureException - {original_exception.message} {extra_information}",
+                            message=f"AzureException - {original_exception.message}",
                             model=model,
                             llm_provider="azure",
+                            litellm_debug_info=extra_information,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"AzureException - {original_exception.message} {extra_information}",
+                            message=f"AzureException - {original_exception.message}",
                             model=model,
                             llm_provider="azure",
+                            litellm_debug_info=extra_information,
                             response=original_exception.response,
                         )
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"AzureException - {original_exception.message} {extra_information}",
+                            message=f"AzureException - {original_exception.message}",
                             model=model,
+                            litellm_debug_info=extra_information,
                             llm_provider="azure",
                         )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"AzureException - {original_exception.message} {extra_information}",
+                            message=f"AzureException - {original_exception.message}",
                             llm_provider="azure",
+                            litellm_debug_info=extra_information,
                             model=model,
                             request=httpx.Request(
                                 method="POST", url="https://openai.com/"
@@ -9456,9 +9507,10 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"{exception_provider} - {message} {extra_information}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider="azure",
                         model=model,
+                        litellm_debug_info=extra_information,
                         request=httpx.Request(method="POST", url="https://openai.com/"),
                     )
         if (
