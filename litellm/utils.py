@@ -35,6 +35,7 @@ from dataclasses import (
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.caching import DualCache
+from litellm.types.utils import CostPerToken
 
 oidc_cache = DualCache()
 
@@ -4222,6 +4223,29 @@ def token_counter(
     return num_tokens
 
 
+def _cost_per_token_custom_pricing_helper(
+    prompt_tokens=0,
+    completion_tokens=0,
+    response_time_ms=None,
+    ### CUSTOM PRICING ###
+    custom_cost_per_token: Optional[CostPerToken] = None,
+    custom_cost_per_second: Optional[float] = None,
+) -> Optional[Tuple[float, float]]:
+    """Internal helper function for calculating cost, if custom pricing given"""
+    if custom_cost_per_token is None and custom_cost_per_second is None:
+        return None
+
+    if custom_cost_per_token is not None:
+        input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
+        output_cost = custom_cost_per_token["output_cost_per_token"] * completion_tokens
+        return input_cost, output_cost
+    elif custom_cost_per_second is not None:
+        output_cost = custom_cost_per_second * response_time_ms / 1000  # type: ignore
+        return 0, output_cost
+
+    return None
+
+
 def cost_per_token(
     model="",
     prompt_tokens=0,
@@ -4229,7 +4253,10 @@ def cost_per_token(
     response_time_ms=None,
     custom_llm_provider=None,
     region_name=None,
-):
+    ### CUSTOM PRICING ###
+    custom_cost_per_token: Optional[CostPerToken] = None,
+    custom_cost_per_second: Optional[float] = None,
+) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -4237,13 +4264,28 @@ def cost_per_token(
         model (str): The name of the model to use. Default is ""
         prompt_tokens (int): The number of tokens in the prompt.
         completion_tokens (int): The number of tokens in the completion.
+        response_time (float): The amount of time, in milliseconds, it took the call to complete.
+        custom_llm_provider (str): The llm provider to whom the call was made (see init.py for full list)
+        custom_cost_per_token: Optional[CostPerToken]: the cost per input + output token for the llm api call.
+        custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
 
     Returns:
         tuple: A tuple containing the cost in USD dollars for prompt tokens and completion tokens, respectively.
     """
+    ## CUSTOM PRICING ##
+    response_cost = _cost_per_token_custom_pricing_helper(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        response_time_ms=response_time_ms,
+        custom_cost_per_second=custom_cost_per_second,
+        custom_cost_per_token=custom_cost_per_token,
+    )
+    if response_cost is not None:
+        return response_cost[0], response_cost[1]
+
     # given
-    prompt_tokens_cost_usd_dollar = 0
-    completion_tokens_cost_usd_dollar = 0
+    prompt_tokens_cost_usd_dollar: float = 0
+    completion_tokens_cost_usd_dollar: float = 0
     model_cost_ref = litellm.model_cost
     model_with_provider = model
     if custom_llm_provider is not None:
@@ -4406,6 +4448,9 @@ def completion_cost(
     size=None,
     quality=None,
     n=None,  # number of images
+    ### CUSTOM PRICING ###
+    custom_cost_per_token: Optional[CostPerToken] = None,
+    custom_cost_per_second: Optional[float] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -4418,6 +4463,8 @@ def completion_cost(
         prompt (str): Optional. The input prompt passed to the llm
         completion (str): Optional. The output completion text from the llm
         total_time (float): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
+        custom_cost_per_token: Optional[CostPerToken]: the cost per input + output token for the llm api call.
+        custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
 
     Returns:
         float: The cost in USD dollars for the completion based on the provided parameters.
@@ -4427,7 +4474,6 @@ def completion_cost(
 
 
     Note:
-        - For custom pricing, see this - https://docs.litellm.ai/docs/proxy/custom_pricing
         - If completion_response is provided, the function extracts token information and the model name from it.
         - If completion_response is not provided, the function calculates token counts based on the model and input text.
         - The cost is calculated based on the model, prompt tokens, and completion tokens.
@@ -4562,6 +4608,8 @@ def completion_cost(
             custom_llm_provider=custom_llm_provider,
             response_time_ms=total_time,
             region_name=region_name,
+            custom_cost_per_second=custom_cost_per_second,
+            custom_cost_per_token=custom_cost_per_token,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
         print_verbose(
