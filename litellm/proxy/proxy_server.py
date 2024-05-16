@@ -1076,7 +1076,7 @@ async def user_api_key_auth(
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
                 if route in LiteLLMRoutes.openai_routes.value:
                     pass
-                elif request['route'].name in LiteLLMRoutes.openai_route_names.value:
+                elif request["route"].name in LiteLLMRoutes.openai_route_names.value:
                     pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
@@ -4976,7 +4976,7 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         if "duration" in non_default_values:
             duration = non_default_values.pop("duration")
             duration_s = _duration_in_seconds(duration=duration)
-            expires = datetime.datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
 
         response = await prisma_client.update_data(
