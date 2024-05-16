@@ -4777,6 +4777,56 @@ async def moderations(
             )
 
 
+@router.post(
+    "/utils/token_counter",
+    tags=["llm utils"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountResponse,
+)
+async def token_counter(request: TokenCountRequest):
+    """ """
+    from litellm import token_counter
+
+    global llm_router
+
+    prompt = request.prompt
+    messages = request.messages
+    if prompt is None and messages is None:
+        raise HTTPException(
+            status_code=400, detail="prompt or messages must be provided"
+        )
+
+    deployment = None
+    litellm_model_name = None
+    if llm_router is not None:
+        # get 1 deployment corresponding to the model
+        for _model in llm_router.model_list:
+            if _model["model_name"] == request.model:
+                deployment = _model
+                break
+    if deployment is not None:
+        litellm_model_name = deployment.get("litellm_params", {}).get("model")
+        # remove the custom_llm_provider_prefix in the litellm_model_name
+        if "/" in litellm_model_name:
+            litellm_model_name = litellm_model_name.split("/", 1)[1]
+
+    model_to_use = (
+        litellm_model_name or request.model
+    )  # use litellm model name, if it's not avalable then fallback to request.model
+    total_tokens, tokenizer_used = token_counter(
+        model=model_to_use,
+        text=prompt,
+        messages=messages,
+        return_tokenizer_used=True,
+    )
+    return TokenCountResponse(
+        total_tokens=total_tokens,
+        request_model=request.model,
+        model_used=model_to_use,
+        tokenizer_type=tokenizer_used,
+    )
+
+
 #### KEY MANAGEMENT ####
 
 
