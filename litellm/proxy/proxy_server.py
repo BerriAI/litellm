@@ -7809,7 +7809,12 @@ async def new_organization(
 
         If none provided, create one based on provided values
         """
-        budget_row = LiteLLM_BudgetTable(**data.json(exclude_none=True))
+        budget_params = LiteLLM_BudgetTable.model_fields.keys()
+
+        # Only include Budget Params when creating an entry in litellm_budgettable
+        _json_data = data.json(exclude_none=True)
+        _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
+        budget_row = LiteLLM_BudgetTable(**_budget_data)
 
         new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
