@@ -93,6 +93,7 @@ class AnthropicConfig:
             "max_tokens",
             "tools",
             "tool_choice",
+            "extra_headers",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -504,7 +505,9 @@ class AnthropicChatCompletion(BaseLLM):
         ## Handle Tool Calling
         if "tools" in optional_params:
             _is_function_call = True
-            headers["anthropic-beta"] = "tools-2024-04-04"
+            if "anthropic-beta" not in headers:
+                # default to v1 of "anthropic-beta"
+                headers["anthropic-beta"] = "tools-2024-04-04"
 
             anthropic_tools = []
             for tool in optional_params["tools"]:
