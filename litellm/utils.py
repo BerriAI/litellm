@@ -8141,33 +8141,39 @@ def exception_type(
             # Common Extra information needed for all providers
             # We pass num retries, api_base, vertex_deployment etc to the exception here
             ################################################################################
+            extra_information = ""
+            try:
+                _api_base = litellm.get_api_base(
+                    model=model, optional_params=extra_kwargs
+                )
+                messages = litellm.get_first_chars_messages(kwargs=completion_kwargs)
+                _vertex_project = extra_kwargs.get("vertex_project")
+                _vertex_location = extra_kwargs.get("vertex_location")
+                _metadata = extra_kwargs.get("metadata", {}) or {}
+                _model_group = _metadata.get("model_group")
+                _deployment = _metadata.get("deployment")
+                extra_information = f"\nModel: {model}"
+                if _api_base:
+                    extra_information += f"\nAPI Base: {_api_base}"
+                if messages and len(messages) > 0:
+                    extra_information += f"\nMessages: {messages}"
 
-            _api_base = litellm.get_api_base(model=model, optional_params=extra_kwargs)
-            messages = litellm.get_first_chars_messages(kwargs=completion_kwargs)
-            _vertex_project = extra_kwargs.get("vertex_project")
-            _vertex_location = extra_kwargs.get("vertex_location")
-            _metadata = extra_kwargs.get("metadata", {}) or {}
-            _model_group = _metadata.get("model_group")
-            _deployment = _metadata.get("deployment")
-            extra_information = f"\nModel: {model}"
-            if _api_base:
-                extra_information += f"\nAPI Base: {_api_base}"
-            if messages and len(messages) > 0:
-                extra_information += f"\nMessages: {messages}"
+                if _model_group is not None:
+                    extra_information += f"\nmodel_group: {_model_group}\n"
+                if _deployment is not None:
+                    extra_information += f"\ndeployment: {_deployment}\n"
+                if _vertex_project is not None:
+                    extra_information += f"\nvertex_project: {_vertex_project}\n"
+                if _vertex_location is not None:
+                    extra_information += f"\nvertex_location: {_vertex_location}\n"
 
-            if _model_group is not None:
-                extra_information += f"\nmodel_group: {_model_group}\n"
-            if _deployment is not None:
-                extra_information += f"\ndeployment: {_deployment}\n"
-            if _vertex_project is not None:
-                extra_information += f"\nvertex_project: {_vertex_project}\n"
-            if _vertex_location is not None:
-                extra_information += f"\nvertex_location: {_vertex_location}\n"
-
-            # on litellm proxy add key name + team to exceptions
-            extra_information = _add_key_name_and_team_to_alert(
-                request_info=extra_information, metadata=_metadata
-            )
+                # on litellm proxy add key name + team to exceptions
+                extra_information = _add_key_name_and_team_to_alert(
+                    request_info=extra_information, metadata=_metadata
+                )
+            except:
+                # DO NOT LET this Block raising the original exception
+                pass
 
             ################################################################################
             # End of Common Extra information Needed for all providers
@@ -8531,6 +8537,28 @@ def exception_type(
                         llm_provider="watsonx",
                         model=model,
                         response=original_exception.response,
+                    )
+            elif custom_llm_provider == "predibase":
+                if "authorization denied for" in error_str:
+                    exception_mapping_worked = True
+
+                    # Predibase returns the raw API Key in the response - this block ensures it's not returned in the exception
+                    if (
+                        error_str is not None
+                        and isinstance(error_str, str)
+                        and "bearer" in error_str.lower()
+                    ):
+                        # only keep the first 10 chars after the occurnence of "bearer"
+                        _bearer_token_start_index = error_str.lower().find("bearer")
+                        error_str = error_str[: _bearer_token_start_index + 14]
+                        error_str += "XXXXXXX" + '"'
+
+                    raise AuthenticationError(
+                        message=f"PredibaseException: Authentication Error - {error_str}",
+                        llm_provider="predibase",
+                        model=model,
+                        response=original_exception.response,
+                        litellm_debug_info=extra_information,
                     )
             elif custom_llm_provider == "bedrock":
                 if (
