@@ -596,6 +596,26 @@ def test_litellm_completion_vertex_exception():
         print("exception: ", e)
 
 
+def test_litellm_predibase_exception():
+    """
+    Test - Assert that the Predibase API Key is not returned on Authentication Errors
+    """
+    try:
+        import litellm
+
+        litellm.set_verbose = True
+        response = completion(
+            model="predibase/llama-3-8b-instruct",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            tenant_id="c4768f95",
+            api_key="hf-rawapikey",
+        )
+        pytest.fail("Request should have failed - bad api key")
+    except Exception as e:
+        assert "hf-rawapikey" not in str(e)
+        print("exception: ", e)
+
+
 # # test_invalid_request_error(model="command-nightly")
 # # Test 3: Rate Limit Errors
 # def test_model_call(model):
