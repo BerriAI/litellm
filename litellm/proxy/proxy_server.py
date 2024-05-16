@@ -4766,7 +4766,9 @@ async def moderations(
 
 
 @router.post(
-    "/dev/token_counter", tags=["LLM Utils"], dependencies=[Depends(user_api_key_auth)]
+    "/utils/token_counter",
+    tags=["LLM Utils"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def token_counter(request: TokenCountRequest):
     """ """
