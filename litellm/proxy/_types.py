@@ -84,8 +84,7 @@ class LiteLLMRoutes(enum.Enum):
         "image_generation",
         "audio_transcriptions",
         "moderations",
-        "model_info_v1",
-        "model_info_v2",
+        "model_list",  # OpenAI /v1/models route
     ]
     openai_routes: List = [
         # chat completions
