@@ -4765,6 +4765,29 @@ async def moderations(
             )
 
 
+@router.post(
+    "/dev/token_counter ",
+    tags=["LLM Utils"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {
+            "cost": {
+                "description": "The calculated cost",
+                "example": 0.0,
+                "type": "float",
+            }
+        }
+    },
+)
+async def token_counter(request: Request):
+    """ """
+    from litellm import token_counter
+
+    data = await request.json()
+    total_tokens = token_counter(**data)
+    return {"total_tokens": total_tokens}
+
+
 #### KEY MANAGEMENT ####
 
 
