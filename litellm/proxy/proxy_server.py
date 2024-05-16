@@ -3290,10 +3290,6 @@ async def startup_event():
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
     master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
-    if not isinstance(master_key, str):
-        raise Exception(
-            "Master key must be a string. Current type - {}".format(type(master_key))
-        )
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         prisma_setup(database_url=os.getenv("DATABASE_URL"))
