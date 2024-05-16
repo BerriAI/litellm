@@ -175,6 +175,7 @@ const sidebars = {
         "observability/custom_callback",
         "observability/langfuse_integration",
         "observability/sentry",
+        "observability/lago",
         "observability/openmeter",
         "observability/promptlayer_integration",
         "observability/wandb_integration",
