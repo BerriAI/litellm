@@ -3880,7 +3880,12 @@ def _select_tokenizer(model: str):
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # default - tiktoken
     else:
-        return {"type": "openai_tokenizer", "tokenizer": encoding}
+        tokenizer = None
+        try:
+            tokenizer = Tokenizer.from_pretrained(model)
+            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+        except:
+            return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
 def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
@@ -4117,6 +4122,7 @@ def token_counter(
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,
+    return_tokenizer_used: Optional[bool] = False,
 ):
     """
     Count the number of tokens in a given text using a specified model.
@@ -4209,7 +4215,10 @@ def token_counter(
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
-
+    _tokenizer_type = tokenizer_json["type"]
+    if return_tokenizer_used:
+        # used by litellm proxy server ->  POST /utils/token_counter
+        return num_tokens, _tokenizer_type
     return num_tokens
 
 
