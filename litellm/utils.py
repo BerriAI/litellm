@@ -2579,7 +2579,7 @@ class Logging:
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
-                    )
+                    )  # type: ignore
                 if callable(callback):  # custom logger functions
                     await customLogger.async_log_event(
                         kwargs=self.model_call_details,
