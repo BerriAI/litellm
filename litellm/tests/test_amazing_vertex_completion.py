@@ -376,9 +376,8 @@ def test_vertex_ai_stream():
             print("making request", model)
             response = completion(
                 model=model,
-                messages=[
-                    {"role": "user", "content": "write 10 line code code for saying hi"}
-                ],
+                messages=[{"role": "user", "content": "hello tell me a short story"}],
+                max_tokens=15,
                 stream=True,
             )
             completed_str = ""

@@ -262,13 +262,22 @@ class Router:
 
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
-        self.fallbacks = fallbacks or litellm.fallbacks
+
+        ## SETTING FALLBACKS ##
+        ### validate if it's set + in correct format
+        _fallbacks = fallbacks or litellm.fallbacks
+
+        self.validate_fallbacks(fallback_param=_fallbacks)
+        ### set fallbacks
+        self.fallbacks = _fallbacks
+
         if default_fallbacks is not None or litellm.default_fallbacks is not None:
             _fallbacks = default_fallbacks or litellm.default_fallbacks
             if self.fallbacks is not None:
                 self.fallbacks.append({"*": _fallbacks})
             else:
                 self.fallbacks = [{"*": _fallbacks}]
+
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
@@ -335,6 +344,21 @@ class Router:
         self.alerting_config: Optional[AlertingConfig] = alerting_config
         if self.alerting_config is not None:
             self._initialize_alerting()
+
+    def validate_fallbacks(self, fallback_param: Optional[List]):
+        if fallback_param is None:
+            return
+        if len(fallback_param) > 0:  # if set
+            ## for dictionary in list, check if only 1 key in dict
+            for _dict in fallback_param:
+                assert isinstance(_dict, dict), "Item={}, not a dictionary".format(
+                    _dict
+                )
+                assert (
+                    len(_dict.keys()) == 1
+                ), "Only 1 key allows in dictionary. You set={} for dict={}".format(
+                    len(_dict.keys()), _dict
+                )
 
     def routing_strategy_init(self, routing_strategy: str, routing_strategy_args: dict):
         if routing_strategy == "least-busy":
@@ -1962,6 +1986,45 @@ class Router:
                 key=rpm_key, value=request_count, local_only=True
             )  # don't change existing ttl
 
+    def _is_cooldown_required(self, exception_status: Union[str, int]):
+        """
+        A function to determine if a cooldown is required based on the exception status.
+
+        Parameters:
+            exception_status (Union[str, int]): The status of the exception.
+
+        Returns:
+            bool: True if a cooldown is required, False otherwise.
+        """
+        try:
+
+            if isinstance(exception_status, str):
+                exception_status = int(exception_status)
+
+            if exception_status >= 400 and exception_status < 500:
+                if exception_status == 429:
+                    # Cool down 429 Rate Limit Errors
+                    return True
+
+                elif exception_status == 401:
+                    # Cool down 401 Auth Errors
+                    return True
+
+                elif exception_status == 408:
+                    return True
+
+                else:
+                    # Do NOT cool down all other 4XX Errors
+                    return False
+
+            else:
+                # should cool down for all other errors
+                return True
+
+        except:
+            # Catch all - if any exceptions default to cooling down
+            return True
+
     def _set_cooldown_deployments(
         self, exception_status: Union[str, int], deployment: Optional[str] = None
     ):
@@ -1973,6 +2036,9 @@ class Router:
         the exception is not one that should be immediately retried (e.g. 401)
         """
         if deployment is None:
+            return
+
+        if self._is_cooldown_required(exception_status=exception_status) == False:
             return
 
         dt = get_utc_datetime()
