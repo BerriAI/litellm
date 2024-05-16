@@ -237,6 +237,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
             total_spend_per_team = total_spend_per_team.map((tspt: any) => {
               tspt["name"] = tspt["team_id"] || "";
               tspt["value"] = tspt["total_spend"] || 0;
+              // round the value to 2 decimal places
+
+              tspt["value"] = tspt["value"].toFixed(2);
+              
+
               return tspt;
             })
 
