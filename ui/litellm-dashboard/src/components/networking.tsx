@@ -675,7 +675,6 @@ export const tagsSpendLogsCall = async (
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
       throw new Error("Network response was not ok");
     }
 
