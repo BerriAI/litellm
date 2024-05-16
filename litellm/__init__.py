@@ -27,7 +27,7 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-_custom_logger_compatible_callbacks_literal = Literal["lago"]
+_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter"]
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
