@@ -346,25 +346,19 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             elif item_tpm is None:
                 continue  # skip if unhealthy deployment
 
-            _deployment_tpm = None
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("model_info", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = float("inf")
+            _deployment_tpm = (
+                        _deployment.get("tpm") or
+                        _deployment.get("litellm_params", {}).get("tpm") or
+                        _deployment.get("model_info", {}).get("tpm") or
+                        float("inf")
+                    )
 
-            _deployment_rpm = None
-            if _deployment_rpm is None:
-                _deployment_rpm = _deployment.get("rpm")
-            if _deployment_rpm is None:
-                _deployment_rpm = _deployment.get("litellm_params", {}).get("rpm")
-            if _deployment_rpm is None:
-                _deployment_rpm = _deployment.get("model_info", {}).get("rpm")
-            if _deployment_rpm is None:
-                _deployment_rpm = float("inf")
+            _deployment_rpm = (
+                        _deployment.get("rpm") or
+                        _deployment.get("litellm_params", {}).get("rpm") or
+                        _deployment.get("model_info", {}).get("rpm") or
+                        float("inf")
+                    )
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
             elif (rpm_dict is not None and item in rpm_dict) and (
@@ -446,37 +440,23 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 if isinstance(_deployment, dict):
                     id = _deployment.get("model_info", {}).get("id")
                     ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_tpm = None
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("litellm_params", {}).get(
-                            "tpm", None
-                        )
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("model_info", {}).get(
-                            "tpm", None
-                        )
-                    if _deployment_tpm is None:
-                        _deployment_tpm = float("inf")
+                    _deployment_tpm = (
+                        _deployment.get("tpm") or
+                        _deployment.get("litellm_params", {}).get("tpm") or
+                        _deployment.get("model_info", {}).get("tpm") or
+                        float("inf")
+                    )
 
                     ### GET CURRENT TPM ###
                     current_tpm = tpm_values[index]
 
                     ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_rpm = None
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("litellm_params", {}).get(
-                            "rpm", None
-                        )
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("model_info", {}).get(
-                            "rpm", None
-                        )
-                    if _deployment_rpm is None:
-                        _deployment_rpm = float("inf")
+                    _deployment_rpm = (
+                        _deployment.get("rpm") or
+                        _deployment.get("litellm_params", {}).get("rpm") or
+                        _deployment.get("model_info", {}).get("rpm") or
+                        float("inf")
+                    )
 
                     ### GET CURRENT RPM ###
                     current_rpm = rpm_values[index]
@@ -549,37 +529,23 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 if isinstance(_deployment, dict):
                     id = _deployment.get("model_info", {}).get("id")
                     ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_tpm = None
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("tpm", None)
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("litellm_params", {}).get(
-                            "tpm", None
-                        )
-                    if _deployment_tpm is None:
-                        _deployment_tpm = _deployment.get("model_info", {}).get(
-                            "tpm", None
-                        )
-                    if _deployment_tpm is None:
-                        _deployment_tpm = float("inf")
+                    _deployment_tpm = (
+                        _deployment.get("tpm") or
+                        _deployment.get("litellm_params", {}).get("tpm") or
+                        _deployment.get("model_info", {}).get("tpm") or
+                        float("inf")
+                    )
 
                     ### GET CURRENT TPM ###
                     current_tpm = tpm_values[index]
 
                     ### GET DEPLOYMENT TPM LIMIT ###
-                    _deployment_rpm = None
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("rpm", None)
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("litellm_params", {}).get(
-                            "rpm", None
-                        )
-                    if _deployment_rpm is None:
-                        _deployment_rpm = _deployment.get("model_info", {}).get(
-                            "rpm", None
-                        )
-                    if _deployment_rpm is None:
-                        _deployment_rpm = float("inf")
+                    _deployment_rpm = (
+                        _deployment.get("rpm") or
+                        _deployment.get("litellm_params", {}).get("rpm") or
+                        _deployment.get("model_info", {}).get("rpm") or
+                        float("inf")
+                    )
 
                     ### GET CURRENT RPM ###
                     current_rpm = rpm_values[index]

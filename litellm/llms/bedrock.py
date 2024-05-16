@@ -749,15 +749,7 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
             model=model, messages=messages, custom_llm_provider="bedrock"
         )
     else:
-        prompt = ""
-        for message in messages:
-            if "role" in message:
-                if message["role"] == "user":
-                    prompt += f"{message['content']}"
-                else:
-                    prompt += f"{message['content']}"
-            else:
-                prompt += f"{message['content']}"
+        prompt = "".join(message['content'] for message in messages)
     return prompt
 
 

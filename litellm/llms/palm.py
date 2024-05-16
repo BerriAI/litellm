@@ -119,15 +119,7 @@ def completion(
         ):  # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
 
-    prompt = ""
-    for message in messages:
-        if "role" in message:
-            if message["role"] == "user":
-                prompt += f"{message['content']}"
-            else:
-                prompt += f"{message['content']}"
-        else:
-            prompt += f"{message['content']}"
+    prompt = "".join(message['content'] for message in messages)
 
     ## LOGGING
     logging_obj.pre_call(
