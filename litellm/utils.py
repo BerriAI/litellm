@@ -6063,7 +6063,7 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
             )
         )
     except Exception as e:
-        verbose_logger.error("Error occurred in getting api base - {}".format(str(e)))
+        verbose_logger.debug("Error occurred in getting api base - {}".format(str(e)))
         custom_llm_provider = None
         dynamic_api_key = None
         dynamic_api_base = None
