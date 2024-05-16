@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Extra, Field, root_validator, Json, validator
+from pydantic import BaseModel, Extra, Field, model_validator, Json, validator
 from dataclasses import fields
 import enum
 from typing import Optional, List, Union, Dict, Literal, Any
@@ -240,7 +240,8 @@ class LiteLLMPromptInjectionParams(LiteLLMBase):
     llm_api_system_prompt: Optional[str] = None
     llm_api_fail_call_string: Optional[str] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def check_llm_api_params(cls, values):
         llm_api_check = values.get("llm_api_check")
         if llm_api_check is True:
@@ -330,7 +331,8 @@ class ModelInfo(LiteLLMBase):
         extra = Extra.allow  # Allow extra fields
         protected_namespaces = ()
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def set_model_info(cls, values):
         if values.get("id") is None:
             values.update({"id": str(uuid.uuid4())})
@@ -359,7 +361,8 @@ class ModelParams(LiteLLMBase):
     class Config:
         protected_namespaces = ()
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def set_model_info(cls, values):
         if values.get("model_info") is None:
             values.update({"model_info": ModelInfo()})
@@ -406,7 +409,8 @@ class GenerateKeyResponse(GenerateKeyRequest):
     user_id: Optional[str] = None
     token_id: Optional[str] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def set_model_info(cls, values):
         if values.get("token") is not None:
             values.update({"key": values.get("token")})
@@ -475,7 +479,8 @@ class UpdateUserRequest(GenerateRequestBase):
     user_role: Optional[str] = None
     max_budget: Optional[float] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def check_user_info(cls, values):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
@@ -495,7 +500,8 @@ class NewEndUserRequest(LiteLLMBase):
         None  # if no equivalent model in allowed region - default all requests to this model
     )
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def check_user_info(cls, values):
         if values.get("max_budget") is not None and values.get("budget_id") is not None:
             raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
@@ -508,7 +514,8 @@ class Member(LiteLLMBase):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def check_user_info(cls, values):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
@@ -553,7 +560,8 @@ class TeamMemberDeleteRequest(LiteLLMBase):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def check_user_info(cls, values):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
@@ -590,7 +598,8 @@ class LiteLLM_TeamTable(TeamBase):
     class Config:
         protected_namespaces = ()
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def set_model_info(cls, values):
         dict_fields = [
             "metadata",
@@ -908,7 +917,8 @@ class UserAPIKeyAuth(
     user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
     allowed_model_region: Optional[Literal["eu"]] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
             values.update({"token": hash_token(values.get("api_key"))})
@@ -935,7 +945,8 @@ class LiteLLM_UserTable(LiteLLMBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def set_model_info(cls, values):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
@@ -956,7 +967,8 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def set_model_info(cls, values):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
