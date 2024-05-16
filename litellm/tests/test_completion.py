@@ -13,6 +13,7 @@ import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from unittest.mock import patch, MagicMock
 
 # litellm.num_retries=3
 litellm.cache = None
@@ -37,7 +38,7 @@ def reset_callbacks():
 @pytest.mark.skip(reason="Local test")
 def test_response_model_none():
     """
-    Addresses - https://github.com/BerriAI/litellm/issues/2972
+    Addresses:https://github.com/BerriAI/litellm/issues/2972
     """
     x = completion(
         model="mymodel",
@@ -58,13 +59,58 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to, check the response
+        # Add assertions here to check the-response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
+    _data = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1677652288,
+        "model": "gpt-3.5-turbo-0125",
+        "system_fingerprint": "fp_44709d6fcb",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": None,
+                    "content": "\n\nHello there, how may I assist you today?",
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+    }
+    return litellm.ModelResponse(**_data)
+
+
+def test_null_role_response():
+    """
+    Test if the api returns 'null' role, 'assistant' role is still returned
+    """
+    import openai
+
+    openai_client = openai.OpenAI()
+    with patch.object(
+        openai_client.chat.completions, "create", side_effect=_openai_mock_response
+    ) as mock_response:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            client=openai_client,
+        )
+        print(f"response: {response}")
+
+        assert response.id == "chatcmpl-123"
+
+        assert response.choices[0].message.role == "assistant"
 
 
 def test_completion_azure_command_r():
@@ -664,6 +710,7 @@ def test_completion_mistral_api():
                     "content": "Hey, how's it going?",
                 }
             ],
+            seed=10,
         )
         # Add any assertions here to check the response
         print(response)
@@ -838,7 +885,7 @@ async def test_acompletion_claude2_1():
             },
             {"role": "user", "content": "Generate a 3 liner joke for me"},
         ]
-        # test without max tokens
+        # test without max-tokens
         response = await litellm.acompletion(model="claude-2.1", messages=messages)
         # Add any assertions here to check the response
         print(response)
@@ -1114,30 +1161,30 @@ HF Tests we should pass
 # Test util to sort models to TGI, conv, None
 def test_get_hf_task_for_model():
     model = "glaiveai/glaive-coder-7b"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "meta-llama/Llama-2-7b-hf"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "facebook/blenderbot-400M-distill"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     model = "facebook/blenderbot-3B"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     # neither Conv or None
     model = "roneneldan/TinyStories-3M"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert model_type == None
+    assert model_type == "text-generation"
 
 
 # test_get_hf_task_for_model()
@@ -1145,15 +1192,92 @@ def test_get_hf_task_for_model():
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
-def hf_test_completion_tgi():
-    # litellm.set_verbose=True
+def tgi_mock_post(url, data=None, json=None, headers=None):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = [
+        {
+            "generated_text": "<|assistant|>\nI'm",
+            "details": {
+                "finish_reason": "length",
+                "generated_tokens": 10,
+                "seed": None,
+                "prefill": [],
+                "tokens": [
+                    {
+                        "id": 28789,
+                        "text": "<",
+                        "logprob": -0.025222778,
+                        "special": False,
+                    },
+                    {
+                        "id": 28766,
+                        "text": "|",
+                        "logprob": -0.000003695488,
+                        "special": False,
+                    },
+                    {
+                        "id": 489,
+                        "text": "ass",
+                        "logprob": -0.0000019073486,
+                        "special": False,
+                    },
+                    {
+                        "id": 11143,
+                        "text": "istant",
+                        "logprob": -0.000002026558,
+                        "special": False,
+                    },
+                    {
+                        "id": 28766,
+                        "text": "|",
+                        "logprob": -0.0000015497208,
+                        "special": False,
+                    },
+                    {
+                        "id": 28767,
+                        "text": ">",
+                        "logprob": -0.0000011920929,
+                        "special": False,
+                    },
+                    {
+                        "id": 13,
+                        "text": "\n",
+                        "logprob": -0.00009703636,
+                        "special": False,
+                    },
+                    {"id": 28737, "text": "I", "logprob": -0.1953125, "special": False},
+                    {
+                        "id": 28742,
+                        "text": "'",
+                        "logprob": -0.88183594,
+                        "special": False,
+                    },
+                    {
+                        "id": 28719,
+                        "text": "m",
+                        "logprob": -0.00032639503,
+                        "special": False,
+                    },
+                ],
+            },
+        }
+    ]
+    return mock_response
+
+
+def test_hf_test_completion_tgi():
+    litellm.set_verbose = True
     try:
-        response = completion(
-            model="huggingface/HuggingFaceH4/zephyr-7b-beta",
-            messages=[{"content": "Hello, how are you?", "role": "user"}],
-        )
-        # Add any assertions here to check the response
-        print(response)
+        with patch("requests.post", side_effect=tgi_mock_post):
+            response = completion(
+                model="huggingface/HuggingFaceH4/zephyr-7b-beta",
+                messages=[{"content": "Hello, how are you?", "role": "user"}],
+                max_tokens=10,
+            )
+            # Add any assertions here to check the response
+            print(response)
     except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
@@ -1191,9 +1315,47 @@ def hf_test_completion_tgi():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_none_task()
+
+
+def mock_post(url, data=None, json=None, headers=None):
+
+    print(f"url={url}")
+    if "text-classification" in url:
+        raise Exception("Model not found")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = [
+        [
+            {"label": "LABEL_0", "score": 0.9990691542625427},
+            {"label": "LABEL_1", "score": 0.0009308889275416732},
+        ]
+    ]
+    return mock_response
+
+
+def test_hf_classifier_task():
+    try:
+        with patch("requests.post", side_effect=mock_post):
+            litellm.set_verbose = True
+            user_message = "I like you. I love you"
+            messages = [{"content": user_message, "role": "user"}]
+            response = completion(
+                model="huggingface/text-classification/shahrukhx01/question-vs-statement-classifier",
+                messages=messages,
+            )
+            print(f"response: {response}")
+            assert isinstance(response, litellm.ModelResponse)
+            assert isinstance(response.choices[0], litellm.Choices)
+            assert response.choices[0].message.content is not None
+            assert isinstance(response.choices[0].message.content, str)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {str(e)}")
+
+
 ########################### End of Hugging Face Tests ##############################################
 # def test_completion_hf_api():
-# # failing on circle ci commenting out
+# # failing on circle-ci commenting out
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
@@ -2472,6 +2634,69 @@ def test_completion_chat_sagemaker_mistral():
 # test_completion_chat_sagemaker_mistral()
 
 
+def response_format_tests(response: litellm.ModelResponse):
+    assert isinstance(response.id, str)
+    assert response.id != ""
+
+    assert isinstance(response.object, str)
+    assert response.object != ""
+
+    assert isinstance(response.created, int)
+
+    assert isinstance(response.model, str)
+    assert response.model != ""
+
+    assert isinstance(response.choices, list)
+    assert len(response.choices) == 1
+    choice = response.choices[0]
+    assert isinstance(choice, litellm.Choices)
+    assert isinstance(choice.get("index"), int)
+
+    message = choice.get("message")
+    assert isinstance(message, litellm.Message)
+    assert isinstance(message.get("role"), str)
+    assert message.get("role") != ""
+    assert isinstance(message.get("content"), str)
+    assert message.get("content") != ""
+
+    assert choice.get("logprobs") is None
+    assert isinstance(choice.get("finish_reason"), str)
+    assert choice.get("finish_reason") != ""
+
+    assert isinstance(response.usage, litellm.Usage)  # type: ignore
+    assert isinstance(response.usage.prompt_tokens, int)  # type: ignore
+    assert isinstance(response.usage.completion_tokens, int)  # type: ignore
+    assert isinstance(response.usage.total_tokens, int)  # type: ignore
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_bedrock_command_r(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        response = completion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        response_format_tests(response=response)
+    else:
+        response = await litellm.acompletion(
+            model="bedrock/cohere.command-r-plus-v1:0",
+            messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+
+        print(f"response: {response}")
+        response_format_tests(response=response)
+
+    print(f"response: {response}")
+
+
 def test_completion_bedrock_titan_null_response():
     try:
         response = completion(
@@ -3121,6 +3346,29 @@ def test_completion_watsonx():
         print(response)
     except litellm.APIError as e:
         pass
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    try:
+        response = completion(
+            model=model_name,
+            messages=messages,
+            stop=["stop"],
+            max_tokens=20,
+            stream=True,
+        )
+        for chunk in response:
+            print(chunk)
+    except litellm.APIError as e:
+        pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3185,6 +3433,30 @@ async def test_acompletion_watsonx():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_watsonx():
+    litellm.set_verbose = True
+    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    print("testing watsonx")
+    try:
+        response = await litellm.acompletion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+        # Add any assertions here to check the response
+        async for chunk in response:
+            print(chunk)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

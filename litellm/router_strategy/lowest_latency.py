@@ -5,8 +5,6 @@ import dotenv, os, requests, random  # type: ignore
 from typing import Optional, Union, List, Dict
 from datetime import datetime, timedelta
 import random
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -29,7 +27,7 @@ class LiteLLMBase(BaseModel):
 
 
 class RoutingArgs(LiteLLMBase):
-    ttl: int = 1 * 60 * 60  # 1 hour
+    ttl: float = 1 * 60 * 60  # 1 hour
     lowest_latency_buffer: float = 0
     max_latency_list_size: int = 10
 
@@ -113,9 +111,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
                     ][: self.routing_args.max_latency_list_size - 1] + [final_value]
-
-                if precise_minute not in request_count_dict[id]:
-                    request_count_dict[id][precise_minute] = {}
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}

@@ -151,7 +151,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
      }'
 ```
 
-## Advanced - Context Window Fallbacks 
+## Advanced - Context Window Fallbacks (Pre-Call Checks + Fallbacks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
 
@@ -232,16 +232,16 @@ model_list:
 	- model_name: gpt-3.5-turbo-small
 	  litellm_params:
 		model: azure/chatgpt-v-2
-		api_base: os.environ/AZURE_API_BASE
-		api_key: os.environ/AZURE_API_KEY
-		api_version: "2023-07-01-preview"
-	  model_info:
-		base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+      model_info:
+      base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
 	
 	- model_name: gpt-3.5-turbo-large
 	  litellm_params:
-		model: gpt-3.5-turbo-1106
-		api_key: os.environ/OPENAI_API_KEY
+      model: gpt-3.5-turbo-1106
+      api_key: os.environ/OPENAI_API_KEY
 
   - model_name: claude-opus
     litellm_params:
@@ -286,6 +286,69 @@ print(response)
 </TabItem>
 </Tabs>
 
+
+## Advanced - EU-Region Filtering (Pre-Call Checks)
+
+**Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
+
+Set 'region_name' of deployment. 
+
+**Note:** LiteLLM can automatically infer region_name for Vertex AI, Bedrock, and IBM WatsonxAI based on your litellm params. For Azure, set `litellm.enable_preview = True`.
+
+**1. Set Config**
+
+```yaml
+router_settings:
+	enable_pre_call_checks: true # 1. Enable pre-call checks
+
+model_list:
+- model_name: gpt-3.5-turbo
+  litellm_params:
+    model: azure/chatgpt-v-2
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2023-07-01-preview"
+    region_name: "eu" # 👈 SET EU-REGION
+
+- model_name: gpt-3.5-turbo
+  litellm_params:
+    model: gpt-3.5-turbo-1106
+    api_key: os.environ/OPENAI_API_KEY
+
+- model_name: gemini-pro
+  litellm_params:
+    model: vertex_ai/gemini-pro-1.5
+    vertex_project: adroit-crow-1234
+    vertex_location: us-east1 # 👈 AUTOMATICALLY INFERS 'region_name'
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.with_raw_response.create(
+    model="gpt-3.5-turbo",
+    messages = [{"role": "user", "content": "Who was Alexander?"}]
+)
+
+print(response)
+
+print(f"response.headers.get('x-litellm-model-api-base')")
+```
 
 ## Advanced - Custom Timeouts, Stream Timeouts - Per Model
 For each model you can set `timeout` & `stream_timeout` under `litellm_params`

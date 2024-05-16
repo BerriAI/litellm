@@ -1,6 +1,7 @@
 # Enterprise Proxy Util Endpoints
 from litellm._logging import verbose_logger
 import collections
+from datetime import datetime
 
 
 async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
@@ -18,26 +19,33 @@ async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
     return response
 
 
-async def ui_get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
-    response = await prisma_client.db.query_raw(
-        """
+async def ui_get_spend_by_tags(start_date: str, end_date: str, prisma_client):
+
+    sql_query = """
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         DATE(s."startTime") AS spend_date,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs" s
-        WHERE s."startTime" >= current_date - interval '30 days'
+        WHERE
+            DATE(s."startTime") >= $1::date
+            AND DATE(s."startTime") <= $2::date
         GROUP BY individual_request_tag, spend_date
-        ORDER BY spend_date;
-        """
+        ORDER BY spend_date
+        LIMIT 100;
+    """
+    response = await prisma_client.db.query_raw(
+        sql_query,
+        start_date,
+        end_date,
     )
 
     # print("tags - spend")
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
-    total_spend_per_tag = collections.defaultdict(float)
-    total_requests_per_tag = collections.defaultdict(int)
+    total_spend_per_tag: collections.defaultdict = collections.defaultdict(float)
+    total_requests_per_tag: collections.defaultdict = collections.defaultdict(int)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]
@@ -49,15 +57,18 @@ async def ui_get_spend_by_tags(start_date=None, end_date=None, prisma_client=Non
     # convert to ui format
     ui_tags = []
     for tag in sorted_tags:
+        current_spend = tag[1]
+        if current_spend is not None and isinstance(current_spend, float):
+            current_spend = round(current_spend, 4)
         ui_tags.append(
             {
                 "name": tag[0],
-                "value": tag[1],
+                "spend": current_spend,
                 "log_count": total_requests_per_tag[tag[0]],
             }
         )
 
-    return {"top_10_tags": ui_tags}
+    return {"spend_per_tag": ui_tags}
 
 
 async def view_spend_logs_from_clickhouse(

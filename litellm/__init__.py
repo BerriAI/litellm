@@ -1,5 +1,6 @@
 ### Hide pydantic namespace conflict warnings globally ###
 import warnings
+
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
 import threading, requests, os
@@ -14,7 +15,9 @@ from litellm.proxy._types import (
 import httpx
 import dotenv
 
-dotenv.load_dotenv()
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
+if litellm_mode == "DEV":
+    dotenv.load_dotenv()
 #############################################
 if set_verbose == True:
     _turn_on_debug()
@@ -24,8 +27,8 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-callbacks: List[Callable] = []
-_custom_logger_compatible_callbacks: list = ["openmeter"]
+_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter"]
+callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
         Literal[
@@ -70,6 +73,7 @@ azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
+clarifai_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
@@ -99,6 +103,9 @@ llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
+##################
+### PREVIEW FEATURES ###
+enable_preview_features: bool = False
 ##################
 logging: bool = True
 caching: bool = (
@@ -214,6 +221,7 @@ max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None  # per model endpoint
+default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0
@@ -400,6 +408,73 @@ replicate_models: List = [
     "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
 ]
 
+clarifai_models: List = [
+    "clarifai/meta.Llama-3.Llama-3-8B-Instruct",
+    "clarifai/gcp.generate.gemma-1_1-7b-it",
+    "clarifai/mistralai.completion.mixtral-8x22B",
+    "clarifai/cohere.generate.command-r-plus",
+    "clarifai/databricks.drbx.dbrx-instruct",
+    "clarifai/mistralai.completion.mistral-large",
+    "clarifai/mistralai.completion.mistral-medium",
+    "clarifai/mistralai.completion.mistral-small",
+    "clarifai/mistralai.completion.mixtral-8x7B-Instruct-v0_1",
+    "clarifai/gcp.generate.gemma-2b-it",
+    "clarifai/gcp.generate.gemma-7b-it",
+    "clarifai/deci.decilm.deciLM-7B-instruct",
+    "clarifai/mistralai.completion.mistral-7B-Instruct",
+    "clarifai/gcp.generate.gemini-pro",
+    "clarifai/anthropic.completion.claude-v1",
+    "clarifai/anthropic.completion.claude-instant-1_2",
+    "clarifai/anthropic.completion.claude-instant",
+    "clarifai/anthropic.completion.claude-v2",
+    "clarifai/anthropic.completion.claude-2_1",
+    "clarifai/meta.Llama-2.codeLlama-70b-Python",
+    "clarifai/meta.Llama-2.codeLlama-70b-Instruct",
+    "clarifai/openai.completion.gpt-3_5-turbo-instruct",
+    "clarifai/meta.Llama-2.llama2-7b-chat",
+    "clarifai/meta.Llama-2.llama2-13b-chat",
+    "clarifai/meta.Llama-2.llama2-70b-chat",
+    "clarifai/openai.chat-completion.gpt-4-turbo",
+    "clarifai/microsoft.text-generation.phi-2",
+    "clarifai/meta.Llama-2.llama2-7b-chat-vllm",
+    "clarifai/upstage.solar.solar-10_7b-instruct",
+    "clarifai/openchat.openchat.openchat-3_5-1210",
+    "clarifai/togethercomputer.stripedHyena.stripedHyena-Nous-7B",
+    "clarifai/gcp.generate.text-bison",
+    "clarifai/meta.Llama-2.llamaGuard-7b",
+    "clarifai/fblgit.una-cybertron.una-cybertron-7b-v2",
+    "clarifai/openai.chat-completion.GPT-4",
+    "clarifai/openai.chat-completion.GPT-3_5-turbo",
+    "clarifai/ai21.complete.Jurassic2-Grande",
+    "clarifai/ai21.complete.Jurassic2-Grande-Instruct",
+    "clarifai/ai21.complete.Jurassic2-Jumbo-Instruct",
+    "clarifai/ai21.complete.Jurassic2-Jumbo",
+    "clarifai/ai21.complete.Jurassic2-Large",
+    "clarifai/cohere.generate.cohere-generate-command",
+    "clarifai/wizardlm.generate.wizardCoder-Python-34B",
+    "clarifai/wizardlm.generate.wizardLM-70B",
+    "clarifai/tiiuae.falcon.falcon-40b-instruct",
+    "clarifai/togethercomputer.RedPajama.RedPajama-INCITE-7B-Chat",
+    "clarifai/gcp.generate.code-gecko",
+    "clarifai/gcp.generate.code-bison",
+    "clarifai/mistralai.completion.mistral-7B-OpenOrca",
+    "clarifai/mistralai.completion.openHermes-2-mistral-7B",
+    "clarifai/wizardlm.generate.wizardLM-13B",
+    "clarifai/huggingface-research.zephyr.zephyr-7B-alpha",
+    "clarifai/wizardlm.generate.wizardCoder-15B",
+    "clarifai/microsoft.text-generation.phi-1_5",
+    "clarifai/databricks.Dolly-v2.dolly-v2-12b",
+    "clarifai/bigcode.code.StarCoder",
+    "clarifai/salesforce.xgen.xgen-7b-8k-instruct",
+    "clarifai/mosaicml.mpt.mpt-7b-instruct",
+    "clarifai/anthropic.completion.claude-3-opus",
+    "clarifai/anthropic.completion.claude-3-sonnet",
+    "clarifai/gcp.generate.gemini-1_5-pro",
+    "clarifai/gcp.generate.imagen-2",
+    "clarifai/salesforce.blip.general-english-image-caption-blip-2",
+]
+
+
 huggingface_models: List = [
     "meta-llama/Llama-2-7b-hf",
     "meta-llama/Llama-2-7b-chat-hf",
@@ -505,6 +580,7 @@ provider_list: List = [
     "text-completion-openai",
     "cohere",
     "cohere_chat",
+    "clarifai",
     "anthropic",
     "replicate",
     "huggingface",
@@ -537,6 +613,7 @@ provider_list: List = [
     "xinference",
     "fireworks_ai",
     "watsonx",
+    "triton",
     "predibase",
     "custom",  # custom apis
 ]
@@ -654,6 +731,7 @@ from .llms.predibase import PredibaseConfig
 from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
+from .llms.clarifai import ClarifaiConfig
 from .llms.ai21 import AI21Config
 from .llms.together_ai import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
@@ -668,6 +746,7 @@ from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
+from .llms.bedrock_httpx import AmazonCohereChatConfig
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
@@ -679,7 +758,7 @@ from .llms.bedrock import (
     AmazonMistralConfig,
     AmazonBedrockGlobalConfig,
 )
-from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
+from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig, MistralConfig
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
