@@ -601,16 +601,45 @@ async def user_api_key_auth(
         ):
             return valid_token
 
+        ## Check END-USER OBJECT
+        request_data = await _read_request_body(request=request)
+        _end_user_object = None
+        end_user_params = {}
+        if "user" in request_data:
+            _end_user_object = await get_end_user_object(
+                end_user_id=request_data["user"],
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if _end_user_object is not None:
+                end_user_params["allowed_model_region"] = (
+                    _end_user_object.allowed_model_region
+                )
+
         try:
-            is_master_key_valid = secrets.compare_digest(api_key, master_key)
+            is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
         except Exception as e:
             is_master_key_valid = False
+
+        ## VALIDATE MASTER KEY ##
+        try:
+            assert isinstance(master_key, str)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "Master key must be a valid string. Current type={}".format(
+                        type(master_key)
+                    )
+                },
+            )
 
         if is_master_key_valid:
             _user_api_key_obj = UserAPIKeyAuth(
                 api_key=master_key,
                 user_role="proxy_admin",
                 user_id=litellm_proxy_admin_name,
+                **end_user_params,
             )
             await user_api_key_cache.async_set_cache(
                 key=hash_token(master_key), value=_user_api_key_obj
@@ -674,10 +703,6 @@ async def user_api_key_auth(
             # 6. If token spend per model is under budget per model
             # 7. If token spend is under team budget
             # 8. If team spend is under team budget
-
-            request_data = await _read_request_body(
-                request=request
-            )  # request data, used across all checks. Making this easily available
 
             # Check 1. If token can call model
             _model_alias_map = {}
@@ -917,7 +942,7 @@ async def user_api_key_auth(
                             {"startTime": {"gt": twenty_eight_days_ago}},
                             {"model": current_model},
                         ]
-                    },
+                    },  # type: ignore
                 )
                 if (
                     len(model_spend) > 0
@@ -988,14 +1013,6 @@ async def user_api_key_auth(
             user_api_key_cache.set_cache(
                 key=valid_token.team_id, value=_team_obj
             )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
-
-            _end_user_object = None
-            if "user" in request_data:
-                _end_user_object = await get_end_user_object(
-                    end_user_id=request_data["user"],
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
 
             global_proxy_spend = None
             if (
@@ -2387,6 +2404,12 @@ class ProxyConfig:
             )
             if master_key and master_key.startswith("os.environ/"):
                 master_key = litellm.get_secret(master_key)
+                if not isinstance(master_key, str):
+                    raise Exception(
+                        "Master key must be a string. Current type - {}".format(
+                            type(master_key)
+                        )
+                    )
 
             if master_key is not None and isinstance(master_key, str):
                 litellm_master_key_hash = hash_token(master_key)
@@ -3426,7 +3449,7 @@ async def startup_event():
         store_model_in_db = (
             litellm.get_secret("STORE_MODEL_IN_DB", store_model_in_db)
             or store_model_in_db
-        )
+        )  # type: ignore
         if store_model_in_db == True:
             scheduler.add_job(
                 proxy_config.add_deployment,
