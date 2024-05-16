@@ -441,29 +441,32 @@ async def user_api_key_auth(
                 # get team id
                 team_id = jwt_handler.get_team_id(token=valid_token, default_value=None)
 
-                if team_id is None:
+                if team_id is None and jwt_handler.is_required_team_id() == True:
                     raise Exception(
                         f"No team id passed in. Field checked in jwt token - '{jwt_handler.litellm_jwtauth.team_id_jwt_field}'"
                     )
-                # check allowed team routes
-                is_allowed = allowed_routes_check(
-                    user_role="team",
-                    user_route=route,
-                    litellm_proxy_roles=jwt_handler.litellm_jwtauth,
-                )
-                if is_allowed == False:
-                    allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes  # type: ignore
-                    actual_routes = get_actual_routes(allowed_routes=allowed_routes)
-                    raise Exception(
-                        f"Team not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
-                    )
 
-                # check if team in db
-                team_object = await get_team_object(
-                    team_id=team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
+                team_object: Optional[LiteLLM_TeamTable] = None
+                if team_id is not None:
+                    # check allowed team routes
+                    is_allowed = allowed_routes_check(
+                        user_role="team",
+                        user_route=route,
+                        litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                    )
+                    if is_allowed == False:
+                        allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes  # type: ignore
+                        actual_routes = get_actual_routes(allowed_routes=allowed_routes)
+                        raise Exception(
+                            f"Team not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
+                        )
+
+                    # check if team in db
+                    team_object = await get_team_object(
+                        team_id=team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
 
                 # [OPTIONAL] track spend for an org id - `LiteLLM_OrganizationTable`
                 org_id = jwt_handler.get_org_id(token=valid_token, default_value=None)
@@ -482,11 +485,9 @@ async def user_api_key_auth(
                         user_id=user_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=jwt_handler.is_upsert_user_id(),
                     )
-                    # save the user object to cache
-                    await user_api_key_cache.async_set_cache(
-                        key=user_id, value=user_object
-                    )
+
                 # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
                 end_user_object = None
                 end_user_id = jwt_handler.get_end_user_id(
@@ -548,18 +549,18 @@ async def user_api_key_auth(
                     global_proxy_spend=global_proxy_spend,
                     route=route,
                 )
-                # save team object in cache
-                await user_api_key_cache.async_set_cache(
-                    key=team_object.team_id, value=team_object
-                )
 
                 # return UserAPIKeyAuth object
                 return UserAPIKeyAuth(
                     api_key=None,
-                    team_id=team_object.team_id,
-                    team_tpm_limit=team_object.tpm_limit,
-                    team_rpm_limit=team_object.rpm_limit,
-                    team_models=team_object.models,
+                    team_id=team_object.team_id if team_object is not None else None,
+                    team_tpm_limit=(
+                        team_object.tpm_limit if team_object is not None else None
+                    ),
+                    team_rpm_limit=(
+                        team_object.rpm_limit if team_object is not None else None
+                    ),
+                    team_models=team_object.models if team_object is not None else [],
                     user_role="app_owner",
                     user_id=user_id,
                     org_id=org_id,
