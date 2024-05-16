@@ -1076,6 +1076,8 @@ async def user_api_key_auth(
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
                 if route in LiteLLMRoutes.openai_routes.value:
                     pass
+                elif request['route'].name in LiteLLMRoutes.openai_route_names.value:
+                    pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
                 ):  # check if user allowed to call an info route
