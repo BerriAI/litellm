@@ -333,7 +333,7 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
-        print(  # noqa
+        verbose_router_logger.info(  # noqa
             f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
         )  # noqa
         self.routing_strategy_args = routing_strategy_args
@@ -2833,7 +2833,7 @@ class Router:
 
         # set region (if azure model) ## PREVIEW FEATURE ##
         if litellm.enable_preview_features == True:
-            print("Auto inferring region")  # noqa
+            verbose_router_logger.info("Auto inferring region")  # noqa
             """
             Hiding behind a feature flag
             When there is a large amount of LLM deployments this makes startup times blow up
@@ -3746,7 +3746,7 @@ class Router:
         litellm.success_callback.append(
             _slack_alerting_logger.response_taking_too_long_callback
         )
-        print("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
+        verbose_router_logger.info("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
 
     def send_deployment_cooldown_alert(
         self, deployment_id: str, exception_status: Union[str, int]
