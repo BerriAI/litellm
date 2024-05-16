@@ -252,8 +252,8 @@ class ProxyLogging:
         """
         Runs the CustomLogger's async_moderation_hook()
         """
+        new_data = copy.deepcopy(data)
         for callback in litellm.callbacks:
-            new_data = copy.deepcopy(data)
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_moderation_hook(
@@ -418,9 +418,14 @@ class ProxyLogging:
 
             Related issue - https://github.com/BerriAI/litellm/issues/3395
             """
+            litellm_debug_info = getattr(original_exception, "litellm_debug_info", None)
+            exception_str = str(original_exception)
+            if litellm_debug_info is not None:
+                exception_str += litellm_debug_info
+
             asyncio.create_task(
                 self.alerting_handler(
-                    message=f"LLM API call failed: {str(original_exception)}",
+                    message=f"LLM API call failed: {exception_str}",
                     level="High",
                     alert_type="llm_exceptions",
                     request_data=request_data,
