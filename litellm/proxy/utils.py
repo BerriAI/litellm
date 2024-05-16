@@ -33,12 +33,28 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from litellm.integrations.slack_alerting import SlackAlerting
 
+from litellm._logging import verbose_logger
+from typing import Optional, Literal
+import litellm
 
-def print_verbose(print_statement):
-    verbose_proxy_logger.debug(print_statement)
-    if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {print_statement}")  # noqa
+############################################################
+def print_verbose(
+    print_statement,
+    logger_only: bool = False,
+    log_level: Literal["DEBUG", "INFO"] = "DEBUG",
+):
+    try:
+        if log_level == "DEBUG":
+            verbose_logger.debug(print_statement)
+        elif log_level == "INFO":
+            verbose_logger.info(print_statement)
+        if litellm.set_verbose == True and logger_only == False:
+            print_verbose(print_statement)  # noqa
+    except:
+        pass
 
+
+####### LOGGING ###################
 
 ### LOGGING ###
 class ProxyLogging:
@@ -575,7 +591,7 @@ class PrismaClient:
             await self.db.query_raw(
                 """SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1"""
             )
-            print("LiteLLM_VerificationTokenView Exists!")  # noqa
+            print_verbose("LiteLLM_VerificationTokenView Exists!")  # noqa
         except Exception as e:
             # If an error occurs, the view does not exist, so create it
             value = await self.health_check()
@@ -593,11 +609,11 @@ class PrismaClient:
                 """
             )
 
-            print("LiteLLM_VerificationTokenView Created!")  # noqa
+            print_verbose("LiteLLM_VerificationTokenView Created!")  # noqa
 
         try:
             await self.db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
-            print("MonthlyGlobalSpend Exists!")  # noqa
+            print_verbose("MonthlyGlobalSpend Exists!")  # noqa
         except Exception as e:
             sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
@@ -613,11 +629,11 @@ class PrismaClient:
             """
             await self.db.execute_raw(query=sql_query)
 
-            print("MonthlyGlobalSpend Created!")  # noqa
+            print_verbose("MonthlyGlobalSpend Created!")  # noqa
 
         try:
             await self.db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
-            print("Last30dKeysBySpend Exists!")  # noqa
+            print_verbose("Last30dKeysBySpend Exists!")  # noqa
         except Exception as e:
             sql_query = """
             CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
@@ -641,11 +657,11 @@ class PrismaClient:
             """
             await self.db.execute_raw(query=sql_query)
 
-            print("Last30dKeysBySpend Created!")  # noqa
+            print_verbose("Last30dKeysBySpend Created!")  # noqa
 
         try:
             await self.db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
-            print("Last30dModelsBySpend Exists!")  # noqa
+            print_verbose("Last30dModelsBySpend Exists!")  # noqa
         except Exception as e:
             sql_query = """
             CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
@@ -664,12 +680,12 @@ class PrismaClient:
             """
             await self.db.execute_raw(query=sql_query)
 
-            print("Last30dModelsBySpend Created!")  # noqa
+            print_verbose("Last30dModelsBySpend Created!")  # noqa
         try:
             await self.db.query_raw(
                 """SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1"""
             )
-            print("MonthlyGlobalSpendPerKey Exists!")  # noqa
+            print_verbose("MonthlyGlobalSpendPerKey Exists!")  # noqa
         except Exception as e:
             sql_query = """
                 CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
@@ -687,13 +703,13 @@ class PrismaClient:
             """
             await self.db.execute_raw(query=sql_query)
 
-            print("MonthlyGlobalSpendPerKey Created!")  # noqa
+            print_verbose("MonthlyGlobalSpendPerKey Created!")  # noqa
 
         try:
             await self.db.query_raw(
                 """SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1"""
             )
-            print("Last30dTopEndUsersSpend Exists!")  # noqa
+            print_verbose("Last30dTopEndUsersSpend Exists!")  # noqa
         except Exception as e:
             sql_query = """
             CREATE VIEW "Last30dTopEndUsersSpend" AS
@@ -707,7 +723,7 @@ class PrismaClient:
             """
             await self.db.execute_raw(query=sql_query)
 
-            print("Last30dTopEndUsersSpend Created!")  # noqa
+            print_verbose("Last30dTopEndUsersSpend Created!")  # noqa
 
         return
 

@@ -5,7 +5,28 @@ import traceback
 import importlib
 
 import packaging
+from litellm._logging import verbose_logger
+from typing import Optional, Literal
+import litellm
 
+############################################################
+def print_verbose(
+    print_statement,
+    logger_only: bool = False,
+    log_level: Literal["DEBUG", "INFO"] = "DEBUG",
+):
+    try:
+        if log_level == "DEBUG":
+            verbose_logger.debug(print_statement)
+        elif log_level == "INFO":
+            verbose_logger.info(print_statement)
+        if litellm.set_verbose == True and logger_only == False:
+            print(print_statement)  # noqa
+    except:
+        pass
+
+
+####### LOGGING ###################
 
 # convert to {completion: xx, tokens: xx}
 def parse_usage(usage):
@@ -76,14 +97,14 @@ class LunaryLogger:
             version = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
             if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
-                print(  # noqa
+                print_verbose(  # noqa
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
                 raise ImportError
 
             self.lunary_client = lunary
         except ImportError:
-            print(  # noqa
+            print_verbose(  # noqa
                 "Lunary not installed. Please install it using 'pip install lunary'"
             )  # noqa
             raise ImportError

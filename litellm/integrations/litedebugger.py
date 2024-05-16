@@ -1,6 +1,27 @@
 import requests, traceback, json, os
 import types
+from litellm._logging import verbose_logger
+from typing import Optional, Literal
+import litellm
 
+############################################################
+def print_verbose(
+    print_statement,
+    logger_only: bool = False,
+    log_level: Literal["DEBUG", "INFO"] = "DEBUG",
+):
+    try:
+        if log_level == "DEBUG":
+            verbose_logger.debug(print_statement)
+        elif log_level == "INFO":
+            verbose_logger.info(print_statement)
+        if litellm.set_verbose == True and logger_only == False:
+            print(print_statement)  # noqa
+    except:
+        pass
+
+
+####### LOGGING ###################
 
 class LiteDebugger:
     user_email = None
@@ -24,11 +45,11 @@ class LiteDebugger:
                 )
             self.dashboard_url = "https://admin.litellm.ai/" + self.user_email
             try:
-                print(
+                print_verbose(
                     f"\033[92mHere's your LiteLLM Dashboard 👉 \033[94m\033[4m{self.dashboard_url}\033[0m"
                 )
             except:
-                print(f"Here's your LiteLLM Dashboard 👉 {self.dashboard_url}")
+                print_verbose(f"Here's your LiteLLM Dashboard 👉 {self.dashboard_url}")
             if self.user_email == None:
                 raise ValueError(
                     "[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_TOKEN. Set it in your environment. Eg.: os.environ['LITELLM_TOKEN']= <your_email>"

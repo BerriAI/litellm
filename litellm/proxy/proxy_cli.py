@@ -6,6 +6,28 @@ from datetime import datetime
 import importlib
 from dotenv import load_dotenv
 import urllib.parse as urlparse
+from litellm._logging import verbose_logger
+from typing import Optional, Literal
+import litellm
+
+############################################################
+def print_verbose(
+    print_statement,
+    logger_only: bool = False,
+    log_level: Literal["DEBUG", "INFO"] = "DEBUG",
+):
+    try:
+        if log_level == "DEBUG":
+            verbose_logger.debug(print_statement)
+        elif log_level == "INFO":
+            verbose_logger.info(print_statement)
+        if litellm.set_verbose == True and logger_only == False:
+            print_verbose(print_statement)  # noqa
+    except:
+        pass
+
+
+####### LOGGING ###################
 
 sys.path.append(os.getcwd())
 
@@ -40,7 +62,7 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        print(
+        print_verbose(
             f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
         """
@@ -276,17 +298,17 @@ def run_server(
                     polling_url = f"{api_base}{url}"
                     polling_response = requests.get(polling_url)
                     polling_response = polling_response.json()
-                    print("\n RESPONSE FROM POLLING JOB", polling_response)
+                    print_verbose("\n RESPONSE FROM POLLING JOB", polling_response)
                     status = polling_response["status"]
                     if status == "finished":
                         llm_response = polling_response["result"]
                         break
-                    print(
+                    print_verbose(
                         f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}"
                     )  # noqa
                     time.sleep(0.5)
                 except Exception as e:
-                    print("got exception in polling", e)
+                    print_verbose("got exception in polling", e)
                     break
 
         # Number of concurrent calls (you can adjust this)
@@ -316,18 +338,18 @@ def run_server(
                 else:
                     failed_calls += 1
         end_time = time.time()
-        print(f"Elapsed Time: {end_time-start_time}")
-        print(f"Load test Summary:")
-        print(f"Total Requests: {concurrent_calls}")
-        print(f"Successful Calls: {successful_calls}")
-        print(f"Failed Calls: {failed_calls}")
+        print_verbose(f"Elapsed Time: {end_time-start_time}")
+        print_verbose(f"Load test Summary:")
+        print_verbose(f"Total Requests: {concurrent_calls}")
+        print_verbose(f"Successful Calls: {successful_calls}")
+        print_verbose(f"Failed Calls: {failed_calls}")
         return
     if health != False:
         import requests
 
-        print("\nLiteLLM: Health Testing models in config")
+        print_verbose("\nLiteLLM: Health Testing models in config")
         response = requests.get(url=f"http://{host}:{port}/health")
-        print(json.dumps(response.json(), indent=4))
+        print_verbose(json.dumps(response.json(), indent=4))
         return
     if test != False:
         request_model = model or "gpt-3.5-turbo"
@@ -354,7 +376,7 @@ def run_server(
         )
         click.echo(f"\nLiteLLM: response from proxy {response}")
 
-        print(
+        print_verbose(
             f"\n LiteLLM: Making a test ChatCompletions + streaming request to proxy. Model={request_model}"
         )
 
@@ -370,11 +392,11 @@ def run_server(
         )
         for chunk in response:
             click.echo(f"LiteLLM: streaming response from proxy {chunk}")
-        print("\n making completion request to proxy")
+        print_verbose("\n making completion request to proxy")
         response = client.completions.create(
             model=request_model, prompt="this is a test request, write a short poem"
         )
-        print(response)
+        print_verbose(response)
 
         return
     else:
@@ -493,12 +515,12 @@ def run_server(
                         subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
                         break  # Exit the loop if the subprocess succeeds
                     except subprocess.CalledProcessError as e:
-                        print(f"Error: {e}")
+                        print_verbose(f"Error: {e}")
                         time.sleep(random.randrange(start=1, stop=5))
                     finally:
                         os.chdir(original_dir)
             else:
-                print(
+                print_verbose(
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
                 )
         if port == 4000 and is_port_in_use(port):
@@ -508,7 +530,7 @@ def run_server(
 
         if run_gunicorn == False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-                print(
+                print_verbose(
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
                 )
                 uvicorn.run(
@@ -549,17 +571,17 @@ def run_server(
                     \n
                     """
                     )
-                    print()  # noqa
-                    print(  # noqa
+                    print_verbose()  # noqa
+                    print_verbose(  # noqa
                         f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
                     )
-                    print(  # noqa
+                    print_verbose(  # noqa
                         f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
                     )
-                    print(
+                    print_verbose(
                         "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
                     )  # noqa
-                    print(  # noqa
+                    print_verbose(  # noqa
                         f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
                     )  # noqa
 
@@ -577,7 +599,7 @@ def run_server(
                     # gunicorn app function
                     return self.application
 
-            print(
+            print_verbose(
                 f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"
             )
             gunicorn_options = {
@@ -591,7 +613,7 @@ def run_server(
             }
 
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-                print(
+                print_verbose(
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
                 )
                 gunicorn_options["certfile"] = ssl_certfile_path

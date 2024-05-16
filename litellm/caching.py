@@ -15,6 +15,7 @@ from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 import traceback
+from litellm._logging import verbose_logger
 
 
 def print_verbose(print_statement):

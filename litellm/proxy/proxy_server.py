@@ -8,6 +8,28 @@ import hashlib, uuid
 import warnings
 import importlib
 import warnings
+from litellm._logging import verbose_logger
+from typing import Optional, Literal
+import litellm
+
+############################################################
+def print_verbose(
+    print_statement,
+    logger_only: bool = False,
+    log_level: Literal["DEBUG", "INFO"] = "DEBUG",
+):
+    try:
+        if log_level == "DEBUG":
+            verbose_logger.debug(print_statement)
+        elif log_level == "INFO":
+            verbose_logger.info(print_statement)
+        if litellm.set_verbose == True and logger_only == False:
+            print_verbose(print_statement)  # noqa
+    except:
+        pass
+
+
+####### LOGGING ###################
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -57,26 +79,26 @@ def generate_feedback_box():
     # Select a random message
     message = random.choice(list_of_messages)
 
-    print()  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
-    print(  # noqa
+    print_verbose()  # noqa
+    print_verbose("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+    print_verbose("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+    print_verbose("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
+    print_verbose(  # noqa
         "\033[1;37m"
         + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
     )  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print()  # noqa
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
-    print()  # noqa
-    print()  # noqa
-    print()  # noqa
-    print(  # noqa
+    print_verbose("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+    print_verbose("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+    print_verbose()  # noqa
+    print_verbose(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
+    print_verbose()  # noqa
+    print_verbose()  # noqa
+    print_verbose()  # noqa
+    print_verbose(  # noqa
         "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
     )  # noqa
-    print()  # noqa
-    print()  # noqa
+    print_verbose()  # noqa
+    print_verbose()  # noqa
 
 
 import litellm
@@ -2137,7 +2159,7 @@ class ProxyConfig:
             reset_color_code = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value == True:
-                    print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
+                    print_verbose(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
                     from litellm.caching import Cache
 
                     cache_params = {}
@@ -2173,19 +2195,19 @@ class ProxyConfig:
                             )
 
                         # Assuming cache_type, cache_host, cache_port, and cache_password are strings
-                        print(  # noqa
+                        print_verbose(  # noqa
                             f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}"
                         )  # noqa
-                        print(  # noqa
+                        print_verbose(  # noqa
                             f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}"
                         )  # noqa
-                        print(  # noqa
+                        print_verbose(  # noqa
                             f"{blue_color_code}Cache Port:{reset_color_code} {cache_port}"
                         )  # noqa
-                        print(  # noqa
+                        print_verbose(  # noqa
                             f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}"
                         )
-                        print()  # noqa
+                        print_verbose()  # noqa
                     if cache_type == "redis-semantic":
                         # by default this should always be async
                         cache_params.update({"redis_semantic_cache_use_async": True})
@@ -2198,7 +2220,7 @@ class ProxyConfig:
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                     self._init_cache(cache_params=cache_params)
                     if litellm.cache is not None:
-                        print(  # noqa
+                        print_verbose(  # noqa
                             f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                         )
                 elif key == "cache" and value == False:
@@ -2375,7 +2397,7 @@ class ProxyConfig:
                                 # Add prometheus asgi middleware to route /metrics requests
                                 metrics_app = make_asgi_app()
                                 app.mount("/metrics", metrics_app)
-                    print(  # noqa
+                    print_verbose(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
                 elif key == "failure_callback":
@@ -2391,7 +2413,7 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.failure_callback.append(callback)
-                    print(  # noqa
+                    print_verbose(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
                 elif key == "cache_params":
@@ -2566,7 +2588,7 @@ class ProxyConfig:
         model_list = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
-            print(  # noqa
+            print_verbose(  # noqa
                 f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )  # noqa
             for model in model_list:
@@ -2574,7 +2596,7 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = litellm.get_secret(v)
-                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
+                print_verbose(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
@@ -3543,7 +3565,7 @@ async def startup_event():
             and proxy_logging_obj.slack_alerting_instance is not None
             and prisma_client is not None
         ):
-            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
+            print_verbose("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
             ### Schedule weekly/monhtly spend reports ###
             scheduler.add_job(
                 proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
