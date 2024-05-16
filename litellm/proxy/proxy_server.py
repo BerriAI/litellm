@@ -2,7 +2,7 @@ import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, get_args
 import secrets, subprocess
 import hashlib, uuid
 import warnings
@@ -2098,8 +2098,18 @@ class ProxyConfig:
                 elif key == "callbacks":
                     if isinstance(value, list):
                         imported_list: List[Any] = []
+                        known_compatible_callbacks = list(
+                            get_args(
+                                litellm._custom_logger_compatible_callbacks_literal
+                            )
+                        )
                         for callback in value:  # ["presidio", <my-custom-callback>]
-                            if isinstance(callback, str) and callback == "presidio":
+                            if (
+                                isinstance(callback, str)
+                                and callback in known_compatible_callbacks
+                            ):
+                                imported_list.append(callback)
+                            elif isinstance(callback, str) and callback == "presidio":
                                 from litellm.proxy.hooks.presidio_pii_masking import (
                                     _OPTIONAL_PresidioPIIMasking,
                                 )

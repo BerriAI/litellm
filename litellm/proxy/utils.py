@@ -140,6 +140,8 @@ class ProxyLogging:
             self.slack_alerting_instance.response_taking_too_long_callback
         )
         for callback in litellm.callbacks:
+            if isinstance(callback, str):
+                callback = litellm.utils._init_custom_logger_compatible_class(callback)
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)
             if callback not in litellm.success_callback:
