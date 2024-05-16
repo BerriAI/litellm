@@ -89,6 +89,14 @@ class JWTHandler:
             team_id = default_value
         return team_id
 
+    def is_upsert_user_id(self) -> bool:
+        """
+        Returns:
+        - True: if 'user_id_upsert' is set
+        - False: if not
+        """
+        return self.litellm_jwtauth.user_id_upsert
+
     def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_id_jwt_field is not None:

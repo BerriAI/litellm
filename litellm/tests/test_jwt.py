@@ -1,7 +1,7 @@
 #### What this tests ####
 #    Unit tests for JWT-Auth
 
-import sys, os, asyncio, time, random
+import sys, os, asyncio, time, random, uuid
 import traceback
 from dotenv import load_dotenv
 
@@ -369,13 +369,20 @@ async def test_team_token_output(prisma_client, audience):
 
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.parametrize(
-    "team_id_set, default_team_id", [(True, None), (False, "1234")]
+    "team_id_set, default_team_id",
+    [(True, False), (False, True)],
 )
 @pytest.mark.parametrize("user_id_upsert", [True, False])
 @pytest.mark.asyncio
 async def test_user_token_output(
     prisma_client, audience, team_id_set, default_team_id, user_id_upsert
 ):
+    import uuid
+
+    args = locals()
+    print(f"received args - {args}")
+    if default_team_id:
+        default_team_id = "team_id_12344_{}".format(uuid.uuid4())
     """
     - If user required, check if it exists
     - fail initial request (when user doesn't exist)
@@ -388,7 +395,12 @@ async def test_user_token_output(
     from cryptography.hazmat.backends import default_backend
     from fastapi import Request
     from starlette.datastructures import URL
-    from litellm.proxy.proxy_server import user_api_key_auth, new_team, new_user
+    from litellm.proxy.proxy_server import (
+        user_api_key_auth,
+        new_team,
+        new_user,
+        user_info,
+    )
     from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, NewUserRequest
     import litellm
     import uuid
@@ -439,6 +451,7 @@ async def test_user_token_output(
 
     jwt_handler.litellm_jwtauth.user_id_jwt_field = "sub"
     jwt_handler.litellm_jwtauth.team_id_default = default_team_id
+    jwt_handler.litellm_jwtauth.user_id_upsert = user_id_upsert
 
     if team_id_set:
         jwt_handler.litellm_jwtauth.team_id_jwt_field = "client_id"
@@ -522,7 +535,7 @@ async def test_user_token_output(
             ),
             user_api_key_dict=result,
         )
-        if default_team_id is not None:
+        if default_team_id:
             await new_team(
                 data=NewTeamRequest(
                     team_id=default_team_id,
@@ -542,23 +555,35 @@ async def test_user_token_output(
         team_result: UserAPIKeyAuth = await user_api_key_auth(
             request=request, api_key=bearer_token
         )
-        pytest.fail(f"User doesn't exist. this should fail")
+        if user_id_upsert == False:
+            pytest.fail(f"User doesn't exist. this should fail")
     except Exception as e:
         pass
 
     ## 4. Create user
-    try:
-        bearer_token = "Bearer " + admin_token
+    if user_id_upsert:
+        ## check if user already exists
+        try:
+            bearer_token = "Bearer " + admin_token
 
-        request._url = URL(url="/team/new")
-        result = await user_api_key_auth(request=request, api_key=bearer_token)
-        await new_user(
-            data=NewUserRequest(
-                user_id=user_id,
-            ),
-        )
-    except Exception as e:
-        pytest.fail(f"This should not fail - {str(e)}")
+            request._url = URL(url="/team/new")
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            await user_info(user_id=user_id)
+        except Exception as e:
+            pytest.fail(f"This should not fail - {str(e)}")
+    else:
+        try:
+            bearer_token = "Bearer " + admin_token
+
+            request._url = URL(url="/team/new")
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            await new_user(
+                data=NewUserRequest(
+                    user_id=user_id,
+                ),
+            )
+        except Exception as e:
+            pytest.fail(f"This should not fail - {str(e)}")
 
     ## 5. 3rd call w/ same team, same user -> call should succeed
     bearer_token = "Bearer " + token
