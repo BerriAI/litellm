@@ -76,6 +76,7 @@ from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.openmeter import OpenMeterLogger
+from .integrations.lago import LagoLogger
 from .integrations.datadog import DataDogLogger
 from .integrations.prometheus import PrometheusLogger
 from .integrations.prometheus_services import PrometheusServicesLogger
@@ -123,6 +124,7 @@ from typing import (
     BinaryIO,
     Iterable,
     Tuple,
+    Callable,
 )
 from .caching import Cache
 from concurrent.futures import ThreadPoolExecutor
@@ -147,6 +149,7 @@ weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
 openMeterLogger = None
+lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
@@ -2111,7 +2114,7 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
-        print_verbose(f"Logging Details LiteLLM-Async Success Call: {cache_hit}")
+        print_verbose(f"Logging Details LiteLLM-Async Success Call")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
@@ -2333,8 +2336,8 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-            except:
-                print_verbose(
+            except Exception as e:
+                verbose_logger.error(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
                 pass
@@ -2692,6 +2695,15 @@ class Rules:
         return True
 
 
+def _init_custom_logger_compatible_class(
+    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+) -> Callable:
+    if logging_integration == "lago":
+        return LagoLogger()  # type: ignore
+    elif logging_integration == "openmeter":
+        return OpenMeterLogger()  # type: ignore
+
+
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def function_setup(
@@ -2702,16 +2714,24 @@ def function_setup(
         function_id = kwargs["id"] if "id" in kwargs else None
         if len(litellm.callbacks) > 0:
             for callback in litellm.callbacks:
+                # check if callback is a string - e.g. "lago", "openmeter"
+                if isinstance(callback, str):
+                    callback = _init_custom_logger_compatible_class(callback)
+                    if any(
+                        isinstance(cb, type(callback))
+                        for cb in litellm._async_success_callback
+                    ):  # don't double add a callback
+                        continue
                 if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)
+                    litellm.input_callback.append(callback)  # type: ignore
                 if callback not in litellm.success_callback:
-                    litellm.success_callback.append(callback)
+                    litellm.success_callback.append(callback)  # type: ignore
                 if callback not in litellm.failure_callback:
-                    litellm.failure_callback.append(callback)
+                    litellm.failure_callback.append(callback)  # type: ignore
                 if callback not in litellm._async_success_callback:
-                    litellm._async_success_callback.append(callback)
+                    litellm._async_success_callback.append(callback)  # type: ignore
                 if callback not in litellm._async_failure_callback:
-                    litellm._async_failure_callback.append(callback)
+                    litellm._async_failure_callback.append(callback)  # type: ignore
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )
