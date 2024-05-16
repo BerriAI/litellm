@@ -1012,4 +1012,3 @@ class TokenCountRequest(LiteLLMBase):
 class TokenCountResponse(LiteLLMBase):
     total_tokens: int
     model: str
-    custom_llm_provider: str

@@ -4767,8 +4767,9 @@ async def moderations(
 
 @router.post(
     "/utils/token_counter",
-    tags=["LLM Utils"],
+    tags=["llm utils"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountResponse,
 )
 async def token_counter(request: TokenCountRequest):
     """ """
@@ -4786,7 +4787,10 @@ async def token_counter(request: TokenCountRequest):
         text=prompt,
         messages=messages,
     )
-    return {"total_tokens": total_tokens}
+    return TokenCountResponse(
+        total_tokens=total_tokens,
+        model=request.model,
+    )
 
 
 #### KEY MANAGEMENT ####
