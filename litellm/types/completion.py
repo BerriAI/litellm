@@ -1,25 +1,8 @@
-from typing import List, Optional, Union, Iterable, cast
+from typing import List, Optional, Union, Iterable
 
-from pydantic import ConfigDict, BaseModel, validator, VERSION
+from pydantic import BaseModel, validator
 
 from typing_extensions import Literal, Required, TypedDict
-
-
-# Function to get Pydantic version
-def is_pydantic_v2() -> int:
-    return int(VERSION.split(".")[0])
-
-
-def get_model_config() -> ConfigDict:
-    # Version-specific configuration
-    if is_pydantic_v2() >= 2:
-        model_config = ConfigDict(extra="allow", protected_namespaces=())  # type: ignore
-    else:
-        from pydantic import Extra
-
-        model_config = ConfigDict(extra=Extra.allow)  # type: ignore
-
-    return model_config
 
 
 class ChatCompletionSystemMessageParam(TypedDict, total=False):
@@ -208,4 +191,6 @@ class CompletionRequest(BaseModel):
     api_key: Optional[str] = None
     model_list: Optional[List[str]] = None
 
-    model_config = get_model_config()
+    class Config:
+        extra = "allow"
+        protected_namespaces = ()
