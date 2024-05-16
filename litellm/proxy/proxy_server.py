@@ -2863,19 +2863,19 @@ async def generate_key_helper_fn(
         expires = None
     else:
         duration_s = _duration_in_seconds(duration=duration)
-        expires = datetime.utcnow() + timedelta(seconds=duration_s)
+        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
     else:
         duration_s = _duration_in_seconds(duration=key_budget_duration)
-        key_reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
+        key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     if budget_duration is None:  # one-time budget
         reset_at = None
     else:
         duration_s = _duration_in_seconds(duration=budget_duration)
-        reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
+        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
@@ -4974,7 +4974,7 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         if "duration" in non_default_values:
             duration = non_default_values.pop("duration")
             duration_s = _duration_in_seconds(duration=duration)
-            expires = datetime.utcnow() + timedelta(seconds=duration_s)
+            expires = datetime.datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
 
         response = await prisma_client.update_data(
