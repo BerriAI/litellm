@@ -3251,7 +3251,7 @@ class Router:
 
             if _rate_limit_error == True:  # allow generic fallback logic to take place
                 raise ValueError(
-                    f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                    f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. Try again in {self.cooldown_time} seconds."
                 )
             elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(
@@ -3323,7 +3323,9 @@ class Router:
         litellm.print_verbose(f"initial list of deployments: {healthy_deployments}")
 
         if len(healthy_deployments) == 0:
-            raise ValueError(f"No healthy deployment available, passed model={model}. ")
+            raise ValueError(
+                f"No healthy deployment available, passed model={model}. Try again in {self.cooldown_time} seconds"
+            )
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -3413,7 +3415,7 @@ class Router:
             if _allowed_model_region is None:
                 _allowed_model_region = "n/a"
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
             )
 
         if (
@@ -3481,7 +3483,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -3611,7 +3613,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
