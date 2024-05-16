@@ -227,13 +227,19 @@ class LiteLLM_JWTAuth(LiteLLMBase):
         "global_spend_tracking_routes",
         "info_routes",
     ]
-    team_jwt_scope: str = "litellm_team"
     team_id_jwt_field: Optional[str] = None
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
+    team_id_default: Optional[str] = Field(
+        default=None,
+        description="If no team_id given, default permissions/spend-tracking to this team.s",
+    )
     org_id_jwt_field: Optional[str] = None
     user_id_jwt_field: Optional[str] = None
+    user_id_upsert: bool = Field(
+        default=False, description="If user doesn't exist, upsert them into the db."
+    )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
 
