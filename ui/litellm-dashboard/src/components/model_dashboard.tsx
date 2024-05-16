@@ -904,8 +904,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       <Text>Filter by Public Model Name</Text>
       <Select
               className="mb-4 mt-2 ml-2 w-50"
-              defaultValue="all"
+              defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
               onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+              value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
             >
               <SelectItem 
                   value={"all"}
