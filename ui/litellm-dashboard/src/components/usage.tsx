@@ -212,7 +212,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             setKeySpendData(overall_spend);
             const top_keys = await adminTopKeysCall(accessToken);
             const filtered_keys = top_keys.map((k: any) => ({
-              key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
+              key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(
                 0,
                 10
               ),
