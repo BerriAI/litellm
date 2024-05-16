@@ -228,7 +228,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
         "info_routes",
     ]
     team_jwt_scope: str = "litellm_team"
-    team_id_jwt_field: str = "client_id"
+    team_id_jwt_field: Optional[str] = None
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
