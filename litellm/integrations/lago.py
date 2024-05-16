@@ -7,7 +7,7 @@ import traceback, httpx
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 import uuid
-from typing import Optional
+from typing import Optional, Literal
 
 
 def get_utc_datetime():
@@ -32,6 +32,10 @@ class LagoLogger(CustomLogger):
         Expects
         LAGO_API_BASE,
         LAGO_API_KEY,
+        LAGO_API_EVENT_CODE,
+
+        Optional:
+        LAGO_API_CHARGE_BY
 
         in the environment
         """
@@ -72,15 +76,37 @@ class LagoLogger(CustomLogger):
         team_id = litellm_params["metadata"].get("user_api_key_team_id", None)
         org_id = litellm_params["metadata"].get("user_api_key_org_id", None)
 
-        if end_user_id is None:
-            raise Exception("LAGO: user is required")
+        charge_by: Literal["end_user_id", "team_id", "user_id"] = "end_user_id"
+        external_customer_id: Optional[str] = None
+
+        if os.getenv("LAGO_API_CHARGE_BY", None) is not None and isinstance(
+            os.environ["LAGO_API_CHARGE_BY"], str
+        ):
+            if os.environ["LAGO_API_CHARGE_BY"] in [
+                "end_user_id",
+                "user_id",
+                "team_id",
+            ]:
+                charge_by = os.environ["LAGO_API_CHARGE_BY"]  # type: ignore
+            else:
+                raise Exception("invalid LAGO_API_CHARGE_BY set")
+
+        if charge_by == "end_user_id":
+            external_customer_id = end_user_id
+        elif charge_by == "team_id":
+            external_customer_id = team_id
+        elif charge_by == "user_id":
+            external_customer_id = user_id
+
+        if external_customer_id is None:
+            raise Exception("External Customer ID is not set")
 
         return {
             "event": {
                 "transaction_id": str(uuid.uuid4()),
-                "external_customer_id": end_user_id,
+                "external_customer_id": external_customer_id,
                 "code": os.getenv("LAGO_API_EVENT_CODE"),
-                "properties": {"model": model, "response_cost": 10000, **usage},
+                "properties": {"model": model, "response_cost": cost, **usage},
             }
         }
 
