@@ -79,6 +79,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
     ]
 
+    llm_utils_routes: List = ["utils/token_counter"]
+
     info_routes: List = [
         "/key/info",
         "/team/info",
@@ -1012,3 +1014,5 @@ class TokenCountRequest(LiteLLMBase):
 class TokenCountResponse(LiteLLMBase):
     total_tokens: int
     model: str
+    base_model: str
+    tokenizer_type: str
