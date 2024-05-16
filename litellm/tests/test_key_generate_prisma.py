@@ -53,6 +53,12 @@ from litellm.proxy.proxy_server import (
     info_key_fn,
     new_team,
     chat_completion,
+    completion,
+    embeddings,
+    image_generation,
+    audio_transcriptions,
+    moderations,
+    model_list,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
@@ -150,10 +156,32 @@ async def test_new_user_response(prisma_client):
 
 @pytest.mark.parametrize(
     "api_route", [
+        # chat_completion
         APIRoute(path="/engines/{model}/chat/completions", endpoint=chat_completion),
         APIRoute(path="/openai/deployments/{model}/chat/completions", endpoint=chat_completion),
         APIRoute(path="/chat/completions", endpoint=chat_completion),
         APIRoute(path="/v1/chat/completions", endpoint=chat_completion),
+        # completion
+        APIRoute(path="/completions", endpoint=completion),
+        APIRoute(path="/v1/completions", endpoint=completion),
+        APIRoute(path="/engines/{model}/completions", endpoint=completion),
+        APIRoute(path="/openai/deployments/{model}/completions", endpoint=completion),
+        # embeddings
+        APIRoute(path="/v1/embeddings", endpoint=embeddings),
+        APIRoute(path="/embeddings", endpoint=embeddings),
+        APIRoute(path="/openai/deployments/{model}/embeddings", endpoint=embeddings),
+        # image generation
+        APIRoute(path="/v1/images/generations", endpoint=image_generation),
+        APIRoute(path="/images/generations", endpoint=image_generation),
+        # audio transcriptions
+        APIRoute(path="/v1/audio/transcriptions", endpoint=audio_transcriptions),
+        APIRoute(path="/audio/transcriptions", endpoint=audio_transcriptions),
+        # moderations
+        APIRoute(path="/v1/moderations", endpoint=moderations),
+        APIRoute(path="/moderations", endpoint=moderations),
+        # model_list
+        APIRoute(path= "/v1/models", endpoint=model_list),
+        APIRoute(path= "/models", endpoint=model_list),
     ],
 )
 def test_generate_and_call_with_valid_key(prisma_client, api_route):
