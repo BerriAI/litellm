@@ -714,6 +714,20 @@ class DynamoDBArgs(LiteLLMBase):
 class ConfigFieldUpdate(LiteLLMBase):
     field_name: str
     field_value: Any
+    config_type: Literal["general_settings"]
+
+
+class ConfigFieldDelete(LiteLLMBase):
+    config_type: Literal["general_settings"]
+    field_name: str
+
+
+class ConfigList(LiteLLMBase):
+    field_name: str
+    field_type: str
+    field_description: str
+    field_value: Any
+    stored_in_db: Optional[bool]
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -763,7 +777,11 @@ class ConfigGeneralSettings(LiteLLMBase):
         description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth",
     )
     max_parallel_requests: Optional[int] = Field(
-        None, description="maximum parallel requests for each api key"
+        None,
+        description="maximum parallel requests for each api key",
+    )
+    global_max_parallel_requests: Optional[int] = Field(
+        None, description="global max parallel requests to allow for a proxy instance."
     )
     infer_model_from_keys: Optional[bool] = Field(
         None,

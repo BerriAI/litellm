@@ -34,9 +34,20 @@ import {
 import {
   getCallbacksCall,
   setCallbacksCall,
+  getGeneralSettingsCall,
   serviceHealthCheck,
+  updateConfigFieldSetting,
+  deleteConfigFieldSetting,
 } from "./networking";
-import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
+import {
+  Modal,
+  Form,
+  Input,
+  Select,
+  Button as Button2,
+  message,
+  InputNumber,
+} from "antd";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -44,6 +55,9 @@ import {
   StatusOnlineIcon,
   TrashIcon,
   RefreshIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  QuestionMarkCircleIcon,
 } from "@heroicons/react/outline";
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 import AddFallbacks from "./add_fallbacks";
@@ -123,6 +137,14 @@ interface routingStrategyArgs {
   lowest_latency_buffer?: number;
 }
 
+interface generalSettingsItem {
+  field_name: string;
+  field_type: string;
+  field_value: any;
+  field_description: string;
+  stored_in_db: boolean | null;
+}
+
 const defaultLowestLatencyArgs: routingStrategyArgs = {
   ttl: 3600,
   lowest_latency_buffer: 0,
@@ -194,6 +216,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>(
     {}
   );
+  const [generalSettingsDict, setGeneralSettingsDict] = useState<{
+    [key: string]: any;
+  }>({});
+  const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>(
+    []
+  );
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
@@ -224,6 +252,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
       console.log("callbacks", data);
       let router_settings = data.router_settings;
       setRouterSettings(router_settings);
+    });
+    getGeneralSettingsCall(accessToken).then((data) => {
+      let general_settings = data;
+      setGeneralSettings(general_settings);
     });
   }, [accessToken, userRole, userID]);
 
@@ -268,6 +300,61 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
       message.success("Router settings updated successfully");
     } catch (error) {
       message.error("Failed to update router settings: " + error, 20);
+    }
+  };
+
+  const handleInputChange = (fieldName: string, newValue: any) => {
+    // Update the value in the state
+    const updatedSettings = generalSettings.map((setting) =>
+      setting.field_name === fieldName
+        ? { ...setting, field_value: newValue }
+        : setting
+    );
+    setGeneralSettings(updatedSettings);
+  };
+
+  const handleUpdateField = (fieldName: string, idx: number) => {
+    if (!accessToken) {
+      return;
+    }
+
+    let fieldValue = generalSettings[idx].field_value;
+
+    if (fieldValue == null || fieldValue == undefined) {
+      return;
+    }
+    try {
+      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+      // update value in state
+
+      const updatedSettings = generalSettings.map((setting) =>
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: true }
+          : setting
+      );
+      setGeneralSettings(updatedSettings);
+    } catch (error) {
+      // do something
+    }
+  };
+
+  const handleResetField = (fieldName: string, idx: number) => {
+    if (!accessToken) {
+      return;
+    }
+
+    try {
+      deleteConfigFieldSetting(accessToken, fieldName);
+      // update value in state
+
+      const updatedSettings = generalSettings.map((setting) =>
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: null, field_value: null }
+          : setting
+      );
+      setGeneralSettings(updatedSettings);
+    } catch (error) {
+      // do something
     }
   };
 
@@ -493,7 +580,81 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
             />
           </TabPanel>
           <TabPanel>
-            <h1>General settings for litellm proxy</h1>
+            <Card>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Setting</TableHeaderCell>
+                    <TableHeaderCell>Value</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>Action</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {generalSettings.map((value, index) => (
+                    <TableRow key={index}>
+                      <TableCell>
+                        <Text>{value.field_name}</Text>
+                        <p
+                          style={{
+                            fontSize: "0.65rem",
+                            color: "#808080",
+                            fontStyle: "italic",
+                          }}
+                          className="mt-1"
+                        >
+                          {value.field_description}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        {value.field_type == "Integer" ? (
+                          <InputNumber
+                            step={1}
+                            value={value.field_value}
+                            onChange={(newValue) =>
+                              handleInputChange(value.field_name, newValue)
+                            } // Handle value change
+                          />
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        {value.stored_in_db == true ? (
+                          <Badge icon={CheckCircleIcon} className="text-white">
+                            In DB
+                          </Badge>
+                        ) : value.stored_in_db == false ? (
+                          <Badge className="text-gray bg-white outline">
+                            In Config
+                          </Badge>
+                        ) : (
+                          <Badge className="text-gray bg-white outline">
+                            Not Set
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          onClick={() =>
+                            handleUpdateField(value.field_name, index)
+                          }
+                        >
+                          Update
+                        </Button>
+                        <Icon
+                          icon={TrashIcon}
+                          color="red"
+                          onClick={() =>
+                            handleResetField(value.field_name, index)
+                          }
+                        >
+                          Reset
+                        </Icon>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Card>
           </TabPanel>
         </TabPanels>
       </TabGroup>
