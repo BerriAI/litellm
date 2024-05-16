@@ -217,6 +217,7 @@ class BedrockLLM(BaseLLM):
         aws_session_name: Optional[str] = None,
         aws_profile_name: Optional[str] = None,
         aws_role_name: Optional[str] = None,
+        aws_web_identity_token: Optional[str] = None,
     ):
         """
         Return a boto3.Credentials object
@@ -231,6 +232,7 @@ class BedrockLLM(BaseLLM):
             aws_session_name,
             aws_profile_name,
             aws_role_name,
+            aws_web_identity_token,
         ]
 
         # Iterate over parameters and update if needed
@@ -247,10 +249,34 @@ class BedrockLLM(BaseLLM):
             aws_session_name,
             aws_profile_name,
             aws_role_name,
+            aws_web_identity_token,
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_role_name is not None and aws_session_name is not None:
+        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
+            oidc_token = get_secret(aws_web_identity_token)
+
+            if oidc_token is None:
+                raise BedrockError(
+                    message="OIDC token could not be retrieved from secret manager.",
+                    status_code=401,
+                )
+
+            sts_client = boto3.client(
+                "sts"
+            )
+
+            # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
+            # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+            sts_response = sts_client.assume_role_with_web_identity(
+                RoleArn=aws_role_name,
+                RoleSessionName=aws_session_name,
+                WebIdentityToken=oidc_token,
+                DurationSeconds=3600,
+            )
+
+            return sts_response["Credentials"]
+        elif aws_role_name is not None and aws_session_name is not None:
             sts_client = boto3.client(
                 "sts",
                 aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
@@ -582,6 +608,7 @@ class BedrockLLM(BaseLLM):
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
+        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -609,6 +636,7 @@ class BedrockLLM(BaseLLM):
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
         )
 
         ### SET RUNTIME ENDPOINT ###
