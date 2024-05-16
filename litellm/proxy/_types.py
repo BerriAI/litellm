@@ -88,6 +88,7 @@ class LiteLLMRoutes(enum.Enum):
     ]
     openai_routes: List = [
         # chat completions
+        "/engines/{model}/chat/completions",
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
