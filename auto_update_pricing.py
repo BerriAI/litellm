@@ -37,6 +37,17 @@ def update_local_data(local_data, remote_data):
                     model_info["input_cost_per_token"] = model["pricing"]["prompt"]
                     model_info["output_cost_per_token"] = model["pricing"]["completion"]
                     break
+    # Add models not in local data yet
+    for model in remote_data["data"]:
+        model_id = model["id"]
+        if model_id not in local_data:
+            local_data[f"openrouter/{model_id}"] = {
+                "max_tokens": model["context_length"],
+                "input_cost_per_token": model["pricing"]["prompt"],
+                "output_cost_per_token": model["pricing"]["completion"],
+                "litellm_provider": "openrouter",
+                "mode": "chat"
+            }
 
 def write_to_file(file_path, data):
     """
