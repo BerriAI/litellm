@@ -368,9 +368,14 @@ async def test_team_token_output(prisma_client, audience):
 
 
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
-@pytest.mark.parametrize("team_id_set", [True, False])
+@pytest.mark.parametrize(
+    "team_id_set, default_team_id", [(True, None), (False, "1234")]
+)
+@pytest.mark.parametrize("user_id_upsert", [True, False])
 @pytest.mark.asyncio
-async def test_user_token_output(prisma_client, audience, team_id_set):
+async def test_user_token_output(
+    prisma_client, audience, team_id_set, default_team_id, user_id_upsert
+):
     """
     - If user required, check if it exists
     - fail initial request (when user doesn't exist)
@@ -433,6 +438,8 @@ async def test_user_token_output(prisma_client, audience, team_id_set):
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
     jwt_handler.litellm_jwtauth.user_id_jwt_field = "sub"
+    jwt_handler.litellm_jwtauth.team_id_default = default_team_id
+
     if team_id_set:
         jwt_handler.litellm_jwtauth.team_id_jwt_field = "client_id"
 
@@ -515,6 +522,16 @@ async def test_user_token_output(prisma_client, audience, team_id_set):
             ),
             user_api_key_dict=result,
         )
+        if default_team_id is not None:
+            await new_team(
+                data=NewTeamRequest(
+                    team_id=default_team_id,
+                    tpm_limit=100,
+                    rpm_limit=99,
+                    models=["gpt-3.5-turbo", "gpt-4"],
+                ),
+                user_api_key_dict=result,
+            )
     except Exception as e:
         pytest.fail(f"This should not fail - {str(e)}")
 
@@ -555,7 +572,7 @@ async def test_user_token_output(prisma_client, audience, team_id_set):
 
     ## 6. ASSERT USER_API_KEY_AUTH format (used for tpm/rpm limiting in parallel_request_limiter.py AND cost tracking)
 
-    if team_id_set:
+    if team_id_set or default_team_id is not None:
         assert team_result.team_tpm_limit == 100
         assert team_result.team_rpm_limit == 99
         assert team_result.team_models == ["gpt-3.5-turbo", "gpt-4"]

@@ -55,11 +55,6 @@ class JWTHandler:
             return True
         return False
 
-    def is_team(self, scopes: list) -> bool:
-        if self.litellm_jwtauth.team_jwt_scope in scopes:
-            return True
-        return False
-
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
@@ -84,7 +79,12 @@ class JWTHandler:
 
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
-            team_id = token[self.litellm_jwtauth.team_id_jwt_field]
+            if self.litellm_jwtauth.team_id_jwt_field is not None:
+                team_id = token[self.litellm_jwtauth.team_id_jwt_field]
+            elif self.litellm_jwtauth.team_id_default is not None:
+                team_id = self.litellm_jwtauth.team_id_default
+            else:
+                team_id = None
         except KeyError:
             team_id = default_value
         return team_id
