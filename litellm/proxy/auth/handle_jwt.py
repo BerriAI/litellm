@@ -60,7 +60,9 @@ class JWTHandler:
             return True
         return False
 
-    def get_end_user_id(self, token: dict, default_value: Optional[str]) -> str:
+    def get_end_user_id(
+        self, token: dict, default_value: Optional[str]
+    ) -> Optional[str]:
         try:
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
                 user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
@@ -69,6 +71,16 @@ class JWTHandler:
         except KeyError:
             user_id = default_value
         return user_id
+
+    def is_required_team_id(self) -> bool:
+        """
+        Returns:
+        - True: if 'team_id_jwt_field' is set
+        - False: if not
+        """
+        if self.litellm_jwtauth.team_id_jwt_field is None:
+            return False
+        return True
 
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
@@ -165,7 +177,7 @@ class JWTHandler:
         decode_options = None
         if audience is None:
             decode_options = {"verify_aud": False}
-        
+
         from jwt.algorithms import RSAAlgorithm
 
         header = jwt.get_unverified_header(token)
@@ -207,12 +219,14 @@ class JWTHandler:
                 raise Exception(f"Validation fails: {str(e)}")
         elif public_key is not None and isinstance(public_key, str):
             try:
-                cert = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
+                cert = x509.load_pem_x509_certificate(
+                    public_key.encode(), default_backend()
+                )
 
                 # Extract public key
                 key = cert.public_key().public_bytes(
                     serialization.Encoding.PEM,
-                    serialization.PublicFormat.SubjectPublicKeyInfo
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
                 )
 
                 # decode the token using the public key
@@ -221,7 +235,7 @@ class JWTHandler:
                     key,
                     algorithms=algorithms,
                     audience=audience,
-                    options=decode_options
+                    options=decode_options,
                 )
                 return payload
 

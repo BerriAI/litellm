@@ -26,7 +26,7 @@ all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes
 
 def common_checks(
     request_body: dict,
-    team_object: LiteLLM_TeamTable,
+    team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
     end_user_object: Optional[LiteLLM_EndUserTable],
     global_proxy_spend: Optional[float],
@@ -45,13 +45,14 @@ def common_checks(
     6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     """
     _model = request_body.get("model", None)
-    if team_object.blocked == True:
+    if team_object is not None and team_object.blocked == True:
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
     # 2. If user can call model
     if (
         _model is not None
+        and team_object is not None
         and len(team_object.models) > 0
         and _model not in team_object.models
     ):
@@ -65,7 +66,8 @@ def common_checks(
             )
     # 3. If team is in budget
     if (
-        team_object.max_budget is not None
+        team_object is not None
+        and team_object.max_budget is not None
         and team_object.spend is not None
         and team_object.spend > team_object.max_budget
     ):
@@ -304,6 +306,9 @@ async def get_team_object(
 
         if response is None:
             raise Exception
+
+        # save the team object to cache
+        await user_api_key_cache.async_set_cache(key=response.team_id, value=response)
 
         return LiteLLM_TeamTable(**response.dict())
     except Exception as e:
