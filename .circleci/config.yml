@@ -58,6 +58,8 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
+            pip install "pydantic==2.7.1"
+            pip install "diskcache==5.6.1"
       - save_cache:
           paths:
             - ./venv
@@ -198,6 +200,7 @@ jobs:
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e AUTO_INFER_REGION=True \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \

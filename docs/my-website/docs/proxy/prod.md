@@ -64,6 +64,12 @@ router_settings:
   redis_password: os.environ/REDIS_PASSWORD
 ```
 
+## 4. Disable 'load_dotenv'
+
+Set `export LITELLM_MODE="PRODUCTION"`
+
+This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
+
 ## Extras
 ### Expected Performance in Production
 

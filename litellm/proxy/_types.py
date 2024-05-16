@@ -52,8 +52,18 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
 
 
 class LiteLLMRoutes(enum.Enum):
+    openai_route_names: List = [
+        "chat_completion",
+        "completion",
+        "embeddings",
+        "image_generation",
+        "audio_transcriptions",
+        "moderations",
+        "model_list",  # OpenAI /v1/models route
+    ]
     openai_routes: List = [
         # chat completions
+        "/engines/{model}/chat/completions",
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
@@ -79,13 +89,21 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
     ]
 
+    llm_utils_routes: List = ["utils/token_counter"]
+
     info_routes: List = [
         "/key/info",
         "/team/info",
+        "/team/list",
         "/user/info",
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
+    ]
+
+    # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
+    master_key_only_routes: List = [
+        "/global/spend/reset",
     ]
 
     sso_only_routes: List = [
@@ -110,6 +128,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/new",
         "/team/update",
         "/team/delete",
+        "/team/list",
         "/team/info",
         "/team/block",
         "/team/unblock",
@@ -182,15 +201,32 @@ class LiteLLM_JWTAuth(LiteLLMBase):
 
     admin_jwt_scope: str = "litellm_proxy_admin"
     admin_allowed_routes: List[
-        Literal["openai_routes", "info_routes", "management_routes"]
-    ] = ["management_routes"]
-    team_jwt_scope: str = "litellm_team"
-    team_id_jwt_field: str = "client_id"
+        Literal[
+            "openai_routes",
+            "info_routes",
+            "management_routes",
+            "spend_tracking_routes",
+            "global_spend_tracking_routes",
+        ]
+    ] = [
+        "management_routes",
+        "spend_tracking_routes",
+        "global_spend_tracking_routes",
+        "info_routes",
+    ]
+    team_id_jwt_field: Optional[str] = None
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
+    team_id_default: Optional[str] = Field(
+        default=None,
+        description="If no team_id given, default permissions/spend-tracking to this team.s",
+    )
     org_id_jwt_field: Optional[str] = None
     user_id_jwt_field: Optional[str] = None
+    user_id_upsert: bool = Field(
+        default=False, description="If user doesn't exist, upsert them into the db."
+    )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
 
@@ -678,6 +714,25 @@ class DynamoDBArgs(LiteLLMBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
+class ConfigFieldUpdate(LiteLLMBase):
+    field_name: str
+    field_value: Any
+    config_type: Literal["general_settings"]
+
+
+class ConfigFieldDelete(LiteLLMBase):
+    config_type: Literal["general_settings"]
+    field_name: str
+
+
+class ConfigList(LiteLLMBase):
+    field_name: str
+    field_type: str
+    field_description: str
+    field_value: Any
+    stored_in_db: Optional[bool]
+
+
 class ConfigGeneralSettings(LiteLLMBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -725,7 +780,11 @@ class ConfigGeneralSettings(LiteLLMBase):
         description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth",
     )
     max_parallel_requests: Optional[int] = Field(
-        None, description="maximum parallel requests for each api key"
+        None,
+        description="maximum parallel requests for each api key",
+    )
+    global_max_parallel_requests: Optional[int] = Field(
+        None, description="global max parallel requests to allow for a proxy instance."
     )
     infer_model_from_keys: Optional[bool] = Field(
         None,
@@ -954,3 +1013,16 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
+
+
+class TokenCountRequest(LiteLLMBase):
+    model: str
+    prompt: Optional[str] = None
+    messages: Optional[List[dict]] = None
+
+
+class TokenCountResponse(LiteLLMBase):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
