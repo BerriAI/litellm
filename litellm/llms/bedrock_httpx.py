@@ -275,7 +275,14 @@ class BedrockLLM(BaseLLM):
                 DurationSeconds=3600,
             )
 
-            return sts_response["Credentials"]
+            session = boto3.Session(
+                aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
+                aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
+                aws_session_token=sts_response["Credentials"]["SessionToken"],
+                region_name=aws_region_name,
+            )
+
+            return session.get_credentials()
         elif aws_role_name is not None and aws_session_name is not None:
             sts_client = boto3.client(
                 "sts",
