@@ -142,6 +142,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return;
     }
 
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
+
     console.log("uiSelectedKey", uiSelectedKey);
 
     let newTopUserData = await adminTopEndUsersCall(
@@ -159,6 +165,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
     if (!startTime || !endTime || !accessToken) {
       return;
     }
+
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
 
     let top_tags = await tagsSpendLogsCall(accessToken, startTime.toISOString(), endTime.toISOString());
     setTopTagsData(top_tags.spend_per_tag);
