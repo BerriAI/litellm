@@ -10623,6 +10623,7 @@ def _has_user_setup_sso():
 @router.on_event("shutdown")
 async def shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
+    verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -10634,6 +10635,18 @@ async def shutdown_event():
 
     if db_writer_client is not None:
         await db_writer_client.close()
+
+    # flush remaining langfuse logs
+    if "langfuse" in litellm.success_callback:
+        try:
+            # flush langfuse logs on shutdow
+            from litellm.utils import langFuseLogger
+
+            langFuseLogger.Langfuse.flush()
+        except:
+            # [DO NOT BLOCK shutdown events for this]
+            pass
+
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
 
