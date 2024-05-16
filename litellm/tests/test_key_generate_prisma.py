@@ -150,8 +150,10 @@ async def test_new_user_response(prisma_client):
 
 @pytest.mark.parametrize(
     "api_route", [
+        APIRoute(path="/engines/{model}/chat/completions", endpoint=chat_completion),
+        APIRoute(path="/openai/deployments/{model}/chat/completions", endpoint=chat_completion),
         APIRoute(path="/chat/completions", endpoint=chat_completion),
-        APIRoute(path="/engines/gpt-35-turbo-0125/chat/completions", endpoint=chat_completion),
+        APIRoute(path="/v1/chat/completions", endpoint=chat_completion),
     ],
 )
 def test_generate_and_call_with_valid_key(prisma_client, api_route):
