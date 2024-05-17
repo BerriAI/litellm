@@ -4123,8 +4123,7 @@ def token_counter(
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,
-    return_tokenizer_used: Optional[bool] = False,
-):
+) -> int:
     """
     Count the number of tokens in a given text using a specified model.
 
@@ -4216,10 +4215,6 @@ def token_counter(
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
-    _tokenizer_type = tokenizer_json["type"]
-    if return_tokenizer_used:
-        # used by litellm proxy server ->  POST /utils/token_counter
-        return num_tokens, _tokenizer_type
     return num_tokens
 
 
