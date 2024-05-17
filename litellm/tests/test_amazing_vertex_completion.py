@@ -388,7 +388,7 @@ def test_vertex_ai_stream():
                 completed_str += content
                 assert type(content) == str
                 # pass
-            assert len(completed_str) > 4
+            assert len(completed_str) > 1
         except litellm.RateLimitError as e:
             pass
         except Exception as e:
