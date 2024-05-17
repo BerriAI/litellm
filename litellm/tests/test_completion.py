@@ -2673,6 +2673,7 @@ def response_format_tests(response: litellm.ModelResponse):
         "mistral.mistral-7b-instruct-v0:2",
         "bedrock/amazon.titan-tg1-large",
         "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14",
     ],
 )
 @pytest.mark.asyncio

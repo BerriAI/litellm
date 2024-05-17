@@ -307,7 +307,13 @@ class BedrockLLM(BaseLLM):
 
         try:
             if provider == "cohere":
-                outputText = completion_response["text"]  # type: ignore
+                if "text" in completion_response:
+                    outputText = completion_response["text"]  # type: ignore
+                elif "generations" in completion_response:
+                    outputText = completion_response["generations"][0]["text"]
+                    model_response["finish_reason"] = map_finish_reason(
+                        completion_response["generations"][0]["finish_reason"]
+                    )
             elif provider == "anthropic":
                 if model.startswith("anthropic.claude-3"):
                     json_schemas: dict = {}
