@@ -5127,7 +5127,7 @@ def get_optional_params(
         or "tools" in non_default_params
     ):
         if (
-            custom_llm_provider != "openai"
+            custom_llm_provider == "ollama"
             and custom_llm_provider != "text-completion-openai"
             and custom_llm_provider != "azure"
             and custom_llm_provider != "vertex_ai"
@@ -5141,6 +5141,8 @@ def get_optional_params(
             and custom_llm_provider != "cohere"
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
+            and custom_llm_provider != "openrouter"
+            and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
                 # ollama actually supports json output
