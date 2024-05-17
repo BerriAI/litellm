@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # 💵 Billing
 
-Bill users for their usage.
+Bill internal teams, external customers for their usage
 
 **🚨 Requirements**
 - [Setup Lago](https://docs.getlago.com/guide/self-hosted/docker#run-the-app), for usage-based billing. We recommend following [their Stripe tutorial](https://docs.getlago.com/templates/per-transaction/stripe#step-1-create-billable-metrics-for-transaction)
@@ -16,7 +16,7 @@ Steps:
 
 ## Quick Start
 
-Bill internal users for their usage
+Bill internal teams for their usage
 
 ### 1. Connect proxy to Lago 
 
@@ -43,7 +43,7 @@ Add your Lago keys to the environment
 export LAGO_API_BASE="http://localhost:3000" # self-host - https://docs.getlago.com/guide/self-hosted/docker#run-the-app
 export LAGO_API_KEY="3e29d607-de54-49aa-a019-ecf585729070" # Get key - https://docs.getlago.com/guide/self-hosted/docker#find-your-api-key
 export LAGO_API_EVENT_CODE="openai_tokens" # name of lago billing code
-export LAGO_API_CHARGE_BY="user_id" # 👈 Charges 'user_id' attached to proxy key
+export LAGO_API_CHARGE_BY="team_id" # 👈 Charges 'team_id' attached to proxy key
 ```
 
 Start proxy 
@@ -52,13 +52,13 @@ Start proxy
 litellm --config /path/to/config.yaml
 ```
 
-### 2. Create Key for Internal User 
+### 2. Create Key for Internal Team 
 
 ```bash
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
---data-raw '{"user_id": "my-unique-id"}' # 👈 Internal User's ID
+--data-raw '{"team_id": "my-unique-id"}' # 👈 Internal Team's ID
 ```
 
 Response Object:
@@ -78,7 +78,7 @@ Response Object:
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
---header 'Authorization: Bearer sk-tXL0wt5-lOOVK9sfY2UacA' \ # 👈 User's Key
+--header 'Authorization: Bearer sk-tXL0wt5-lOOVK9sfY2UacA' \ # 👈 Team's Key
 --data ' {
       "model": "fake-openai-endpoint",
       "messages": [
@@ -96,7 +96,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-tXL0wt5-lOOVK9sfY2UacA", # 👈 User's Key
+    api_key="sk-tXL0wt5-lOOVK9sfY2UacA", # 👈 Team's Key
     base_url="http://0.0.0.0:4000"
 )
 
@@ -123,7 +123,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 import os 
 
-os.environ["OPENAI_API_KEY"] = "sk-tXL0wt5-lOOVK9sfY2UacA" # 👈 User's Key
+os.environ["OPENAI_API_KEY"] = "sk-tXL0wt5-lOOVK9sfY2UacA" # 👈 Team's Key
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
@@ -171,7 +171,7 @@ This is what LiteLLM will log to Lagos
 }
 ```
 
-## Advanced - Bill Customers, Internal Teams 
+## Advanced - Bill Customers, Internal Users 
 
 For:
 - Customers (id passed via 'user' param in /chat/completion call) = 'end_user_id'
@@ -271,21 +271,21 @@ For:
   </Tabs>
 
 </TabItem>
-<TabItem value="teams" label="Team Billing">
+<TabItem value="users" label="Internal User Billing">
 
-1. Set 'LAGO_API_CHARGE_BY' to 'team_id'
+1. Set 'LAGO_API_CHARGE_BY' to 'user_id'
 
 ```bash
-export LAGO_API_CHARGE_BY="team_id"
+export LAGO_API_CHARGE_BY="user_id"
 ```
 
-2. Create a key for that team 
+2. Create a key for that user 
 
 ```bash
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"team_id": "my-unique-id"}'
+--data-raw '{"user_id": "my-unique-id"}' # 👈 Internal User's id
 ```
 
 Response Object:
