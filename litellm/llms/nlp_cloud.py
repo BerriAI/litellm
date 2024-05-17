@@ -1,7 +1,7 @@
 import os, types
 import json
 from enum import Enum
-import requests
+import requests  # type: ignore
 import time
 from typing import Callable, Optional
 import litellm
@@ -185,9 +185,9 @@ def completion(
         else:
             try:
                 if len(completion_response["generated_text"]) > 0:
-                    model_response["choices"][0]["message"][
-                        "content"
-                    ] = completion_response["generated_text"]
+                    model_response["choices"][0]["message"]["content"] = (
+                        completion_response["generated_text"]
+                    )
             except:
                 raise NLPCloudError(
                     message=json.dumps(completion_response),
@@ -205,7 +205,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
 
 

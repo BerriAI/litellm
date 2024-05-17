@@ -1,9 +1,9 @@
-from typing import List, Optional, Union, Dict, Tuple, Literal
-
-from pydantic import BaseModel, validator
+from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
+import httpx
+from pydantic import BaseModel, validator, Field
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-import uuid
+import uuid, enum
 
 
 class ModelConfig(BaseModel):
@@ -48,10 +48,34 @@ class RouterConfig(BaseModel):
         protected_namespaces = ()
 
 
+class UpdateRouterConfig(BaseModel):
+    """
+    Set of params that you can modify via `router.update_settings()`.
+    """
+
+    routing_strategy_args: Optional[dict] = None
+    routing_strategy: Optional[str] = None
+    model_group_retry_policy: Optional[dict] = None
+    allowed_fails: Optional[int] = None
+    cooldown_time: Optional[float] = None
+    num_retries: Optional[int] = None
+    timeout: Optional[float] = None
+    max_retries: Optional[int] = None
+    retry_after: Optional[float] = None
+    fallbacks: Optional[List[dict]] = None
+    context_window_fallbacks: Optional[List[dict]] = None
+
+    class Config:
+        protected_namespaces = ()
+
+
 class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -80,19 +104,27 @@ class ModelInfo(BaseModel):
         setattr(self, key, value)
 
 
-class LiteLLM_Params(BaseModel):
-    model: str
+class GenericLiteLLMParams(BaseModel):
+    """
+    LiteLLM Params without 'model' arg (used across completion / assistants api)
+    """
+
+    custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
     api_key: Optional[str] = None
     api_base: Optional[str] = None
     api_version: Optional[str] = None
-    timeout: Optional[Union[float, str]] = None  # if str, pass in as os.environ/
+    timeout: Optional[Union[float, str, httpx.Timeout]] = (
+        None  # if str, pass in as os.environ/
+    )
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
-    max_retries: int = 2  # follows openai default of 2
+    max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
+    ## UNIFIED PROJECT/REGION ##
+    region_name: Optional[str] = None
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
@@ -100,16 +132,57 @@ class LiteLLM_Params(BaseModel):
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
+    ## IBM WATSONX ##
+    watsonx_region_name: Optional[str] = None
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
 
-    def __init__(self, max_retries: Optional[Union[int, str]] = None, **params):
-        if max_retries is None:
-            max_retries = 2
-        elif isinstance(max_retries, str):
+    def __init__(
+        self,
+        custom_llm_provider: Optional[str] = None,
+        max_retries: Optional[Union[int, str]] = None,
+        tpm: Optional[int] = None,
+        rpm: Optional[int] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        timeout: Optional[Union[float, str]] = None,  # if str, pass in as os.environ/
+        stream_timeout: Optional[Union[float, str]] = (
+            None  # timeout when making stream=True calls, if str, pass in as os.environ/
+        ),
+        organization: Optional[str] = None,  # for openai orgs
+        ## UNIFIED PROJECT/REGION ##
+        region_name: Optional[str] = None,
+        ## VERTEX AI ##
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        ## AWS BEDROCK / SAGEMAKER ##
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_region_name: Optional[str] = None,
+        ## IBM WATSONX ##
+        watsonx_region_name: Optional[str] = None,
+        input_cost_per_token: Optional[float] = None,
+        output_cost_per_token: Optional[float] = None,
+        input_cost_per_second: Optional[float] = None,
+        output_cost_per_second: Optional[float] = None,
+        **params
+    ):
+        args = locals()
+        args.pop("max_retries", None)
+        args.pop("self", None)
+        args.pop("params", None)
+        args.pop("__class__", None)
+        if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
-        super().__init__(max_retries=max_retries, **params)
+        super().__init__(max_retries=max_retries, **args, **params)
 
     class Config:
         extra = "allow"
+        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -128,17 +201,145 @@ class LiteLLM_Params(BaseModel):
         setattr(self, key, value)
 
 
+class LiteLLM_Params(GenericLiteLLMParams):
+    """
+    LiteLLM Params with 'model' requirement - used for completions
+    """
+
+    model: str
+
+    def __init__(
+        self,
+        model: str,
+        custom_llm_provider: Optional[str] = None,
+        max_retries: Optional[Union[int, str]] = None,
+        tpm: Optional[int] = None,
+        rpm: Optional[int] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        timeout: Optional[Union[float, str]] = None,  # if str, pass in as os.environ/
+        stream_timeout: Optional[Union[float, str]] = (
+            None  # timeout when making stream=True calls, if str, pass in as os.environ/
+        ),
+        organization: Optional[str] = None,  # for openai orgs
+        ## VERTEX AI ##
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        ## AWS BEDROCK / SAGEMAKER ##
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_region_name: Optional[str] = None,
+        **params
+    ):
+        args = locals()
+        args.pop("max_retries", None)
+        args.pop("self", None)
+        args.pop("params", None)
+        args.pop("__class__", None)
+        if max_retries is not None and isinstance(max_retries, str):
+            max_retries = int(max_retries)  # cast to int
+        super().__init__(max_retries=max_retries, **args, **params)
+
+    class Config:
+        extra = "allow"
+        arbitrary_types_allowed = True
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
+
+class updateLiteLLMParams(GenericLiteLLMParams):
+    # This class is used to update the LiteLLM_Params
+    # only differece is model is optional
+    model: Optional[str] = None
+
+
+class updateDeployment(BaseModel):
+    model_name: Optional[str] = None
+    litellm_params: Optional[updateLiteLLMParams] = None
+    model_info: Optional[ModelInfo] = None
+
+    class Config:
+        protected_namespaces = ()
+
+
+class LiteLLMParamsTypedDict(TypedDict, total=False):
+    """
+    [TODO]
+    - allow additional params (not in list)
+    - set value to none if not set -> don't raise error if value not set
+    """
+
+    model: str
+    custom_llm_provider: Optional[str]
+    tpm: Optional[int]
+    rpm: Optional[int]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    api_version: Optional[str]
+    timeout: Optional[Union[float, str, httpx.Timeout]]
+    stream_timeout: Optional[Union[float, str]]
+    max_retries: Optional[int]
+    organization: Optional[str]  # for openai orgs
+    ## UNIFIED PROJECT/REGION ##
+    region_name: Optional[str]
+    ## VERTEX AI ##
+    vertex_project: Optional[str]
+    vertex_location: Optional[str]
+    ## AWS BEDROCK / SAGEMAKER ##
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    aws_region_name: Optional[str]
+    ## IBM WATSONX ##
+    watsonx_region_name: Optional[str]
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float]
+    output_cost_per_token: Optional[float]
+    input_cost_per_second: Optional[float]
+    output_cost_per_second: Optional[float]
+
+
+class DeploymentTypedDict(TypedDict):
+    model_name: str
+    litellm_params: LiteLLMParamsTypedDict
+
+
 class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
 
-    def __init__(self, model_info: Optional[Union[ModelInfo, dict]] = None, **params):
+    def __init__(
+        self,
+        model_name: str,
+        litellm_params: LiteLLM_Params,
+        model_info: Optional[Union[ModelInfo, dict]] = None,
+        **params
+    ):
         if model_info is None:
             model_info = ModelInfo()
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
-        super().__init__(model_info=model_info, **params)
+        super().__init__(
+            model_info=model_info,
+            model_name=model_name,
+            litellm_params=litellm_params,
+            **params
+        )
 
     def to_json(self, **kwargs):
         try:
@@ -166,3 +367,44 @@ class Deployment(BaseModel):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class RouterErrors(enum.Enum):
+    """
+    Enum for router specific errors with common codes
+    """
+
+    user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    no_deployments_available = "No deployments available for selected model"
+
+
+class RetryPolicy(BaseModel):
+    """
+    Use this to set a custom number of retries per exception type
+    If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+    Mapping of Exception type to number of retries
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorRetries: Optional[int] = None
+    AuthenticationErrorRetries: Optional[int] = None
+    TimeoutErrorRetries: Optional[int] = None
+    RateLimitErrorRetries: Optional[int] = None
+    ContentPolicyViolationErrorRetries: Optional[int] = None
+    InternalServerErrorRetries: Optional[int] = None
+
+
+class AlertingConfig(BaseModel):
+    """
+    Use this configure alerting for the router. Receive alerts on the following events
+    - LLM API Exceptions
+    - LLM Responses Too Slow
+    - LLM Requests Hanging
+
+    Args:
+        webhook_url: str            - webhook url for alerting, slack provides a webhook url to send alerts to
+        alerting_threshold: Optional[float] = None - threshold for slow / hanging llm responses (in seconds)
+    """
+
+    webhook_url: str
+    alerting_threshold: Optional[float] = 300

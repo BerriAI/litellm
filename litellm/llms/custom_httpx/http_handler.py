@@ -41,13 +41,12 @@ class AsyncHTTPHandler:
         data: Optional[Union[dict, str]] = None,  # type: ignore
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
+        stream: bool = False,
     ):
-        response = await self.client.post(
-            url,
-            data=data,  # type: ignore
-            params=params,
-            headers=headers,
+        req = self.client.build_request(
+            "POST", url, data=data, params=params, headers=headers  # type: ignore
         )
+        response = await self.client.send(req, stream=stream)
         return response
 
     def __del__(self) -> None:
@@ -58,14 +57,26 @@ class AsyncHTTPHandler:
 
 
 class HTTPHandler:
-    def __init__(self, concurrent_limit=1000):
-        # Create a client with a connection pool
-        self.client = httpx.Client(
-            limits=httpx.Limits(
-                max_connections=concurrent_limit,
-                max_keepalive_connections=concurrent_limit,
+    def __init__(
+        self,
+        timeout: Optional[httpx.Timeout] = None,
+        concurrent_limit=1000,
+        client: Optional[httpx.Client] = None,
+    ):
+        if timeout is None:
+            timeout = _DEFAULT_TIMEOUT
+
+        if client is None:
+            # Create a client with a connection pool
+            self.client = httpx.Client(
+                timeout=timeout,
+                limits=httpx.Limits(
+                    max_connections=concurrent_limit,
+                    max_keepalive_connections=concurrent_limit,
+                ),
             )
-        )
+        else:
+            self.client = client
 
     def close(self):
         # Close the client when you're done with it
@@ -80,11 +91,15 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: Optional[dict] = None,
+        data: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
+        stream: bool = False,
     ):
-        response = self.client.post(url, data=data, params=params, headers=headers)
+        req = self.client.build_request(
+            "POST", url, data=data, params=params, headers=headers  # type: ignore
+        )
+        response = self.client.send(req, stream=stream)
         return response
 
     def __del__(self) -> None:

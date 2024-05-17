@@ -11,7 +11,9 @@ sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
 
-load_dotenv()
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
+if litellm_mode == "DEV":
+    load_dotenv()
 from importlib import resources
 import shutil
 
@@ -252,7 +254,7 @@ def run_server(
     if model and "ollama" in model and api_base is None:
         run_ollama_serve()
     if test_async is True:
-        import requests, concurrent, time
+        import requests, concurrent, time  # type: ignore
 
         api_base = f"http://{host}:{port}"
 
@@ -418,7 +420,7 @@ def run_server(
             read from there and save it to os.env['DATABASE_URL']
             """
             try:
-                import yaml, asyncio
+                import yaml, asyncio  # type: ignore
             except:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"

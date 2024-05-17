@@ -1,7 +1,7 @@
 #### What this tests ####
 # This tests litellm router
 
-import sys, os, time
+import sys, os, time, openai
 import traceback, asyncio
 import pytest
 
@@ -14,8 +14,169 @@ from litellm.router import Deployment, LiteLLM_Params, ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
+import os, httpx
 
 load_dotenv()
+
+
+@pytest.mark.parametrize("num_retries", [None, 2])
+@pytest.mark.parametrize("max_retries", [None, 4])
+def test_router_num_retries_init(num_retries, max_retries):
+    """
+    - test when num_retries set v/s not
+    - test client value when max retries set v/s not
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "max_retries": max_retries,
+                },
+                "model_info": {"id": 12345},
+            },
+        ],
+        num_retries=num_retries,
+    )
+
+    if num_retries is not None:
+        assert router.num_retries == num_retries
+    else:
+        assert router.num_retries == openai.DEFAULT_MAX_RETRIES
+
+    model_client = router._get_client(
+        {"model_info": {"id": 12345}}, client_type="async", kwargs={}
+    )
+
+    if max_retries is not None:
+        assert getattr(model_client, "max_retries") == max_retries
+    else:
+        assert getattr(model_client, "max_retries") == 0
+
+
+@pytest.mark.parametrize(
+    "timeout", [10, 1.0, httpx.Timeout(timeout=300.0, connect=20.0)]
+)
+@pytest.mark.parametrize("ssl_verify", [True, False])
+def test_router_timeout_init(timeout, ssl_verify):
+    """
+    Allow user to pass httpx.Timeout
+
+    related issue - https://github.com/BerriAI/litellm/issues/3162
+    """
+    litellm.ssl_verify = ssl_verify
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "timeout": timeout,
+                },
+                "model_info": {"id": 1234},
+            }
+        ]
+    )
+
+    model_client = router._get_client(
+        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    )
+
+    assert getattr(model_client, "timeout") == timeout
+
+    print(f"vars model_client: {vars(model_client)}")
+    http_client = getattr(model_client, "_client")
+    print(f"http client: {vars(http_client)}, ssl_Verify={ssl_verify}")
+    if ssl_verify == False:
+        assert http_client._transport._pool._ssl_context.verify_mode.name == "CERT_NONE"
+    else:
+        assert (
+            http_client._transport._pool._ssl_context.verify_mode.name
+            == "CERT_REQUIRED"
+        )
+
+
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_router_retries(sync_mode):
+    """
+    - make sure retries work as expected
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "bad-key"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list, num_retries=2)
+
+    if sync_mode:
+        router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    else:
+        response = await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+        print(response.choices[0].message)
+
+
+@pytest.mark.parametrize(
+    "mistral_api_base",
+    [
+        "os.environ/AZURE_MISTRAL_API_BASE",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1/",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/",
+        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com",
+    ],
+)
+def test_router_azure_ai_studio_init(mistral_api_base):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "azure/mistral-large-latest",
+                    "api_key": "os.environ/AZURE_MISTRAL_API_KEY",
+                    "api_base": mistral_api_base,
+                },
+                "model_info": {"id": 1234},
+            }
+        ]
+    )
+
+    model_client = router._get_client(
+        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    )
+    url = getattr(model_client, "_base_url")
+    uri_reference = str(getattr(url, "_uri_reference"))
+
+    print(f"uri_reference: {uri_reference}")
+
+    assert "/v1/" in uri_reference
+    assert uri_reference.count("v1") == 1
 
 
 def test_exception_raising():
@@ -528,6 +689,55 @@ def test_router_context_window_check_pre_call_check_out_group():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
+@pytest.mark.parametrize("allowed_model_region", ["eu", None])
+def test_router_region_pre_call_check(allowed_model_region):
+    """
+    If region based routing set
+    - check if only model in allowed region is allowed by '_pre_call_checks'
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "base_model": "azure/gpt-35-turbo",
+                "region_name": "eu",
+            },
+            "model_info": {"id": "1"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo-large",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "gpt-3.5-turbo-1106",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+            "model_info": {"id": "2"},
+        },
+    ]
+
+    router = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    _healthy_deployments = router._pre_call_checks(
+        model="gpt-3.5-turbo",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "Hey!"}],
+        allowed_model_region=allowed_model_region,
+    )
+
+    if allowed_model_region is None:
+        assert len(_healthy_deployments) == 2
+    else:
+        assert len(_healthy_deployments) == 1, "No models selected as healthy"
+        assert (
+            _healthy_deployments[0]["model_info"]["id"] == "1"
+        ), "Incorrect model id picked. Got id={}, expected id=1".format(
+            _healthy_deployments[0]["model_info"]["id"]
+        )
+
+
 ### FUNCTION CALLING
 
 
@@ -995,6 +1205,7 @@ def test_consistent_model_id():
     assert id1 == id2
 
 
+@pytest.mark.skip(reason="local test")
 def test_reading_keys_os_environ():
     import openai
 
@@ -1094,6 +1305,7 @@ def test_reading_keys_os_environ():
 # test_reading_keys_os_environ()
 
 
+@pytest.mark.skip(reason="local test")
 def test_reading_openai_keys_os_environ():
     import openai
 
