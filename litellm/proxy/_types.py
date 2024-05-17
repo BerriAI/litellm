@@ -88,7 +88,7 @@ class LiteLLMRoutes(enum.Enum):
         "/models",
         "/v1/models",
         # token counter
-        "utils/token_counter",
+        "/utils/token_counter",
     ]
 
     info_routes: List = [
