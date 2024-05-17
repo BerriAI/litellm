@@ -2670,6 +2670,9 @@ def response_format_tests(response: litellm.ModelResponse):
         "anthropic.claude-3-sonnet-20240229-v1:0",
         "anthropic.claude-instant-v1",
         "bedrock/ai21.j2-mid",
+        "mistral.mistral-7b-instruct-v0:2",
+        "bedrock/amazon.titan-tg1-large",
+        "meta.llama3-8b-instruct-v1:0",
     ],
 )
 @pytest.mark.asyncio
@@ -2692,7 +2695,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
             model=model,
             messages=[{"role": "user", "content": "Hey! how's it going?"}],
             temperature=0.2,
-            max_tokens=200,
+            max_tokens=100,
         )
 
         assert isinstance(response, litellm.ModelResponse)
@@ -2726,24 +2729,6 @@ def test_completion_bedrock_titan_null_response():
         print(f"response: {response}")
     except Exception as e:
         pytest.fail(f"An error occurred - {str(e)}")
-
-
-def test_completion_bedrock_titan():
-    try:
-        response = completion(
-            model="bedrock/amazon.titan-tg1-large",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=200,
-            top_p=0.8,
-            logger_fn=logger_fn,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_bedrock_titan()
