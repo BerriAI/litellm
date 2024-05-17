@@ -18,4 +18,4 @@ class EmbeddingRequest(BaseModel):
     litellm_logging_obj: Optional[dict] = None
     logger_fn: Optional[str] = None
 
-    model_config: ConfigDict = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow")

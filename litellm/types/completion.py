@@ -191,4 +191,4 @@ class CompletionRequest(BaseModel):
     api_key: Optional[str] = None
     model_list: Optional[List[str]] = None
 
-    model_config: ConfigDict = ConfigDict(protected_namespaces=(), extra="allow")
+    model_config = ConfigDict(protected_namespaces=(), extra="allow")
