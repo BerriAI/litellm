@@ -11510,7 +11510,11 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "predibase"
                 or (
                     self.custom_llm_provider == "bedrock"
-                    and ("cohere" in self.model or "anthropic" in self.model)
+                    and (
+                        "cohere" in self.model
+                        or "anthropic" in self.model
+                        or "ai21" in self.model
+                    )
                 )
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
