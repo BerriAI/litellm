@@ -3774,7 +3774,7 @@ async def chat_completion(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
-                model_region=user_api_key_dict.allowed_model_region
+                model_region=getattr(user_api_key_dict, "allowed_model_region", "")
             )
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3792,7 +3792,7 @@ async def chat_completion(
             cache_key=cache_key,
             api_base=api_base,
             version=version,
-            model_region=user_api_key_dict.allowed_model_region
+            model_region=getattr(user_api_key_dict, "allowed_model_region", "")
         ))
 
         ### CALL HOOKS ### - modify outgoing data
@@ -4211,7 +4211,7 @@ async def embeddings(
             cache_key=cache_key,
             api_base=api_base,
             version=version,
-            model_region=user_api_key_dict.allowed_model_region
+            model_region=getattr(user_api_key_dict, "allowed_model_region", "")
         ))
 
         return response
@@ -4392,7 +4392,7 @@ async def image_generation(
             cache_key=cache_key,
             api_base=api_base,
             version=version,
-            model_region=user_api_key_dict.allowed_model_region
+            model_region=getattr(user_api_key_dict, "allowed_model_region", "")
         ))
 
         return response
@@ -4591,7 +4591,7 @@ async def audio_transcriptions(
             cache_key=cache_key,
             api_base=api_base,
             version=version,
-            model_region=user_api_key_dict.allowed_model_region
+            model_region=getattr(user_api_key_dict, "allowed_model_region", "")
         ))
 
         return response
@@ -4772,7 +4772,7 @@ async def moderations(
             cache_key=cache_key,
             api_base=api_base,
             version=version,
-            model_region=user_api_key_dict.allowed_model_region
+            model_region=getattr(user_api_key_dict, "allowed_model_region", "")
         ))
 
         return response
