@@ -8606,7 +8606,10 @@ def exception_type(
                     message=f"ReplicateException - {str(original_exception)}",
                     llm_provider="replicate",
                     model=model,
-                    request=original_exception.request,
+                    request=httpx.Request(
+                        method="POST",
+                        url="https://api.replicate.com/v1/deployments",
+                    ),
                 )
             elif custom_llm_provider == "watsonx":
                 if "token_quota_reached" in error_str:
@@ -11485,6 +11488,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "vertex_ai"
                 or self.custom_llm_provider == "sagemaker"
                 or self.custom_llm_provider == "gemini"
+                or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"
                 or self.custom_llm_provider == "predibase"
                 or (self.custom_llm_provider == "bedrock" and "cohere" in self.model)
