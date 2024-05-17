@@ -307,7 +307,7 @@ class BedrockLLM(BaseLLM):
 
         try:
             if provider == "cohere":
-                model_response.choices[0].message.content = completion_response["text"]  # type: ignore
+                outputText = completion_response["text"]  # type: ignore
             elif provider == "anthropic":
                 if model.startswith("anthropic.claude-3"):
                     json_schemas: dict = {}
@@ -427,6 +427,15 @@ class BedrockLLM(BaseLLM):
                 outputText = (
                     completion_response.get("completions")[0].get("data").get("text")
                 )
+            elif provider == "meta":
+                outputText = completion_response["generation"]
+            elif provider == "mistral":
+                outputText = completion_response["outputs"][0]["text"]
+                model_response["finish_reason"] = completion_response["outputs"][0][
+                    "stop_reason"
+                ]
+            else:  # amazon titan
+                outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
             raise BedrockError(
                 message="Error processing={}, Received error={}".format(
@@ -690,6 +699,40 @@ class BedrockLLM(BaseLLM):
                 ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                     inference_params[k] = v
 
+            data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "mistral":
+            ## LOAD CONFIG
+            config = litellm.AmazonMistralConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "amazon":  # amazon titan
+            ## LOAD CONFIG
+            config = litellm.AmazonTitanConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps(
+                {
+                    "inputText": prompt,
+                    "textGenerationConfig": inference_params,
+                }
+            )
+        elif provider == "meta":
+            ## LOAD CONFIG
+            config = litellm.AmazonLlamaConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
             data = json.dumps({"prompt": prompt, **inference_params})
         else:
             raise Exception("UNSUPPORTED PROVIDER")

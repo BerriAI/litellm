@@ -1048,6 +1048,9 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         "anthropic.claude-3-sonnet-20240229-v1:0",
         "anthropic.claude-instant-v1",
         "bedrock/ai21.j2-mid",
+        "mistral.mistral-7b-instruct-v0:2",
+        "bedrock/amazon.titan-tg1-large",
+        "meta.llama3-8b-instruct-v1:0",
     ],
 )
 @pytest.mark.asyncio
