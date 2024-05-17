@@ -2375,7 +2375,7 @@ class Router:
                 organization = litellm.get_secret(organization_env_name)
                 litellm_params["organization"] = organization
 
-            if "azure" in model_name and isinstance(api_key, str):
+            if "azure" in model_name:
                 if api_base is None or not isinstance(api_base, str):
                     raise ValueError(
                         f"api_base is required for Azure OpenAI. Set it on your config. Model - {model}"
