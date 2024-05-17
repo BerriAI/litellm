@@ -3089,7 +3089,6 @@ def test_mistral_anyscale_stream():
         print(chunk["choices"][0]["delta"].get("content", ""), end="")
 
 
-# test_mistral_anyscale_stream()
 # test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
