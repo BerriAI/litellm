@@ -1044,8 +1044,10 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
 @pytest.mark.parametrize(
     "model",
     [
-        # "bedrock/cohere.command-r-plus-v1:0",
-        "anthropic.claude-3-sonnet-20240229-v1:0"
+        "bedrock/cohere.command-r-plus-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "anthropic.claude-instant-v1",
+        "bedrock/ai21.j2-mid",
     ],
 )
 @pytest.mark.asyncio

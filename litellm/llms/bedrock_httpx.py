@@ -419,15 +419,63 @@ class BedrockLLM(BaseLLM):
                         + completion_response["usage"]["output_tokens"],
                     )
                     setattr(model_response, "usage", _usage)
-            else:
-                outputText = completion_response["completion"]
-                model_response["finish_reason"] = completion_response["stop_reason"]
+                else:
+                    outputText = completion_response["completion"]
+
+                    model_response["finish_reason"] = completion_response["stop_reason"]
+            elif provider == "ai21":
+                outputText = (
+                    completion_response.get("completions")[0].get("data").get("text")
+                )
         except Exception as e:
             raise BedrockError(
                 message="Error processing={}, Received error={}".format(
                     response.text, str(e)
                 ),
                 status_code=422,
+            )
+
+        try:
+            if (
+                len(outputText) > 0
+                and hasattr(model_response.choices[0], "message")
+                and getattr(model_response.choices[0].message, "tool_calls", None)
+                is None
+            ):
+                model_response["choices"][0]["message"]["content"] = outputText
+            elif (
+                hasattr(model_response.choices[0], "message")
+                and getattr(model_response.choices[0].message, "tool_calls", None)
+                is not None
+            ):
+                pass
+            else:
+                raise Exception()
+        except:
+            raise BedrockError(
+                message=json.dumps(outputText), status_code=response.status_code
+            )
+
+        if stream and provider == "ai21":
+            streaming_model_response = ModelResponse(stream=True)
+            streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
+                0
+            ].finish_reason
+            # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
+            streaming_choice = litellm.utils.StreamingChoices()
+            streaming_choice.index = model_response.choices[0].index
+            delta_obj = litellm.utils.Delta(
+                content=getattr(model_response.choices[0].message, "content", None),
+                role=model_response.choices[0].message.role,
+            )
+            streaming_choice.delta = delta_obj
+            streaming_model_response.choices = [streaming_choice]
+            mri = ModelResponseIterator(model_response=streaming_model_response)
+            return CustomStreamWrapper(
+                completion_stream=mri,
+                model=model,
+                custom_llm_provider="cached_response",
+                logging_obj=logging_obj,
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
@@ -489,6 +537,7 @@ class BedrockLLM(BaseLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        provider = model.split(".")[0]
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
@@ -544,14 +593,13 @@ class BedrockLLM(BaseLLM):
         else:
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-        if stream is not None and stream == True:
+        if (stream is not None and stream == True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{model}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{model}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
-        provider = model.split(".")[0]
         prompt, chat_history = self.convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
@@ -633,6 +681,16 @@ class BedrockLLM(BaseLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "ai21":
+            ## LOAD CONFIG
+            config = litellm.AmazonAI21Config.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps({"prompt": prompt, **inference_params})
         else:
             raise Exception("UNSUPPORTED PROVIDER")
 
@@ -662,7 +720,7 @@ class BedrockLLM(BaseLLM):
         if acompletion:
             if isinstance(client, HTTPHandler):
                 client = None
-            if stream:
+            if stream == True and provider != "ai21":
                 return self.async_streaming(
                     model=model,
                     messages=messages,
@@ -691,7 +749,7 @@ class BedrockLLM(BaseLLM):
                 encoding=encoding,
                 logging_obj=logging_obj,
                 optional_params=optional_params,
-                stream=False,
+                stream=stream,  # type: ignore
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 headers=prepped.headers,
@@ -708,7 +766,7 @@ class BedrockLLM(BaseLLM):
             self.client = HTTPHandler(**_params)  # type: ignore
         else:
             self.client = client
-        if stream is not None and stream == True:
+        if (stream is not None and stream == True) and provider != "ai21":
             response = self.client.post(
                 url=prepped.url,
                 headers=prepped.headers,  # type: ignore
@@ -787,7 +845,7 @@ class BedrockLLM(BaseLLM):
             model=model,
             response=response,
             model_response=model_response,
-            stream=stream,
+            stream=stream if isinstance(stream, bool) else False,
             logging_obj=logging_obj,
             api_key="",
             data=data,
