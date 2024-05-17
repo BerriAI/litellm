@@ -11,7 +11,7 @@ Get alerts for:
 - Daily Reports:
     - **LLM** Top 5 slowest deployments
     - **LLM** Top 5 deployments with most failed requests
-    - **Spend** Weekly & Monthly spend per Team, Tag
+- **Spend** Weekly & Monthly spend per Team, Tag
 
 
 ## Quick Start
@@ -61,8 +61,37 @@ curl -X GET 'http://localhost:4000/health/services?service=slack' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
+## Advanced
+### Opting into specific alert types
 
-## Extras
+Set `alert_types` if you want to Opt into only specific alert types
+
+```shell
+general_settings:
+  alerting: ["slack"]
+  alert_types: ["spend_reports"] 
+```
+
+All Possible Alert Types
+
+```python
+alert_types: 
+Optional[
+List[
+    Literal[
+        "llm_exceptions",
+        "llm_too_slow",
+        "llm_requests_hanging",
+        "budget_alerts",
+        "db_exceptions",
+        "daily_reports",
+        "spend_reports",
+        "cooldown_deployment",
+        "new_model_added",
+    ]
+]
+```
+
 
 ### Using Discord Webhooks
 
