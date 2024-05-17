@@ -332,7 +332,7 @@ class HiddenParams(OpenAIObject):
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
 
-    model_config: ConfigDict = ConfigDict(extra="allow", protected_namespaces=())
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
