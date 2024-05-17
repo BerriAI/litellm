@@ -367,7 +367,11 @@ def get_custom_headers(*,
         'x-litellm-version': version,
         '"x-litellm-model-region': model_region
     }
-    return {key: value for key, value in headers.items() if value not in exclude_values}
+    try:
+        return {key: value for key, value in headers.items() if value not in exclude_values}
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error setting custom headers: {e}")
+        return {}
 
 
 async def check_request_disconnection(request: Request, llm_api_call_task):
