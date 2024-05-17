@@ -52,18 +52,8 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
 
 
 class LiteLLMRoutes(enum.Enum):
-    openai_route_names: List = [
-        "chat_completion",
-        "completion",
-        "embeddings",
-        "image_generation",
-        "audio_transcriptions",
-        "moderations",
-        "model_list",  # OpenAI /v1/models route
-    ]
     openai_routes: List = [
         # chat completions
-        "/engines/{model}/chat/completions",
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
@@ -87,8 +77,6 @@ class LiteLLMRoutes(enum.Enum):
         # models
         "/models",
         "/v1/models",
-        # token counter
-        "utils/token_counter",
     ]
 
     info_routes: List = [
@@ -226,6 +214,14 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     user_id_jwt_field: Optional[str] = None
     user_id_upsert: bool = Field(
         default=False, description="If user doesn't exist, upsert them into the db."
+    )
+    user_email_jwt_field: Optional[str] = Field(
+        default="email",
+        description='If no user_email_jwt_field given, default valid is "email".',
+    )
+    team_name_default: Optional[str] = Field(
+        default=None,
+        description="If no team_id given, default permissions/spend-tracking to this team.s. If team doesn't exist, it will be upserted into the db",
     )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
@@ -403,9 +399,9 @@ class GenerateKeyRequest(GenerateRequestBase):
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
-    model_max_budget: Optional[dict] = (
-        {}
-    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    model_max_budget: Optional[
+        dict
+    ] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     class Config:
         protected_namespaces = ()
@@ -1013,16 +1009,3 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
-
-
-class TokenCountRequest(LiteLLMBase):
-    model: str
-    prompt: Optional[str] = None
-    messages: Optional[List[dict]] = None
-
-
-class TokenCountResponse(LiteLLMBase):
-    total_tokens: int
-    request_model: str
-    model_used: str
-    tokenizer_type: str

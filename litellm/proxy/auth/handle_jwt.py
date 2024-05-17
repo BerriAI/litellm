@@ -1,9 +1,9 @@
 """
-Supports using JWT's for authenticating into the proxy. 
+Supports using JWT's for authenticating into the proxy.
 
-Currently only supports admin. 
+Currently only supports admin.
 
-JWT token must have 'litellm_proxy_admin' in scope. 
+JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import jwt
@@ -97,6 +97,14 @@ class JWTHandler:
         """
         return self.litellm_jwtauth.user_id_upsert
 
+    def get_team_name_default(self) -> str:
+        """
+        Returns:
+        - Str: if 'team_name_default' is set
+        - None: if not value does not exist
+        """
+        return self.litellm_jwtauth.team_name_default
+
     def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_id_jwt_field is not None:
@@ -106,6 +114,18 @@ class JWTHandler:
         except KeyError:
             user_id = default_value
         return user_id
+
+    def get_user_email(
+        self, token: dict, default_value: Optional[str]
+    ) -> Optional[str]:
+        try:
+            if self.litellm_jwtauth.user_email_jwt_field is not None:
+                user_email = token[self.litellm_jwtauth.user_email_jwt_field]
+            else:
+                user_email = None
+        except KeyError:
+            user_email = default_value
+        return user_email
 
     def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
@@ -160,13 +180,15 @@ class JWTHandler:
 
         public_key: Optional[dict] = None
 
-        if len(keys) == 1:
-            if kid is None or keys["kid"] == kid:
-                public_key = keys[0]
-        elif len(keys) > 1:
-            for key in keys:
-                if kid is not None and key == kid:
-                    public_key = keys[key]
+        # Test mode key finder
+        if kid is None and len(keys) == 1:
+            public_key = keys[0]
+
+        # Non-test key finder
+        for key in keys:
+            if kid is not None and key["kid"] == kid:
+                public_key = key
+                break
 
         if public_key is None:
             raise Exception(

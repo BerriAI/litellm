@@ -2,12 +2,13 @@
 ## Common auth checks between jwt + key based auth
 """
 Got Valid Token from Cache, DB
-Run checks for: 
+Run checks for:
 
 1. If user can call model
-2. If user is in budget 
-3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
+2. If user is in budget
+3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
+
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_EndUserTable,
@@ -20,6 +21,8 @@ from typing import Optional, Literal, Union
 from litellm.proxy.utils import PrismaClient
 from litellm.caching import DualCache
 import litellm
+import uuid
+import json
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
@@ -239,9 +242,11 @@ async def get_end_user_object(
 
 async def get_user_object(
     user_id: str,
+    user_email: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     user_id_upsert: bool,
+    team_name_default: Optional[str],
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -263,15 +268,57 @@ async def get_user_object(
             return cached_user_obj
     # else, check db
     try:
-
         response = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": user_id}
         )
 
         if response is None:
             if user_id_upsert:
+                # grab the default if exists
+                user_to_add = {"user_id": user_id}
+
+                # check if the user_email_jwt_field is set
+                if user_email:
+                    user_to_add["user_email"] = user_email
+
+                # check if a default team is set, if it is, associated it - create it otherwise
+                if team_name_default:
+                    try:
+                        # if the default team exists, verify it exists, if not upsert it
+                        response = await prisma_client.db.litellm_teamtable.find_unique(
+                            where={"team_alias": team_name_default}
+                        )
+
+                        print("RESPONSE AFTER FINDING TEAM FROM ALIAS")
+                        print(response)
+                        # If we have a response, add the team id
+                        if response:
+                            user_to_add["teams"] = [response.data.team_id]
+
+                    except Exception as e:  # if user not in db
+                        # Create the team id automatically
+                        print("TEAM DOES NOT EXIST --- CREATE THE TEAM")
+                        team_id = str(uuid.uuid4())
+                        response = await prisma_client.db.litellm_teamtable.create(
+                            data={
+                                "team_id": team_id,
+                                "team_alias": team_name_default,
+                                "models": ["all-proxy-models"],
+                                "members_with_roles": json.dumps(
+                                    [
+                                        {
+                                            "role": "admin",
+                                            "user_id": user_id,  # create the default team using the existing user id
+                                        }
+                                    ]
+                                ),
+                            }
+                        )
+                        # Add team id to the user once the team is created
+                        user_to_add["teams"] = [team_id]
+
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id}
+                    data=user_to_add
                 )
             else:
                 raise Exception
