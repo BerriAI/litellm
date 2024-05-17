@@ -1120,6 +1120,8 @@ async def user_api_key_auth(
                     pass
                 elif request["route"].name in LiteLLMRoutes.openai_route_names.value:
                     pass
+                elif route in LiteLLMRoutes.llm_utils_routes.value:
+                    pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
                 ):  # check if user allowed to call an info route
