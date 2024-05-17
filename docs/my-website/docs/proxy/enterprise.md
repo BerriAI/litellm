@@ -546,6 +546,8 @@ LITELLM_LICENSE=""
 
 ### Customize Title + Description
 
+In your environment, set: 
+
 ```bash
 DOCS_TITLE="TotalGPT"
 DOCS_DESCRIPTION="Sample Company Description"
@@ -555,6 +557,7 @@ DOCS_DESCRIPTION="Sample Company Description"
 
 Hide admin routes from users. 
 
+In your environment, set: 
 
 ```bash
 DOCS_FILTERED="True" # only shows openai routes to user
