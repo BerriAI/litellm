@@ -326,7 +326,10 @@ async def acompletion(
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
-            or (custom_llm_provider == "bedrock" and "cohere" in model)
+            or (
+                custom_llm_provider == "bedrock"
+                and ("cohere" in model or "anthropic" in model)
+            )
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -1979,7 +1982,7 @@ def completion(
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            if "cohere" in model:
+            if "cohere" in model or "anthropic" in model:
                 response = bedrock_chat_completion.completion(
                     model=model,
                     messages=messages,
