@@ -2663,13 +2663,17 @@ def response_format_tests(response: litellm.ModelResponse):
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/cohere.command-r-plus-v1:0", "anthropic.claude-3-sonnet-20240229-v1:0"],
+)
 @pytest.mark.asyncio
-async def test_completion_bedrock_command_r(sync_mode):
+async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
 
     if sync_mode:
         response = completion(
-            model="bedrock/cohere.command-r-plus-v1:0",
+            model=model,
             messages=[{"role": "user", "content": "Hey! how's it going?"}],
         )
 
@@ -2678,7 +2682,7 @@ async def test_completion_bedrock_command_r(sync_mode):
         response_format_tests(response=response)
     else:
         response = await litellm.acompletion(
-            model="bedrock/cohere.command-r-plus-v1:0",
+            model=model,
             messages=[{"role": "user", "content": "Hey! how's it going?"}],
         )
 
