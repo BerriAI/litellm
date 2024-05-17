@@ -8713,7 +8713,10 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if "Connect timeout on endpoint URL" in error_str:
+                if (
+                    "Connect timeout on endpoint URL" in error_str
+                    or "timed out" in error_str
+                ):
                     exception_mapping_worked = True
                     raise Timeout(
                         message=f"BedrockException: Timeout Error - {error_str}",
