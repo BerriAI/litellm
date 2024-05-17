@@ -671,11 +671,19 @@ class SlackAlerting(CustomLogger):
                 )
                 await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
             return
-
         return
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str):
-        model_info = litellm.model_cost.get(litellm_model_name, {})
+    async def model_added_alert(
+        self, model_name: str, litellm_model_name: str, passed_model_info: Any
+    ):
+        base_model_from_user = getattr(passed_model_info, "base_model", None)
+        model_info = {}
+        base_model = ""
+        if base_model_from_user is not None:
+            model_info = litellm.model_cost.get(base_model_from_user, {})
+            base_model = f"Base Model: `{base_model_from_user}`\n"
+        else:
+            model_info = litellm.model_cost.get(litellm_model_name, {})
         model_info_str = ""
         for k, v in model_info.items():
             if k == "input_cost_per_token" or k == "output_cost_per_token":
@@ -687,6 +695,7 @@ class SlackAlerting(CustomLogger):
         message = f"""
 *🚅 New Model Added*
 Model Name: `{model_name}`
+{base_model}
 
 Usage OpenAI Python SDK:
 ```
