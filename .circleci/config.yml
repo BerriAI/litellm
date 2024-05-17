@@ -1,4 +1,4 @@
-version: 2.1
+version: 4.3.4
 jobs:
   local_testing:
     docker:
@@ -40,7 +40,7 @@ jobs:
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
-            pip install "langfuse==2.7.3"
+            pip install "langfuse==2.27.1"
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
             pip install openai
@@ -57,6 +57,9 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
             pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.7.1"
+            pip install "diskcache==5.6.1"
       - save_cache:
           paths:
             - ./venv
@@ -187,22 +190,28 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$PROXY_DOCKER_DB_URL \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e AUTO_INFER_REGION=True \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
+              -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
+              -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
+              -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
-              --num_workers 8 \
               --detailed_debug \
-              --run_gunicorn \
       - run:
           name: Install curl and dockerize
           command: |
@@ -217,7 +226,7 @@ jobs:
           background: true
       - run: 
           name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 1m
+          command: dockerize -wait http://localhost:4000 -timeout 5m
       - run:
           name: Run tests
           command: |

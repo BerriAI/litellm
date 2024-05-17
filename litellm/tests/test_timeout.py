@@ -10,7 +10,37 @@ sys.path.insert(
 import time
 import litellm
 import openai
-import pytest, uuid
+import pytest, uuid, httpx
+
+
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("gpt-3.5-turbo", "openai"),
+        ("anthropic.claude-instant-v1", "bedrock"),
+        ("azure/chatgpt-v-2", "azure"),
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_httpx_timeout(model, provider, sync_mode):
+    """
+    Test if setting httpx.timeout works for completion calls
+    """
+    timeout_val = httpx.Timeout(10.0, connect=60.0)
+
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+
+    if sync_mode:
+        response = litellm.completion(
+            model=model, messages=messages, timeout=timeout_val
+        )
+    else:
+        response = await litellm.acompletion(
+            model=model, messages=messages, timeout=timeout_val
+        )
+
+    print(f"response: {response}")
 
 
 def test_timeout():
@@ -78,7 +108,8 @@ def test_hanging_request_azure():
                     "model_name": "openai-gpt",
                     "litellm_params": {"model": "gpt-3.5-turbo"},
                 },
-            ]
+            ],
+            num_retries=0,
         )
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
@@ -131,7 +162,8 @@ def test_hanging_request_openai():
                     "model_name": "openai-gpt",
                     "litellm_params": {"model": "gpt-3.5-turbo"},
                 },
-            ]
+            ],
+            num_retries=0,
         )
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
@@ -189,6 +221,7 @@ def test_timeout_streaming():
 # test_timeout_streaming()
 
 
+@pytest.mark.skip(reason="local test")
 def test_timeout_ollama():
     # this Will Raise a timeout
     import litellm

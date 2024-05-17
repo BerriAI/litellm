@@ -5,6 +5,7 @@ import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
 import ViewUserSpend from "./view_user_spend";
+import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
@@ -31,6 +32,12 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
 
+type TeamInterface = {
+  models: any[];
+  team_id: null;
+  team_alias: String
+}
+
 const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
@@ -55,8 +62,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const defaultTeam: TeamInterface = {
+    "models": [],
+    "team_alias": "Default Team",
+    "team_id": null
+  }
   const [selectedTeam, setSelectedTeam] = useState<any | null>(
-    teams ? teams[0] : null
+    teams ? teams[0] : defaultTeam
   );
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -140,7 +152,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             }
             setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
-            setSelectedTeam(response["teams"] ? response["teams"][0] : null);
+            const teamsArray = [...response['teams']];
+            if (teamsArray.length > 0) {
+                console.log(`response['teams']: ${teamsArray}`);
+                setSelectedTeam(teamsArray[0]);
+            } else {
+                setSelectedTeam(defaultTeam);
+            }
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -232,11 +250,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
+          <ViewUserTeam
+            userID={userID}
+            userRole={userRole}
+            selectedTeam={selectedTeam ? selectedTeam : null}
+            accessToken={accessToken}
+          />
           <ViewUserSpend
             userID={userID}
             userRole={userRole}
             accessToken={accessToken}
             userSpend={teamSpend}
+            selectedTeam = {selectedTeam ? selectedTeam : null}
+
           />
 
           <ViewKeyTable
@@ -246,6 +272,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             selectedTeam={selectedTeam ? selectedTeam : null}
             data={keys}
             setData={setKeys}
+            teams={teams}
           />
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
@@ -256,7 +283,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             data={keys}
             setData={setKeys}
           />
-          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} />
+          <DashboardTeam teams={teams} setSelectedTeam={setSelectedTeam} userRole={userRole}/>
         </Col>
       </Grid>
     </div>

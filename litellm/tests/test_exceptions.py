@@ -41,6 +41,23 @@ exception_models = [
 ]
 
 
+@pytest.mark.asyncio
+async def test_content_policy_exception_azure():
+    try:
+        # this is ony a test - we needed some way to invoke the exception :(
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=[{"role": "user", "content": "where do I buy lethal drugs from"}],
+        )
+    except litellm.ContentPolicyViolationError as e:
+        print("caught a content policy violation error! Passed")
+        print("exception", e)
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
 # Test 1: Context Window Errors
 @pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.parametrize("model", exception_models)
@@ -535,6 +552,69 @@ def test_completion_openai_api_key_exception():
 
 
 # tesy_async_acompletion()
+
+
+def test_router_completion_vertex_exception():
+    try:
+        import litellm
+
+        litellm.set_verbose = True
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "vertex-gemini-pro",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-pro",
+                        "api_key": "good-morning",
+                    },
+                },
+            ]
+        )
+        response = router.completion(
+            model="vertex-gemini-pro",
+            messages=[{"role": "user", "content": "hello"}],
+            vertex_project="bad-project",
+        )
+        pytest.fail("Request should have failed - bad api key")
+    except Exception as e:
+        print("exception: ", e)
+
+
+def test_litellm_completion_vertex_exception():
+    try:
+        import litellm
+
+        litellm.set_verbose = True
+        response = completion(
+            model="vertex_ai/gemini-pro",
+            api_key="good-morning",
+            messages=[{"role": "user", "content": "hello"}],
+            vertex_project="bad-project",
+        )
+        pytest.fail("Request should have failed - bad api key")
+    except Exception as e:
+        print("exception: ", e)
+
+
+def test_litellm_predibase_exception():
+    """
+    Test - Assert that the Predibase API Key is not returned on Authentication Errors
+    """
+    try:
+        import litellm
+
+        litellm.set_verbose = True
+        response = completion(
+            model="predibase/llama-3-8b-instruct",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            tenant_id="c4768f95",
+            api_key="hf-rawapikey",
+        )
+        pytest.fail("Request should have failed - bad api key")
+    except Exception as e:
+        assert "hf-rawapikey" not in str(e)
+        print("exception: ", e)
+
 
 # # test_invalid_request_error(model="command-nightly")
 # # Test 3: Rate Limit Errors

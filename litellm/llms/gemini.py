@@ -260,7 +260,7 @@ def completion(
                 message_obj = Message(content=item.content.parts[0].text)
             else:
                 message_obj = Message(content=None)
-            choice_obj = Choices(index=idx + 1, message=message_obj)
+            choice_obj = Choices(index=idx, message=message_obj)
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
     except Exception as e:
@@ -311,7 +311,7 @@ def completion(
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 
@@ -352,7 +352,7 @@ async def async_completion(
                 message_obj = Message(content=item.content.parts[0].text)
             else:
                 message_obj = Message(content=None)
-            choice_obj = Choices(index=idx + 1, message=message_obj)
+            choice_obj = Choices(index=idx, message=message_obj)
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
     except Exception as e:

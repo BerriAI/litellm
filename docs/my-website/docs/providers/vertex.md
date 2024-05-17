@@ -253,6 +253,7 @@ litellm.vertex_location = "us-central1 # Your Location
 ## Anthropic 
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
+| claude-3-opus@20240229   | `completion('vertex_ai/claude-3-opus@20240229', messages)` |
 | claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
 | claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
 
@@ -363,6 +364,8 @@ response = completion(
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-1.5-flash-preview-0514   | `completion('gemini-1.5-flash-preview-0514', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-1.5-pro-preview-0514   | `completion('gemini-1.5-pro-preview-0514', messages)`, `completion('vertex_ai/gemini-1.5-pro-preview-0514', messages)` |
 
 
 
@@ -476,6 +479,36 @@ print(response)
 | code-gecko@latest| `completion('code-gecko@latest', messages)` |
 
 
+## Embedding Models
+
+#### Usage - Embedding
+```python
+import litellm
+from litellm import embedding
+litellm.vertex_project = "hardy-device-38811" # Your Project ID
+litellm.vertex_location = "us-central1"  # proj location
+
+response = embedding(
+    model="vertex_ai/textembedding-gecko",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+#### Supported Embedding Models
+All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| textembedding-gecko | `embedding(model="vertex_ai/textembedding-gecko", input)` | 
+| textembedding-gecko-multilingual | `embedding(model="vertex_ai/textembedding-gecko-multilingual", input)` | 
+| textembedding-gecko-multilingual@001 | `embedding(model="vertex_ai/textembedding-gecko-multilingual@001", input)` | 
+| textembedding-gecko@001 | `embedding(model="vertex_ai/textembedding-gecko@001", input)` | 
+| textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
+| text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
+| text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+
+
 ## Extra
 
 ### Using `GOOGLE_APPLICATION_CREDENTIALS`
@@ -518,6 +551,12 @@ def load_vertex_ai_credentials():
 
 
 ### Using GCP Service Account 
+
+:::info
+
+Trying to deploy LiteLLM on Google Cloud Run? Tutorial [here](https://docs.litellm.ai/docs/proxy/deploy#deploy-on-google-cloud-run)
+
+:::
 
 1. Figure out the Service Account bound to the Google Cloud Run service
 

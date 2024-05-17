@@ -55,11 +55,11 @@ const Navbar: React.FC<NavbarProps> = ({
       <div className="text-left my-2 absolute top-0 left-0">
         <div className="flex flex-col items-center">
           <Link href="/">
-            <button className="text-gray-800 text-2xl py-1 rounded text-center">
+            <button className="text-gray-800 rounded text-center">
               <img
                 src={imageUrl}
-                width={200}
-                height={200}
+                width={160}
+                height={160}
                 alt="LiteLLM Brand"
                 className="mr-2"
               />
