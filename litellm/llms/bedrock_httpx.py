@@ -735,7 +735,19 @@ class BedrockLLM(BaseLLM):
                     inference_params[k] = v
             data = json.dumps({"prompt": prompt, **inference_params})
         else:
-            raise Exception("UNSUPPORTED PROVIDER")
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": inference_params,
+                },
+            )
+            raise Exception(
+                "Bedrock HTTPX: Unsupported provider={}, model={}".format(
+                    provider, model
+                )
+            )
 
         ## COMPLETION CALL
 
@@ -821,6 +833,14 @@ class BedrockLLM(BaseLLM):
                 raise BedrockError(
                     status_code=response.status_code, message=response.text
                 )
+
+            ## LOGGING
+            logging_obj.post_call(
+                input=messages,
+                api_key="",
+                original_response=response.text,
+                additional_args={"complete_input_dict": data},
+            )
 
             decoder = AWSEventStreamDecoder(model=model)
 
@@ -940,6 +960,15 @@ class BedrockLLM(BaseLLM):
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
         )
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=streaming_response,
+            additional_args={"complete_input_dict": data},
+        )
+
         return streaming_response
 
     def embedding(self, *args, **kwargs):
