@@ -26,7 +26,7 @@ class LicenseCheck:
 
             response_json = response.json()
 
-            premium = response_json["valid"]
+            premium = response_json["verify"]
 
             assert isinstance(premium, bool)
 
