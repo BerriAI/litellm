@@ -74,6 +74,9 @@ class ProxyLogging:
                 "budget_alerts",
                 "db_exceptions",
                 "daily_reports",
+                "spend_reports",
+                "cooldown_deployment",
+                "new_model_added",
             ]
         ] = [
             "llm_exceptions",
@@ -82,6 +85,9 @@ class ProxyLogging:
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
+            "cooldown_deployment",
+            "new_model_added",
         ]
         self.slack_alerting_instance = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
@@ -104,6 +110,9 @@ class ProxyLogging:
                     "budget_alerts",
                     "db_exceptions",
                     "daily_reports",
+                    "spend_reports",
+                    "cooldown_deployment",
+                    "new_model_added",
                 ]
             ]
         ] = None,
