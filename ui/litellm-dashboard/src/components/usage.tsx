@@ -3,15 +3,19 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem, DateRangePicker, DateRangePickerValue } from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
+  adminTopEndUsersCall,
   teamSpendLogsCall,
-  tagsSpendLogsCall
+  tagsSpendLogsCall,
+  modelMetricsCall,
+  modelAvailableCall,
+  modelInfoCall,
 } from "./networking";
 import { start } from "repl";
 
@@ -20,6 +24,7 @@ interface UsagePageProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  keys: any[] | null;
 }
 
 type CustomTooltipTypeBar = {
@@ -92,47 +97,14 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
 }
 type DataDict = { [key: string]: unknown };
 type UserData = { user_id: string; spend: number };
-function getTopUsers(data: Array<DataDict>): UserData[] {
-  const userSpend: { [key: string]: number } = {};
 
-  data.forEach((dict) => {
-    const payload: DataDict = dict["users"] as DataDict;
-    Object.entries(payload).forEach(([user_id, value]) => {
-      if (
-        user_id === "" ||
-        user_id === undefined ||
-        user_id === null ||
-        user_id == "None"
-      ) {
-        return;
-      }
-
-      if (!userSpend[user_id]) {
-        userSpend[user_id] = 0;
-      }
-      userSpend[user_id] += value as number;
-    });
-  });
-
-  const spendUsers: UserData[] = Object.entries(userSpend).map(
-    ([user_id, spend]) => ({
-      user_id,
-      spend,
-    })
-  );
-
-  spendUsers.sort((a, b) => b.spend - a.spend);
-
-  const topKeys = spendUsers.slice(0, 5);
-  console.log(`topKeys: ${Object.values(topKeys[0])}`);
-  return topKeys;
-}
 
 const UsagePage: React.FC<UsagePageProps> = ({
   accessToken,
   token,
   userRole,
   userID,
+  keys,
 }) => {
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
@@ -143,6 +115,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
+    to: new Date(),
+  });
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -157,6 +134,51 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
+
+  console.log("keys in usage", keys);
+
+  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
+    if (!startTime || !endTime || !accessToken) {
+      return;
+    }
+
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
+
+    console.log("uiSelectedKey", uiSelectedKey);
+
+    let newTopUserData = await adminTopEndUsersCall(
+      accessToken,
+      uiSelectedKey,
+      startTime.toISOString(),
+      endTime.toISOString()
+    )
+    console.log("End user data updated successfully", newTopUserData);
+    setTopUsers(newTopUserData);
+  
+  }
+
+  const updateTagSpendData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
+    if (!startTime || !endTime || !accessToken) {
+      return;
+    }
+
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
+
+    let top_tags = await tagsSpendLogsCall(accessToken, startTime.toISOString(), endTime.toISOString());
+    setTopTagsData(top_tags.spend_per_tag);
+    console.log("Tag spend data updated successfully");
+
+
+
+  }
 
   function formatDate(date: Date) {
     const year = date.getFullYear();
@@ -190,7 +212,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             setKeySpendData(overall_spend);
             const top_keys = await adminTopKeysCall(accessToken);
             const filtered_keys = top_keys.map((k: any) => ({
-              key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
+              key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(
                 0,
                 10
               ),
@@ -215,14 +237,26 @@ const UsagePage: React.FC<UsagePageProps> = ({
             total_spend_per_team = total_spend_per_team.map((tspt: any) => {
               tspt["name"] = tspt["team_id"] || "";
               tspt["value"] = tspt["total_spend"] || 0;
+              // round the value to 2 decimal places
+
+              tspt["value"] = tspt["value"].toFixed(2);
+              
+
               return tspt;
             })
 
             setTotalSpendPerTeam(total_spend_per_team);
 
             //get top tags
-            const top_tags = await tagsSpendLogsCall(accessToken);
-            setTopTagsData(top_tags.top_10_tags);
+            const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString());
+            setTopTagsData(top_tags.spend_per_tag);
+
+            // get spend per end-user
+            let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
+            setTopUsers(spend_user_call);
+
+            console.log("spend/user result", spend_user_call);
+
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -254,7 +288,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   spend: k["spend"],
                 }));
                 setTopKeys(filtered_keys);
-                setTopUsers(getTopUsers(response));
                 setKeySpendData(response);
               }
             });
@@ -268,6 +301,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
     }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
+
   return (
     <div style={{ width: "100%" }} className="p-8">
       <ViewUserSpend
@@ -275,11 +309,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             userSpend={null}
+            selectedTeam={null}
           />
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
+          <Tab>End User Usage</Tab>
            <Tab>Tag Based Usage</Tab>
         </TabList>
         <TabPanels>
@@ -318,23 +354,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 </Card>
               </Col>
               <Col numColSpan={1}>
-                <Card>
-                  <Title>Top Users</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={topUsers}
-                    index="user_id"
-                    categories={["spend"]}
-                    colors={["blue"]}
-                    yAxisWidth={200}
-                    layout="vertical"
-                    showXAxis={false}
-                    showLegend={false}
-                  />
-                </Card>
-              </Col>
-              <Col numColSpan={1}>
-                <Card>
+              <Card>
                   <Title>Top Models</Title>
                   <BarChart
                     className="mt-4 h-40"
@@ -348,6 +368,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     showLegend={false}
                   />
                 </Card>
+               
+              </Col>
+              <Col numColSpan={1}>
+                
               </Col>
             </Grid>
             </TabPanel>
@@ -370,6 +394,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   index="date"
                   categories={uniqueTeamIds}
                   yAxisWidth={80}
+                  colors={["blue", "green", "yellow", "red", "purple"]}
                   
                   stack={true}
                 />
@@ -380,46 +405,119 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
+            <p className="mb-2 text-gray-500 italic text-[12px]">End-Users of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
+              <Grid numItems={2}>
+                <Col>
+                <Text>Select Time Range</Text>
+       
+              <DateRangePicker 
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateEndUserData(value.from, value.to, null); // Call updateModelMetrics with the new date range
+                  }}
+                />
+                         </Col>
+                         <Col>
+                  <Text>Select Key</Text>
+                  <Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      updateEndUserData(dateValue.from, dateValue.to, null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            onClick={() => {
+                              updateEndUserData(dateValue.from, dateValue.to, key["token"]);
+                            }}
+                          >
+                            {key["key_alias"]}
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+                  </Col>
+
+              </Grid>
+            
+                
+                
+              <Card className="mt-4">
+
+
+             
+              <Table className="max-h-[70vh] min-h-[500px]">
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>End User</TableHeaderCell>
+                      <TableHeaderCell>Spend</TableHeaderCell>
+                      <TableHeaderCell>Total Events</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+
+                  <TableBody>
+                    {topUsers?.map((user: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell>{user.end_user}</TableCell>
+                        <TableCell>{user.total_spend?.toFixed(4)}</TableCell>
+                        <TableCell>{user.total_count}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+              </Card>
+
+            </TabPanel>
+            <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
-              <Col numColSpan={2}>
+            <Col numColSpan={2}>
+            <DateRangePicker 
+                  className="mb-4"
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateTagSpendData(value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+              />
 
               <Card>
-              <Title>Spend Per Tag - Last 30 Days</Title>
-              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>Tag</TableHeaderCell>
-                    <TableHeaderCell>Spend</TableHeaderCell>
-                    <TableHeaderCell>Requests</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {topTagsData.map((tag) => (
-                    <TableRow key={tag.name}>
-                      <TableCell>{tag.name}</TableCell>
-                      <TableCell>{tag.value}</TableCell>
-                      <TableCell>{tag.log_count}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-                {/* <BarChart
-                  className="h-72"
-                  data={teamSpendData}
-                  showLegend={true}
-                  index="date"
-                  categories={uniqueTeamIds}
-                  yAxisWidth={80}
-                  
-                  stack={true}
-                /> */}
+              <Title>Spend Per Tag</Title>
+              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
+             <BarChart
+              className="h-72"
+              data={topTagsData}
+              index="name"
+              categories={["spend"]}
+              colors={["blue"]}
+             >
+
+             </BarChart>
               </Card>
               </Col>
               <Col numColSpan={2}>
               </Col>
             </Grid>
             </TabPanel>
+            
         </TabPanels>
       </TabGroup>
     </div>

@@ -90,10 +90,10 @@ class TmpFunction:
         print(f"ON ASYNC LOGGING")
         self.async_success = True
         print(
-            f'kwargs.get("complete_streaming_response"): {kwargs.get("complete_streaming_response")}'
+            f'kwargs.get("async_complete_streaming_response"): {kwargs.get("async_complete_streaming_response")}'
         )
         self.complete_streaming_response_in_callback = kwargs.get(
-            "complete_streaming_response"
+            "async_complete_streaming_response"
         )
 
 
@@ -115,6 +115,10 @@ async def test_async_chat_openai_stream():
             print(complete_streaming_response)
 
         complete_streaming_response = complete_streaming_response.strip("'")
+
+        await asyncio.sleep(3)
+
+        # problematic line
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"
         ]["content"]
@@ -412,7 +416,7 @@ async def test_cost_tracking_with_caching():
     """
     from litellm import Cache
 
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     litellm.cache = Cache(
         type="redis",
         host=os.environ["REDIS_HOST"],
@@ -433,8 +437,9 @@ async def test_cost_tracking_with_caching():
         max_tokens=40,
         temperature=0.2,
         caching=True,
+        mock_response="Hey, i'm doing well!",
     )
-    await asyncio.sleep(1)  # success callback is async
+    await asyncio.sleep(3)  # success callback is async
     response_cost = customHandler_optional_params.response_cost
     assert response_cost > 0
     response2 = await litellm.acompletion(

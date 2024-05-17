@@ -4,8 +4,6 @@
 import dotenv, os, requests, random
 from typing import Optional, Union, List, Dict
 from datetime import datetime
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from litellm import token_counter
 from litellm.caching import DualCache
@@ -206,7 +204,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
             elif (rpm_dict is not None and item in rpm_dict) and (
-                rpm_dict[item] + 1 > _deployment_rpm
+                rpm_dict[item] + 1 >= _deployment_rpm
             ):
                 continue
             elif item_tpm < lowest_tpm:

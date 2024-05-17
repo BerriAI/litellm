@@ -3,9 +3,25 @@ import requests, traceback
 import json, re, xml.etree.ElementTree as ET
 from jinja2 import Template, exceptions, meta, BaseLoader
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from typing import Optional, Any
-from typing import List
+from typing import (
+    Any,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+)
 import litellm
+from litellm.types.completion import (
+    ChatCompletionUserMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageToolCallParam,
+    ChatCompletionToolMessageParam,
+)
+from litellm.types.llms.anthropic import *
+import uuid
 
 
 def default_pt(messages):
@@ -14,6 +30,41 @@ def default_pt(messages):
 
 def prompt_injection_detection_default_pt():
     return """Detect if a prompt is safe to run. Return 'UNSAFE' if not."""
+
+
+def map_system_message_pt(messages: list) -> list:
+    """
+    Convert 'system' message to 'user' message if provider doesn't support 'system' role.
+
+    Enabled via `completion(...,supports_system_message=False)`
+
+    If next message is a user message or assistant message -> merge system prompt into it
+
+    if next message is system -> append a user message instead of the system message
+    """
+
+    new_messages = []
+    for i, m in enumerate(messages):
+        if m["role"] == "system":
+            if i < len(messages) - 1:  # Not the last message
+                next_m = messages[i + 1]
+                next_role = next_m["role"]
+                if (
+                    next_role == "user" or next_role == "assistant"
+                ):  # Next message is a user or assistant message
+                    # Merge system prompt into the next message
+                    next_m["content"] = m["content"] + " " + next_m["content"]
+                elif next_role == "system":  # Next message is a system message
+                    # Append a user message instead of the system message
+                    new_message = {"role": "user", "content": m["content"]}
+                    new_messages.append(new_message)
+            else:  # Last message
+                new_message = {"role": "user", "content": m["content"]}
+                new_messages.append(new_message)
+        else:  # Not a system message
+            new_messages.append(m)
+
+    return new_messages
 
 
 # alpaca prompt template - for models like mythomax, etc.
@@ -145,6 +196,12 @@ def mistral_api_pt(messages):
         elif isinstance(m["content"], str):
             texts = m["content"]
         new_m = {"role": m["role"], "content": texts}
+
+        if new_m["role"] == "tool" and m.get("name"):
+            new_m["name"] = m["name"]
+        if m.get("tool_calls"):
+            new_m["tool_calls"] = m["tool_calls"]
+
         new_messages.append(new_m)
     return new_messages
 
@@ -218,6 +275,26 @@ def phind_codellama_pt(messages):
     return prompt
 
 
+known_tokenizer_config = {
+    "mistralai/Mistral-7B-Instruct-v0.1": {
+        "tokenizer": {
+            "chat_template": "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+        },
+        "status": "success",
+    },
+    "meta-llama/Meta-Llama-3-8B-Instruct": {
+        "tokenizer": {
+            "chat_template": "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}",
+            "bos_token": "<|begin_of_text|>",
+            "eos_token": "",
+        },
+        "status": "success",
+    },
+}
+
+
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
@@ -246,20 +323,23 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             else:
                 return {"status": "failure"}
 
-        tokenizer_config = _get_tokenizer_config(model)
+        if model in known_tokenizer_config:
+            tokenizer_config = known_tokenizer_config[model]
+        else:
+            tokenizer_config = _get_tokenizer_config(model)
         if (
             tokenizer_config["status"] == "failure"
             or "chat_template" not in tokenizer_config["tokenizer"]
         ):
             raise Exception("No chat template found")
         ## read the bos token, eos token and chat template from the json
-        tokenizer_config = tokenizer_config["tokenizer"]
-        bos_token = tokenizer_config["bos_token"]
-        eos_token = tokenizer_config["eos_token"]
-        chat_template = tokenizer_config["chat_template"]
+        tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
 
+        bos_token = tokenizer_config["bos_token"]  # type: ignore
+        eos_token = tokenizer_config["eos_token"]  # type: ignore
+        chat_template = tokenizer_config["chat_template"]  # type: ignore
     try:
-        template = env.from_string(chat_template)
+        template = env.from_string(chat_template)  # type: ignore
     except Exception as e:
         raise e
 
@@ -402,6 +482,35 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
     return prompt
 
 
+### IBM Granite
+
+
+def ibm_granite_pt(messages: list):
+    """
+    IBM's Granite models uses the template:
+    <|system|> {system_message} <|user|> {user_message} <|assistant|> {assistant_message}
+
+    See: https://www.ibm.com/docs/en/watsonx-as-a-service?topic=solutions-supported-foundation-models
+    """
+    return custom_prompt(
+        messages=messages,
+        role_dict={
+            "system": {
+                "pre_message": "<|system|>\n",
+                "post_message": "\n",
+            },
+            "user": {
+                "pre_message": "<|user|>\n",
+                "post_message": "\n",
+            },
+            "assistant": {
+                "pre_message": "<|assistant|>\n",
+                "post_message": "\n",
+            },
+        },
+    ).strip()
+
+
 ### ANTHROPIC ###
 
 
@@ -466,10 +575,11 @@ def construct_tool_use_system_prompt(
 ):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
     tool_str_list = []
     for tool in tools:
+        tool_function = get_attribute_or_key(tool, "function")
         tool_str = construct_format_tool_for_claude_prompt(
-            tool["function"]["name"],
-            tool["function"].get("description", ""),
-            tool["function"].get("parameters", {}),
+            get_attribute_or_key(tool_function, "name"),
+            get_attribute_or_key(tool_function, "description", ""),
+            get_attribute_or_key(tool_function, "parameters", {}),
         )
         tool_str_list.append(tool_str)
     tool_use_system_prompt = (
@@ -593,7 +703,8 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
     </function_results>
     """
     name = message.get("name")
-    content = message.get("content")
+    content = message.get("content", "")
+    content = content.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
@@ -614,13 +725,15 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
 def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
     invokes = ""
     for tool in tool_calls:
-        if tool["type"] != "function":
+        if get_attribute_or_key(tool, "type") != "function":
             continue
 
-        tool_name = tool["function"]["name"]
+        tool_function = get_attribute_or_key(tool, "function")
+        tool_name = get_attribute_or_key(tool_function, "name")
+        tool_arguments = get_attribute_or_key(tool_function, "arguments")
         parameters = "".join(
             f"<{param}>{val}</{param}>\n"
-            for param, val in json.loads(tool["function"]["arguments"]).items()
+            for param, val in json.loads(tool_arguments).items()
         )
         invokes += (
             "<invoke>\n"
@@ -674,7 +787,7 @@ def anthropic_messages_pt_xml(messages: list):
                     {
                         "type": "text",
                         "text": (
-                            convert_to_anthropic_tool_result(messages[msg_i])
+                            convert_to_anthropic_tool_result_xml(messages[msg_i])
                             if messages[msg_i]["role"] == "tool"
                             else messages[msg_i]["content"]
                         ),
@@ -695,7 +808,7 @@ def anthropic_messages_pt_xml(messages: list):
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
-                assistant_text += convert_to_anthropic_tool_invoke(  # type: ignore
+                assistant_text += convert_to_anthropic_tool_invoke_xml(  # type: ignore
                     messages[msg_i]["tool_calls"]
                 )
 
@@ -705,7 +818,7 @@ def anthropic_messages_pt_xml(messages: list):
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -737,6 +850,13 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
         "name": "get_current_weather",
         "content": "function result goes here",
     },
+
+    OpenAI message with a function call result looks like:
+    {
+        "role": "function",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    }
     """
 
     """
@@ -753,18 +873,42 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
         ]
     }
     """
-    tool_call_id = message.get("tool_call_id")
-    content = message.get("content")
+    if message["role"] == "tool":
+        tool_call_id = message.get("tool_call_id")
+        content = message.get("content")
 
-    # We can't determine from openai message format whether it's a successful or
-    # error call result so default to the successful result template
-    anthropic_tool_result = {
-        "type": "tool_result",
-        "tool_use_id": tool_call_id,
-        "content": content,
-    }
+        # We can't determine from openai message format whether it's a successful or
+        # error call result so default to the successful result template
+        anthropic_tool_result = {
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": content,
+        }
+        return anthropic_tool_result
+    elif message["role"] == "function":
+        content = message.get("content")
+        anthropic_tool_result = {
+            "type": "tool_result",
+            "tool_use_id": str(uuid.uuid4()),
+            "content": content,
+        }
+        return anthropic_tool_result
+    return {}
 
-    return anthropic_tool_result
+
+def convert_function_to_anthropic_tool_invoke(function_call):
+    try:
+        anthropic_tool_invoke = [
+            {
+                "type": "tool_use",
+                "id": str(uuid.uuid4()),
+                "name": get_attribute_or_key(function_call, "name"),
+                "input": json.loads(get_attribute_or_key(function_call, "arguments")),
+            }
+        ]
+        return anthropic_tool_invoke
+    except Exception as e:
+        raise e
 
 
 def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
@@ -807,12 +951,18 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
     anthropic_tool_invoke = [
         {
             "type": "tool_use",
-            "id": tool["id"],
-            "name": tool["function"]["name"],
-            "input": json.loads(tool["function"]["arguments"]),
+            "id": get_attribute_or_key(tool, "id"),
+            "name": get_attribute_or_key(
+                get_attribute_or_key(tool, "function"), "name"
+            ),
+            "input": json.loads(
+                get_attribute_or_key(
+                    get_attribute_or_key(tool, "function"), "arguments"
+                )
+            ),
         }
         for tool in tool_calls
-        if tool["type"] == "function"
+        if get_attribute_or_key(tool, "type") == "function"
     ]
 
     return anthropic_tool_invoke
@@ -821,7 +971,7 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
 def anthropic_messages_pt(messages: list):
     """
     format messages for anthropic
-    1. Anthropic supports roles like "user" and "assistant", (here litellm translates system-> assistant)
+    1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately)
     2. The first message always needs to be of role "user"
     3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
     4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
@@ -829,12 +979,14 @@ def anthropic_messages_pt(messages: list):
     6. Ensure we only accept role, content. (message.name is not supported)
     """
     # add role=tool support to allow function call result/error submission
-    user_message_types = {"user", "tool"}
+    user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages = []
+    new_messages: list = []
     msg_i = 0
+    tool_use_param = False
     while msg_i < len(messages):
         user_content = []
+        init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
             if isinstance(messages[msg_i]["content"], list):
@@ -850,7 +1002,10 @@ def anthropic_messages_pt(messages: list):
                         )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
-            elif messages[msg_i]["role"] == "tool":
+            elif (
+                messages[msg_i]["role"] == "tool"
+                or messages[msg_i]["role"] == "function"
+            ):
                 # OpenAI's tool message content will always be a string
                 user_content.append(convert_to_anthropic_tool_result(messages[msg_i]))
             else:
@@ -879,12 +1034,25 @@ def anthropic_messages_pt(messages: list):
                     convert_to_anthropic_tool_invoke(messages[msg_i]["tool_calls"])
                 )
 
+            if messages[msg_i].get("function_call"):
+                assistant_content.extend(
+                    convert_function_to_anthropic_tool_invoke(
+                        messages[msg_i]["function_call"]
+                    )
+                )
+
             msg_i += 1
 
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
 
-    if new_messages[0]["role"] != "user":
+        if msg_i == init_msg_i:  # prevent infinite loops
+            raise Exception(
+                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
+                    messages[msg_i]
+                )
+            )
+    if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
                 0, {"role": "user", "content": [{"type": "text", "text": "."}]}
@@ -895,11 +1063,14 @@ def anthropic_messages_pt(messages: list):
             )
 
     if new_messages[-1]["role"] == "assistant":
-        for content in new_messages[-1]["content"]:
-            if isinstance(content, dict) and content["type"] == "text":
-                content["text"] = content[
-                    "text"
-                ].rstrip()  # no trailing whitespace for final assistant message
+        if isinstance(new_messages[-1]["content"], str):
+            new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
+        elif isinstance(new_messages[-1]["content"], list):
+            for content in new_messages[-1]["content"]:
+                if isinstance(content, dict) and content["type"] == "text":
+                    content["text"] = content[
+                        "text"
+                    ].rstrip()  # no trailing whitespace for final assistant message
 
     return new_messages
 
@@ -978,6 +1149,30 @@ def get_system_prompt(messages):
     return system_prompt, messages
 
 
+def convert_to_documents(
+    observations: Any,
+) -> List[MutableMapping]:
+    """Converts observations into a 'document' dict"""
+    documents: List[MutableMapping] = []
+    if isinstance(observations, str):
+        # strings are turned into a key/value pair and a key of 'output' is added.
+        observations = [{"output": observations}]
+    elif isinstance(observations, Mapping):
+        # single mappings are transformed into a list to simplify the rest of the code.
+        observations = [observations]
+    elif not isinstance(observations, Sequence):
+        # all other types are turned into a key/value pair within a list
+        observations = [{"output": observations}]
+
+    for doc in observations:
+        if not isinstance(doc, Mapping):
+            # types that aren't Mapping are turned into a key/value pair.
+            doc = {"output": doc}
+        documents.append(doc)
+
+    return documents
+
+
 def convert_openai_message_to_cohere_tool_result(message):
     """
     OpenAI message with a tool result looks like:
@@ -1019,7 +1214,7 @@ def convert_openai_message_to_cohere_tool_result(message):
             "parameters": {"location": "San Francisco, CA"},
             "generation_id": tool_call_id,
         },
-        "outputs": [content],
+        "outputs": convert_to_documents(content),
     }
     return cohere_tool_result
 
@@ -1032,8 +1227,9 @@ def cohere_message_pt(messages: list):
         if message["role"] == "tool":
             tool_result = convert_openai_message_to_cohere_tool_result(message)
             tool_results.append(tool_result)
-        else:
-            prompt += message["content"]
+        elif message.get("content"):
+            prompt += message["content"] + "\n\n"
+    prompt = prompt.rstrip()
     return prompt, tool_results
 
 
@@ -1107,12 +1303,6 @@ def _gemini_vision_convert_messages(messages: list):
     Returns:
         tuple: A tuple containing the prompt (a string) and the processed images (a list of objects representing the images).
     """
-    try:
-        from PIL import Image
-    except:
-        raise Exception(
-            "gemini image conversion failed please run `pip install Pillow`"
-        )
 
     try:
         # given messages for gpt-4 vision, convert them for gemini
@@ -1139,6 +1329,12 @@ def _gemini_vision_convert_messages(messages: list):
                 image = _load_image_from_url(img)
                 processed_images.append(image)
             else:
+                try:
+                    from PIL import Image
+                except:
+                    raise Exception(
+                        "gemini image conversion failed please run `pip install Pillow`"
+                    )
                 # Case 2: Image filepath (e.g. temp.jpeg) given
                 image = Image.open(img)
                 processed_images.append(image)
@@ -1286,7 +1482,11 @@ def prompt_factory(
             messages=messages, prompt_format=prompt_format, chat_template=chat_template
         )
     elif custom_llm_provider == "gemini":
-        if model == "gemini-pro-vision":
+        if (
+            model == "gemini-pro-vision"
+            or litellm.supports_vision(model=model)
+            or litellm.supports_vision(model=custom_llm_provider + "/" + model)
+        ):
             return _gemini_vision_convert_messages(messages=messages)
         else:
             return gemini_text_image_pt(messages=messages)
@@ -1302,15 +1502,62 @@ def prompt_factory(
                 return anthropic_pt(messages=messages)
         elif "mistral." in model:
             return mistral_instruct_pt(messages=messages)
+        elif "llama2" in model and "chat" in model:
+            return llama_2_chat_pt(messages=messages)
+        elif "llama3" in model and "instruct" in model:
+            return hf_chat_template(
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
+                messages=messages,
+            )
+
+    elif custom_llm_provider == "clarifai":
+        if "claude" in model:
+            return anthropic_pt(messages=messages)
+        
     elif custom_llm_provider == "perplexity":
         for message in messages:
             message.pop("name", None)
         return messages
     elif custom_llm_provider == "azure_text":
         return azure_text_pt(messages=messages)
+    elif custom_llm_provider == "watsonx":
+        if "granite" in model and "chat" in model:
+            # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
+            return ibm_granite_pt(messages=messages)
+        elif "ibm-mistral" in model and "instruct" in model:
+            # models like ibm-mistral/mixtral-8x7b-instruct-v01-q use the mistral instruct prompt template
+            return mistral_instruct_pt(messages=messages)
+        elif "meta-llama/llama-3" in model and "instruct" in model:
+            # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
+            return custom_prompt(
+                role_dict={
+                    "system": {
+                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "user": {
+                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                },
+                messages=messages,
+                initial_prompt_value="<|begin_of_text|>",
+                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
+            )
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
+        elif (
+            "meta-llama/llama-3" in model or "meta-llama-3" in model
+        ) and "instruct" in model:
+            return hf_chat_template(
+                model="meta-llama/Meta-Llama-3-8B-Instruct",
+                messages=messages,
+            )
         elif (
             "tiiuae/falcon" in model
         ):  # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
@@ -1351,3 +1598,9 @@ def prompt_factory(
         return default_pt(
             messages=messages
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
+
+
+def get_attribute_or_key(tool_or_function, attribute, default=None):
+    if hasattr(tool_or_function, attribute):
+        return getattr(tool_or_function, attribute)
+    return tool_or_function.get(attribute, default)

@@ -8,13 +8,22 @@ For companies that need SSO, user management and professional support for LiteLL
 :::
 
 This covers: 
-- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Features under the [LiteLLM Commercial License (Content Mod, Custom Tags, etc.)](https://docs.litellm.ai/docs/proxy/enterprise)**
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
 - ✅ **Custom SLAs**
-- ✅ **Secure access with Single Sign-On**
+- ✅ [**Secure UI access with Single Sign-On**](../docs/proxy/ui.md#setup-ssoauth-for-ui)
+- ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
 
+
+## [COMING SOON] AWS Marketplace Support
+
+Deploy managed LiteLLM Proxy within your VPC.
+
+Includes all enterprise features.
+
+[**Get early access**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 ## Frequently Asked Questions
 

@@ -17,10 +17,11 @@ import {
   DialogPanel,
   Text,
   Title,
+  Subtitle,
   Icon,
   BarChart,
 } from "@tremor/react";
-
+import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -31,8 +32,6 @@ import {
   message,
   Select,
 } from "antd";
-
-import ViewKeySpendReport from "./view_key_spend_report";
 
 const { Option } = Select;
 
@@ -52,6 +51,7 @@ interface ViewKeyTableProps {
   selectedTeam: any | null;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: any[] | null;
 }
 
 interface ItemData {
@@ -78,11 +78,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   selectedTeam,
   data,
   setData,
+  teams
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
-  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
   const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
   const [spendData, setSpendData] = useState<{ day: string; spend: number }[] | null>(
     null
@@ -90,8 +90,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [predictedSpendString, setPredictedSpendString] = useState("");
 
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [infoDialogVisible, setInfoDialogVisible] = useState(false);
   const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
   const [userModels, setUserModels] = useState([]);
+  const initialKnownTeamIDs: Set<string> = new Set();
+
+  const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
   useEffect(() => {
     const fetchUserModels = async () => {
@@ -116,13 +120,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
+  useEffect(() => {
+    if (teams) {
+      const teamIDSet: Set<string> = new Set();
+      teams.forEach((team: any, index: number) => {
+        const team_obj: string = team.team_id
+        teamIDSet.add(team_obj);
+      });
+      setKnownTeamIDs(teamIDSet)
+    }
+  }, [teams])
   const EditKeyModal: React.FC<EditKeyModalProps> = ({ visible, onCancel, token, onSubmit }) => {
     const [form] = Form.useForm();
-
-    console.log("in edit key modal:", token);
-    console.log("in edit key modal, team:", selectedTeam);
-
-    
+    const [keyTeam, setKeyTeam] = useState(selectedTeam);
+    const [errorModels, setErrorModels] = useState<string[]>([]);
+    const [errorBudget, setErrorBudget] = useState<boolean>(false);
 
     const handleOk = () => {
       form
@@ -135,8 +147,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         .catch((error) => {
           console.error("Validation failed:", error);
         });
-  };
-  
+      };
+
     return (
         <Modal
               title="Edit Key"
@@ -164,7 +176,24 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 <Input />
               </Form.Item>
 
-              <Form.Item label="Models" name="models">
+              <Form.Item label="Models" name="models" rules={[
+                {
+                  validator: (rule, value) => {
+                    const errorModels = value.filter((model: string) => (
+                      !keyTeam.models.includes(model) && 
+                      model !== "all-team-models" && 
+                      model !== "all-proxy-models" && 
+                      !keyTeam.models.includes("all-proxy-models")
+                    ));
+                    console.log(`errorModels: ${errorModels}`)
+                    if (errorModels.length > 0) {
+                      return Promise.reject(`Some models are not part of the new team\'s models - ${errorModels}Team models: ${keyTeam.models}`);
+                    } else {
+                      return Promise.resolve();
+                    }
+                  }
+                }
+              ]}>
                 <Select
                   mode="multiple"
                   placeholder="Select models"
@@ -173,42 +202,40 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Option key="all-team-models" value="all-team-models">
                     All Team Models
                   </Option>                
-                  {selectedTeam && selectedTeam.models ? (
-  selectedTeam.models.includes("all-proxy-models") ? (
-    userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
-      <Option key={model} value={model}>
-        {model}
-      </Option>
-    ))
-  ) : (
-    selectedTeam.models.map((model: string) => (
-      <Option key={model} value={model}>
-        {model}
-      </Option>
-    ))
-  )
-) : (
-  userModels.map((model: string) => (
-    <Option key={model} value={model}>
-      {model}
-    </Option>
-  ))
-)}
-
-
-
+                  {keyTeam && keyTeam.models ? (
+                    keyTeam.models.includes("all-proxy-models") ? (
+                      userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    ) : (
+                      keyTeam.models.map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                    )
+                  ) : (
+                    userModels.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                  )}
                 </Select>
               </Form.Item>
               <Form.Item 
                 className="mt-8"
                 label="Max Budget (USD)" 
                 name="max_budget" 
-                help={`Budget cannot exceed team max budget: $${selectedTeam?.max_budget !== null && selectedTeam?.max_budget !== undefined ? selectedTeam?.max_budget : 'unlimited'}`}
+                help={`Budget cannot exceed team max budget: ${keyTeam?.max_budget !== null && keyTeam?.max_budget !== undefined ? keyTeam?.max_budget : 'unlimited'}`}
                 rules={[
                   {
                       validator: async (_, value) => {
-                          if (value && selectedTeam && selectedTeam.max_budget !== null && value > selectedTeam.max_budget) {
-                              throw new Error(`Budget cannot exceed team max budget: $${selectedTeam.max_budget}`);
+                          if (value && keyTeam && keyTeam.max_budget !== null && value > keyTeam.max_budget) {
+                              console.log(`keyTeam.max_budget: ${keyTeam.max_budget}`)
+                              throw new Error(`Budget cannot exceed team max budget: $${keyTeam.max_budget}`);
                           }
                       },
                   },
@@ -221,7 +248,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   name="token"
                   hidden={true}
                 ></Form.Item>
-
+              <Form.Item 
+                label="Team" 
+                name="team_id"
+                help="the team this key belongs to"
+              >
+                <Select3 value={token.team_alias}>
+                {teams?.map((team_obj, index) => (
+                    <SelectItem
+                      key={index}
+                      value={team_obj.team_id}
+                      onClick={() => setKeyTeam(team_obj)}
+                    >
+                      {team_obj.team_alias}
+                    </SelectItem>
+                  ))}
+              </Select3>
+              </Form.Item>
             </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Edit Key</Button2>
@@ -247,19 +290,24 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setEditModalVisible(true);
   };
 
-const handleEditCancel = () => {
-  setEditModalVisible(false);
-  setSelectedToken(null);
-};
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedToken(null);
+  };
 
-const handleEditSubmit = async (formValues: Record<string, any>) => {
-  // Call API to update team with teamId and values
+  const handleEditSubmit = async (formValues: Record<string, any>) => {
+  /**
+   * Call API to update team with teamId and values
+   * 
+   * Client-side validation: For selected team, ensure models in team + max budget < team max budget
+   */
   if (accessToken == null) {
     return;
   }
+
   const currentKey = formValues.token; 
   formValues.key = currentKey;
-  
+
   console.log("handleEditSubmit:", formValues);
 
   let newKeyValues = await keyUpdateCall(accessToken, formValues);
@@ -276,49 +324,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
 
   setEditModalVisible(false);
   setSelectedToken(null);
-};
-
-
-
-  // call keySpendLogsCall and set the data
-  const fetchData = async (item: ItemData | null) => {
-    try {
-      if (accessToken == null || item == null) {
-        return;
-      }
-      console.log(`accessToken: ${accessToken}; token: ${item.token}`);
-      const response = await keySpendLogsCall(accessToken, item.token);
-
-      console.log("Response:", response);
-      setSpendData(response);
-
-      // predict spend based on response
-      try {
-        const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
-        console.log("Response2:", predictedSpend);
-
-        // append predictedSpend to data
-        const combinedData = [...response, ...predictedSpend.response];
-        setSpendData(combinedData);
-        setPredictedSpendString(predictedSpend.predicted_spend)
-
-        console.log("Combined Data:", combinedData);
-      } catch (error) {
-        console.error("There was an error fetching the predicted data", error);
-      }
-      
-      // setPredictedSpend(predictedSpend);
-      
-    } catch (error) {
-      console.error("There was an error fetching the data", error);
-    }
   };
 
-  useEffect(() => {
-      fetchData(selectedItem);
-  }, [selectedItem]);
-
-  
 
   const handleDelete = async (token: any) => {
     console.log("handleDelete:", token);
@@ -366,30 +373,19 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
   if (data == null) {
     return;
   }
-
-  // useEffect(() => {
-  //   if (openDialogId !== null && selectedItem !== null) {
-  //     fetchData(selectedItem);
-  //   }
-  // }, [openDialogId, selectedItem]);
-
   console.log("RERENDER TRIGGERED");
   return (
     <div>
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
-      <Table className="mt-5">
+      <Table className="mt-5 max-h-[300px] min-h-[300px]">
         <TableHead>
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
-            {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
-            {/* <TableHeaderCell>Team</TableHeaderCell> */}
-            {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-            {/* <TableHeaderCell>Expires</TableHeaderCell> */}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -400,9 +396,17 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               return null;
             }
             if (selectedTeam) {
-              if (item.team_id != selectedTeam.team_id) {
+              /**
+               * if selected team id is null -> show the keys with no team id or team id's that don't exist in db
+               */
+              console.log(`item team id: ${item.team_id}, knownTeamIDs.has(item.team_id): ${knownTeamIDs.has(item.team_id)}, selectedTeam id: ${selectedTeam.team_id}`)
+              if (selectedTeam.team_id == null && item.team_id !== null && !knownTeamIDs.has(item.team_id)) {
+                // do nothing -> returns a row with this key
+              }
+              else if (item.team_id != selectedTeam.team_id) {
                 return null;
               }
+              console.log(`item team id: ${item.team_id}, is returned`)
             }
             return (
               <TableRow key={item.token}>
@@ -511,25 +515,27 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 <TableCell>
                     <Icon
                       onClick={() => {
-                        setSelectedItem(item);
-                        setOpenDialogId(item.id);
+                        setSelectedToken(item);
+                        setInfoDialogVisible(true);
                       }}
                       icon={InformationCircleIcon}
                       size="sm"
                     />
+                    
                 
-                <Dialog
-  open={openDialogId !== null}
-  onClose={() => {
-    setOpenDialogId(null);
-    setSelectedItem(null);
-  }}
+    <Modal
+      open={infoDialogVisible}
+      onCancel={() => {
+        setInfoDialogVisible(false);
+        setSelectedToken(null);
+      }}
+      footer={null}
+      width={800}
+    >
 
->
-  <DialogPanel>
-    {selectedItem && (
+    {selectedToken && (
       <>
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-8">
           <Card>
             <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
               Spend
@@ -538,9 +544,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
               <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
               {(() => {
                       try {
-                        return parseFloat(selectedItem.spend).toFixed(4);
+                        return parseFloat(selectedToken.spend).toFixed(4);
                       } catch (error) {
-                        return selectedItem.spend;
+                        return selectedToken.spend;
                       }
                     })()}
 
@@ -553,8 +559,8 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             </p>
             <div className="mt-2 flex items-baseline space-x-2.5">
               <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-              {selectedItem.max_budget != null ? (
-                  <>{selectedItem.max_budget}</>
+              {selectedToken.max_budget != null ? (
+                  <>{selectedToken.max_budget}</>
                 ) : (
                   <>Unlimited</>
                 )}
@@ -567,9 +573,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             </p>
             <div className="mt-2 flex items-baseline space-x-2.5">
               <p className="text-tremor-default font-small text-tremor-content-strong dark:text-dark-tremor-content-strong">
-              {selectedItem.expires != null ? (
+              {selectedToken.expires != null ? (
                   <>
-                  {new Date(selectedItem.expires).toLocaleString(undefined, {
+                  {new Date(selectedToken.expires).toLocaleString(undefined, {
                     day: 'numeric',
                     month: 'long',
                     year: 'numeric',
@@ -586,38 +592,28 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           </Card>
       </div>
 
-        <Card className="mt-6 mb-6">
-          {spendData && (
-            <BarChart
-              className="mt-6"
-              data={spendData}
-              colors={["blue", "amber"]}
-              index="date"
-              categories={["spend", "predicted_spend"]}
-              yAxisWidth={80}
-            />
-          )}
-        </Card>
-
+      <Card className="my-4">
+        <Title>Token Name</Title>
+        <Text className="my-1">{selectedToken.key_alias ? selectedToken.key_alias : selectedToken.key_name}</Text>
+        <Title>Token ID</Title>
+        <Text className="my-1 text-[12px]">{selectedToken.token}</Text>
         <Title>Metadata</Title>
-
-        <Text>{JSON.stringify(selectedItem.metadata)}</Text>
-
+        <Text className="my-1"><pre>{JSON.stringify(selectedToken.metadata)} </pre></Text>
+      </Card>
 
         <Button
-          variant="light"
           className="mx-auto flex items-center"
           onClick={() => {
-            setOpenDialogId(null);
-            setSelectedItem(null);
+            setInfoDialogVisible(false);
+            setSelectedToken(null);
           }}
         >
           Close
         </Button>
       </>
     )}
-</DialogPanel>
-</Dialog>
+
+</Modal>
                   <Icon
                     icon={PencilAltIcon}
                     size="sm"

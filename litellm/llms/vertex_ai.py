@@ -1,12 +1,12 @@
 import os, types
 import json
 from enum import Enum
-import requests
+import requests  # type: ignore
 import time
 from typing import Callable, Optional, Union, List
 from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
 import litellm, uuid
-import httpx, inspect
+import httpx, inspect  # type: ignore
 
 
 class VertexAIError(Exception):
@@ -20,6 +20,35 @@ class VertexAIError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+
+class ExtendedGenerationConfig(dict):
+    """Extended parameters for the generation."""
+
+    def __init__(
+        self,
+        *,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        candidate_count: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        response_mime_type: Optional[str] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+    ):
+        super().__init__(
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            candidate_count=candidate_count,
+            max_output_tokens=max_output_tokens,
+            stop_sequences=stop_sequences,
+            response_mime_type=response_mime_type,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+        )
 
 
 class VertexAIConfig:
@@ -43,6 +72,10 @@ class VertexAIConfig:
 
     - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
 
+    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
+
+    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
+
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
@@ -53,6 +86,8 @@ class VertexAIConfig:
     response_mime_type: Optional[str] = None
     candidate_count: Optional[int] = None
     stop_sequences: Optional[list] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
 
     def __init__(
         self,
@@ -63,6 +98,8 @@ class VertexAIConfig:
         response_mime_type: Optional[str] = None,
         candidate_count: Optional[int] = None,
         stop_sequences: Optional[list] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -86,6 +123,97 @@ class VertexAIConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "n",
+            "stop",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if (
+                param == "stream" and value == True
+            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
+                optional_params["stream"] = value
+            if param == "n":
+                optional_params["candidate_count"] = value
+            if param == "stop":
+                if isinstance(value, str):
+                    optional_params["stop_sequences"] = [value]
+                elif isinstance(value, list):
+                    optional_params["stop_sequences"] = value
+            if param == "max_tokens":
+                optional_params["max_output_tokens"] = value
+            if param == "response_format" and value["type"] == "json_object":
+                optional_params["response_mime_type"] = "application/json"
+            if param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
+            if param == "tools" and isinstance(value, list):
+                from vertexai.preview import generative_models
+
+                gtool_func_declarations = []
+                for tool in value:
+                    gtool_func_declaration = generative_models.FunctionDeclaration(
+                        name=tool["function"]["name"],
+                        description=tool["function"].get("description", ""),
+                        parameters=tool["function"].get("parameters", {}),
+                    )
+                    gtool_func_declarations.append(gtool_func_declaration)
+                optional_params["tools"] = [
+                    generative_models.Tool(
+                        function_declarations=gtool_func_declarations
+                    )
+                ]
+            if param == "tool_choice" and (
+                isinstance(value, str) or isinstance(value, dict)
+            ):
+                pass
+        return optional_params
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Common auth params across bedrock/vertex_ai/azure/watsonx
+        """
+        return {"project": "vertex_project", "region_name": "vertex_location"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
+    def get_eu_regions(self) -> List[str]:
+        """
+        Source: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#available-regions
+        """
+        return [
+            "europe-central2",
+            "europe-north1",
+            "europe-southwest1",
+            "europe-west1",
+            "europe-west2",
+            "europe-west3",
+            "europe-west4",
+            "europe-west6",
+            "europe-west8",
+            "europe-west9",
+        ]
 
 
 import asyncio
@@ -130,8 +258,7 @@ def _get_image_bytes_from_url(image_url: str) -> bytes:
         image_bytes = response.content
         return image_bytes
     except requests.exceptions.RequestException as e:
-        # Handle any request exceptions (e.g., connection error, timeout)
-        return b""  # Return an empty bytes object or handle the error as needed
+        raise Exception(f"An exception occurs with this image - {str(e)}")
 
 
 def _load_image_from_url(image_url: str):
@@ -152,7 +279,8 @@ def _load_image_from_url(image_url: str):
     )
 
     image_bytes = _get_image_bytes_from_url(image_url)
-    return Image.from_bytes(image_bytes)
+
+    return Image.from_bytes(data=image_bytes)
 
 
 def _gemini_vision_convert_messages(messages: list):
@@ -270,6 +398,7 @@ def completion(
     logging_obj,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
@@ -307,48 +436,23 @@ def completion(
         from google.protobuf.struct_pb2 import Value  # type: ignore
         from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
         import google.auth  # type: ignore
-
-        class ExtendedGenerationConfig(GenerationConfig):
-            """Extended parameters for the generation."""
-
-            def __init__(
-                self,
-                *,
-                temperature: Optional[float] = None,
-                top_p: Optional[float] = None,
-                top_k: Optional[int] = None,
-                candidate_count: Optional[int] = None,
-                max_output_tokens: Optional[int] = None,
-                stop_sequences: Optional[List[str]] = None,
-                response_mime_type: Optional[str] = None,
-            ):
-                args_spec = inspect.getfullargspec(gapic_content_types.GenerationConfig)
-
-                if "response_mime_type" in args_spec.args:
-                    self._raw_generation_config = gapic_content_types.GenerationConfig(
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        candidate_count=candidate_count,
-                        max_output_tokens=max_output_tokens,
-                        stop_sequences=stop_sequences,
-                        response_mime_type=response_mime_type,
-                    )
-                else:
-                    self._raw_generation_config = gapic_content_types.GenerationConfig(
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        candidate_count=candidate_count,
-                        max_output_tokens=max_output_tokens,
-                        stop_sequences=stop_sequences,
-                    )
+        import proto  # type: ignore
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
-        creds, _ = google.auth.default(quota_project_id=vertex_project)
+        if vertex_credentials is not None and isinstance(vertex_credentials, str):
+            import google.oauth2.service_account
+
+            json_obj = json.loads(vertex_credentials)
+
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            creds, _ = google.auth.default(quota_project_id=vertex_project)
         print_verbose(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
         )
@@ -457,6 +561,7 @@ def completion(
                 "instances": instances,
                 "vertex_location": vertex_location,
                 "vertex_project": vertex_project,
+                "safety_settings": safety_settings,
                 **optional_params,
             }
             if optional_params.get("stream", False) is True:
@@ -471,8 +576,9 @@ def completion(
             tools = optional_params.pop("tools", None)
             prompt, images = _gemini_vision_convert_messages(messages=messages)
             content = [prompt] + images
-            if "stream" in optional_params and optional_params["stream"] == True:
-                stream = optional_params.pop("stream")
+            stream = optional_params.pop("stream", False)
+            if stream == True:
+
                 request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), safety_settings={safety_settings}, stream={stream})\n"
                 logging_obj.pre_call(
                     input=prompt,
@@ -485,12 +591,12 @@ def completion(
 
                 model_response = llm_model.generate_content(
                     contents=content,
-                    generation_config=ExtendedGenerationConfig(**optional_params),
+                    generation_config=optional_params,
                     safety_settings=safety_settings,
                     stream=True,
                     tools=tools,
                 )
-                optional_params["stream"] = True
+
                 return model_response
 
             request_str += f"response = llm_model.generate_content({content})\n"
@@ -507,7 +613,7 @@ def completion(
             ## LLM Call
             response = llm_model.generate_content(
                 contents=content,
-                generation_config=ExtendedGenerationConfig(**optional_params),
+                generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
             )
@@ -517,9 +623,21 @@ def completion(
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
-                for k, v in function_call.args.items():
-                    args_dict[k] = v
-                args_str = json.dumps(args_dict)
+
+                # Check if it's a RepeatedComposite instance
+                for key, val in function_call.args.items():
+                    if isinstance(
+                        val, proto.marshal.collections.repeated.RepeatedComposite
+                    ):
+                        # If so, convert to list
+                        args_dict[key] = [v for v in val]
+                    else:
+                        args_dict[key] = val
+
+                try:
+                    args_str = json.dumps(args_dict)
+                except Exception as e:
+                    raise VertexAIError(status_code=422, message=str(e))
                 message = litellm.Message(
                     content=None,
                     tool_calls=[
@@ -562,7 +680,7 @@ def completion(
                     },
                 )
                 model_response = chat.send_message_streaming(prompt, **optional_params)
-                optional_params["stream"] = True
+
                 return model_response
 
             request_str += f"chat.send_message({prompt}, **{optional_params}).text\n"
@@ -594,7 +712,7 @@ def completion(
                     },
                 )
                 model_response = llm_model.predict_streaming(prompt, **optional_params)
-                optional_params["stream"] = True
+
                 return model_response
 
             request_str += f"llm_model.predict({prompt}, **{optional_params}).text\n"
@@ -719,9 +837,11 @@ def completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
+        if isinstance(e, VertexAIError):
+            raise e
         raise VertexAIError(status_code=500, message=str(e))
 
 
@@ -740,55 +860,20 @@ async def async_completion(
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    safety_settings=None,
     **optional_params,
 ):
     """
     Add support for acompletion calls for gemini-pro
     """
     try:
-        from vertexai.preview.generative_models import GenerationConfig
-        from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
-
-        class ExtendedGenerationConfig(GenerationConfig):
-            """Extended parameters for the generation."""
-
-            def __init__(
-                self,
-                *,
-                temperature: Optional[float] = None,
-                top_p: Optional[float] = None,
-                top_k: Optional[int] = None,
-                candidate_count: Optional[int] = None,
-                max_output_tokens: Optional[int] = None,
-                stop_sequences: Optional[List[str]] = None,
-                response_mime_type: Optional[str] = None,
-            ):
-                args_spec = inspect.getfullargspec(gapic_content_types.GenerationConfig)
-
-                if "response_mime_type" in args_spec.args:
-                    self._raw_generation_config = gapic_content_types.GenerationConfig(
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        candidate_count=candidate_count,
-                        max_output_tokens=max_output_tokens,
-                        stop_sequences=stop_sequences,
-                        response_mime_type=response_mime_type,
-                    )
-                else:
-                    self._raw_generation_config = gapic_content_types.GenerationConfig(
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        candidate_count=candidate_count,
-                        max_output_tokens=max_output_tokens,
-                        stop_sequences=stop_sequences,
-                    )
+        import proto  # type: ignore
 
         if mode == "vision":
-            print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
+            print_verbose("\nMaking VertexAI Gemini Pro/Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
             tools = optional_params.pop("tools", None)
+            stream = optional_params.pop("stream", False)
 
             prompt, images = _gemini_vision_convert_messages(messages=messages)
             content = [prompt] + images
@@ -805,20 +890,34 @@ async def async_completion(
             )
 
             ## LLM Call
+            # print(f"final content: {content}")
             response = await llm_model._generate_content_async(
                 contents=content,
-                generation_config=ExtendedGenerationConfig(**optional_params),
+                generation_config=optional_params,
+                safety_settings=safety_settings,
                 tools=tools,
             )
 
-            if tools is not None and hasattr(
-                response.candidates[0].content.parts[0], "function_call"
+            if tools is not None and bool(
+                getattr(response.candidates[0].content.parts[0], "function_call", None)
             ):
                 function_call = response.candidates[0].content.parts[0].function_call
                 args_dict = {}
-                for k, v in function_call.args.items():
-                    args_dict[k] = v
-                args_str = json.dumps(args_dict)
+
+                # Check if it's a RepeatedComposite instance
+                for key, val in function_call.args.items():
+                    if isinstance(
+                        val, proto.marshal.collections.repeated.RepeatedComposite
+                    ):
+                        # If so, convert to list
+                        args_dict[key] = [v for v in val]
+                    else:
+                        args_dict[key] = val
+
+                try:
+                    args_str = json.dumps(args_dict)
+                except Exception as e:
+                    raise VertexAIError(status_code=422, message=str(e))
                 message = litellm.Message(
                     content=None,
                     tool_calls=[
@@ -965,7 +1064,7 @@ async def async_completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
@@ -986,50 +1085,12 @@ async def async_streaming(
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    safety_settings=None,
     **optional_params,
 ):
     """
     Add support for async streaming calls for gemini-pro
     """
-    from vertexai.preview.generative_models import GenerationConfig
-    from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
-
-    class ExtendedGenerationConfig(GenerationConfig):
-        """Extended parameters for the generation."""
-
-        def __init__(
-            self,
-            *,
-            temperature: Optional[float] = None,
-            top_p: Optional[float] = None,
-            top_k: Optional[int] = None,
-            candidate_count: Optional[int] = None,
-            max_output_tokens: Optional[int] = None,
-            stop_sequences: Optional[List[str]] = None,
-            response_mime_type: Optional[str] = None,
-        ):
-            args_spec = inspect.getfullargspec(gapic_content_types.GenerationConfig)
-
-            if "response_mime_type" in args_spec.args:
-                self._raw_generation_config = gapic_content_types.GenerationConfig(
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    candidate_count=candidate_count,
-                    max_output_tokens=max_output_tokens,
-                    stop_sequences=stop_sequences,
-                    response_mime_type=response_mime_type,
-                )
-            else:
-                self._raw_generation_config = gapic_content_types.GenerationConfig(
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    candidate_count=candidate_count,
-                    max_output_tokens=max_output_tokens,
-                    stop_sequences=stop_sequences,
-                )
-
     if mode == "vision":
         stream = optional_params.pop("stream")
         tools = optional_params.pop("tools", None)
@@ -1050,11 +1111,11 @@ async def async_streaming(
 
         response = await llm_model._generate_content_streaming_async(
             contents=content,
-            generation_config=ExtendedGenerationConfig(**optional_params),
+            generation_config=optional_params,
+            safety_settings=safety_settings,
             tools=tools,
         )
-        optional_params["stream"] = True
-        optional_params["tools"] = tools
+
     elif mode == "chat":
         chat = llm_model.start_chat()
         optional_params.pop(
@@ -1073,7 +1134,7 @@ async def async_streaming(
             },
         )
         response = chat.send_message_streaming_async(prompt, **optional_params)
-        optional_params["stream"] = True
+
     elif mode == "text":
         optional_params.pop(
             "stream", None
@@ -1169,6 +1230,7 @@ def embedding(
     encoding=None,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     aembedding=False,
     print_verbose=None,
 ):
@@ -1189,7 +1251,17 @@ def embedding(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
-        creds, _ = google.auth.default(quota_project_id=vertex_project)
+        if vertex_credentials is not None and isinstance(vertex_credentials, str):
+            import google.oauth2.service_account
+
+            json_obj = json.loads(vertex_credentials)
+
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            creds, _ = google.auth.default(quota_project_id=vertex_project)
         print_verbose(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
         )

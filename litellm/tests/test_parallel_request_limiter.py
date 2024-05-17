@@ -15,7 +15,7 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import Router
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import (
@@ -29,11 +29,43 @@ from datetime import datetime
 
 
 @pytest.mark.asyncio
+async def test_global_max_parallel_requests():
+    """
+    Test if ParallelRequestHandler respects 'global_max_parallel_requests'
+
+    data["metadata"]["global_max_parallel_requests"]
+    """
+    global_max_parallel_requests = 0
+    _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=100)
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler()
+
+    for _ in range(3):
+        try:
+            await parallel_request_handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={
+                    "metadata": {
+                        "global_max_parallel_requests": global_max_parallel_requests
+                    }
+                },
+                call_type="",
+            )
+            pytest.fail("Expected call to fail")
+        except Exception as e:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook():
     """
     Test if cache updated on call being received
     """
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler()
@@ -248,6 +280,7 @@ async def test_success_call_hook():
     Test if on success, cache correctly decremented
     """
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler()
@@ -289,6 +322,7 @@ async def test_failure_call_hook():
     Test if on failure, cache correctly decremented
     """
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler()
@@ -366,6 +400,7 @@ async def test_normal_router_call():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -443,6 +478,7 @@ async def test_normal_router_tpm_limit():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )
@@ -524,6 +560,7 @@ async def test_streaming_router_call():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -599,6 +636,7 @@ async def test_streaming_router_tpm_limit():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )
@@ -677,6 +715,7 @@ async def test_bad_router_call():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -750,6 +789,7 @@ async def test_bad_router_tpm_limit():
     )  # type: ignore
 
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )
