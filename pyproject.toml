@@ -84,3 +84,5 @@ version_files = [
     "pyproject.toml:^version"
 ]
 
+[tool.mypy]
+plugins = "pydantic.mypy"
