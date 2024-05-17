@@ -834,14 +834,6 @@ class BedrockLLM(BaseLLM):
                     status_code=response.status_code, message=response.text
                 )
 
-            ## LOGGING
-            logging_obj.post_call(
-                input=messages,
-                api_key="",
-                original_response=response.text,
-                additional_args={"complete_input_dict": data},
-            )
-
             decoder = AWSEventStreamDecoder(model=model)
 
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
@@ -850,6 +842,14 @@ class BedrockLLM(BaseLLM):
                 model=model,
                 custom_llm_provider="bedrock",
                 logging_obj=logging_obj,
+            )
+
+            ## LOGGING
+            logging_obj.post_call(
+                input=messages,
+                api_key="",
+                original_response=streaming_response,
+                additional_args={"complete_input_dict": data},
             )
             return streaming_response
 
