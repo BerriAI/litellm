@@ -371,7 +371,7 @@ def test_vertex_ai_stream():
                 "gemini-1.5-pro",
                 "gemini-1.5-pro-preview-0215",
             ]:
-                # our account does not have access to this model
+                # ouraccount does not have access to this model
                 continue
             print("making request", model)
             response = completion(
