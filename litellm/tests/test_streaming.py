@@ -1041,14 +1041,21 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "bedrock/cohere.command-r-plus-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0"
+    ],
+)
 @pytest.mark.asyncio
-async def test_bedrock_cohere_command_r_streaming(sync_mode):
+async def test_bedrock_httpx_streaming(sync_mode, model):
     try:
         litellm.set_verbose = True
         if sync_mode:
             final_chunk: Optional[litellm.ModelResponse] = None
             response: litellm.CustomStreamWrapper = completion(  # type: ignore
-                model="bedrock/cohere.command-r-plus-v1:0",
+                model=model,
                 messages=messages,
                 max_tokens=10,  # type: ignore
                 stream=True,
@@ -1069,7 +1076,7 @@ async def test_bedrock_cohere_command_r_streaming(sync_mode):
                 raise Exception("Empty response received")
         else:
             response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
-                model="bedrock/cohere.command-r-plus-v1:0",
+                model=model,
                 messages=messages,
                 max_tokens=100,  # type: ignore
                 stream=True,

@@ -21,7 +21,7 @@ class BaseLLM:
         messages: list,
         print_verbose,
         encoding,
-    ) -> litellm.utils.ModelResponse:
+    ) -> Union[litellm.utils.ModelResponse, litellm.utils.CustomStreamWrapper]:
         """
         Helper function to process the response across sync + async completion calls
         """

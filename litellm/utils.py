@@ -4123,8 +4123,7 @@ def token_counter(
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,
-    return_tokenizer_used: Optional[bool] = False,
-):
+) -> int:
     """
     Count the number of tokens in a given text using a specified model.
 
@@ -4216,10 +4215,6 @@ def token_counter(
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
-    _tokenizer_type = tokenizer_json["type"]
-    if return_tokenizer_used:
-        # used by litellm proxy server ->  POST /utils/token_counter
-        return num_tokens, _tokenizer_type
     return num_tokens
 
 
@@ -10642,7 +10637,7 @@ class CustomStreamWrapper:
             raise e
 
     def handle_bedrock_stream(self, chunk):
-        if "cohere" in self.model:
+        if "cohere" in self.model or "anthropic" in self.model:
             return {
                 "text": chunk["text"],
                 "is_finished": chunk["is_finished"],
@@ -11513,7 +11508,10 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"
                 or self.custom_llm_provider == "predibase"
-                or (self.custom_llm_provider == "bedrock" and "cohere" in self.model)
+                or (
+                    self.custom_llm_provider == "bedrock"
+                    and ("cohere" in self.model or "anthropic" in self.model)
+                )
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:
