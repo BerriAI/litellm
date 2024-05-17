@@ -232,7 +232,6 @@ response = completion(
     model="anthropic/claude-3-opus-20240229",
     messages=messages,
     tools=tools,
-    extra_headers={"anthropic-beta": "tools-2024-05-16"},
 )
 ```
 
@@ -247,7 +246,6 @@ response = completion(
     messages=messages,
     tools=tools,
     tool_choice={"type": "tool", "name": "get_weather"},
-    extra_headers={"anthropic-beta": "tools-2024-05-16"},
 )
 ```
 
