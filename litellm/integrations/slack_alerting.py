@@ -164,13 +164,28 @@ class SlackAlerting(CustomLogger):
     ) -> Optional[str]:
         """
         Returns langfuse trace url
+
+        - check:
+        -> existing_trace_id
+        -> trace_id
+        -> litellm_call_id
         """
         # do nothing for now
-        if (
-            request_data is not None
-            and request_data.get("metadata", {}).get("trace_id", None) is not None
-        ):
-            trace_id = request_data["metadata"]["trace_id"]
+        if request_data is not None:
+            trace_id = None
+            if (
+                request_data.get("metadata", {}).get("existing_trace_id", None)
+                is not None
+            ):
+                trace_id = request_data["metadata"]["existing_trace_id"]
+            elif request_data.get("metadata", {}).get("trace_id", None) is not None:
+                trace_id = request_data["metadata"]["trace_id"]
+            elif request_data.get("litellm_logging_obj", None) is not None and hasattr(
+                request_data["litellm_logging_obj"], "model_call_details"
+            ):
+                trace_id = request_data["litellm_logging_obj"].model_call_details[
+                    "litellm_call_id"
+                ]
             if litellm.utils.langFuseLogger is not None:
                 base_url = litellm.utils.langFuseLogger.Langfuse.base_url
                 return f"{base_url}/trace/{trace_id}"
@@ -671,11 +686,19 @@ class SlackAlerting(CustomLogger):
                 )
                 await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
             return
-
         return
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str):
-        model_info = litellm.model_cost.get(litellm_model_name, {})
+    async def model_added_alert(
+        self, model_name: str, litellm_model_name: str, passed_model_info: Any
+    ):
+        base_model_from_user = getattr(passed_model_info, "base_model", None)
+        model_info = {}
+        base_model = ""
+        if base_model_from_user is not None:
+            model_info = litellm.model_cost.get(base_model_from_user, {})
+            base_model = f"Base Model: `{base_model_from_user}`\n"
+        else:
+            model_info = litellm.model_cost.get(litellm_model_name, {})
         model_info_str = ""
         for k, v in model_info.items():
             if k == "input_cost_per_token" or k == "output_cost_per_token":
@@ -687,6 +710,7 @@ class SlackAlerting(CustomLogger):
         message = f"""
 *🚅 New Model Added*
 Model Name: `{model_name}`
+{base_model}
 
 Usage OpenAI Python SDK:
 ```

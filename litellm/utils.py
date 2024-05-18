@@ -3853,7 +3853,7 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     )
     if total_time == 0.0:  # total time is in ms
         start_time = completion_response["created"]
-        end_time = completion_response["ended"]
+        end_time = getattr(completion_response, "ended", time.time())
         total_time = end_time - start_time
 
     return a100_80gb_price_per_second_public * total_time / 1000
@@ -8676,7 +8676,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if "Malformed input request" in error_str:
+                elif "Malformed input request" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
                         message=f"BedrockException - {error_str}",
@@ -8684,7 +8684,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if (
+                elif (
                     "Unable to locate credentials" in error_str
                     or "The security token included in the request is invalid"
                     in error_str
@@ -8696,7 +8696,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if "AccessDeniedException" in error_str:
+                elif "AccessDeniedException" in error_str:
                     exception_mapping_worked = True
                     raise PermissionDeniedError(
                         message=f"BedrockException PermissionDeniedError - {error_str}",
@@ -8704,7 +8704,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if (
+                elif (
                     "throttlingException" in error_str
                     or "ThrottlingException" in error_str
                 ):
@@ -8715,14 +8715,17 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if "Connect timeout on endpoint URL" in error_str:
+                elif (
+                    "Connect timeout on endpoint URL" in error_str
+                    or "timed out" in error_str
+                ):
                     exception_mapping_worked = True
                     raise Timeout(
                         message=f"BedrockException: Timeout Error - {error_str}",
                         model=model,
                         llm_provider="bedrock",
                     )
-                if hasattr(original_exception, "status_code"):
+                elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
@@ -8759,6 +8762,49 @@ def exception_type(
                             llm_provider="bedrock",
                             model=model,
                             response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
                         )
             elif custom_llm_provider == "sagemaker":
                 if "Unable to locate credentials" in error_str:
@@ -10639,75 +10685,11 @@ class CustomStreamWrapper:
             raise e
 
     def handle_bedrock_stream(self, chunk):
-        if "cohere" in self.model:
-            return {
-                "text": chunk["text"],
-                "is_finished": chunk["is_finished"],
-                "finish_reason": chunk["finish_reason"],
-            }
-        if hasattr(chunk, "get"):
-            chunk = chunk.get("chunk")
-            chunk_data = json.loads(chunk.get("bytes").decode())
-        else:
-            chunk_data = json.loads(chunk.decode())
-        if chunk_data:
-            text = ""
-            is_finished = False
-            finish_reason = ""
-            if "outputText" in chunk_data:
-                text = chunk_data["outputText"]
-            # ai21 mapping
-            if "ai21" in self.model:  # fake ai21 streaming
-                text = chunk_data.get("completions")[0].get("data").get("text")
-                is_finished = True
-                finish_reason = "stop"
-            ######## bedrock.anthropic mappings ###############
-            elif "completion" in chunk_data:  # not claude-3
-                text = chunk_data["completion"]  # bedrock.anthropic
-                stop_reason = chunk_data.get("stop_reason", None)
-                if stop_reason != None:
-                    is_finished = True
-                    finish_reason = stop_reason
-            elif "delta" in chunk_data:
-                if chunk_data["delta"].get("text", None) is not None:
-                    text = chunk_data["delta"]["text"]
-                stop_reason = chunk_data["delta"].get("stop_reason", None)
-                if stop_reason != None:
-                    is_finished = True
-                    finish_reason = stop_reason
-            ######## bedrock.mistral mappings ###############
-            elif "outputs" in chunk_data:
-                if (
-                    len(chunk_data["outputs"]) == 1
-                    and chunk_data["outputs"][0].get("text", None) is not None
-                ):
-                    text = chunk_data["outputs"][0]["text"]
-                stop_reason = chunk_data.get("stop_reason", None)
-                if stop_reason != None:
-                    is_finished = True
-                    finish_reason = stop_reason
-            ######## bedrock.cohere mappings ###############
-            # meta mapping
-            elif "generation" in chunk_data:
-                text = chunk_data["generation"]  # bedrock.meta
-            # cohere mapping
-            elif "text" in chunk_data:
-                text = chunk_data["text"]  # bedrock.cohere
-            # cohere mapping for finish reason
-            elif "finish_reason" in chunk_data:
-                finish_reason = chunk_data["finish_reason"]
-                is_finished = True
-            elif chunk_data.get("completionReason", None):
-                is_finished = True
-                finish_reason = chunk_data["completionReason"]
-            elif chunk.get("error", None):
-                raise Exception(chunk["error"])
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        return ""
+        return {
+            "text": chunk["text"],
+            "is_finished": chunk["is_finished"],
+            "finish_reason": chunk["finish_reason"],
+        }
 
     def handle_sagemaker_stream(self, chunk):
         if "data: [DONE]" in chunk:
@@ -11510,7 +11492,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"
                 or self.custom_llm_provider == "predibase"
-                or (self.custom_llm_provider == "bedrock" and "cohere" in self.model)
+                or self.custom_llm_provider == "bedrock"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:
