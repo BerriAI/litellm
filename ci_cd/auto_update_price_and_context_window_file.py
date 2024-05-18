@@ -13,7 +13,7 @@ async def fetch_data(url):
                 resp.raise_for_status()
                 # Parse the response JSON
                 resp_json = await resp.json()
-                print("Fetch the data from URL:")
+                print("Fetch the data from URL.")
                 # Return the 'data' field from the JSON response
                 return resp_json['data']
     except Exception as e:
@@ -55,6 +55,11 @@ def transform_remote_data(data):
             "litellm_provider": "openrouter",
             "mode": "chat"
         }
+
+        # Add an field 'input_cost_per_image'
+        if "pricing" in row and "image" in row["pricing"]:
+            obj['input_cost_per_image'] = float(row["pricing"]["image"])
+
         # Add an additional field if the modality is 'multimodal'
         if row.get('architecture', {}).get('modality') == 'multimodal':
             obj['supports_vision'] = True
