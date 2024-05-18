@@ -859,13 +859,14 @@ class BedrockLLM(BaseLLM):
             )
             return streaming_response
 
-        response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
-
         try:
+            response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=response.text)
+        except httpx.TimeoutException as e:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return self.process_response(
             model=model,
@@ -909,7 +910,15 @@ class BedrockLLM(BaseLLM):
         else:
             self.client = client  # type: ignore
 
-        response = await self.client.post(api_base, headers=headers, data=data)  # type: ignore
+        try:
+            response = await self.client.post(api_base, headers=headers, data=data)  # type: ignore
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            error_code = err.response.status_code
+            raise BedrockError(status_code=error_code, message=response.text)
+        except httpx.TimeoutException as e:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
+
         return self.process_response(
             model=model,
             response=response,
