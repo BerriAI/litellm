@@ -2603,6 +2603,11 @@ class ProxyConfig:
 
         Return model info w/ id
         """
+        _id: Optional[str] = getattr(model, "model_id", None)
+        if _id is not None:
+            model.model_info["id"] = _id
+            model.model_info["db_model"] = True
+
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
                 model.model_info["id"] = model.model_id
