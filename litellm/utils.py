@@ -5195,7 +5195,7 @@ def get_optional_params(
         if unsupported_params and not litellm.drop_params:
             raise UnsupportedParamsError(
                 status_code=500,
-                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
             )
 
     def _map_and_modify_arg(supported_params: dict, provider: str, model: str):
@@ -5884,10 +5884,19 @@ def get_optional_params(
         optional_params["extra_body"] = (
             extra_body  # openai client supports `extra_body` param
         )
-    else:  # assume passing in params for openai/azure openai
-
+    elif custom_llm_provider == "openai":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="openai"
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.OpenAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
+    else:  # assume passing in params for azure openai
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider="azure"
         )
         _check_valid_arg(supported_params=supported_params)
         if functions is not None:
@@ -6263,7 +6272,9 @@ def get_supported_openai_params(model: str, custom_llm_provider: str):
             "presence_penalty",
             "stop",
         ]
-    elif custom_llm_provider == "openai" or custom_llm_provider == "azure":
+    elif custom_llm_provider == "openai":
+        return litellm.OpenAIConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "azure":
         return [
             "functions",
             "function_call",

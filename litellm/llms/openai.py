@@ -234,6 +234,47 @@ class OpenAIConfig:
             and v is not None
         }
 
+    def get_supported_openai_params(self, model: str) -> list:
+        base_params = [
+            "frequency_penalty",
+            "logit_bias",
+            "logprobs",
+            "top_logprobs",
+            "max_tokens",
+            "n",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "stream",
+            "stream_options",
+            "temperature",
+            "top_p",
+            "tools",
+            "tool_choice",
+            "user",
+            "function_call",
+            "functions",
+            "max_retries",
+            "extra_headers",
+        ]  # works across all models
+
+        model_specific_params = []
+        if (
+            "gpt-3.5-turbo" in model or "gpt-4-turbo" in model or "gpt-4o" in model
+        ):  # gpt-4 does not support 'response_format'
+            model_specific_params.append("response_format")
+
+        return base_params + model_specific_params
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params(model)
+        for param, value in non_default_params.items():
+            if param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params
+
 
 class OpenAITextCompletionConfig:
     """

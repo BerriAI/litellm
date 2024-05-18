@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, json
 import traceback
 from dotenv import load_dotenv
 
@@ -1052,6 +1052,25 @@ def test_completion_azure_gpt4_vision():
 
 
 # test_completion_azure_gpt4_vision()
+
+
+@pytest.mark.parametrize("model", ["gpt-3.5-turbo", "gpt-4", "gpt-4o"])
+def test_completion_openai_params(model):
+    litellm.drop_params = True
+    messages = [
+        {
+            "role": "user",
+            "content": """Generate JSON about Bill Gates: { "full_name": "", "title": "" }""",
+        }
+    ]
+
+    response = completion(
+        model=model,
+        messages=messages,
+        response_format={"type": "json_object"},
+    )
+
+    print(f"response: {response}")
 
 
 def test_completion_fireworks_ai():
