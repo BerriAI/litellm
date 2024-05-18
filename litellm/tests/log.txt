@@ -3,40 +3,9 @@ platform darwin -- Python 3.11.9, pytest-7.3.1, pluggy-1.3.0
 rootdir: /Users/krrishdholakia/Documents/litellm/litellm/tests
 plugins: timeout-2.2.0, asyncio-0.23.2, anyio-3.7.1, xdist-3.3.1
 asyncio: mode=Mode.STRICT
-collected 2 items
+collected 1 item
 
-test_streaming.py .Logging Details LiteLLM-Async Success Call
-Goes into checking if chunk has hiddden created at param
-Chunks have a created at hidden param
-Chunks sorted
-token_counter messages received: [{'content': 'Hello, how are you?', 'role': 'user'}]
-Token Counter - using generic token counter, for model=cohere.command-text-v14
-LiteLLM: Utils - Counting tokens for OpenAI model=gpt-3.5-turbo
-.Token Counter - using generic token counter, for model=cohere.command-text-v14
-LiteLLM: Utils - Counting tokens for OpenAI model=gpt-3.5-turbo
-Async success callbacks: Got a complete streaming response
-Looking up model=cohere.command-text-v14 in model_cost_map
-Success: model=cohere.command-text-v14 in model_cost_map
-prompt_tokens=13; completion_tokens=10
-Returned custom cost for model=cohere.command-text-v14 - prompt_tokens_cost_usd_dollar: 1.95e-05, completion_tokens_cost_usd_dollar: 1.9999999999999998e-05
-final cost: 3.95e-05; prompt_tokens_cost_usd_dollar: 1.95e-05; completion_tokens_cost_usd_dollar: 1.9999999999999998e-05
-                                                     [100%]Logging Details LiteLLM-Success Call: None
-success callbacks: []
-Goes into checking if chunk has hiddden created at param
-Chunks have a created at hidden param
-Chunks sorted
-token_counter messages received: [{'content': 'Hello, how are you?', 'role': 'user'}]
-Token Counter - using generic token counter, for model=cohere.command-text-v14
-LiteLLM: Utils - Counting tokens for OpenAI model=gpt-3.5-turbo
-Token Counter - using generic token counter, for model=cohere.command-text-v14
-LiteLLM: Utils - Counting tokens for OpenAI model=gpt-3.5-turbo
-Logging Details LiteLLM-Success Call streaming complete
-Looking up model=cohere.command-text-v14 in model_cost_map
-Success: model=cohere.command-text-v14 in model_cost_map
-prompt_tokens=13; completion_tokens=10
-Returned custom cost for model=cohere.command-text-v14 - prompt_tokens_cost_usd_dollar: 1.95e-05, completion_tokens_cost_usd_dollar: 1.9999999999999998e-05
-final cost: 3.95e-05; prompt_tokens_cost_usd_dollar: 1.95e-05; completion_tokens_cost_usd_dollar: 1.9999999999999998e-05
-
+test_router_timeout.py .                                                 [100%]
 
 =============================== warnings summary ===============================
 ../../../../../../opt/homebrew/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: 25 warnings
@@ -99,10 +68,9 @@ final cost: 3.95e-05; prompt_tokens_cost_usd_dollar: 1.95e-05; completion_tokens
   /Users/krrishdholakia/Documents/litellm/litellm/utils.py:60: DeprecationWarning: open_text is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
     with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
 
-test_streaming.py::test_bedrock_httpx_streaming[cohere.command-text-v14-False]
-test_streaming.py::test_bedrock_httpx_streaming[cohere.command-text-v14-True]
+test_router_timeout.py::test_router_timeouts_bedrock
   /opt/homebrew/lib/python3.11/site-packages/httpx/_content.py:204: DeprecationWarning: Use 'content=<...>' to upload raw bytes/text content.
     warnings.warn(message, DeprecationWarning)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 2 passed, 41 warnings in 4.94s ========================
+======================== 1 passed, 40 warnings in 0.99s ========================
