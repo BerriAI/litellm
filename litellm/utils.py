@@ -3844,18 +3844,14 @@ def get_model_params_and_category(model_name):
     return None
 
 
-def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
+def get_replicate_completion_pricing(total_time: float = 0.0) -> float:
     # see https://replicate.com/pricing
     a100_40gb_price_per_second_public = 0.001150
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
+    # todo: The pricing is to be extracted from `model_prices_and_context_window.json` ??
     a100_80gb_price_per_second_public = (
         0.001400  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:  # total time is in ms
-        start_time = completion_response["created"]
-        end_time = completion_response["ended"]
-        total_time = end_time - start_time
-
     return a100_80gb_price_per_second_public * total_time / 1000
 
 
@@ -4540,7 +4536,7 @@ def completion_cost(
             model in litellm.replicate_models or "replicate" in model
         ) and model not in litellm.model_cost:
             # for unmapped replicate model, default to replicate's time tracking logic
-            return get_replicate_completion_pricing(completion_response, total_time)
+            return get_replicate_completion_pricing(total_time)
 
         (
             prompt_tokens_cost_usd_dollar,
