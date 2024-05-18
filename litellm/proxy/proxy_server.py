@@ -671,15 +671,21 @@ async def user_api_key_auth(
         _end_user_object = None
         end_user_params = {}
         if "user" in request_data:
-            _end_user_object = await get_end_user_object(
-                end_user_id=request_data["user"],
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            if _end_user_object is not None:
-                end_user_params["allowed_model_region"] = (
-                    _end_user_object.allowed_model_region
+            try:
+                _end_user_object = await get_end_user_object(
+                    end_user_id=request_data["user"],
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
                 )
+                if _end_user_object is not None:
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "Unable to find user in db. Error - {}".format(str(e))
+                )
+                pass
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -4920,7 +4926,7 @@ async def token_counter(request: TokenCountRequest):
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
     _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use)
-    tokenizer_used = _tokenizer_used["type"]
+    tokenizer_used = str(_tokenizer_used["type"])
     total_tokens = token_counter(
         model=model_to_use,
         text=prompt,
@@ -8134,6 +8140,7 @@ async def add_new_model(
                     await proxy_logging_obj.slack_alerting_instance.model_added_alert(
                         model_name=model_params.model_name,
                         litellm_model_name=_orignal_litellm_model_name,
+                        passed_model_info=model_params.model_info,
                     )
             except:
                 pass

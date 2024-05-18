@@ -76,6 +76,9 @@ class ModelInfo(BaseModel):
     db_model: bool = (
         False  # used for proxy - to separate models which are stored in the db vs. config.
     )
+    base_model: Optional[str] = (
+        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    )
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:

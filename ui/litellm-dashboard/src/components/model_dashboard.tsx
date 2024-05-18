@@ -121,6 +121,7 @@ const handleSubmit = async (formValues: Record<string, any>, accessToken: string
       // Iterate through the key-value pairs in formValues
       litellmParamsObj["model"] = litellm_model
       let modelName: string  = "";
+      console.log("formValues add deployment:", formValues);
       for (const [key, value] of Object.entries(formValues)) {
         if (value === '') {
           continue;
@@ -628,6 +629,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     let input_cost = "Undefined";
     let output_cost = "Undefined";
     let max_tokens = "Undefined";
+    let max_input_tokens = "Undefined";
     let cleanedLitellmParams = {};
 
     const getProviderFromModel = (model: string) => {
@@ -664,6 +666,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       input_cost = model_info?.input_cost_per_token;
       output_cost = model_info?.output_cost_per_token;
       max_tokens = model_info?.max_tokens;
+      max_input_tokens = model_info?.max_input_tokens;
     }
 
     if (curr_model?.litellm_params) {
@@ -689,6 +692,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     }
     
     modelData.data[i].max_tokens = max_tokens;
+    modelData.data[i].max_input_tokens = max_input_tokens;
     modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
     modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
@@ -936,7 +940,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       <TableHeaderCell style={{ maxWidth: '200px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Extra litellm Params</TableHeaderCell>
       <TableHeaderCell style={{ maxWidth: '85px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Input Price <p style={{ fontSize: '10px', color: 'gray' }}>/1M Tokens ($)</p></TableHeaderCell>
       <TableHeaderCell style={{ maxWidth: '85px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Output Price <p style={{ fontSize: '10px', color: 'gray' }}>/1M Tokens ($)</p></TableHeaderCell>
-      <TableHeaderCell style={{ maxWidth: '85px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Max Tokens</TableHeaderCell>
+      <TableHeaderCell style={{ maxWidth: '120px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Max Tokens</TableHeaderCell>
       <TableHeaderCell style={{ maxWidth: '50px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Status</TableHeaderCell>
     </TableRow>
   </TableHead>
@@ -970,7 +974,12 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           </TableCell>
           <TableCell style={{ maxWidth: '80px', whiteSpace: 'normal', wordBreak: 'break-word' }}>{model.input_cost || model.litellm_params.input_cost_per_token || null}</TableCell>
           <TableCell style={{ maxWidth: '80px', whiteSpace: 'normal', wordBreak: 'break-word' }}>{model.output_cost || model.litellm_params.output_cost_per_token || null}</TableCell>
-          <TableCell style={{ maxWidth: '100px', whiteSpace: 'normal', wordBreak: 'break-word' }}>{model.max_tokens}</TableCell>
+          <TableCell style={{ maxWidth: '120px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+            <p style={{ fontSize: '10px' }}>
+            Max Tokens: {model.max_tokens} <br></br>
+            Max Input Tokens: {model.max_input_tokens}
+            </p>
+          </TableCell>
           <TableCell style={{ maxWidth: '100px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
             {model.model_info.db_model ? (
               <Badge icon={CheckCircleIcon} size="xs" className="text-white">
@@ -1114,13 +1123,22 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </Form.Item>
                 }
                 {
-                  selectedProvider == Providers.Azure && <Form.Item
-                  label="Base Model"
-                  name="base_model"
-                >
-                  <TextInput placeholder="azure/gpt-3.5-turbo"/>
-                  <Text>The actual model your azure deployment uses. Used for accurate cost tracking. Select name from <Link href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" target="_blank">here</Link></Text>
-                </Form.Item>
+                  selectedProvider == Providers.Azure && 
+     
+                    <div>
+                    <Form.Item
+                      label="Base Model"
+                      name="base_model"
+                      className="mb-0"
+                    >
+                    <TextInput placeholder="azure/gpt-3.5-turbo"/>
+                    </Form.Item>
+                <Row>
+                <Col span={10}></Col>
+                <Col span={10}><Text className="mb-2">The actual model your azure deployment uses. Used for accurate cost tracking. Select name from <Link href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" target="_blank">here</Link></Text></Col>
+                </Row>
+
+                  </div>
                 }
                 {
                   selectedProvider == Providers.Bedrock && <Form.Item
