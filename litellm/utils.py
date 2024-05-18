@@ -3853,7 +3853,7 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     )
     if total_time == 0.0:  # total time is in ms
         start_time = completion_response["created"]
-        end_time = completion_response["ended"]
+        end_time = getattr(completion_response, "ended", time.time())
         total_time = end_time - start_time
 
     return a100_80gb_price_per_second_public * total_time / 1000
