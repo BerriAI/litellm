@@ -1,107 +1,103 @@
-import requests
+import asyncio
+import aiohttp
 import json
 
-def fetch_data(url):
-    """
-    Fetches data from the specified URL.
-
-    Args:
-        url (str): The URL to fetch data from.
-
-    Returns:
-        dict or None: The JSON response if successful, None otherwise.
-    """
+# Asynchronously fetch data from a given URL
+async def fetch_data(url):
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
+        # Create an asynchronous session
+        async with aiohttp.ClientSession() as session:
+            # Send a GET request to the URL
+            async with session.get(url) as resp:
+                # Raise an error if the response status is not OK
+                resp.raise_for_status()
+                # Parse the response JSON
+                resp_json = await resp.json()
+                print("Fetch the data from URL:")
+                # Return the 'data' field from the JSON response
+                return resp_json['data']
+    except Exception as e:
+        # Print an error message if fetching data fails
         print("Error fetching data from URL:", e)
         return None
 
-def update_local_data(local_data, remote_data):
-    """
-    Updates local data with information fetched remotely.
+# Synchronize local data with remote data
+def sync_local_data_with_remote(local_data, remote_data):
+    # Update existing keys in local_data with values from remote_data
+    for key in (set(local_data) & set(remote_data)):
+        local_data[key].update(remote_data[key])
 
-    Args:
-        local_data (dict): Local data to be updated.
-        remote_data (dict): Remote data fetched from an API.
+    # Add new keys from remote_data to local_data
+    for key in (set(remote_data) - set(local_data)):
+        local_data[key] = remote_data[key]
 
-    """
-    for model_name, model_info in local_data.items():
-        if model_name.startswith("openrouter/"):
-            model_suffix = model_name[len("openrouter/"):]
-            for model in remote_data["data"]:
-                if model["id"] == model_suffix:
-                    # Update only the values that need to be updated
-                    model_info.update({
-                        "max_tokens": model["context_length"],
-                        "input_cost_per_token": model["pricing"]["prompt"],
-                        "output_cost_per_token": model["pricing"]["completion"]
-                    })
-                    break
-    # Add models not in local data yet
-    for model in remote_data["data"]:
-        model_id = model["id"]
-        if f"openrouter/{model_id}" not in local_data:
-            local_data[f"openrouter/{model_id}"] = {
-                "max_tokens": model["context_length"],
-                "input_cost_per_token": model["pricing"]["prompt"],
-                "output_cost_per_token": model["pricing"]["completion"],
-                "litellm_provider": "openrouter",
-                "mode": "chat"
-            }
-
+# Write data to the json file
 def write_to_file(file_path, data):
-    """
-    Writes data to a JSON file.
-
-    Args:
-        file_path (str): The path to the JSON file.
-        data (dict): The data to write to the file.
-    """
     try:
+        # Open the file in write mode
         with open(file_path, "w") as file:
+            # Dump the data as JSON into the file
             json.dump(data, file, indent=4)
         print("Values updated successfully.")
     except Exception as e:
+        # Print an error message if writing to file fails
         print("Error updating JSON file:", e)
 
+# Update the existing models and add the missing models
+def transform_remote_data(data):
+    transformed = {}
+    for row in data:
+        # Create a new dictionary with transformed data
+        obj = {
+            "max_tokens": row["context_length"],
+            "input_cost_per_token": float(row["pricing"]["prompt"]),
+            "output_cost_per_token": float(row["pricing"]["completion"]),
+            "litellm_provider": "openrouter",
+            "mode": "chat"
+        }
+        # Add an additional field if the modality is 'multimodal'
+        if row.get('architecture', {}).get('modality') == 'multimodal':
+            obj['supports_vision'] = True
+        
+        # Use a composite key to store the transformed object
+        transformed[f'openrouter/{row["id"]}'] = obj
+
+    return transformed
+
+# Load local data from a specified file
+def load_local_data(file_path):
+    try:
+        # Open the file in read mode
+        with open(file_path, "r") as file:
+            # Load and return the JSON data
+            return json.load(file)
+    except FileNotFoundError:
+        # Print an error message if the file is not found
+        print("File not found:", file_path)
+        return None
+    except json.JSONDecodeError as e:
+        # Print an error message if JSON decoding fails
+        print("Error decoding JSON:", e)
+        return None
+
 def main():
-    """
-    Main function to orchestrate the process.
-    """
-    local_file_path = "model_prices_and_context_window.json"
-    url = "https://openrouter.ai/api/v1/models"
+    local_file_path = "model_prices_and_context_window.json"  # Path to the local data file
+    url = "https://openrouter.ai/api/v1/models"  # URL to fetch remote data
 
+    # Load local data from file
     local_data = load_local_data(local_file_path)
-    remote_data = fetch_data(url)
+    # Fetch remote data asynchronously
+    remote_data = asyncio.run(fetch_data(url))
+    # Transform the fetched remote data
+    remote_data = transform_remote_data(remote_data)
 
+    # If both local and remote data are available, synchronize and save
     if local_data and remote_data:
-        update_local_data(local_data, remote_data)
+        sync_local_data_with_remote(local_data, remote_data)
         write_to_file(local_file_path, local_data)
     else:
         print("Failed to fetch model data from either local file or URL.")
 
-def load_local_data(file_path):
-    """
-    Loads data from a local JSON file.
-
-    Args:
-        file_path (str): The path to the JSON file.
-
-    Returns:
-        dict or None: The loaded data if successful, None otherwise.
-    """
-    try:
-        with open(file_path, "r") as file:
-            return json.load(file)
-    except FileNotFoundError:
-        print("File not found:", file_path)
-        return None
-    except json.JSONDecodeError as e:
-        print("Error decoding JSON:", e)
-        return None
-
+# Entry point of the script
 if __name__ == "__main__":
     main()
