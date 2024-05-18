@@ -8674,7 +8674,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if "Malformed input request" in error_str:
+                elif "Malformed input request" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
                         message=f"BedrockException - {error_str}",
@@ -8682,7 +8682,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if (
+                elif (
                     "Unable to locate credentials" in error_str
                     or "The security token included in the request is invalid"
                     in error_str
@@ -8694,7 +8694,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if "AccessDeniedException" in error_str:
+                elif "AccessDeniedException" in error_str:
                     exception_mapping_worked = True
                     raise PermissionDeniedError(
                         message=f"BedrockException PermissionDeniedError - {error_str}",
@@ -8702,7 +8702,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if (
+                elif (
                     "throttlingException" in error_str
                     or "ThrottlingException" in error_str
                 ):
@@ -8713,7 +8713,7 @@ def exception_type(
                         llm_provider="bedrock",
                         response=original_exception.response,
                     )
-                if (
+                elif (
                     "Connect timeout on endpoint URL" in error_str
                     or "timed out" in error_str
                 ):
@@ -8723,7 +8723,7 @@ def exception_type(
                         model=model,
                         llm_provider="bedrock",
                     )
-                if hasattr(original_exception, "status_code"):
+                elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
@@ -8760,6 +8760,49 @@ def exception_type(
                             llm_provider="bedrock",
                             model=model,
                             response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"BedrockException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
                         )
             elif custom_llm_provider == "sagemaker":
                 if "Unable to locate credentials" in error_str:
