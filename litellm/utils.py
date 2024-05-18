@@ -8008,11 +8008,8 @@ def _should_retry(status_code: int):
     return False
 
 
-def _calculate_retry_after(
-    remaining_retries: int,
-    max_retries: int,
+def _get_retry_after_from_exception_header(
     response_headers: Optional[httpx.Headers] = None,
-    min_timeout: int = 0,
 ):
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
@@ -8038,9 +8035,19 @@ def _calculate_retry_after(
                     retry_after = int(retry_date - time.time())
         else:
             retry_after = -1
+        return retry_after
 
-    except Exception:
+    except Exception as e:
         retry_after = -1
+
+
+def _calculate_retry_after(
+    remaining_retries: int,
+    max_retries: int,
+    response_headers: Optional[httpx.Headers] = None,
+    min_timeout: int = 0,
+):
+    retry_after = _get_retry_after_from_exception_header(response_headers)
 
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
     if 0 < retry_after <= 60:
