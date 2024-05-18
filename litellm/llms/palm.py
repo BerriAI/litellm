@@ -118,17 +118,13 @@ def completion(
             k not in inference_params
         ):  # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
-
-    prompt = ""
+    prompt = []
+    palm_messages = []     # Construct messages with roles
+    context = inference_params.get("context", None)
     for message in messages:
-        if "role" in message:
-            if message["role"] == "user":
-                prompt += f"{message['content']}"
-            else:
-                prompt += f"{message['content']}"
-        else:
-            prompt += f"{message['content']}"
-
+        role = message.get("role", "user")
+        palm_messages.append({"author": role, "content": message["content"]})
+        prompt.append({"context": context, "messages": palm_messages})
     ## LOGGING
     logging_obj.pre_call(
         input=prompt,
@@ -137,7 +133,7 @@ def completion(
     )
     ## COMPLETION CALL
     try:
-        response = palm.generate_text(prompt=prompt, **inference_params)
+        response = palm.chat(messages=palm_messages, context=context, **inference_params)
     except Exception as e:
         raise PalmError(
             message=str(e),
@@ -179,10 +175,11 @@ def completion(
         )
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-    prompt_tokens = len(encoding.encode(prompt))
-    completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-    )
+    prompt_tokens = len(encoding.encode(context or ""))
+    for msg in palm_messages:
+        prompt_tokens += len(encoding.encode(msg["content"]))
+    completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+                            )
 
     model_response["created"] = int(time.time())
     model_response["model"] = "palm/" + model
