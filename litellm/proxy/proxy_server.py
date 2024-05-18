@@ -8135,6 +8135,7 @@ async def add_new_model(
                     await proxy_logging_obj.slack_alerting_instance.model_added_alert(
                         model_name=model_params.model_name,
                         litellm_model_name=_orignal_litellm_model_name,
+                        passed_model_info=model_params.model_info,
                     )
             except:
                 pass
