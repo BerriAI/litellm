@@ -4915,7 +4915,7 @@ async def token_counter(request: TokenCountRequest):
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
     _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use)
-    tokenizer_used = _tokenizer_used["type"]
+    tokenizer_used = str(_tokenizer_used["type"])
     total_tokens = token_counter(
         model=model_to_use,
         text=prompt,
