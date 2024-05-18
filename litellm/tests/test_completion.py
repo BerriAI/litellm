@@ -2301,6 +2301,8 @@ def test_completion_azure_deployment_id():
 
 # test_completion_azure_deployment_id()
 
+import asyncio
+
 
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
