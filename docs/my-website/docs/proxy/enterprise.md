@@ -1,7 +1,8 @@
+import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ✨ Enterprise Features - Content Mod, SSO
+# ✨ Enterprise Features - Content Mod, SSO, Custom Swagger
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
@@ -20,6 +21,7 @@ Features:
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 - ✅ Don't log/store specific requests to Langfuse, Sentry, etc. (eg confidential LLM requests)
 - ✅ Tracking Spend for Custom Tags
+- ✅ Custom Branding + Routes on Swagger Docs
 
 
 
@@ -527,3 +529,38 @@ curl -X GET "http://0.0.0.0:4000/spend/tags" \
 <!-- ## Tracking Spend per Key
 
 ## Tracking Spend per User -->
+
+## Swagger Docs - Custom Routes + Branding 
+
+:::info 
+
+Requires a LiteLLM Enterprise key to use. Request one [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+Set LiteLLM Key in your environment
+
+```bash
+LITELLM_LICENSE=""
+```
+
+### Customize Title + Description
+
+In your environment, set: 
+
+```bash
+DOCS_TITLE="TotalGPT"
+DOCS_DESCRIPTION="Sample Company Description"
+```
+
+### Customize Routes
+
+Hide admin routes from users. 
+
+In your environment, set: 
+
+```bash
+DOCS_FILTERED="True" # only shows openai routes to user
+```
+
+<Image img={require('../../img/custom_swagger.png')}  style={{ width: '900px', height: 'auto' }} />

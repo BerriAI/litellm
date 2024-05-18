@@ -507,7 +507,7 @@ class AnthropicChatCompletion(BaseLLM):
             _is_function_call = True
             if "anthropic-beta" not in headers:
                 # default to v1 of "anthropic-beta"
-                headers["anthropic-beta"] = "tools-2024-04-04"
+                headers["anthropic-beta"] = "tools-2024-05-16"
 
             anthropic_tools = []
             for tool in optional_params["tools"]:
