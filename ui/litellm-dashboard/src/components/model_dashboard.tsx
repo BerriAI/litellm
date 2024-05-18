@@ -121,6 +121,7 @@ const handleSubmit = async (formValues: Record<string, any>, accessToken: string
       // Iterate through the key-value pairs in formValues
       litellmParamsObj["model"] = litellm_model
       let modelName: string  = "";
+      console.log("formValues add deployment:", formValues);
       for (const [key, value] of Object.entries(formValues)) {
         if (value === '') {
           continue;
@@ -1114,13 +1115,22 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </Form.Item>
                 }
                 {
-                  selectedProvider == Providers.Azure && <Form.Item
-                  label="Base Model"
-                  name="base_model"
-                >
-                  <TextInput placeholder="azure/gpt-3.5-turbo"/>
-                  <Text>The actual model your azure deployment uses. Used for accurate cost tracking. Select name from <Link href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" target="_blank">here</Link></Text>
-                </Form.Item>
+                  selectedProvider == Providers.Azure && 
+     
+                    <div>
+                    <Form.Item
+                      label="Base Model"
+                      name="base_model"
+                      className="mb-0"
+                    >
+                    <TextInput placeholder="azure/gpt-3.5-turbo"/>
+                    </Form.Item>
+                <Row>
+                <Col span={10}></Col>
+                <Col span={10}><Text className="mb-2">The actual model your azure deployment uses. Used for accurate cost tracking. Select name from <Link href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" target="_blank">here</Link></Text></Col>
+                </Row>
+
+                  </div>
                 }
                 {
                   selectedProvider == Providers.Bedrock && <Form.Item
