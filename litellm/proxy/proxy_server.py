@@ -671,15 +671,21 @@ async def user_api_key_auth(
         _end_user_object = None
         end_user_params = {}
         if "user" in request_data:
-            _end_user_object = await get_end_user_object(
-                end_user_id=request_data["user"],
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            if _end_user_object is not None:
-                end_user_params["allowed_model_region"] = (
-                    _end_user_object.allowed_model_region
+            try:
+                _end_user_object = await get_end_user_object(
+                    end_user_id=request_data["user"],
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
                 )
+                if _end_user_object is not None:
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "Unable to find user in db. Error - {}".format(str(e))
+                )
+                pass
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
