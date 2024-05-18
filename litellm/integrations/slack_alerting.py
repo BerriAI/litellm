@@ -164,13 +164,28 @@ class SlackAlerting(CustomLogger):
     ) -> Optional[str]:
         """
         Returns langfuse trace url
+
+        - check:
+        -> existing_trace_id
+        -> trace_id
+        -> litellm_call_id
         """
         # do nothing for now
-        if (
-            request_data is not None
-            and request_data.get("metadata", {}).get("trace_id", None) is not None
-        ):
-            trace_id = request_data["metadata"]["trace_id"]
+        if request_data is not None:
+            trace_id = None
+            if (
+                request_data.get("metadata", {}).get("existing_trace_id", None)
+                is not None
+            ):
+                trace_id = request_data["metadata"]["existing_trace_id"]
+            elif request_data.get("metadata", {}).get("trace_id", None) is not None:
+                trace_id = request_data["metadata"]["trace_id"]
+            elif request_data.get("litellm_logging_obj", None) is not None and hasattr(
+                request_data["litellm_logging_obj"], "model_call_details"
+            ):
+                trace_id = request_data["litellm_logging_obj"].model_call_details[
+                    "litellm_call_id"
+                ]
             if litellm.utils.langFuseLogger is not None:
                 base_url = litellm.utils.langFuseLogger.Langfuse.base_url
                 return f"{base_url}/trace/{trace_id}"
