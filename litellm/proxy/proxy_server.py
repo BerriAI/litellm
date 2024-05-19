@@ -536,7 +536,6 @@ async def user_api_key_auth(
                         team_id=team_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
-                        team_name_default=jwt_handler.get_team_name_default(),
                     )
 
                 # [OPTIONAL] track spend for an org id - `LiteLLM_OrganizationTable`
@@ -550,10 +549,14 @@ async def user_api_key_auth(
                 # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
                 user_object = None
                 user_id = jwt_handler.get_user_id(token=valid_token, default_value=None)
+                user_email = jwt_handler.get_user_email(
+                    token=valid_token, default_value=None
+                )
                 if user_id is not None:
                     # get the user object
                     user_object = await get_user_object(
                         user_id=user_id,
+                        user_email=user_email,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
                         user_id_upsert=jwt_handler.is_upsert_user_id(),

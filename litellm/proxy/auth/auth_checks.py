@@ -281,7 +281,7 @@ async def get_user_object(
                 if user_email:
                     user_to_add["user_email"] = user_email
 
-                # check if a default team is set, if it is, associated it
+                # check if a default team is set, if it is, associated it - create it otherwise
                 if team_name_default:
                     try:
                         # if the default team exists, verify it exists, if not upsert it
@@ -291,12 +291,28 @@ async def get_user_object(
 
                         # If we have a response, add the team id
                         if response:
-                            user_to_add["teams"] = [response.json().team_id]
+                            user_to_add["teams"] = [response.data.team_id]
 
                     except Exception as e:  # if user not in db
-                        raise ValueError(
-                            f"Default team exist in db. 'team_alias'={team_name_default}. Create team via `/team/new` call."
+                        # Create the team id automatically
+                        team_id = str(uuid.uuid4())
+                        response = await prisma_client.db.litellm_teamtable.create(
+                            data={
+                                "team_id": team_id,
+                                "team_alias": team_name_default,
+                                "models": ["all-proxy-models"],
+                                "members_with_roles": json.dumps(
+                                    [
+                                        {
+                                            "role": "admin",
+                                            "user_id": user_id,  # create the default team using the existing user id
+                                        }
+                                    ]
+                                ),
+                            }
                         )
+                        # Add team id to the user once the team is created
+                        user_to_add["teams"] = [team_id]
 
                 response = await prisma_client.db.litellm_usertable.create(
                     data=user_to_add
@@ -320,7 +336,6 @@ async def get_team_object(
     team_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
-    team_name_default: Optional[str],
 ) -> LiteLLM_TeamTable:
     """
     - Check if team id in proxy Team Table
@@ -346,24 +361,7 @@ async def get_team_object(
         )
 
         if response is None:
-            # check if a default team is set
-            if team_name_default:
-                try:
-                    # if the default team exists, verify it exists, if not upsert it
-                    response = await prisma_client.db.litellm_teamtable.find_unique(
-                        where={"team_alias": team_name_default}
-                    )
-                except Exception as e:  # if user not in db
-                    # Create the team id automatically
-                    team_id = str(uuid.uuid4())
-                    response = await prisma_client.db.litellm_teamtable.create(
-                        data={
-                            "team_id": team_id,
-                            "team_alias": team_name_default,
-                            "models": ["all-proxy-models"],
-                            "members_with_roles": json.dumps([]),
-                        }
-                    )
+            raise Exception
 
         _response = LiteLLM_TeamTable(**response.dict())
         # save the team object to cache
