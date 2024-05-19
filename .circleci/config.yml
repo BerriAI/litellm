@@ -311,32 +311,6 @@ jobs:
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
               -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
 
-<<<<<<< HEAD
-=======
-  auto_update_price_and_context_window:
-    docker:
-      - image: circleci/python:3.9
-    steps:
-      - checkout
-      - run:
-          name: Install Dependencies
-          command: |
-            pip install aiohttp
-      - run:
-          name: Update Price and Context Window
-          command: |
-            python ci_cd/auto_update_price_and_context_window_file.py
-      - run:
-          name: Commit Changes
-          command: |
-            git config user.name "CircleCI"
-            git config user.email "circleci@example.com"
-            git add model_prices_and_context_window.json
-            git commit -m "[skip ci] Daily Price and Context window update: $(date +'%Y-%m-%d')"
-            git push -q origin main
-    schedule:
-      - cron: "0 0 * * *"
->>>>>>> dd2e31c59 (Daily JSON update: 2024-05-19)
 workflows:
   version: 2
   build_and_test:
@@ -367,9 +341,3 @@ workflows:
             branches:
               only:
                 - main
-<<<<<<< HEAD
-=======
-  daily_update_price_and_context_window:
-    jobs:
-      - auto_update_price_and_context_window
->>>>>>> dd2e31c59 (Daily JSON update: 2024-05-19)
