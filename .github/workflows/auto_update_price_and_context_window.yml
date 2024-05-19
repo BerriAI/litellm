@@ -15,7 +15,7 @@ jobs:
           pip install aiohttp
       - name: Update JSON Data
         run: |
-          python ci_cd/auto_update_price_and_context_window_file.py
+          python ".github/workflows/auto_update_price_and_context_window_file.py"
       - name: Create Pull Request
         run: |
           git add model_prices_and_context_window.json 
