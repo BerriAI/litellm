@@ -1081,6 +1081,7 @@
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.0-pro": { 
@@ -1092,6 +1093,7 @@
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.0-pro-001": { 
@@ -1103,6 +1105,7 @@
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.0-pro-002": { 
@@ -1114,6 +1117,7 @@
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.5-pro": { 
@@ -1126,6 +1130,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true, 
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.5-flash-preview-0514": {
@@ -1144,6 +1149,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.5-pro-preview-0514": { 
@@ -1156,6 +1162,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true, 
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.5-pro-preview-0215": { 
@@ -1168,6 +1175,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true, 
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.5-pro-preview-0409": {
@@ -1180,6 +1188,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true, 
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-experimental": {
@@ -1192,6 +1201,7 @@
         "mode": "chat",
         "supports_function_calling": false,
         "supports_tool_choice": true, 
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-pro-vision": {
@@ -1207,6 +1217,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.0-pro-vision": {
@@ -1222,6 +1233,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.0-pro-vision-001": {
@@ -1237,6 +1249,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "vertex_ai/claude-3-sonnet@20240229": {
@@ -1419,6 +1432,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini/gemini-pro": {
@@ -1430,6 +1444,7 @@
         "litellm_provider": "gemini",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini/gemini-1.5-pro": {
@@ -1443,6 +1458,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_tool_choice": true, 
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini/gemini-1.5-pro-latest": {
@@ -1456,6 +1472,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_tool_choice": true, 
+        "supports_system_role": false,
         "source": "https://ai.google.dev/models/gemini"
     },
     "gemini/gemini-pro-vision": {
@@ -1468,6 +1485,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_system_role": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "command-r": {
@@ -1678,7 +1696,8 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_system_role": false
     },
     "openrouter/mistralai/mixtral-8x22b-instruct": {
         "max_tokens": 65536,
@@ -1743,7 +1762,8 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_system_role": false
     },
     "openrouter/fireworks/firellava-13b": {
         "max_tokens": 4096,
