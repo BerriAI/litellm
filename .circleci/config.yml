@@ -184,9 +184,6 @@ jobs:
             pip install "PyGithub==1.59.1"
             # Run pytest and generate JUnit XML report
       - run:
-          name: Update File for Price & Content Window
-          command: python ci_cd/auto_update_price_and_context_window_file.py
-      - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f Dockerfile.database .
       - run:
