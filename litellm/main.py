@@ -326,7 +326,7 @@ async def acompletion(
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
-            or (custom_llm_provider == "bedrock" and "cohere" in model)
+            or custom_llm_provider == "bedrock"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -368,6 +368,8 @@ async def acompletion(
 async def _async_streaming(response, model, custom_llm_provider, args):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
+        if asyncio.iscoroutine(response):
+            response = await response
         async for line in response:
             print_verbose(f"line in async streaming: {line}")
             yield line
@@ -1979,23 +1981,9 @@ def completion(
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            if "cohere" in model:
-                response = bedrock_chat_completion.completion(
-                    model=model,
-                    messages=messages,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    extra_headers=extra_headers,
-                    timeout=timeout,
-                    acompletion=acompletion,
-                )
-            else:
+            if (
+                "aws_bedrock_client" in optional_params
+            ):  # use old bedrock flow for aws_bedrock_client users.
                 response = bedrock.completion(
                     model=model,
                     messages=messages,
@@ -2031,7 +2019,22 @@ def completion(
                             custom_llm_provider="bedrock",
                             logging_obj=logging,
                         )
-
+            else:
+                response = bedrock_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                )
             if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
