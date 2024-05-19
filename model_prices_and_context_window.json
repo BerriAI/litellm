@@ -1696,8 +1696,13 @@
     },
     "openrouter/databricks/dbrx-instruct": {
         "max_tokens": 32768,
+<<<<<<< HEAD
         "input_cost_per_token": 0.0000006,
         "output_cost_per_token": 0.0000006,
+=======
+        "input_cost_per_token": 1.08e-06,
+        "output_cost_per_token": 1.08e-06,
+>>>>>>> dd2e31c59 (Daily JSON update: 2024-05-19)
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
