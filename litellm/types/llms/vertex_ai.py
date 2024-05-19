@@ -1,4 +1,4 @@
-from typing import TypedDict, Any, Union, Optional, List, Literal
+from typing import TypedDict, Any, Union, Optional, List, Literal, Dict
 import json
 from typing_extensions import (
     Self,
@@ -13,7 +13,7 @@ from typing_extensions import (
 
 class Field(TypedDict):
     key: str
-    value: dict[str, Any]
+    value: Dict[str, Any]
 
 
 class FunctionCallArgs(TypedDict):
