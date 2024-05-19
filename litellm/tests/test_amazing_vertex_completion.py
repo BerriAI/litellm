@@ -751,7 +751,7 @@ async def test_gemini_pro_async_function_calling():
                 "type": "function",
                 "function": {
                     "name": "get_current_weather",
-                    "description": "Get the current weather in a given location. Response with a prediction on temperature as well.",
+                    "description": "Get the current weather in a given location.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -763,9 +763,8 @@ async def test_gemini_pro_async_function_calling():
                                 "type": "string",
                                 "enum": ["celsius", "fahrenheit"],
                             },
-                            "predicted_temperature": {"type": "integer"},
                         },
-                        "required": ["location", "predicted_temperature"],
+                        "required": ["location"],
                     },
                 },
             }
@@ -773,7 +772,7 @@ async def test_gemini_pro_async_function_calling():
         messages = [
             {
                 "role": "user",
-                "content": "What's the weather like in Boston today in fahrenheit, give me a prediction?",
+                "content": "What's the weather like in Boston today in fahrenheit?",
             }
         ]
         completion = await litellm.acompletion(
@@ -783,7 +782,6 @@ async def test_gemini_pro_async_function_calling():
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
 
-        raise Exception
     # except litellm.APIError as e:
     #     pass
     except litellm.RateLimitError as e:
@@ -977,4 +975,3 @@ def test_prompt_factory():
     translated_messages = _gemini_convert_messages_text(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
-    raise Exception
