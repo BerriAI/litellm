@@ -16,7 +16,7 @@ from litellm.tests.test_streaming import streaming_format_tests
 import json
 import os
 import tempfile
-from litellm.llms.vertex_ai import _gemini_convert_messages_text
+from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
 
 litellm.num_retries = 3
 litellm.cache = None
@@ -590,7 +590,7 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_gemini_pro_function_calling(sync_mode):
     try:
@@ -972,6 +972,6 @@ def test_prompt_factory():
         # Now the assistant can reply with the result of the tool call.
     ]
 
-    translated_messages = _gemini_convert_messages_text(messages=messages)
+    translated_messages = _gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
