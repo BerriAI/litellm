@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import requests  # type: ignore
 import time
-from typing import Callable, Optional, Union, List, Literal, Tuple
+from typing import Callable, Optional, Union, List, Literal
 from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
 import litellm, uuid
 import httpx, inspect  # type: ignore
@@ -336,39 +336,14 @@ def _process_gemini_image(image_url: str) -> PartType:
         raise e
 
 
-def _extract_system_prompt_from_messages(messages: list) -> Optional[ContentType]:
-    # Separate system prompt from rest of message
-    system_prompt_indices = []
-    _parts: List[PartType] = []
-    for idx, message in enumerate(messages):
-        if message["role"] == "system":
-            _part = PartType(text=message["content"])
-            _parts.append(_part)
-            system_prompt_indices.append(idx)
-    if len(system_prompt_indices) > 0:
-        for idx in reversed(system_prompt_indices):
-            messages.pop(idx)
-    if len(_parts) > 0:
-        return ContentType(parts=_parts)
-    return None
-
-
-def _gemini_convert_messages_with_history(
-    messages: list,
-) -> Tuple[Optional[ContentType], List[ContentType]]:
+def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
 
     - Parts must be iterable
     - Roles must alternate b/w 'user' and 'model' (same as anthropic -> merge consecutive roles)
     - Please ensure that function response turn comes immediately after a function call turn
-
-    Returns:
-    - Tuple[Optional[system_instructions], messages]
     """
-
-    system_instructions = _extract_system_prompt_from_messages(messages=messages)
-
     user_message_types = {"user", "system"}
     contents: List[ContentType] = []
 
@@ -429,7 +404,7 @@ def _gemini_convert_messages_with_history(
                 )
             )
 
-    return system_instructions, contents
+    return contents
 
 
 def _gemini_vision_convert_messages(messages: list):
@@ -724,9 +699,7 @@ def completion(
             print_verbose("\nMaking VertexAI Gemini Pro / Pro Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
             tools = optional_params.pop("tools", None)
-            system_instruction, content = _gemini_convert_messages_with_history(
-                messages=messages
-            )
+            content = _gemini_convert_messages_with_history(messages=messages)
             stream = optional_params.pop("stream", False)
             if stream == True:
                 request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), safety_settings={safety_settings}, stream={stream})\n"
@@ -763,7 +736,6 @@ def completion(
             ## LLM Call
             response = llm_model.generate_content(
                 contents=content,
-                system_instruction=system_instruction,
                 generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
