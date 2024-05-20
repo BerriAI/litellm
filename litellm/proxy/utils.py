@@ -290,12 +290,9 @@ class ProxyLogging:
             "token_budget",
             "user_budget",
             "team_budget",
-            "user_and_proxy_budget",
-            "failed_budgets",
+            "proxy_budget",
             "projected_limit_exceeded",
         ],
-        user_max_budget: float,
-        user_current_spend: float,
         user_info: CallInfo,
     ):
         if self.alerting is None:
@@ -303,8 +300,6 @@ class ProxyLogging:
             return
         await self.slack_alerting_instance.budget_alerts(
             type=type,
-            user_max_budget=user_max_budget,
-            user_current_spend=user_current_spend,
             user_info=user_info,
         )
 
