@@ -3646,7 +3646,6 @@ async def chat_completion(
 ):
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     data = {}
-    check_request_disconnected = None
     try:
         body = await request.body()
         body_str = body.decode()
@@ -3829,9 +3828,6 @@ async def chat_completion(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        check_request_disconnected = asyncio.create_task(
-            check_request_disconnection(request, llm_responses)
-        )
         responses = await llm_responses
 
         response = responses[1]
@@ -3913,9 +3909,6 @@ async def chat_completion(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
-    finally:
-        if check_request_disconnected is not None:
-            check_request_disconnected.cancel()
 
 
 @router.post(
@@ -3942,7 +3935,6 @@ async def completion(
 ):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = {}
-    check_request_disconnected = None
     try:
         body = await request.body()
         body_str = body.decode()
@@ -4042,9 +4034,6 @@ async def completion(
                     + data.get("model", "")
                 },
             )
-        check_request_disconnected = asyncio.create_task(
-            check_request_disconnection(request, llm_response)
-        )
 
         # Await the llm_response task
         response = await llm_response
@@ -4109,9 +4098,6 @@ async def completion(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
-    finally:
-        if check_request_disconnected is not None:
-            check_request_disconnected.cancel()
 
 
 @router.post(
