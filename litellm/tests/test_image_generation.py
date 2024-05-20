@@ -178,7 +178,13 @@ async def test_aimage_generation_vertex_ai():
             prompt="An olympic size swimming pool",
             model="vertex_ai/imagegeneration@006",
         )
-        print(f"response: {response}")
+        assert response.data is not None
+        assert len(response.data) > 0
+
+        for d in response.data:
+            assert isinstance(d, litellm.ImageObject)
+            print("data in response.data", d)
+            assert d.b64_json is not None
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:

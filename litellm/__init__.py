@@ -726,6 +726,7 @@ from .utils import (
     get_first_chars_messages,
     ModelResponse,
     ImageResponse,
+    ImageObject,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
