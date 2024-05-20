@@ -429,7 +429,10 @@ async def check_request_disconnection(request: Request, llm_api_call_task):
     Returns:
     - None
     """
-    while True:
+
+    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
+    start_time = time.time()
+    while time.time() - start_time < 600:
         await asyncio.sleep(1)
         if await request.is_disconnected():
 
