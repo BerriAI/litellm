@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import requests  # type: ignore
 import time
-from typing import Callable, Optional, Union, List
+from typing import Callable, Optional, Union, List, Any
 from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
 import litellm, uuid
 import httpx, inspect  # type: ignore
@@ -25,8 +25,6 @@ class VertexAIError(Exception):
 
 
 class VertexLLM(BaseLLM):
-    from google.auth.credentials import Credentials  # type: ignore[import-untyped]
-
     def __init__(self) -> None:
         from google.auth.credentials import Credentials  # type: ignore[import-untyped]
 
@@ -36,7 +34,7 @@ class VertexLLM(BaseLLM):
         self._credentials: Optional[Credentials] = None
         self.project_id: Optional[str] = None
 
-    def load_auth(self) -> tuple[Credentials, str]:
+    def load_auth(self) -> tuple[Any, str]:
         from google.auth.transport.requests import Request  # type: ignore[import-untyped]
         from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         import google.auth as google_auth
@@ -57,7 +55,7 @@ class VertexLLM(BaseLLM):
 
         return credentials, project_id
 
-    def refresh_auth(self, credentials: Credentials) -> None:
+    def refresh_auth(self, credentials: Any) -> None:
         from google.auth.transport.requests import Request  # type: ignore[import-untyped]
 
         credentials.refresh(Request())
