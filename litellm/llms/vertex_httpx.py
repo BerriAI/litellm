@@ -157,9 +157,6 @@ class VertexLLM(BaseLLM):
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
-
-        import vertexai
-
         auth_header = self._ensure_access_token()
 
         request_data = {
