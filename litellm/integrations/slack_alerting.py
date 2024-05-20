@@ -875,7 +875,8 @@ Model Info:
 
             if isinstance(response_obj, litellm.ModelResponse):
                 completion_tokens = response_obj.usage.completion_tokens
-                final_value = float(response_s.total_seconds() / completion_tokens)
+                if completion_tokens is not None and completion_tokens > 0:
+                    final_value = float(response_s.total_seconds() / completion_tokens)
 
             await self.async_update_daily_reports(
                 DeploymentMetrics(
