@@ -8322,18 +8322,18 @@ def exception_type(
                 _deployment = _metadata.get("deployment")
                 extra_information = f"\nModel: {model}"
                 if _api_base:
-                    extra_information += f"\nAPI Base: {_api_base}"
+                    extra_information += f"\nAPI Base: `{_api_base}`"
                 if messages and len(messages) > 0:
-                    extra_information += f"\nMessages: {messages}"
+                    extra_information += f"\nMessages: `{messages}`"
 
                 if _model_group is not None:
-                    extra_information += f"\nmodel_group: {_model_group}\n"
+                    extra_information += f"\nmodel_group: `{_model_group}`\n"
                 if _deployment is not None:
-                    extra_information += f"\ndeployment: {_deployment}\n"
+                    extra_information += f"\ndeployment: `{_deployment}`\n"
                 if _vertex_project is not None:
-                    extra_information += f"\nvertex_project: {_vertex_project}\n"
+                    extra_information += f"\nvertex_project: `{_vertex_project}`\n"
                 if _vertex_location is not None:
-                    extra_information += f"\nvertex_location: {_vertex_location}\n"
+                    extra_information += f"\nvertex_location: `{_vertex_location}`\n"
 
                 # on litellm proxy add key name + team to exceptions
                 extra_information = _add_key_name_and_team_to_alert(
