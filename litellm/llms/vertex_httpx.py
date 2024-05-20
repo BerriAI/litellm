@@ -153,15 +153,21 @@ class VertexLLM(BaseLLM):
                 {
                     "prompt": "a cat"
                 }
-            ]
+            ],
+            "parameters": {
+                "sampleCount": 1
+            }
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
         auth_header = self._ensure_access_token()
+        optional_params = optional_params or {
+            "sampleCount": 1
+        }  # default optional params
 
         request_data = {
             "instances": [{"prompt": prompt}],
-            "parameters": {"sampleCount": 1},
+            "parameters": optional_params,
         }
 
         request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
