@@ -173,6 +173,9 @@ async def test_aimage_generation_bedrock_with_optional_params():
 
 @pytest.mark.asyncio
 async def test_aimage_generation_vertex_ai():
+    from test_amazing_vertex_completion import load_vertex_ai_credentials
+
+    load_vertex_ai_credentials()
     try:
         response = await litellm.aimage_generation(
             prompt="An olympic size swimming pool",
