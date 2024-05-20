@@ -88,7 +88,7 @@ class VertexLLM(BaseLLM):
         assert isinstance(self._credentials.token, str)
         return self._credentials.token
 
-    async def aimage_generation(
+    def image_generation(
         self,
         prompt: str,
         vertex_project: str,
@@ -101,6 +101,35 @@ class VertexLLM(BaseLLM):
         timeout: Optional[int] = None,
         logging_obj=None,
         model_response=None,
+        aimg_generation=False,
+    ):
+        if aimg_generation == True:
+            response = self.aimage_generation(
+                prompt=prompt,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                model=model,
+                client=client,
+                optional_params=optional_params,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                model_response=model_response,
+            )
+            return response
+
+    async def aimage_generation(
+        self,
+        prompt: str,
+        vertex_project: str,
+        vertex_location: str,
+        model_response: litellm.ImageResponse,
+        model: Optional[
+            str
+        ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
+        client: Optional[AsyncHTTPHandler] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[int] = None,
+        logging_obj=None,
     ):
         response = None
         if client is None:
@@ -152,5 +181,31 @@ class VertexLLM(BaseLLM):
 
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
+        """
+        Vertex AI Image generation response example:
+        {
+            "predictions": [
+                {
+                "bytesBase64Encoded": "BASE64_IMG_BYTES",
+                "mimeType": "image/png"
+                },
+                {
+                "mimeType": "image/png",
+                "bytesBase64Encoded": "BASE64_IMG_BYTES"
+                }
+            ]
+        }
+        """
+
+        _json_response = response.json()
+        _predictions = _json_response["predictions"]
+
+        _response_data: List[litellm.ImageObject] = []
+        for _prediction in _predictions:
+            _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
+            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            _response_data.append(image_object)
+
+        model_response.data = _response_data
 
         return model_response

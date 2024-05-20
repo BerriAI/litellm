@@ -3874,7 +3874,7 @@ def image_generation(
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
-            model_response = vertex_chat_completion.aimage_generation(  # type: ignore
+            model_response = vertex_chat_completion.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
@@ -3883,6 +3883,7 @@ def image_generation(
                 model_response=model_response,
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
+                aimg_generation=aimg_generation,
             )
 
         return model_response
