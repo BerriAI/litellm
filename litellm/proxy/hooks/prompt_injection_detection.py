@@ -193,13 +193,15 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return data
 
         except HTTPException as e:
+
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)
                 and "error" in e.detail
+                and self.prompt_injection_params is not None
+                and self.prompt_injection_params.reject_as_response
             ):
-                if self.prompt_injection_params.reject_as_response:
-                    return e.detail["error"]
+                return e.detail["error"]
             raise e
         except Exception as e:
             traceback.print_exc()

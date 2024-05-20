@@ -6440,6 +6440,7 @@ def get_formatted_prompt(
         "image_generation",
         "audio_transcription",
         "moderation",
+        "text_completion",
     ],
 ) -> str:
     """
@@ -6452,6 +6453,8 @@ def get_formatted_prompt(
         for m in data["messages"]:
             if "content" in m and isinstance(m["content"], str):
                 prompt += m["content"]
+    elif call_type == "text_completion":
+        prompt = data["prompt"]
     elif call_type == "embedding" or call_type == "moderation":
         if isinstance(data["input"], str):
             prompt = data["input"]
@@ -12190,8 +12193,13 @@ def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
 
 
 class ModelResponseIterator:
-    def __init__(self, model_response):
-        self.model_response = model_response
+    def __init__(self, model_response: ModelResponse, convert_to_delta: bool = False):
+        if convert_to_delta == True:
+            self.model_response = ModelResponse(stream=True)
+            _delta = self.model_response.choices[0].delta  # type: ignore
+            _delta.content = model_response.choices[0].message.content  # type: ignore
+        else:
+            self.model_response = model_response
         self.is_done = False
 
     # Sync iterator
