@@ -260,7 +260,7 @@ class OpenAIConfig:
 
         model_specific_params = []
         if (
-            "gpt-3.5-turbo" in model or "gpt-4-turbo" in model or "gpt-4o" in model
+            model != "gpt-3.5-turbo-16k" and model != "gpt-4"
         ):  # gpt-4 does not support 'response_format'
             model_specific_params.append("response_format")
 

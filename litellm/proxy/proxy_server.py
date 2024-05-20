@@ -4889,6 +4889,9 @@ async def moderations(
             )
 
 
+#### DEV UTILS ####
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -4938,6 +4941,36 @@ async def token_counter(request: TokenCountRequest):
         model_used=model_to_use,
         tokenizer_type=tokenizer_used,
     )
+
+
+@router.get(
+    "/utils/supported_openai_params",
+    tags=["llm utils"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def supported_openai_params(model: str):
+    """
+    Returns supported openai params for a given litellm model name 
+
+    e.g. `gpt-4` vs `gpt-3.5-turbo` 
+
+    Example curl: 
+    ```
+    curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        return {
+            "supported_openai_params": litellm.get_supported_openai_params(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail={"error": "Could not map model={}".format(model)}
+        )
 
 
 #### KEY MANAGEMENT ####
