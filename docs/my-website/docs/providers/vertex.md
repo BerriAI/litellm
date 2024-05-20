@@ -521,6 +521,19 @@ response = await litellm.aimage_generation(
 )
 ```
 
+**Generating multiple images**
+
+Use the `n` parameter to pass how many images you want generated
+```python
+response = await litellm.aimage_generation(
+    prompt="An olympic size swimming pool",
+    model="vertex_ai/imagegeneration@006",
+    vertex_ai_project="adroit-crow-413218",
+    vertex_ai_location="us-central1",
+    n=1,
+)
+```
+
 ## Extra
 
 ### Using `GOOGLE_APPLICATION_CREDENTIALS`
