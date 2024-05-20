@@ -4,7 +4,6 @@ import dotenv, os
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
-from litellm.utils import ModelResponse
 from typing import Literal, Union, Optional
 import traceback
 
