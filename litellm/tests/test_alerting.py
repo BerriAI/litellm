@@ -431,7 +431,6 @@ async def test_send_daily_reports_all_zero_or_none():
         "user_budget",
         "team_budget",
         "user_and_proxy_budget",
-        "failed_budgets",
         "projected_limit_exceeded",
     ],
 )
@@ -470,7 +469,6 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
         "user_budget",
         "team_budget",
         "user_and_proxy_budget",
-        "failed_budgets",
         "projected_limit_exceeded",
     ],
 )
