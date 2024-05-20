@@ -1012,7 +1012,7 @@ class ImageObject(OpenAIObject):
 class ImageResponse(OpenAIObject):
     created: Optional[int] = None
 
-    data: Optional[list[ImageObject]] = None
+    data: Optional[List[ImageObject]] = None
 
     usage: Optional[dict] = None
 
