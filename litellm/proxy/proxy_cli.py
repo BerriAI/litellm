@@ -17,6 +17,7 @@ if litellm_mode == "DEV":
 from importlib import resources
 import shutil
 
+
 telemetry = None
 
 
@@ -505,6 +506,7 @@ def run_server(
             port = random.randint(1024, 49152)
 
         from litellm.proxy.proxy_server import app
+        import litellm
 
         if run_gunicorn == False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
@@ -519,7 +521,15 @@ def run_server(
                     ssl_certfile=ssl_certfile_path,
                 )  # run uvicorn
             else:
-                uvicorn.run(app, host=host, port=port)  # run uvicorn
+                print(f"litellm.json_logs: {litellm.json_logs}")
+                if litellm.json_logs:
+                    from litellm.proxy._logging import logger
+
+                    uvicorn.run(
+                        app, host=host, port=port, log_config=None
+                    )  # run uvicorn w/ json
+                else:
+                    uvicorn.run(app, host=host, port=port)  # run uvicorn
         elif run_gunicorn == True:
             import gunicorn.app.base
 
