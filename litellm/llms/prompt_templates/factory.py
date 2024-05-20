@@ -1501,6 +1501,7 @@ def _gemini_vision_convert_messages(messages: list):
                 # Case 1: Image from URL
                 image = _load_image_from_url(img)
                 processed_images.append(image)
+
             else:
                 try:
                     from PIL import Image
@@ -1508,8 +1509,22 @@ def _gemini_vision_convert_messages(messages: list):
                     raise Exception(
                         "gemini image conversion failed please run `pip install Pillow`"
                     )
-                # Case 2: Image filepath (e.g. temp.jpeg) given
-                image = Image.open(img)
+                
+                if "base64" in img:
+                    # Case 2: Base64 image data
+                    import base64
+                    import io
+                    # Extract the base64 image data
+                    base64_data = img.split("base64,")[1]
+
+                    # Decode the base64 image data
+                    image_data = base64.b64decode(base64_data)
+
+                    # Load the image from the decoded data
+                    image = Image.open(io.BytesIO(image_data))
+                else:
+                    # Case 3: Image filepath (e.g. temp.jpeg) given
+                    image = Image.open(img)
                 processed_images.append(image)
         content = [prompt] + processed_images
         return content
