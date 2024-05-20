@@ -589,12 +589,12 @@ async def user_api_key_auth(
                             ttl=UserAPIKeyCacheTTLEnum.global_proxy_spend.value,
                         )
                     if global_proxy_spend is not None:
-                        user_info = {
-                            "user_id": litellm_proxy_admin_name,
-                            "max_budget": litellm.max_budget,
-                            "spend": global_proxy_spend,
-                            "user_email": "",
-                        }
+                        user_info = CallInfo(
+                            user_id=litellm_proxy_admin_name,
+                            max_budget=litellm.max_budget,
+                            spend=global_proxy_spend,
+                            token=valid_token["token"],
+                        )
                         asyncio.create_task(
                             proxy_logging_obj.budget_alerts(
                                 user_max_budget=litellm.max_budget,
@@ -922,12 +922,19 @@ async def user_api_key_auth(
                                 user_max_budget is not None
                                 and user_current_spend is not None
                             ):
+                                call_info = CallInfo(
+                                    token=valid_token["token"],
+                                    spend=valid_token["spend"],
+                                    user_id=_user.get("user_id", None),
+                                    user_email=_user.get("user_email", None),
+                                    key_alias=valid_token["key_alias"],
+                                )
                                 asyncio.create_task(
                                     proxy_logging_obj.budget_alerts(
                                         user_max_budget=user_max_budget,
                                         user_current_spend=user_current_spend,
                                         type="user_and_proxy_budget",
-                                        user_info=_user,
+                                        user_info=call_info,
                                     )
                                 )
 
@@ -947,12 +954,22 @@ async def user_api_key_auth(
                             user_max_budget is not None
                             and user_current_spend is not None
                         ):
+                            call_info = CallInfo(
+                                token=valid_token["token"],
+                                spend=valid_token["spend"],
+                                max_budget=valid_token["max_budget"],
+                                user_id=getattr(user_id_information, "user_id", None),
+                                user_email=getattr(
+                                    user_id_information, "user_email", None
+                                ),
+                                key_alias=valid_token["key_alias"],
+                            )
                             asyncio.create_task(
                                 proxy_logging_obj.budget_alerts(
                                     user_max_budget=user_max_budget,
                                     user_current_spend=user_current_spend,
                                     type="user_budget",
-                                    user_info=user_id_information,
+                                    user_info=call_info,
                                 )
                             )
 
@@ -982,12 +999,18 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
+                call_info = CallInfo(
+                    token=valid_token["token"],
+                    spend=valid_token["spend"],
+                    max_budget=valid_token["max_budget"],
+                    user_id=valid_token["user_id"],
+                )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
                         user_max_budget=valid_token.max_budget,
                         user_current_spend=valid_token.spend,
                         type="token_budget",
-                        user_info=valid_token,
+                        user_info=call_info,
                     )
                 )
 
@@ -1038,12 +1061,18 @@ async def user_api_key_auth(
                 and hasattr(valid_token, "team_max_budget")
                 and valid_token.team_max_budget is not None
             ):
+                call_info = CallInfo(
+                    token=valid_token["token"],
+                    spend=valid_token["spend"],
+                    max_budget=valid_token["max_budget"],
+                    user_id=valid_token["user_id"],
+                )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
                         user_max_budget=valid_token.team_max_budget,
                         user_current_spend=valid_token.spend,
-                        type="token_budget",
-                        user_info=valid_token,
+                        type="team_budget",
+                        user_info=call_info,
                     )
                 )
 
@@ -1059,12 +1088,18 @@ async def user_api_key_auth(
                 and hasattr(valid_token, "team_max_budget")
                 and valid_token.team_max_budget is not None
             ):
+                call_info = CallInfo(
+                    token=valid_token["token"],
+                    spend=valid_token["spend"],
+                    max_budget=valid_token["max_budget"],
+                    user_id=valid_token["user_id"],
+                )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
                         user_max_budget=valid_token.team_max_budget,
                         user_current_spend=valid_token.team_spend,
-                        type="token_budget",
-                        user_info=valid_token,
+                        type="team_budget",
+                        user_info=call_info,
                     )
                 )
 
@@ -1110,18 +1145,18 @@ async def user_api_key_auth(
                     )
 
                 if global_proxy_spend is not None:
-                    user_info = {
-                        "user_id": litellm_proxy_admin_name,
-                        "max_budget": litellm.max_budget,
-                        "spend": global_proxy_spend,
-                        "user_email": "",
-                    }
+                    call_info = CallInfo(
+                        token=valid_token["token"],
+                        spend=global_proxy_spend,
+                        max_budget=litellm.max_budget,
+                        user_id=litellm_proxy_admin_name,
+                    )
                     asyncio.create_task(
                         proxy_logging_obj.budget_alerts(
                             user_max_budget=litellm.max_budget,
                             user_current_spend=global_proxy_spend,
                             type="user_and_proxy_budget",
-                            user_info=user_info,
+                            user_info=call_info,
                         )
                     )
             _ = common_checks(
@@ -1513,13 +1548,8 @@ async def _PROXY_track_cost_callback(
         model = kwargs.get("model", "")
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
         error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
-        user_id = user_id or "not-found"
         asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                user_max_budget=0,
-                user_current_spend=0,
-                type="failed_tracking",
-                user_info=user_id,
+            proxy_logging_obj.failed_tracking_alert(
                 error_message=error_msg,
             )
         )
@@ -1766,22 +1796,29 @@ async def update_cache(
                 == True
             )
         ):
-            key_alias = existing_spend_obj.key_alias
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
                 current_spend=new_spend,
-                soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
+                    "soft_budget", None
+                ),
+            )  # type: ignore
+            soft_limit = existing_spend_obj.litellm_budget_table.get(
+                "soft_budget", float("inf")
             )
-            soft_limit = existing_spend_obj.litellm_budget_table.soft_budget
-            user_info = {
-                "key_alias": key_alias,
-                "projected_spend": projected_spend,
-                "projected_exceeded_date": projected_exceeded_date,
-            }
+            call_info = CallInfo(
+                token=existing_spend_obj.token or "",
+                spend=existing_spend_obj.spend,
+                key_alias=existing_spend_obj.key_alias,
+                max_budget=existing_spend_obj.max_budget,
+                user_id=existing_spend_obj.user_id,
+                projected_spend=projected_spend,
+                projected_exceeded_data=projected_exceeded_date,
+            )
             # alert user
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
                     type="projected_limit_exceeded",
-                    user_info=user_info,
+                    user_info=call_info,
                     user_max_budget=soft_limit,
                     user_current_spend=new_spend,
                 )

@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_TeamTable,
     Member,
+    CallInfo,
 )
 from litellm.caching import DualCache, RedisCache
 from litellm.router import Deployment, ModelInfo, LiteLLM_Params
@@ -276,20 +277,26 @@ class ProxyLogging:
                 raise e
         return data
 
+    async def failed_tracking_alert(self, error_message: str):
+        if self.alerting is None:
+            return
+        await self.slack_alerting_instance.failed_tracking_alert(
+            error_message=error_message
+        )
+
     async def budget_alerts(
         self,
         type: Literal[
             "token_budget",
             "user_budget",
+            "team_budget",
             "user_and_proxy_budget",
             "failed_budgets",
-            "failed_tracking",
             "projected_limit_exceeded",
         ],
         user_max_budget: float,
         user_current_spend: float,
-        user_info=None,
-        error_message="",
+        user_info: CallInfo,
     ):
         if self.alerting is None:
             # do nothing if alerting is not switched on
@@ -299,7 +306,6 @@ class ProxyLogging:
             user_max_budget=user_max_budget,
             user_current_spend=user_current_spend,
             user_info=user_info,
-            error_message=error_message,
         )
 
     async def alerting_handler(
@@ -355,7 +361,11 @@ class ProxyLogging:
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
-                    message=message, level=level, alert_type=alert_type, **extra_kwargs
+                    message=message,
+                    level=level,
+                    alert_type=alert_type,
+                    user_info=None,
+                    **extra_kwargs,
                 )
             elif client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:

@@ -1,7 +1,7 @@
 #### What this does ####
 #    Class for sending Slack Alerts #
 import dotenv, os
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, CallInfo
 from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm, threading
 from typing import List, Literal, Any, Union, Optional, Dict
@@ -571,20 +571,35 @@ class SlackAlerting(CustomLogger):
                     alert_type="llm_requests_hanging",
                 )
 
+    async def failed_tracking_alert(self, error_message: str):
+        """Raise alert when tracking failed for specific model"""
+        _cache: DualCache = self.internal_usage_cache
+        message = "Failed Tracking Cost for" + error_message
+        _cache_key = "budget_alerts:failed_tracking:{}".format(message)
+        result = await _cache.async_get_cache(key=_cache_key)
+        if result is None:
+            await self.send_alert(
+                message=message, level="High", alert_type="budget_alerts"
+            )
+            await _cache.async_set_cache(
+                key=_cache_key,
+                value="SENT",
+                ttl=self.alerting_args.budget_alert_ttl,
+            )
+
     async def budget_alerts(
         self,
         type: Literal[
             "token_budget",
             "user_budget",
+            "team_budget",
             "user_and_proxy_budget",
             "failed_budgets",
-            "failed_tracking",
             "projected_limit_exceeded",
         ],
         user_max_budget: float,
         user_current_spend: float,
-        user_info=None,
-        error_message="",
+        user_info: CallInfo,
     ):
         ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
         # - Alert once within 24hr period
@@ -598,39 +613,23 @@ class SlackAlerting(CustomLogger):
         if "budget_alerts" not in self.alert_types:
             return
         _id: str = "default_id"  # used for caching
+        user_info_str = ""
         if type == "user_and_proxy_budget":
-            user_info = dict(user_info)
-            user_id = user_info["user_id"]
-            _id = user_id
-            max_budget = user_info["max_budget"]
-            spend = user_info["spend"]
-            user_email = user_info["user_email"]
-            user_info = f"""\nUser ID: {user_id}\nMax Budget: ${max_budget}\nSpend: ${spend}\nUser Email: {user_email}"""
-        elif type == "token_budget":
-            token_info = dict(user_info)
-            token = token_info["token"]
+            user_id = user_info.user_id
+            if user_id is not None:
+                _id = user_id
+            max_budget = user_info.max_budget
+            spend = user_info.spend
+            user_email = user_info.user_email
+            user_info_str = f"""\nUser ID: {user_id}\nMax Budget: ${max_budget}\nSpend: ${spend}\nUser Email: {user_email}"""
+        elif type == "token_budget" or type == "team_budget":
+            token_info = user_info
+            token = token_info.token
             _id = token
-            spend = token_info["spend"]
-            max_budget = token_info["max_budget"]
-            user_id = token_info["user_id"]
-            user_info = f"""\nToken: {token}\nSpend: ${spend}\nMax Budget: ${max_budget}\nUser ID: {user_id}"""
-        elif type == "failed_tracking":
-            user_id = str(user_info)
-            _id = user_id
-            user_info = f"\nUser ID: {user_id}\n Error {error_message}"
-            message = "Failed Tracking Cost for" + user_info
-            _cache_key = "budget_alerts:failed_tracking:{}".format(_id)
-            result = await _cache.async_get_cache(key=_cache_key)
-            if result is None:
-                await self.send_alert(
-                    message=message, level="High", alert_type="budget_alerts"
-                )
-                await _cache.async_set_cache(
-                    key=_cache_key,
-                    value="SENT",
-                    ttl=self.alerting_args.budget_alert_ttl,
-                )
-            return
+            spend = token_info.spend
+            max_budget = token_info.max_budget
+            user_id = token_info.user_id
+            user_info_str = f"""\nToken: {token}\nSpend: ${spend}\nMax Budget: ${max_budget}\nUser ID: {user_id}"""
         elif type == "projected_limit_exceeded" and user_info is not None:
             """
             Input variables:
@@ -642,12 +641,15 @@ class SlackAlerting(CustomLogger):
             user_max_budget=soft_limit,
             user_current_spend=new_spend
             """
-            message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` {user_info["key_alias"]} \n`Expected Day of Error`: {user_info["projected_exceeded_date"]} \n`Current Spend`: {user_current_spend} \n`Projected Spend at end of month`: {user_info["projected_spend"]} \n`Soft Limit`: {user_max_budget}"""
+            message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` {user_info.key_alias} \n`Expected Day of Error`: {user_info.projected_exceeded_data} \n`Current Spend`: {user_current_spend} \n`Projected Spend at end of month`: {user_info.projected_spend} \n`Soft Limit`: {user_max_budget}"""
             _cache_key = "budget_alerts:projected_limit_exceeded:{}".format(_id)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 await self.send_alert(
-                    message=message, level="High", alert_type="budget_alerts"
+                    message=message,
+                    level="High",
+                    alert_type="budget_alerts",
+                    user_info=user_info,
                 )
                 await _cache.async_set_cache(
                     key=_cache_key,
@@ -655,8 +657,6 @@ class SlackAlerting(CustomLogger):
                     ttl=self.alerting_args.budget_alert_ttl,
                 )
             return
-        else:
-            user_info = str(user_info)
 
         # percent of max_budget left to spend
         if user_max_budget > 0:
@@ -664,18 +664,21 @@ class SlackAlerting(CustomLogger):
         else:
             percent_left = 0
         verbose_proxy_logger.debug(
-            f"Budget Alerts: Percent left: {percent_left} for {user_info}"
+            f"Budget Alerts: Percent left: {percent_left} for {user_info_str}"
         )
 
         # check if crossed budget
         if user_current_spend >= user_max_budget:
-            verbose_proxy_logger.debug("Budget Crossed for %s", user_info)
-            message = "Budget Crossed for" + user_info
+            verbose_proxy_logger.debug("Budget Crossed for %s", user_info_str)
+            message = "Budget Crossed for" + user_info_str
             _cache_key = "budget_alerts:budget_crossed:{}".format(_id)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 await self.send_alert(
-                    message=message, level="High", alert_type="budget_alerts"
+                    message=message,
+                    level="High",
+                    alert_type="budget_alerts",
+                    user_info=user_info,
                 )
                 await _cache.async_set_cache(
                     key=_cache_key,
@@ -686,7 +689,7 @@ class SlackAlerting(CustomLogger):
 
         # check if 5% of max budget is left
         if percent_left <= 0.05:
-            message = "5% budget left for" + user_info
+            message = "5% budget left for" + user_info_str
             _cache_key = "budget_alerts:5_perc_budget_crossed:{}".format(_id)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
@@ -694,6 +697,7 @@ class SlackAlerting(CustomLogger):
                     message=message,
                     level="Medium",
                     alert_type="budget_alerts",
+                    user_info=user_info,
                 )
 
                 await _cache.async_set_cache(
@@ -706,7 +710,7 @@ class SlackAlerting(CustomLogger):
 
         # check if 15% of max budget is left
         if percent_left <= 0.15:
-            message = "15% budget left for" + user_info
+            message = "15% budget left for" + user_info_str
             _cache_key = "budget_alerts:15_perc_budget_crossed:{}".format(_id)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
@@ -714,6 +718,7 @@ class SlackAlerting(CustomLogger):
                     message=message,
                     level="Low",
                     alert_type="budget_alerts",
+                    user_info=user_info,
                 )
                 await _cache.async_set_cache(
                     key=_cache_key,
@@ -780,6 +785,36 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    async def send_webhook_alert(
+        self, alert_type: Literal["budget_alerts"], call_info: CallInfo
+    ) -> bool:
+        """
+        Sends structured alert to webhook, if set.
+
+        Currently only implemented for budget alerts
+
+        Returns -> True if sent, False if not.
+        """
+
+        webhook_url = os.getenv("WEBHOOK_URL", None)
+        if webhook_url is None:
+            raise Exception("Missing webhook_url from environment")
+
+        payload = call_info.model_dump_json()
+        headers = {"Content-type": "application/json"}
+
+        response = await self.async_http_handler.post(
+            url=webhook_url,
+            headers=headers,
+            data=payload,
+        )
+        if response.status_code == 200:
+            return True
+        else:
+            print("Error sending webhook alert. Error=", response.text)  # noqa
+
+        return False
+
     async def send_alert(
         self,
         message: str,
@@ -795,6 +830,7 @@ Model Info:
             "new_model_added",
             "cooldown_deployment",
         ],
+        user_info: Optional[CallInfo] = None,
         **kwargs,
     ):
         """
@@ -812,6 +848,18 @@ Model Info:
             message: str - what is the alert about
         """
         if self.alerting is None:
+            return
+
+        if (
+            "webhook" in self.alerting
+            and alert_type == "budget_alerts"
+            and user_info is not None
+        ):
+            await self.send_webhook_alert(
+                alert_type="budget_alerts", call_info=user_info
+            )
+
+        if "slack" not in self.alerting:
             return
 
         if alert_type not in self.alert_types:
