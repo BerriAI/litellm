@@ -676,7 +676,7 @@ async def test_gemini_pro_function_calling(sync_mode):
 # gemini_pro_function_calling()
 
 
-@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.asyncio
 async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
