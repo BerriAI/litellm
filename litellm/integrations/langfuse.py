@@ -417,12 +417,12 @@ class LangFuseLogger:
             if aws_region_name:
                 clean_metadata["aws_region_name"] = aws_region_name
 
+            if "cache_hit" in kwargs:
+                if kwargs["cache_hit"] is None:
+                    kwargs["cache_hit"] = False
+                clean_metadata["cache_hit"] = kwargs["cache_hit"]
+
             if supports_tags:
-                if "cache_hit" in kwargs:
-                    if kwargs["cache_hit"] is None:
-                        kwargs["cache_hit"] = False
-                    tags.append(f"cache_hit:{kwargs['cache_hit']}")
-                    clean_metadata["cache_hit"] = kwargs["cache_hit"]
                 if existing_trace_id is None:
                     trace_params.update({"tags": tags})
 
