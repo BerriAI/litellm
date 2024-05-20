@@ -8990,9 +8990,25 @@ async def google_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
+    global premium_user
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+
+    ####### Check if user is a Enterprise / Premium User #######
+    if (
+        microsoft_client_id is not None
+        or google_client_id is not None
+        or generic_client_id is not None
+    ):
+        if premium_user != True:
+            raise ProxyException(
+                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                type="auth_error",
+                param="premium_user",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
     # get url from request
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
     ui_username = os.getenv("UI_USERNAME")
