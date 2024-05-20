@@ -31,6 +31,7 @@ class VertexLLM(BaseLLM):
         self.refresh_token: Optional[str] = None
         self._credentials: Optional[Any] = None
         self.project_id: Optional[str] = None
+        self.async_handler: Optional[AsyncHTTPHandler] = None
 
     def load_auth(self) -> Tuple[Any, str]:
         from google.auth.transport.requests import Request  # type: ignore[import-untyped]
@@ -134,9 +135,9 @@ class VertexLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     _httpx_timeout = httpx.Timeout(timeout)
                     _params["timeout"] = _httpx_timeout
-            client = AsyncHTTPHandler(**_params)  # type: ignore
+            self.async_handler = AsyncHTTPHandler(**_params)  # type: ignore
         else:
-            client = client  # type: ignore
+            self.async_handler = client  # type: ignore
 
         # make POST request to
         # https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict
@@ -176,7 +177,7 @@ class VertexLLM(BaseLLM):
             },
         )
 
-        response = await client.post(
+        response = await self.async_handler.post(
             url=url,
             headers={
                 "Content-Type": "application/json; charset=utf-8",
