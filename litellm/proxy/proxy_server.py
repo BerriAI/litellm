@@ -5874,6 +5874,8 @@ async def calculate_spend(request: Request):
 
     Calculate spend **before** making call:
 
+    Note: If you see a spend of $0.0 you need to set custom_pricing for your model: https://docs.litellm.ai/docs/proxy/custom_pricing
+
     ```
     curl --location 'http://localhost:4000/spend/calculate'
     --header 'Authorization: Bearer sk-1234'
