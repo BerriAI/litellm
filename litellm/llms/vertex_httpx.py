@@ -135,6 +135,9 @@ class VertexLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     _httpx_timeout = httpx.Timeout(timeout)
                     _params["timeout"] = _httpx_timeout
+            else:
+                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
+
             self.async_handler = AsyncHTTPHandler(**_params)  # type: ignore
         else:
             self.async_handler = client  # type: ignore
