@@ -1923,10 +1923,28 @@ class Router:
             metadata = kwargs.get("litellm_params", {}).get("metadata", None)
             _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
 
+            exception_response = getattr(exception, "response", {})
+            exception_headers = getattr(exception_response, "headers", None)
+            _time_to_cooldown = self.cooldown_time
+
+            if exception_headers is not None:
+
+                _time_to_cooldown = (
+                    litellm.utils._get_retry_after_from_exception_header(
+                        response_headers=exception_headers
+                    )
+                )
+
+                if _time_to_cooldown < 0:
+                    # if the response headers did not read it -> set to default cooldown time
+                    _time_to_cooldown = self.cooldown_time
+
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
                 self._set_cooldown_deployments(
-                    exception_status=exception_status, deployment=deployment_id
+                    exception_status=exception_status,
+                    deployment=deployment_id,
+                    time_to_cooldown=_time_to_cooldown,
                 )  # setting deployment_id in cooldown deployments
             if custom_llm_provider:
                 model_name = f"{custom_llm_provider}/{model_name}"
@@ -2026,7 +2044,10 @@ class Router:
             return True
 
     def _set_cooldown_deployments(
-        self, exception_status: Union[str, int], deployment: Optional[str] = None
+        self,
+        exception_status: Union[str, int],
+        deployment: Optional[str] = None,
+        time_to_cooldown: Optional[float] = None,
     ):
         """
         Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -2053,6 +2074,8 @@ class Router:
             f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
         )
         cooldown_time = self.cooldown_time or 1
+        if time_to_cooldown is not None:
+            cooldown_time = time_to_cooldown
 
         if isinstance(exception_status, str):
             try:
@@ -2090,7 +2113,9 @@ class Router:
                 )
 
             self.send_deployment_cooldown_alert(
-                deployment_id=deployment, exception_status=exception_status
+                deployment_id=deployment,
+                exception_status=exception_status,
+                cooldown_time=cooldown_time,
             )
         else:
             self.failed_calls.set_cache(
@@ -3751,7 +3776,10 @@ class Router:
         print("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
 
     def send_deployment_cooldown_alert(
-        self, deployment_id: str, exception_status: Union[str, int]
+        self,
+        deployment_id: str,
+        exception_status: Union[str, int],
+        cooldown_time: float,
     ):
         try:
             from litellm.proxy.proxy_server import proxy_logging_obj
@@ -3775,7 +3803,7 @@ class Router:
                 )
                 asyncio.create_task(
                     proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{self.cooldown_time}` seconds\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
+                        message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
                         alert_type="cooldown_deployment",
                         level="Low",
                     )
