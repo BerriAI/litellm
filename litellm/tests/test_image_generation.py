@@ -175,11 +175,14 @@ async def test_aimage_generation_bedrock_with_optional_params():
 async def test_aimage_generation_vertex_ai():
     from test_amazing_vertex_completion import load_vertex_ai_credentials
 
+    litellm.set_verbose = True
+
     load_vertex_ai_credentials()
     try:
         response = await litellm.aimage_generation(
             prompt="An olympic size swimming pool",
             model="vertex_ai/imagegeneration@006",
+            vertex_ai_project="adroit-crow-413218",
         )
         assert response.data is not None
         assert len(response.data) > 0
