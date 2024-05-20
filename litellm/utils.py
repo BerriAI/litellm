@@ -4946,6 +4946,14 @@ def get_optional_params_image_gen(
             width, height = size.split("x")
             optional_params["width"] = int(width)
             optional_params["height"] = int(height)
+    elif custom_llm_provider == "vertex_ai":
+        supported_params = ["n"]
+        """
+        All params here: https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/imagegeneration?project=adroit-crow-413218
+        """
+        _check_valid_arg(supported_params=supported_params)
+        if n is not None:
+            optional_params["sampleCount"] = int(n)
 
     for k in passed_params.keys():
         if k not in default_params.keys():
