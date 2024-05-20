@@ -169,3 +169,22 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_aimage_generation_vertex_ai():
+    try:
+        response = await litellm.aimage_generation(
+            prompt="A cute baby sea otter",
+            model="vertex_ai/imagegeneration@006",
+        )
+        print(f"response: {response}")
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.ContentPolicyViolationError:
+        pass  # Azure randomly raises these errors - skip when they occur
+    except Exception as e:
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
