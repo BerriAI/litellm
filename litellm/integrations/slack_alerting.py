@@ -36,6 +36,7 @@ class SlackAlertingArgs(LiteLLMBase):
         os.getenv("SLACK_DAILY_REPORT_FREQUENCY", default_daily_report_frequency)
     )
     report_check_interval: int = 5 * 60  # 5 minutes
+    budget_alert_ttl: int = 24 * 60 * 60  # 24 hours
 
 
 class DeploymentMetrics(LiteLLMBase):
@@ -585,6 +586,12 @@ class SlackAlerting(CustomLogger):
         user_info=None,
         error_message="",
     ):
+        ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
+        # - Alert once within 24hr period
+        # - Cache this information
+        # - Don't re-alert, if alert already sent
+        _cache: DualCache = self.internal_usage_cache
+
         if self.alerting is None or self.alert_types is None:
             # do nothing if alerting is not switched on
             return
@@ -612,9 +619,17 @@ class SlackAlerting(CustomLogger):
             _id = user_id
             user_info = f"\nUser ID: {user_id}\n Error {error_message}"
             message = "Failed Tracking Cost for" + user_info
-            await self.send_alert(
-                message=message, level="High", alert_type="budget_alerts"
-            )
+            _cache_key = "budget_alerts:failed_tracking:{}".format(_id)
+            result = await _cache.async_get_cache(key=_cache_key)
+            if result is None:
+                await self.send_alert(
+                    message=message, level="High", alert_type="budget_alerts"
+                )
+                await _cache.async_set_cache(
+                    key=_cache_key,
+                    value="SENT",
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
             return
         elif type == "projected_limit_exceeded" and user_info is not None:
             """
@@ -628,9 +643,17 @@ class SlackAlerting(CustomLogger):
             user_current_spend=new_spend
             """
             message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` {user_info["key_alias"]} \n`Expected Day of Error`: {user_info["projected_exceeded_date"]} \n`Current Spend`: {user_current_spend} \n`Projected Spend at end of month`: {user_info["projected_spend"]} \n`Soft Limit`: {user_max_budget}"""
-            await self.send_alert(
-                message=message, level="High", alert_type="budget_alerts"
-            )
+            _cache_key = "budget_alerts:projected_limit_exceeded:{}".format(_id)
+            result = await _cache.async_get_cache(key=_cache_key)
+            if result is None:
+                await self.send_alert(
+                    message=message, level="High", alert_type="budget_alerts"
+                )
+                await _cache.async_set_cache(
+                    key=_cache_key,
+                    value="SENT",
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
             return
         else:
             user_info = str(user_info)
@@ -644,47 +667,59 @@ class SlackAlerting(CustomLogger):
             f"Budget Alerts: Percent left: {percent_left} for {user_info}"
         )
 
-        ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
-        # - Alert once within 28d period
-        # - Cache this information
-        # - Don't re-alert, if alert already sent
-        _cache: DualCache = self.internal_usage_cache
-
         # check if crossed budget
         if user_current_spend >= user_max_budget:
             verbose_proxy_logger.debug("Budget Crossed for %s", user_info)
             message = "Budget Crossed for" + user_info
-            result = await _cache.async_get_cache(key=message)
+            _cache_key = "budget_alerts:budget_crossed:{}".format(_id)
+            result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 await self.send_alert(
                     message=message, level="High", alert_type="budget_alerts"
                 )
-                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
+                await _cache.async_set_cache(
+                    key=_cache_key,
+                    value="SENT",
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
             return
 
         # check if 5% of max budget is left
         if percent_left <= 0.05:
             message = "5% budget left for" + user_info
-            cache_key = "alerting:{}".format(_id)
-            result = await _cache.async_get_cache(key=cache_key)
+            _cache_key = "budget_alerts:5_perc_budget_crossed:{}".format(_id)
+            result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 await self.send_alert(
-                    message=message, level="Medium", alert_type="budget_alerts"
+                    message=message,
+                    level="Medium",
+                    alert_type="budget_alerts",
                 )
 
-                await _cache.async_set_cache(key=cache_key, value="SENT", ttl=2419200)
+                await _cache.async_set_cache(
+                    key=_cache_key,
+                    value="SENT",
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
 
             return
 
         # check if 15% of max budget is left
         if percent_left <= 0.15:
             message = "15% budget left for" + user_info
-            result = await _cache.async_get_cache(key=message)
+            _cache_key = "budget_alerts:15_perc_budget_crossed:{}".format(_id)
+            result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 await self.send_alert(
-                    message=message, level="Low", alert_type="budget_alerts"
+                    message=message,
+                    level="Low",
+                    alert_type="budget_alerts",
                 )
-                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
+                await _cache.async_set_cache(
+                    key=_cache_key,
+                    value="SENT",
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
             return
         return
 
