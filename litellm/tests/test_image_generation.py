@@ -183,6 +183,7 @@ async def test_aimage_generation_vertex_ai():
             prompt="An olympic size swimming pool",
             model="vertex_ai/imagegeneration@006",
             vertex_ai_project="adroit-crow-413218",
+            vertex_ai_location="us-central1",
         )
         assert response.data is not None
         assert len(response.data) > 0
