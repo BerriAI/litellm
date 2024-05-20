@@ -131,7 +131,13 @@ class ProxyLogging:
             alerting_args=alerting_args,
         )
 
-        if "daily_reports" in self.alert_types:
+        if (
+            self.alerting is not None
+            and "slack" in self.alerting
+            and "daily_reports" in self.alert_types
+        ):
+            # NOTE: ENSURE we only add callbacks when alerting is on
+            # We should NOT add callbacks when alerting is off
             litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
         if redis_cache is not None:
