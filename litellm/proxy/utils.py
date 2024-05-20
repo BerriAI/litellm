@@ -436,7 +436,7 @@ class ProxyLogging:
 
             asyncio.create_task(
                 self.alerting_handler(
-                    message=f"LLM API call failed: {exception_str}",
+                    message=f"LLM API call failed: `{exception_str}`",
                     level="High",
                     alert_type="llm_exceptions",
                     request_data=request_data,
