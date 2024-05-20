@@ -1,7 +1,7 @@
 # What is this?
 ## Tests slack alerting on proxy logging object
 
-import sys, json, uuid
+import sys, json, uuid, random
 import os
 import io, asyncio
 from datetime import datetime, timedelta
@@ -22,6 +22,7 @@ import unittest.mock
 from unittest.mock import AsyncMock
 import pytest
 from litellm.router import AlertingConfig, Router
+from litellm.proxy._types import CallInfo
 
 
 @pytest.mark.parametrize(
@@ -417,9 +418,9 @@ async def test_send_daily_reports_all_zero_or_none():
     [
         "token_budget",
         "user_budget",
+        "team_budget",
         "user_and_proxy_budget",
         "failed_budgets",
-        "failed_tracking",
         "projected_limit_exceeded",
     ],
 )
@@ -428,20 +429,59 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
     slack_alerting = SlackAlerting()
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        if alerting_type == "failed_tracking":
-            user_info = "ishaan@berri.ai"
-        else:
-            user_info = {
-                "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
-                "spend": uuid.uuid4(),
-                "max_budget": None,
-                "user_id": "ishaan@berri.ai",
-                "user_email": "ishaan@berri.ai",
-                "key_alias": "my-test-key",
-                "projected_exceeded_date": "10/20/2024",
-                "projected_spend": 200,
-            }
+        user_info = {
+            "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+            "spend": random.uniform(1.5, 1.9),
+            "max_budget": None,
+            "user_id": "ishaan@berri.ai",
+            "user_email": "ishaan@berri.ai",
+            "key_alias": "my-test-key",
+            "projected_exceeded_date": "10/20/2024",
+            "projected_spend": 200,
+        }
 
+        user_info = CallInfo(**user_info)
+
+        for _ in range(50):
+            await slack_alerting.budget_alerts(
+                type=alerting_type,
+                user_info=user_info,
+                user_current_spend=86,
+                user_max_budget=100,
+            )
+        mock_send_alert.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "alerting_type",
+    [
+        "token_budget",
+        "user_budget",
+        "team_budget",
+        "user_and_proxy_budget",
+        "failed_budgets",
+        "projected_limit_exceeded",
+    ],
+)
+@pytest.mark.asyncio
+async def test_webhook_alerting(alerting_type):
+    slack_alerting = SlackAlerting(alerting=["webhook"])
+
+    with patch.object(
+        slack_alerting, "send_webhook_alert", new=AsyncMock()
+    ) as mock_send_alert:
+        user_info = {
+            "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+            "spend": random.uniform(1.5, 1.9),
+            "max_budget": None,
+            "user_id": "ishaan@berri.ai",
+            "user_email": "ishaan@berri.ai",
+            "key_alias": "my-test-key",
+            "projected_exceeded_date": "10/20/2024",
+            "projected_spend": 200,
+        }
+
+        user_info = CallInfo(**user_info)
         for _ in range(50):
             await slack_alerting.budget_alerts(
                 type=alerting_type,
