@@ -168,6 +168,16 @@ class VertexLLM(BaseLLM):
             "parameters": {"sampleCount": 1},
         }
 
+        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
+        logging_obj.pre_call(
+            input=prompt,
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+
         response = await client.post(
             url=url,
             headers={
