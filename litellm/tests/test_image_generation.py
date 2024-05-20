@@ -175,7 +175,7 @@ async def test_aimage_generation_bedrock_with_optional_params():
 async def test_aimage_generation_vertex_ai():
     try:
         response = await litellm.aimage_generation(
-            prompt="A cute baby sea otter",
+            prompt="An olympic size swimming pool",
             model="vertex_ai/imagegeneration@006",
         )
         print(f"response: {response}")
