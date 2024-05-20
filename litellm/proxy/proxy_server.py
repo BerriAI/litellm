@@ -3761,11 +3761,24 @@ async def chat_completion(
 
         data["litellm_logging_obj"] = logging_obj
 
-        ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
+        ### CALL HOOKS ### - modify/reject incoming data before calling the model
+        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
         )
 
+        if isinstance(data, litellm.ModelResponse):
+            return data
+        elif isinstance(data, litellm.CustomStreamWrapper):
+            selected_data_generator = select_data_generator(
+                response=data,
+                user_api_key_dict=user_api_key_dict,
+                request_data={},
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+            )
         tasks = []
         tasks.append(
             proxy_logging_obj.during_call_hook(
@@ -3998,9 +4011,23 @@ async def completion(
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
+        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
         )
+
+        if isinstance(data, litellm.TextCompletionResponse):
+            return data
+        elif isinstance(data, litellm.TextCompletionStreamWrapper):
+            selected_data_generator = select_data_generator(
+                response=data,
+                user_api_key_dict=user_api_key_dict,
+                request_data={},
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+            )
 
         ### ROUTE THE REQUESTs ###
         router_model_names = llm_router.model_names if llm_router is not None else []

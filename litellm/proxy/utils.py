@@ -19,7 +19,16 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm import ModelResponse, EmbeddingResponse, ImageResponse
+from litellm import (
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
+    CustomStreamWrapper,
+    TextCompletionStreamWrapper,
+)
+from litellm.utils import ModelResponseIterator
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
@@ -32,6 +41,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from litellm.integrations.slack_alerting import SlackAlerting
+from typing_extensions import overload
 
 
 def print_verbose(print_statement):
@@ -176,18 +186,60 @@ class ProxyLogging:
             )
             litellm.utils.set_callbacks(callback_list=callback_list)
 
+    # fmt: off
+
+    @overload
+    async def pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict,
+        call_type: Literal["completion"]
+    ) -> Union[dict, ModelResponse, CustomStreamWrapper]: 
+        ...
+
+    @overload
+    async def pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict,
+        call_type: Literal["text_completion"]
+    ) -> Union[dict, TextCompletionResponse, TextCompletionStreamWrapper]: 
+        ...
+    
+    @overload
+    async def pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict,
+        call_type: Literal["embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",]
+    ) -> dict: 
+        ...
+
+    # fmt: on
+
+    # The actual implementation of the function
     async def pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
         call_type: Literal[
             "completion",
+            "text_completion",
             "embeddings",
             "image_generation",
             "moderation",
             "audio_transcription",
         ],
-    ):
+    ) -> Union[
+        dict,
+        ModelResponse,
+        TextCompletionResponse,
+        CustomStreamWrapper,
+        TextCompletionStreamWrapper,
+    ]:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
 
@@ -214,7 +266,58 @@ class ProxyLogging:
                         call_type=call_type,
                     )
                     if response is not None:
-                        data = response
+                        if isinstance(response, Exception):
+                            raise response
+                        elif isinstance(response, dict):
+                            data = response
+                        elif isinstance(response, str):
+                            if call_type == "completion":
+                                _chat_response = ModelResponse()
+                                _chat_response.choices[0].message.content = response
+
+                                if (
+                                    data.get("stream", None) is not None
+                                    and data["stream"] == True
+                                ):
+                                    _iterator = ModelResponseIterator(
+                                        model_response=_chat_response
+                                    )
+                                    return CustomStreamWrapper(
+                                        completion_stream=_iterator,
+                                        model=data.get("model", ""),
+                                        custom_llm_provider="cached_response",
+                                        logging_obj=data.get(
+                                            "litellm_logging_obj", None
+                                        ),
+                                    )
+                                return _response
+                            elif call_type == "text_completion":
+                                if (
+                                    data.get("stream", None) is not None
+                                    and data["stream"] == True
+                                ):
+                                    _chat_response = ModelResponse()
+                                    _chat_response.choices[0].message.content = response
+
+                                    if (
+                                        data.get("stream", None) is not None
+                                        and data["stream"] == True
+                                    ):
+                                        _iterator = ModelResponseIterator(
+                                            model_response=_chat_response
+                                        )
+                                        return TextCompletionStreamWrapper(
+                                            completion_stream=_iterator,
+                                            model=data.get("model", ""),
+                                        )
+                                else:
+                                    _response = TextCompletionResponse()
+                                    _response.choices[0].text = response
+                                    return _response
+                            else:
+                                raise HTTPException(
+                                    status_code=400, detail={"error": response}
+                                )
 
             print_verbose(f"final data being sent to {call_type} call: {data}")
             return data
