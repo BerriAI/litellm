@@ -124,7 +124,9 @@ from datetime import datetime, timedelta
 
 @pytest.fixture
 def slack_alerting():
-    return SlackAlerting(alerting_threshold=1, internal_usage_cache=DualCache())
+    return SlackAlerting(
+        alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"]
+    )
 
 
 # Test for hanging LLM responses
@@ -162,7 +164,10 @@ async def test_budget_alerts_crossed(slack_alerting):
     user_current_spend = 101
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         await slack_alerting.budget_alerts(
-            "user_budget", user_max_budget, user_current_spend
+            "user_budget",
+            user_max_budget,
+            user_current_spend,
+            user_info=CallInfo(token="", spend=0),
         )
         mock_send_alert.assert_awaited_once()
 
@@ -174,12 +179,18 @@ async def test_budget_alerts_crossed_again(slack_alerting):
     user_current_spend = 101
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         await slack_alerting.budget_alerts(
-            "user_budget", user_max_budget, user_current_spend
+            "user_budget",
+            user_max_budget,
+            user_current_spend,
+            user_info=CallInfo(token="", spend=0),
         )
         mock_send_alert.assert_awaited_once()
         mock_send_alert.reset_mock()
         await slack_alerting.budget_alerts(
-            "user_budget", user_max_budget, user_current_spend
+            "user_budget",
+            user_max_budget,
+            user_current_spend,
+            user_info=CallInfo(token="", spend=0),
         )
         mock_send_alert.assert_not_awaited()
 
