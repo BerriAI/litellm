@@ -1,7 +1,7 @@
-import logging
+import logging, os
 
 set_verbose = False
-json_logs = False
+json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 handler = logging.StreamHandler()
 handler.setLevel(logging.DEBUG)
