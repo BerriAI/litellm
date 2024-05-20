@@ -124,6 +124,7 @@ from litellm.proxy.auth.auth_checks import (
     get_actual_routes,
 )
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.exceptions import RejectedRequestError
 
 try:
     from litellm._version import version
@@ -3766,19 +3767,6 @@ async def chat_completion(
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
         )
 
-        if isinstance(data, litellm.ModelResponse):
-            return data
-        elif isinstance(data, litellm.CustomStreamWrapper):
-            selected_data_generator = select_data_generator(
-                response=data,
-                user_api_key_dict=user_api_key_dict,
-                request_data={},
-            )
-
-            return StreamingResponse(
-                selected_data_generator,
-                media_type="text/event-stream",
-            )
         tasks = []
         tasks.append(
             proxy_logging_obj.during_call_hook(
@@ -3893,6 +3881,40 @@ async def chat_completion(
         )
 
         return response
+    except RejectedRequestError as e:
+        _data = e.request_data
+        _data["litellm_status"] = "fail"  # used for alerting
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+        _chat_response = litellm.ModelResponse()
+        _chat_response.choices[0].message.content = e.message  # type: ignore
+
+        if data.get("stream", None) is not None and data["stream"] == True:
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_chat_response
+            )
+            _streaming_response = litellm.CustomStreamWrapper(
+                completion_stream=_iterator,
+                model=data.get("model", ""),
+                custom_llm_provider="cached_response",
+                logging_obj=data.get("litellm_logging_obj", None),
+            )
+            selected_data_generator = select_data_generator(
+                response=e.message,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+            )
+        _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        _chat_response.usage = _usage  # type: ignore
+        return _chat_response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         traceback.print_exc()
@@ -4112,6 +4134,34 @@ async def completion(
         )
 
         return response
+    except RejectedRequestError as e:
+        _data = e.request_data
+        _data["litellm_status"] = "fail"  # used for alerting
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+        if _data.get("stream", None) is not None and _data["stream"] == True:
+            _chat_response = litellm.ModelResponse()
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _chat_response.usage = _usage  # type: ignore
+            _chat_response.choices[0].message.content = e.message  # type: ignore
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_chat_response
+            )
+            return litellm.TextCompletionStreamWrapper(
+                completion_stream=_iterator,
+                model=_data.get("model", ""),
+            )
+        else:
+            _response = litellm.TextCompletionResponse()
+            _response.choices[0].text = e.message
+            return _response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
