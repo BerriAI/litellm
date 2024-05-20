@@ -26,12 +26,10 @@ class VertexAIError(Exception):
 
 class VertexLLM(BaseLLM):
     def __init__(self) -> None:
-        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
-
         super().__init__()
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
-        self._credentials: Optional[Credentials] = None
+        self._credentials: Optional[Any] = None
         self.project_id: Optional[str] = None
 
     def load_auth(self) -> Tuple[Any, str]:
