@@ -1026,3 +1026,16 @@ class TokenCountResponse(LiteLLMBase):
     request_model: str
     model_used: str
     tokenizer_type: str
+
+
+class CallInfo(LiteLLMBase):
+    """Used for slack budget alerting"""
+
+    token: str = Field(description="Hashed value of that key")
+    spend: float = Field(description="The spend for that key")
+    max_budget: Optional[float] = None
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    key_alias: Optional[str] = None
+    projected_exceeded_data: Optional[str] = None
+    projected_spend: Optional[float] = None
