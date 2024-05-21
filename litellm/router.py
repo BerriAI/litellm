@@ -262,13 +262,22 @@ class Router:
 
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
-        self.fallbacks = fallbacks or litellm.fallbacks
+
+        ## SETTING FALLBACKS ##
+        ### validate if it's set + in correct format
+        _fallbacks = fallbacks or litellm.fallbacks
+
+        self.validate_fallbacks(fallback_param=_fallbacks)
+        ### set fallbacks
+        self.fallbacks = _fallbacks
+
         if default_fallbacks is not None or litellm.default_fallbacks is not None:
             _fallbacks = default_fallbacks or litellm.default_fallbacks
             if self.fallbacks is not None:
                 self.fallbacks.append({"*": _fallbacks})
             else:
                 self.fallbacks = [{"*": _fallbacks}]
+
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
@@ -335,6 +344,21 @@ class Router:
         self.alerting_config: Optional[AlertingConfig] = alerting_config
         if self.alerting_config is not None:
             self._initialize_alerting()
+
+    def validate_fallbacks(self, fallback_param: Optional[List]):
+        if fallback_param is None:
+            return
+        if len(fallback_param) > 0:  # if set
+            ## for dictionary in list, check if only 1 key in dict
+            for _dict in fallback_param:
+                assert isinstance(_dict, dict), "Item={}, not a dictionary".format(
+                    _dict
+                )
+                assert (
+                    len(_dict.keys()) == 1
+                ), "Only 1 key allows in dictionary. You set={} for dict={}".format(
+                    len(_dict.keys()), _dict
+                )
 
     def routing_strategy_init(self, routing_strategy: str, routing_strategy_args: dict):
         if routing_strategy == "least-busy":
@@ -638,6 +662,10 @@ class Router:
     async def abatch_completion(
         self, models: List[str], messages: List[Dict[str, str]], **kwargs
     ):
+        """
+        Async Batch Completion - Batch Process 1 request to multiple model_group on litellm.Router
+        Use this for sending the same request to N models
+        """
 
         async def _async_completion_no_exceptions(
             model: str, messages: List[Dict[str, str]], **kwargs
@@ -656,6 +684,51 @@ class Router:
             _tasks.append(
                 _async_completion_no_exceptions(
                     model=model, messages=messages, **kwargs
+                )
+            )
+
+        response = await asyncio.gather(*_tasks)
+        return response
+
+    async def abatch_completion_one_model_multiple_requests(
+        self, model: str, messages: List[List[Dict[str, str]]], **kwargs
+    ):
+        """
+        Async Batch Completion - Batch Process multiple Messages to one model_group on litellm.Router
+
+        Use this for sending multiple requests to 1 model
+
+        Args:
+            model (List[str]): model group
+            messages (List[List[Dict[str, str]]]): list of messages. Each element in the list is one request
+            **kwargs: additional kwargs
+        Usage:
+            response = await self.abatch_completion_one_model_multiple_requests(
+                model="gpt-3.5-turbo",
+                messages=[
+                    [{"role": "user", "content": "hello"}, {"role": "user", "content": "tell me something funny"}],
+                    [{"role": "user", "content": "hello good mornign"}],
+                ]
+            )
+        """
+
+        async def _async_completion_no_exceptions(
+            model: str, messages: List[Dict[str, str]], **kwargs
+        ):
+            """
+            Wrapper around self.async_completion that catches exceptions and returns them as a result
+            """
+            try:
+                return await self.acompletion(model=model, messages=messages, **kwargs)
+            except Exception as e:
+                return e
+
+        _tasks = []
+        for message_request in messages:
+            # add each task but if the task fails
+            _tasks.append(
+                _async_completion_no_exceptions(
+                    model=model, messages=message_request, **kwargs
                 )
             )
 
@@ -1899,10 +1972,28 @@ class Router:
             metadata = kwargs.get("litellm_params", {}).get("metadata", None)
             _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
 
+            exception_response = getattr(exception, "response", {})
+            exception_headers = getattr(exception_response, "headers", None)
+            _time_to_cooldown = self.cooldown_time
+
+            if exception_headers is not None:
+
+                _time_to_cooldown = (
+                    litellm.utils._get_retry_after_from_exception_header(
+                        response_headers=exception_headers
+                    )
+                )
+
+                if _time_to_cooldown < 0:
+                    # if the response headers did not read it -> set to default cooldown time
+                    _time_to_cooldown = self.cooldown_time
+
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
                 self._set_cooldown_deployments(
-                    exception_status=exception_status, deployment=deployment_id
+                    exception_status=exception_status,
+                    deployment=deployment_id,
+                    time_to_cooldown=_time_to_cooldown,
                 )  # setting deployment_id in cooldown deployments
             if custom_llm_provider:
                 model_name = f"{custom_llm_provider}/{model_name}"
@@ -1962,8 +2053,50 @@ class Router:
                 key=rpm_key, value=request_count, local_only=True
             )  # don't change existing ttl
 
+    def _is_cooldown_required(self, exception_status: Union[str, int]):
+        """
+        A function to determine if a cooldown is required based on the exception status.
+
+        Parameters:
+            exception_status (Union[str, int]): The status of the exception.
+
+        Returns:
+            bool: True if a cooldown is required, False otherwise.
+        """
+        try:
+
+            if isinstance(exception_status, str):
+                exception_status = int(exception_status)
+
+            if exception_status >= 400 and exception_status < 500:
+                if exception_status == 429:
+                    # Cool down 429 Rate Limit Errors
+                    return True
+
+                elif exception_status == 401:
+                    # Cool down 401 Auth Errors
+                    return True
+
+                elif exception_status == 408:
+                    return True
+
+                else:
+                    # Do NOT cool down all other 4XX Errors
+                    return False
+
+            else:
+                # should cool down for all other errors
+                return True
+
+        except:
+            # Catch all - if any exceptions default to cooling down
+            return True
+
     def _set_cooldown_deployments(
-        self, exception_status: Union[str, int], deployment: Optional[str] = None
+        self,
+        exception_status: Union[str, int],
+        deployment: Optional[str] = None,
+        time_to_cooldown: Optional[float] = None,
     ):
         """
         Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -1973,6 +2106,9 @@ class Router:
         the exception is not one that should be immediately retried (e.g. 401)
         """
         if deployment is None:
+            return
+
+        if self._is_cooldown_required(exception_status=exception_status) == False:
             return
 
         dt = get_utc_datetime()
@@ -1987,6 +2123,8 @@ class Router:
             f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
         )
         cooldown_time = self.cooldown_time or 1
+        if time_to_cooldown is not None:
+            cooldown_time = time_to_cooldown
 
         if isinstance(exception_status, str):
             try:
@@ -2024,7 +2162,9 @@ class Router:
                 )
 
             self.send_deployment_cooldown_alert(
-                deployment_id=deployment, exception_status=exception_status
+                deployment_id=deployment,
+                exception_status=exception_status,
+                cooldown_time=cooldown_time,
             )
         else:
             self.failed_calls.set_cache(
@@ -2309,7 +2449,7 @@ class Router:
                 organization = litellm.get_secret(organization_env_name)
                 litellm_params["organization"] = organization
 
-            if "azure" in model_name and isinstance(api_key, str):
+            if "azure" in model_name:
                 if api_base is None or not isinstance(api_base, str):
                     raise ValueError(
                         f"api_base is required for Azure OpenAI. Set it on your config. Model - {model}"
@@ -3185,7 +3325,7 @@ class Router:
 
             if _rate_limit_error == True:  # allow generic fallback logic to take place
                 raise ValueError(
-                    f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                    f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. Try again in {self.cooldown_time} seconds."
                 )
             elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(
@@ -3257,7 +3397,9 @@ class Router:
         litellm.print_verbose(f"initial list of deployments: {healthy_deployments}")
 
         if len(healthy_deployments) == 0:
-            raise ValueError(f"No healthy deployment available, passed model={model}. ")
+            raise ValueError(
+                f"No healthy deployment available, passed model={model}. Try again in {self.cooldown_time} seconds"
+            )
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -3347,7 +3489,7 @@ class Router:
             if _allowed_model_region is None:
                 _allowed_model_region = "n/a"
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
             )
 
         if (
@@ -3415,7 +3557,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -3545,7 +3687,7 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, passed model={model}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}"
             )
         verbose_router_logger.info(
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
@@ -3683,7 +3825,10 @@ class Router:
         print("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
 
     def send_deployment_cooldown_alert(
-        self, deployment_id: str, exception_status: Union[str, int]
+        self,
+        deployment_id: str,
+        exception_status: Union[str, int],
+        cooldown_time: float,
     ):
         try:
             from litellm.proxy.proxy_server import proxy_logging_obj
@@ -3707,7 +3852,7 @@ class Router:
                 )
                 asyncio.create_task(
                     proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down deployment: {_api_base}, for {self.cooldown_time} seconds. Got exception: {str(exception_status)}. Change 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
+                        message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
                         alert_type="cooldown_deployment",
                         level="Low",
                     )

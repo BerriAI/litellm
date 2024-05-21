@@ -558,7 +558,7 @@ async def test_async_chat_bedrock_stream():
                 continue
         except:
             pass
-        time.sleep(1)
+        await asyncio.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
