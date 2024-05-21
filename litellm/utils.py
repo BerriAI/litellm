@@ -10080,7 +10080,14 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
+        self.special_tokens = [
+            "<|assistant|>",
+            "<|system|>",
+            "<|user|>",
+            "<s>",
+            "</s>",
+            "<|im_end|>",
+        ]
         self.holding_chunk = ""
         self.complete_response = ""
         self.response_uptil_now = ""
