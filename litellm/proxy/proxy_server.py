@@ -590,17 +590,15 @@ async def user_api_key_auth(
                             ttl=UserAPIKeyCacheTTLEnum.global_proxy_spend.value,
                         )
                     if global_proxy_spend is not None:
-                        user_info = {
-                            "user_id": litellm_proxy_admin_name,
-                            "max_budget": litellm.max_budget,
-                            "spend": global_proxy_spend,
-                            "user_email": "",
-                        }
+                        user_info = CallInfo(
+                            user_id=litellm_proxy_admin_name,
+                            max_budget=litellm.max_budget,
+                            spend=global_proxy_spend,
+                            token=valid_token["token"],
+                        )
                         asyncio.create_task(
                             proxy_logging_obj.budget_alerts(
-                                user_max_budget=litellm.max_budget,
-                                user_current_spend=global_proxy_spend,
-                                type="user_and_proxy_budget",
+                                type="proxy_budget",
                                 user_info=user_info,
                             )
                         )
@@ -923,12 +921,18 @@ async def user_api_key_auth(
                                 user_max_budget is not None
                                 and user_current_spend is not None
                             ):
+                                call_info = CallInfo(
+                                    token=valid_token.token,
+                                    spend=user_current_spend,
+                                    max_budget=user_max_budget,
+                                    user_id=_user.get("user_id", None),
+                                    user_email=_user.get("user_email", None),
+                                    key_alias=valid_token.key_alias,
+                                )
                                 asyncio.create_task(
                                     proxy_logging_obj.budget_alerts(
-                                        user_max_budget=user_max_budget,
-                                        user_current_spend=user_current_spend,
-                                        type="user_and_proxy_budget",
-                                        user_info=_user,
+                                        type="user_budget",
+                                        user_info=call_info,
                                     )
                                 )
 
@@ -948,12 +952,20 @@ async def user_api_key_auth(
                             user_max_budget is not None
                             and user_current_spend is not None
                         ):
+                            call_info = CallInfo(
+                                token=valid_token.token,
+                                spend=user_current_spend,
+                                max_budget=user_max_budget,
+                                user_id=getattr(user_id_information, "user_id", None),
+                                user_email=getattr(
+                                    user_id_information, "user_email", None
+                                ),
+                                key_alias=valid_token.key_alias,
+                            )
                             asyncio.create_task(
                                 proxy_logging_obj.budget_alerts(
-                                    user_max_budget=user_max_budget,
-                                    user_current_spend=user_current_spend,
                                     type="user_budget",
-                                    user_info=user_id_information,
+                                    user_info=call_info,
                                 )
                             )
 
@@ -983,12 +995,17 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
-                        user_max_budget=valid_token.max_budget,
-                        user_current_spend=valid_token.spend,
                         type="token_budget",
-                        user_info=valid_token,
+                        user_info=call_info,
                     )
                 )
 
@@ -1033,39 +1050,24 @@ async def user_api_key_auth(
                         raise Exception(
                             f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
                         )
-            # Check 6. Token spend is under Team budget
-            if (
-                valid_token.spend is not None
-                and hasattr(valid_token, "team_max_budget")
-                and valid_token.team_max_budget is not None
-            ):
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        user_max_budget=valid_token.team_max_budget,
-                        user_current_spend=valid_token.spend,
-                        type="token_budget",
-                        user_info=valid_token,
-                    )
-                )
 
-                if valid_token.spend >= valid_token.team_max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Team: {valid_token.team_max_budget}"
-                    )
-
-            # Check 7. Team spend is under Team budget
+            # Check 6. Team spend is under Team budget
             if (
                 hasattr(valid_token, "team_spend")
                 and valid_token.team_spend is not None
                 and hasattr(valid_token, "team_max_budget")
                 and valid_token.team_max_budget is not None
             ):
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.team_spend,
+                    max_budget=valid_token.team_max_budget,
+                    user_id=valid_token.user_id,
+                )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
-                        user_max_budget=valid_token.team_max_budget,
-                        user_current_spend=valid_token.team_spend,
-                        type="token_budget",
-                        user_info=valid_token,
+                        type="team_budget",
+                        user_info=call_info,
                     )
                 )
 
@@ -1111,18 +1113,17 @@ async def user_api_key_auth(
                     )
 
                 if global_proxy_spend is not None:
-                    user_info = {
-                        "user_id": litellm_proxy_admin_name,
-                        "max_budget": litellm.max_budget,
-                        "spend": global_proxy_spend,
-                        "user_email": "",
-                    }
+                    call_info = CallInfo(
+                        token=valid_token.token,
+                        spend=global_proxy_spend,
+                        max_budget=litellm.max_budget,
+                        user_id=litellm_proxy_admin_name,
+                        team_id=valid_token.team_id,
+                    )
                     asyncio.create_task(
                         proxy_logging_obj.budget_alerts(
-                            user_max_budget=litellm.max_budget,
-                            user_current_spend=global_proxy_spend,
-                            type="user_and_proxy_budget",
-                            user_info=user_info,
+                            type="proxy_budget",
+                            user_info=call_info,
                         )
                     )
             _ = common_checks(
@@ -1514,13 +1515,8 @@ async def _PROXY_track_cost_callback(
         model = kwargs.get("model", "")
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
         error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
-        user_id = user_id or "not-found"
         asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                user_max_budget=0,
-                user_current_spend=0,
-                type="failed_tracking",
-                user_info=user_id,
+            proxy_logging_obj.failed_tracking_alert(
                 error_message=error_msg,
             )
         )
@@ -1732,14 +1728,14 @@ async def update_cache(
     """
 
     ### UPDATE KEY SPEND ###
-    async def _update_key_cache():
+    async def _update_key_cache(token: str, response_cost: float):
         # Fetch the existing cost for the given token
         if isinstance(token, str) and token.startswith("sk-"):
             hashed_token = hash_token(token=token)
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
+        existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
         verbose_proxy_logger.debug(
             f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
         )
@@ -1748,7 +1744,7 @@ async def update_cache(
         )
         if existing_spend_obj is None:
             existing_spend = 0
-            existing_spend_obj = LiteLLM_VerificationTokenView()
+            existing_spend_obj = LiteLLM_VerificationTokenView(token=token)
         else:
             existing_spend = existing_spend_obj.spend
         # Calculate the new cost by adding the existing cost and response_cost
@@ -1762,29 +1758,36 @@ async def update_cache(
             and (
                 _is_projected_spend_over_limit(
                     current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                    soft_budget_limit=existing_spend_obj.litellm_budget_table[
+                        "soft_budget"
+                    ],
                 )
                 == True
             )
         ):
-            key_alias = existing_spend_obj.key_alias
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
                 current_spend=new_spend,
-                soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
+                    "soft_budget", None
+                ),
+            )  # type: ignore
+            soft_limit = existing_spend_obj.litellm_budget_table.get(
+                "soft_budget", float("inf")
             )
-            soft_limit = existing_spend_obj.litellm_budget_table.soft_budget
-            user_info = {
-                "key_alias": key_alias,
-                "projected_spend": projected_spend,
-                "projected_exceeded_date": projected_exceeded_date,
-            }
+            call_info = CallInfo(
+                token=existing_spend_obj.token or "",
+                spend=new_spend,
+                key_alias=existing_spend_obj.key_alias,
+                max_budget=soft_limit,
+                user_id=existing_spend_obj.user_id,
+                projected_spend=projected_spend,
+                projected_exceeded_date=projected_exceeded_date,
+            )
             # alert user
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
                     type="projected_limit_exceeded",
-                    user_info=user_info,
-                    user_max_budget=soft_limit,
-                    user_current_spend=new_spend,
+                    user_info=call_info,
                 )
             )
             # set cooldown on alert
@@ -1794,7 +1797,7 @@ async def update_cache(
             existing_spend_obj is not None
             and getattr(existing_spend_obj, "team_spend", None) is not None
         ):
-            existing_team_spend = existing_spend_obj.team_spend
+            existing_team_spend = existing_spend_obj.team_spend or 0
             # Calculate the new cost by adding the existing cost and response_cost
             existing_spend_obj.team_spend = existing_team_spend + response_cost
 
@@ -1911,8 +1914,8 @@ async def update_cache(
                 f"An error occurred updating end user cache: {str(e)}\n\n{traceback.format_exc()}"
             )
 
-    if token is not None:
-        asyncio.create_task(_update_key_cache())
+    if token is not None and response_cost is not None:
+        asyncio.create_task(_update_key_cache(token=token, response_cost=response_cost))
 
     asyncio.create_task(_update_user_cache())
 
@@ -10277,7 +10280,7 @@ async def test_endpoint(request: Request):
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: Literal[
-        "slack_budget_alerts", "langfuse", "slack", "openmeter"
+        "slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook"
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
@@ -10292,7 +10295,13 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
-        if service not in ["slack_budget_alerts", "langfuse", "slack", "openmeter"]:
+        if service not in [
+            "slack_budget_alerts",
+            "langfuse",
+            "slack",
+            "openmeter",
+            "webhook",
+        ]:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -10327,6 +10336,20 @@ async def health_services_endpoint(
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
             }
+
+        if service == "webhook":
+            user_info = CallInfo(
+                token=user_api_key_dict.token or "",
+                spend=1,
+                max_budget=0,
+                user_id=user_api_key_dict.user_id,
+                key_alias=user_api_key_dict.key_alias,
+                team_id=user_api_key_dict.team_id,
+            )
+            await proxy_logging_obj.budget_alerts(
+                type="user_budget",
+                user_info=user_info,
+            )
 
         if service == "slack" or service == "slack_budget_alerts":
             if "slack" in general_settings.get("alerting", []):
@@ -10403,6 +10426,7 @@ async def health_services_endpoint(
                     },
                 )
     except Exception as e:
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
