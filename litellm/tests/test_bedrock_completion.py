@@ -206,6 +206,7 @@ def test_completion_bedrock_claude_sts_client_auth():
 
 # test_completion_bedrock_claude_sts_client_auth()
 
+
 @pytest.mark.skip(reason="We don't have Circle CI OIDC credentials as yet")
 def test_completion_bedrock_claude_sts_oidc_auth():
     print("\ncalling bedrock claude with oidc auth")
@@ -244,7 +245,7 @@ def test_bedrock_extra_headers():
             messages=messages,
             max_tokens=10,
             temperature=0.78,
-            extra_headers={"x-key": "x_key_value"}
+            extra_headers={"x-key": "x_key_value"},
         )
         # Add any assertions here to check the response
         assert len(response.choices) > 0
@@ -259,7 +260,7 @@ def test_bedrock_claude_3():
     try:
         litellm.set_verbose = True
         data = {
-            "max_tokens": 2000,
+            "max_tokens": 100,
             "stream": False,
             "temperature": 0.3,
             "messages": [
@@ -282,6 +283,7 @@ def test_bedrock_claude_3():
         }
         response: ModelResponse = completion(
             model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            num_retries=3,
             # messages=messages,
             # max_tokens=10,
             # temperature=0.78,
