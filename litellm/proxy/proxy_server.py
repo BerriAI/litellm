@@ -7744,6 +7744,12 @@ async def team_info(
         team_info = await prisma_client.get_data(
             team_id=team_id, table_name="team", query_type="find_unique"
         )
+        if team_info is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": f"Team not found, passed team id: {team_id}."},
+            )
+
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
             team_id=team_id,
