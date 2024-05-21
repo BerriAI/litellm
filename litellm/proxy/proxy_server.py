@@ -7522,6 +7522,11 @@ async def update_team(
     existing_team_row = await prisma_client.get_data(
         team_id=data.team_id, table_name="team", query_type="find_unique"
     )
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
     updated_kv = data.json(exclude_none=True)
     team_row = await prisma_client.update_data(
@@ -7774,6 +7779,17 @@ async def delete_team(
 
     if data.team_ids is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    # check that all teams passed exist
+    for team_id in data.team_ids:
+        team_row = await prisma_client.get_data(  # type: ignore
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        if team_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team not found, passed team_id={team_id}"},
+            )
 
     ## DELETE ASSOCIATED KEYS
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
