@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_TeamTable,
     Member,
+    CallInfo,
 )
 from litellm.caching import DualCache, RedisCache
 from litellm.router import Deployment, ModelInfo, LiteLLM_Params
@@ -18,8 +19,18 @@ from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.exceptions import RejectedRequestError
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm import ModelResponse, EmbeddingResponse, ImageResponse
+from litellm import (
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
+    CustomStreamWrapper,
+    TextCompletionStreamWrapper,
+)
+from litellm.utils import ModelResponseIterator
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
@@ -32,6 +43,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from litellm.integrations.slack_alerting import SlackAlerting
+from typing_extensions import overload
 
 
 def print_verbose(print_statement):
@@ -74,6 +86,9 @@ class ProxyLogging:
                 "budget_alerts",
                 "db_exceptions",
                 "daily_reports",
+                "spend_reports",
+                "cooldown_deployment",
+                "new_model_added",
             ]
         ] = [
             "llm_exceptions",
@@ -82,6 +97,9 @@ class ProxyLogging:
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
+            "cooldown_deployment",
+            "new_model_added",
         ]
         self.slack_alerting_instance = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
@@ -104,6 +122,9 @@ class ProxyLogging:
                     "budget_alerts",
                     "db_exceptions",
                     "daily_reports",
+                    "spend_reports",
+                    "cooldown_deployment",
+                    "new_model_added",
                 ]
             ]
         ] = None,
@@ -122,7 +143,13 @@ class ProxyLogging:
             alerting_args=alerting_args,
         )
 
-        if "daily_reports" in self.alert_types:
+        if (
+            self.alerting is not None
+            and "slack" in self.alerting
+            and "daily_reports" in self.alert_types
+        ):
+            # NOTE: ENSURE we only add callbacks when alerting is on
+            # We should NOT add callbacks when alerting is off
             litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
         if redis_cache is not None:
@@ -140,6 +167,8 @@ class ProxyLogging:
             self.slack_alerting_instance.response_taking_too_long_callback
         )
         for callback in litellm.callbacks:
+            if isinstance(callback, str):
+                callback = litellm.utils._init_custom_logger_compatible_class(callback)
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)
             if callback not in litellm.success_callback:
@@ -165,18 +194,20 @@ class ProxyLogging:
             )
             litellm.utils.set_callbacks(callback_list=callback_list)
 
+    # The actual implementation of the function
     async def pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
         call_type: Literal[
             "completion",
+            "text_completion",
             "embeddings",
             "image_generation",
             "moderation",
             "audio_transcription",
         ],
-    ):
+    ) -> dict:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
 
@@ -203,8 +234,25 @@ class ProxyLogging:
                         call_type=call_type,
                     )
                     if response is not None:
-                        data = response
-
+                        if isinstance(response, Exception):
+                            raise response
+                        elif isinstance(response, dict):
+                            data = response
+                        elif isinstance(response, str):
+                            if (
+                                call_type == "completion"
+                                or call_type == "text_completion"
+                            ):
+                                raise RejectedRequestError(
+                                    message=response,
+                                    model=data.get("model", ""),
+                                    llm_provider="",
+                                    request_data=data,
+                                )
+                            else:
+                                raise HTTPException(
+                                    status_code=400, detail={"error": response}
+                                )
             print_verbose(f"final data being sent to {call_type} call: {data}")
             return data
         except Exception as e:
@@ -252,8 +300,8 @@ class ProxyLogging:
         """
         Runs the CustomLogger's async_moderation_hook()
         """
+        new_data = copy.deepcopy(data)
         for callback in litellm.callbacks:
-            new_data = copy.deepcopy(data)
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_moderation_hook(
@@ -265,30 +313,30 @@ class ProxyLogging:
                 raise e
         return data
 
+    async def failed_tracking_alert(self, error_message: str):
+        if self.alerting is None:
+            return
+        await self.slack_alerting_instance.failed_tracking_alert(
+            error_message=error_message
+        )
+
     async def budget_alerts(
         self,
         type: Literal[
             "token_budget",
             "user_budget",
-            "user_and_proxy_budget",
-            "failed_budgets",
-            "failed_tracking",
+            "team_budget",
+            "proxy_budget",
             "projected_limit_exceeded",
         ],
-        user_max_budget: float,
-        user_current_spend: float,
-        user_info=None,
-        error_message="",
+        user_info: CallInfo,
     ):
         if self.alerting is None:
             # do nothing if alerting is not switched on
             return
         await self.slack_alerting_instance.budget_alerts(
             type=type,
-            user_max_budget=user_max_budget,
-            user_current_spend=user_current_spend,
             user_info=user_info,
-            error_message=error_message,
         )
 
     async def alerting_handler(
@@ -344,7 +392,11 @@ class ProxyLogging:
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
-                    message=message, level=level, alert_type=alert_type, **extra_kwargs
+                    message=message,
+                    level=level,
+                    alert_type=alert_type,
+                    user_info=None,
+                    **extra_kwargs,
                 )
             elif client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:
@@ -418,9 +470,14 @@ class ProxyLogging:
 
             Related issue - https://github.com/BerriAI/litellm/issues/3395
             """
+            litellm_debug_info = getattr(original_exception, "litellm_debug_info", None)
+            exception_str = str(original_exception)
+            if litellm_debug_info is not None:
+                exception_str += litellm_debug_info
+
             asyncio.create_task(
                 self.alerting_handler(
-                    message=f"LLM API call failed: {str(original_exception)}",
+                    message=f"LLM API call failed: `{exception_str}`",
                     level="High",
                     alert_type="llm_exceptions",
                     request_data=request_data,
@@ -1787,7 +1844,9 @@ def hash_token(token: str):
     return hashed_token
 
 
-def get_logging_payload(kwargs, response_obj, start_time, end_time):
+def get_logging_payload(
+    kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
+):
     from litellm.proxy._types import LiteLLM_SpendLogs
     from pydantic import Json
     import uuid
@@ -1865,7 +1924,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
         "request_tags": metadata.get("tags", []),
-        "end_user": kwargs.get("user", ""),
+        "end_user": end_user_id or "",
         "api_base": litellm_params.get("api_base", ""),
     }
 
@@ -2028,6 +2087,11 @@ async def update_spend(
                 raise e
 
     ### UPDATE END-USER TABLE ###
+    verbose_proxy_logger.debug(
+        "End-User Spend transactions: {}".format(
+            len(prisma_client.end_user_list_transactons.keys())
+        )
+    )
     if len(prisma_client.end_user_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
             start_time = time.time()
@@ -2043,13 +2107,18 @@ async def update_spend(
                             max_end_user_budget = None
                             if litellm.max_end_user_budget is not None:
                                 max_end_user_budget = litellm.max_end_user_budget
-                            new_user_obj = LiteLLM_EndUserTable(
-                                user_id=end_user_id, spend=response_cost, blocked=False
-                            )
-                            batcher.litellm_endusertable.update_many(
+                            batcher.litellm_endusertable.upsert(
                                 where={"user_id": end_user_id},
-                                data={"spend": {"increment": response_cost}},
+                                data={
+                                    "create": {
+                                        "user_id": end_user_id,
+                                        "spend": response_cost,
+                                        "blocked": False,
+                                    },
+                                    "update": {"spend": {"increment": response_cost}},
+                                },
                             )
+
                 prisma_client.end_user_list_transactons = (
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.

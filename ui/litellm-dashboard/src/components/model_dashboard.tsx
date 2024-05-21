@@ -121,6 +121,7 @@ const handleSubmit = async (formValues: Record<string, any>, accessToken: string
       // Iterate through the key-value pairs in formValues
       litellmParamsObj["model"] = litellm_model
       let modelName: string  = "";
+      console.log("formValues add deployment:", formValues);
       for (const [key, value] of Object.entries(formValues)) {
         if (value === '') {
           continue;
@@ -628,6 +629,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     let input_cost = "Undefined";
     let output_cost = "Undefined";
     let max_tokens = "Undefined";
+    let max_input_tokens = "Undefined";
     let cleanedLitellmParams = {};
 
     const getProviderFromModel = (model: string) => {
@@ -664,6 +666,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       input_cost = model_info?.input_cost_per_token;
       output_cost = model_info?.output_cost_per_token;
       max_tokens = model_info?.max_tokens;
+      max_input_tokens = model_info?.max_input_tokens;
     }
 
     if (curr_model?.litellm_params) {
@@ -677,7 +680,19 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     modelData.data[i].provider = provider;
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
+    
+
+    // Convert Cost in terms of Cost per 1M tokens 
+    if (modelData.data[i].input_cost) {
+      modelData.data[i].input_cost = (Number(modelData.data[i].input_cost) * 1000000).toFixed(2);
+    }
+
+    if (modelData.data[i].output_cost) {
+      modelData.data[i].output_cost = (Number(modelData.data[i].output_cost) * 1000000).toFixed(2);
+    }
+    
     modelData.data[i].max_tokens = max_tokens;
+    modelData.data[i].max_input_tokens = max_input_tokens;
     modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
     modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
@@ -893,8 +908,9 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
       <Text>Filter by Public Model Name</Text>
       <Select
               className="mb-4 mt-2 ml-2 w-50"
-              defaultValue="all"
+              defaultValue={selectedModelGroup? selectedModelGroup : availableModelGroups[0]}
               onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+              value={selectedModelGroup ? selectedModelGroup : availableModelGroups[0]}
             >
               <SelectItem 
                   value={"all"}
@@ -913,85 +929,76 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             </Select>
           </div>
         <Card>
-          <Table className="mt-5">
-            <TableHead>
-              <TableRow>
-
-                  <TableHeaderCell>Public Model Name </TableHeaderCell>
-
-                <TableHeaderCell>
-                  Provider
-                </TableHeaderCell>
-                {
-                  userRole === "Admin" && (
-                    <TableHeaderCell>
-                      API Base
-                    </TableHeaderCell>
-                  )
-                }
-                <TableHeaderCell>
-                  Extra litellm Params
-                </TableHeaderCell>
-                <TableHeaderCell>Input Price per token ($)</TableHeaderCell>
-                <TableHeaderCell>Output Price per token ($)</TableHeaderCell>
-                <TableHeaderCell>Max Tokens</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              { modelData.data
-                  .filter((model: any) =>
-                    selectedModelGroup === "all" || model.model_name === selectedModelGroup || selectedModelGroup === null || selectedModelGroup === undefined || selectedModelGroup === ""
-                  )
-                  .map((model: any, index: number) => (
-                    
-                <TableRow key={index}>
-                  <TableCell>
-                    <Text>{model.model_name}</Text>
-                  </TableCell>
-                  <TableCell>{model.provider}</TableCell>
-                  {
-                    userRole === "Admin" && (
-                      <TableCell>{model.api_base}</TableCell>
-                    )
-                  }
-
-                  <TableCell>
-
-                <Accordion>
-                  <AccordionHeader>
-                    <Text>Litellm params</Text>
-                  </AccordionHeader>
-                  <AccordionBody>
-                  <pre>
-                    {JSON.stringify(model.cleanedLitellmParams, null, 2)}
-                    </pre>
-                  </AccordionBody>
-                </Accordion>
-                   
-                  </TableCell>
-                  <TableCell>{model.input_cost || model.litellm_params.input_cost_per_token || null}</TableCell>
-                  <TableCell>{model.output_cost || model.litellm_params.output_cost_per_token || null}</TableCell>
-                  <TableCell>{model.max_tokens}</TableCell>
-                  <TableCell>
-                    {
-                      model.model_info.db_model ? <Badge icon={CheckCircleIcon} className="text-white">DB Model</Badge> : <Badge icon={XCircleIcon} className="text-black">Config Model</Badge>
-                    }
-                    
-                  </TableCell>
-                  <TableCell>
-                        <Icon
-                            icon={PencilAltIcon}
-                            size="sm"
-                            onClick={() => handleEditClick(model)}
-                          />
-                          <DeleteModelButton modelID={model.model_info.id} accessToken={accessToken} />
-                        </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-
+        <Table className="mt-5" style={{ maxWidth: '1500px', width: '100%' }}>
+  <TableHead>
+    <TableRow>
+      <TableHeaderCell style={{ maxWidth: '150px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Public Model Name</TableHeaderCell>
+      <TableHeaderCell style={{ maxWidth: '100px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Provider</TableHeaderCell>
+      {userRole === "Admin" && (
+        <TableHeaderCell style={{ maxWidth: '150px', whiteSpace: 'normal', wordBreak: 'break-word' }}>API Base</TableHeaderCell>
+      )}
+      <TableHeaderCell style={{ maxWidth: '200px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Extra litellm Params</TableHeaderCell>
+      <TableHeaderCell style={{ maxWidth: '85px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Input Price <p style={{ fontSize: '10px', color: 'gray' }}>/1M Tokens ($)</p></TableHeaderCell>
+      <TableHeaderCell style={{ maxWidth: '85px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Output Price <p style={{ fontSize: '10px', color: 'gray' }}>/1M Tokens ($)</p></TableHeaderCell>
+      <TableHeaderCell style={{ maxWidth: '120px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Max Tokens</TableHeaderCell>
+      <TableHeaderCell style={{ maxWidth: '50px', whiteSpace: 'normal', wordBreak: 'break-word' }}>Status</TableHeaderCell>
+    </TableRow>
+  </TableHead>
+  <TableBody>
+    {modelData.data
+      .filter((model: any) =>
+        selectedModelGroup === "all" ||
+        model.model_name === selectedModelGroup ||
+        selectedModelGroup === null ||
+        selectedModelGroup === undefined ||
+        selectedModelGroup === ""
+      )
+      .map((model: any, index: number) => (
+        <TableRow key={index}>
+          <TableCell style={{ maxWidth: '150px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+            <Text>{model.model_name}</Text>
+          </TableCell>
+          <TableCell style={{ maxWidth: '100px', whiteSpace: 'normal', wordBreak: 'break-word' }}>{model.provider}</TableCell>
+          {userRole === "Admin" && (
+            <TableCell style={{ maxWidth: '150px', whiteSpace: 'normal', wordBreak: 'break-word' }}>{model.api_base}</TableCell>
+          )}
+          <TableCell style={{ maxWidth: '200px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+            <Accordion>
+              <AccordionHeader>
+                <Text>Litellm params</Text>
+              </AccordionHeader>
+              <AccordionBody>
+                <pre>{JSON.stringify(model.cleanedLitellmParams, null, 2)}</pre>
+              </AccordionBody>
+            </Accordion>
+          </TableCell>
+          <TableCell style={{ maxWidth: '80px', whiteSpace: 'normal', wordBreak: 'break-word' }}>{model.input_cost || model.litellm_params.input_cost_per_token || null}</TableCell>
+          <TableCell style={{ maxWidth: '80px', whiteSpace: 'normal', wordBreak: 'break-word' }}>{model.output_cost || model.litellm_params.output_cost_per_token || null}</TableCell>
+          <TableCell style={{ maxWidth: '120px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+            <p style={{ fontSize: '10px' }}>
+            Max Tokens: {model.max_tokens} <br></br>
+            Max Input Tokens: {model.max_input_tokens}
+            </p>
+          </TableCell>
+          <TableCell style={{ maxWidth: '100px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+            {model.model_info.db_model ? (
+              <Badge icon={CheckCircleIcon} size="xs" className="text-white">
+                <p style={{ fontSize: '10px' }}>DB Model</p>
+              </Badge>
+            ) : (
+              <Badge icon={XCircleIcon} size="xs" className="text-black">
+                 <p style={{ fontSize: '10px' }}>Config Model</p>
+              </Badge>
+            )}
+          </TableCell>
+          <TableCell style={{ maxWidth: '100px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+            <Icon icon={PencilAltIcon} size="sm" onClick={() => handleEditClick(model)} />
+            <DeleteModelButton modelID={model.model_info.id} accessToken={accessToken} />
+          </TableCell>
+        </TableRow>
+      ))}
+  </TableBody>
+</Table>
         </Card>
 
       </Grid>
@@ -1116,13 +1123,22 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </Form.Item>
                 }
                 {
-                  selectedProvider == Providers.Azure && <Form.Item
-                  label="Base Model"
-                  name="base_model"
-                >
-                  <TextInput placeholder="azure/gpt-3.5-turbo"/>
-                  <Text>The actual model your azure deployment uses. Used for accurate cost tracking. Select name from <Link href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" target="_blank">here</Link></Text>
-                </Form.Item>
+                  selectedProvider == Providers.Azure && 
+     
+                    <div>
+                    <Form.Item
+                      label="Base Model"
+                      name="base_model"
+                      className="mb-0"
+                    >
+                    <TextInput placeholder="azure/gpt-3.5-turbo"/>
+                    </Form.Item>
+                <Row>
+                <Col span={10}></Col>
+                <Col span={10}><Text className="mb-2">The actual model your azure deployment uses. Used for accurate cost tracking. Select name from <Link href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" target="_blank">here</Link></Text></Col>
+                </Row>
+
+                  </div>
                 }
                 {
                   selectedProvider == Providers.Bedrock && <Form.Item
