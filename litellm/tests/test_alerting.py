@@ -165,9 +165,9 @@ async def test_budget_alerts_crossed(slack_alerting):
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         await slack_alerting.budget_alerts(
             "user_budget",
-            user_max_budget,
-            user_current_spend,
-            user_info=CallInfo(token="", spend=0),
+            user_info=CallInfo(
+                token="", spend=user_current_spend, max_budget=user_max_budget
+            ),
         )
         mock_send_alert.assert_awaited_once()
 
@@ -180,17 +180,17 @@ async def test_budget_alerts_crossed_again(slack_alerting):
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         await slack_alerting.budget_alerts(
             "user_budget",
-            user_max_budget,
-            user_current_spend,
-            user_info=CallInfo(token="", spend=0),
+            user_info=CallInfo(
+                token="", spend=user_current_spend, max_budget=user_max_budget
+            ),
         )
         mock_send_alert.assert_awaited_once()
         mock_send_alert.reset_mock()
         await slack_alerting.budget_alerts(
             "user_budget",
-            user_max_budget,
-            user_current_spend,
-            user_info=CallInfo(token="", spend=0),
+            user_info=CallInfo(
+                token="", spend=user_current_spend, max_budget=user_max_budget
+            ),
         )
         mock_send_alert.assert_not_awaited()
 
@@ -430,7 +430,7 @@ async def test_send_daily_reports_all_zero_or_none():
         "token_budget",
         "user_budget",
         "team_budget",
-        "user_and_proxy_budget",
+        "proxy_budget",
         "projected_limit_exceeded",
     ],
 )
@@ -441,8 +441,8 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         user_info = {
             "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
-            "spend": random.uniform(1.5, 1.9),
-            "max_budget": None,
+            "spend": 86,
+            "max_budget": 100,
             "user_id": "ishaan@berri.ai",
             "user_email": "ishaan@berri.ai",
             "key_alias": "my-test-key",
@@ -456,8 +456,6 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
             await slack_alerting.budget_alerts(
                 type=alerting_type,
                 user_info=user_info,
-                user_current_spend=86,
-                user_max_budget=100,
             )
         mock_send_alert.assert_awaited_once()
 
@@ -468,7 +466,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
         "token_budget",
         "user_budget",
         "team_budget",
-        "user_and_proxy_budget",
+        "proxy_budget",
         "projected_limit_exceeded",
     ],
 )
@@ -481,8 +479,8 @@ async def test_webhook_alerting(alerting_type):
     ) as mock_send_alert:
         user_info = {
             "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
-            "spend": random.uniform(1.5, 1.9),
-            "max_budget": None,
+            "spend": 1,
+            "max_budget": 0,
             "user_id": "ishaan@berri.ai",
             "user_email": "ishaan@berri.ai",
             "key_alias": "my-test-key",
@@ -495,7 +493,5 @@ async def test_webhook_alerting(alerting_type):
             await slack_alerting.budget_alerts(
                 type=alerting_type,
                 user_info=user_info,
-                user_current_spend=86,
-                user_max_budget=100,
             )
         mock_send_alert.assert_awaited_once()
