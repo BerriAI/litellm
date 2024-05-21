@@ -702,6 +702,14 @@ class Router:
             model (List[str]): model group
             messages (List[List[Dict[str, str]]]): list of messages. Each element in the list is one request
             **kwargs: additional kwargs
+        Usage:
+            response = await self.abatch_completion_one_model_multiple_requests(
+                model="gpt-3.5-turbo",
+                messages=[
+                    [{"role": "user", "content": "hello"}, {"role": "user", "content": "tell me something funny"}],
+                    [{"role": "user", "content": "hello good mornign"}],
+                ]
+            )
         """
 
         async def _async_completion_no_exceptions(
