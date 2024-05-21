@@ -470,7 +470,6 @@ class LangFuseLogger:
             generation_params = {
                 "name": generation_name,
                 "id": clean_metadata.pop("generation_id", generation_id),
-                "parent_observation_id": metadata.get("parent_observation_id"),
                 "start_time": start_time,
                 "end_time": end_time,
                 "model": kwargs["model"],
@@ -482,6 +481,10 @@ class LangFuseLogger:
                 "level": level,
                 "version": clean_metadata.pop("version", None),
             }
+
+            parent_observation_id = metadata.get("parent_observation_id", None)
+            if parent_observation_id is not None:
+                generation_params["parent_observation_id"] = parent_observation_id
 
             if supports_prompt:
                 user_prompt = clean_metadata.pop("prompt", None)
