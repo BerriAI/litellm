@@ -1113,7 +1113,7 @@ async def user_api_key_auth(
 
                 if global_proxy_spend is not None:
                     call_info = CallInfo(
-                        token=valid_token["token"],
+                        token=valid_token.token,
                         spend=global_proxy_spend,
                         max_budget=litellm.max_budget,
                         user_id=litellm_proxy_admin_name,
@@ -1310,7 +1310,7 @@ async def user_api_key_auth(
         elif isinstance(e, ProxyException):
             raise e
         raise ProxyException(
-            message="Authentication Error 1234, " + str(e),
+            message="Authentication Error, " + str(e),
             type="auth_error",
             param=getattr(e, "param", "None"),
             code=status.HTTP_401_UNAUTHORIZED,
