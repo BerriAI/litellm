@@ -662,6 +662,10 @@ class Router:
     async def abatch_completion(
         self, models: List[str], messages: List[Dict[str, str]], **kwargs
     ):
+        """
+        Async Batch Completion - Batch Process 1 request to multiple model_group on litellm.Router
+        Use this for sending the same request to N models
+        """
 
         async def _async_completion_no_exceptions(
             model: str, messages: List[Dict[str, str]], **kwargs
@@ -680,6 +684,51 @@ class Router:
             _tasks.append(
                 _async_completion_no_exceptions(
                     model=model, messages=messages, **kwargs
+                )
+            )
+
+        response = await asyncio.gather(*_tasks)
+        return response
+
+    async def abatch_completion_one_model_multiple_requests(
+        self, model: str, messages: List[List[Dict[str, str]]], **kwargs
+    ):
+        """
+        Async Batch Completion - Batch Process multiple Messages to one model_group on litellm.Router
+
+        Use this for sending multiple requests to 1 model
+
+        Args:
+            model (List[str]): model group
+            messages (List[List[Dict[str, str]]]): list of messages. Each element in the list is one request
+            **kwargs: additional kwargs
+        Usage:
+            response = await self.abatch_completion_one_model_multiple_requests(
+                model="gpt-3.5-turbo",
+                messages=[
+                    [{"role": "user", "content": "hello"}, {"role": "user", "content": "tell me something funny"}],
+                    [{"role": "user", "content": "hello good mornign"}],
+                ]
+            )
+        """
+
+        async def _async_completion_no_exceptions(
+            model: str, messages: List[Dict[str, str]], **kwargs
+        ):
+            """
+            Wrapper around self.async_completion that catches exceptions and returns them as a result
+            """
+            try:
+                return await self.acompletion(model=model, messages=messages, **kwargs)
+            except Exception as e:
+                return e
+
+        _tasks = []
+        for message_request in messages:
+            # add each task but if the task fails
+            _tasks.append(
+                _async_completion_no_exceptions(
+                    model=model, messages=message_request, **kwargs
                 )
             )
 
