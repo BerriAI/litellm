@@ -27,7 +27,7 @@ class LiteLLMBase(BaseModel):
 
 
 class RoutingArgs(LiteLLMBase):
-    ttl: int = 1 * 60 * 60  # 1 hour
+    ttl: float = 1 * 60 * 60  # 1 hour
     lowest_latency_buffer: float = 0
     max_latency_list_size: int = 10
 

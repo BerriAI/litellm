@@ -1,7 +1,7 @@
 #### What this does ####
 #    Class for sending Slack Alerts #
 import dotenv, os
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, CallInfo
 from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm, threading
 from typing import List, Literal, Any, Union, Optional, Dict
@@ -36,6 +36,13 @@ class SlackAlertingArgs(LiteLLMBase):
         os.getenv("SLACK_DAILY_REPORT_FREQUENCY", default_daily_report_frequency)
     )
     report_check_interval: int = 5 * 60  # 5 minutes
+    budget_alert_ttl: int = 24 * 60 * 60  # 24 hours
+
+
+class WebhookEvent(CallInfo):
+    event: Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
+    event_group: Literal["user", "key", "team", "proxy"]
+    event_message: str  # human-readable description of event
 
 
 class DeploymentMetrics(LiteLLMBase):
@@ -87,6 +94,9 @@ class SlackAlerting(CustomLogger):
                 "budget_alerts",
                 "db_exceptions",
                 "daily_reports",
+                "spend_reports",
+                "cooldown_deployment",
+                "new_model_added",
             ]
         ] = [
             "llm_exceptions",
@@ -95,6 +105,9 @@ class SlackAlerting(CustomLogger):
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
+            "cooldown_deployment",
+            "new_model_added",
         ],
         alert_to_webhook_url: Optional[
             Dict
@@ -158,13 +171,28 @@ class SlackAlerting(CustomLogger):
     ) -> Optional[str]:
         """
         Returns langfuse trace url
+
+        - check:
+        -> existing_trace_id
+        -> trace_id
+        -> litellm_call_id
         """
         # do nothing for now
-        if (
-            request_data is not None
-            and request_data.get("metadata", {}).get("trace_id", None) is not None
-        ):
-            trace_id = request_data["metadata"]["trace_id"]
+        if request_data is not None:
+            trace_id = None
+            if (
+                request_data.get("metadata", {}).get("existing_trace_id", None)
+                is not None
+            ):
+                trace_id = request_data["metadata"]["existing_trace_id"]
+            elif request_data.get("metadata", {}).get("trace_id", None) is not None:
+                trace_id = request_data["metadata"]["trace_id"]
+            elif request_data.get("litellm_logging_obj", None) is not None and hasattr(
+                request_data["litellm_logging_obj"], "model_call_details"
+            ):
+                trace_id = request_data["litellm_logging_obj"].model_call_details[
+                    "litellm_call_id"
+                ]
             if litellm.utils.langFuseLogger is not None:
                 base_url = litellm.utils.langFuseLogger.Langfuse.base_url
                 return f"{base_url}/trace/{trace_id}"
@@ -549,127 +577,131 @@ class SlackAlerting(CustomLogger):
                     alert_type="llm_requests_hanging",
                 )
 
+    async def failed_tracking_alert(self, error_message: str):
+        """Raise alert when tracking failed for specific model"""
+        _cache: DualCache = self.internal_usage_cache
+        message = "Failed Tracking Cost for" + error_message
+        _cache_key = "budget_alerts:failed_tracking:{}".format(message)
+        result = await _cache.async_get_cache(key=_cache_key)
+        if result is None:
+            await self.send_alert(
+                message=message, level="High", alert_type="budget_alerts"
+            )
+            await _cache.async_set_cache(
+                key=_cache_key,
+                value="SENT",
+                ttl=self.alerting_args.budget_alert_ttl,
+            )
+
     async def budget_alerts(
         self,
         type: Literal[
             "token_budget",
             "user_budget",
-            "user_and_proxy_budget",
-            "failed_budgets",
-            "failed_tracking",
+            "team_budget",
+            "proxy_budget",
             "projected_limit_exceeded",
         ],
-        user_max_budget: float,
-        user_current_spend: float,
-        user_info=None,
-        error_message="",
+        user_info: CallInfo,
     ):
+        ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
+        # - Alert once within 24hr period
+        # - Cache this information
+        # - Don't re-alert, if alert already sent
+        _cache: DualCache = self.internal_usage_cache
+
         if self.alerting is None or self.alert_types is None:
             # do nothing if alerting is not switched on
             return
         if "budget_alerts" not in self.alert_types:
             return
         _id: str = "default_id"  # used for caching
-        if type == "user_and_proxy_budget":
-            user_info = dict(user_info)
-            user_id = user_info["user_id"]
-            _id = user_id
-            max_budget = user_info["max_budget"]
-            spend = user_info["spend"]
-            user_email = user_info["user_email"]
-            user_info = f"""\nUser ID: {user_id}\nMax Budget: ${max_budget}\nSpend: ${spend}\nUser Email: {user_email}"""
+        user_info_json = user_info.model_dump(exclude_none=True)
+        for k, v in user_info_json.items():
+            user_info_str = "\n{}: {}\n".format(k, v)
+
+        event: Optional[
+            Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
+        ] = None
+        event_group: Optional[Literal["user", "team", "key", "proxy"]] = None
+        event_message: str = ""
+        webhook_event: Optional[WebhookEvent] = None
+        if type == "proxy_budget":
+            event_group = "proxy"
+            event_message += "Proxy Budget: "
+        elif type == "user_budget":
+            event_group = "user"
+            event_message += "User Budget: "
+            _id = user_info.user_id or _id
+        elif type == "team_budget":
+            event_group = "team"
+            event_message += "Team Budget: "
+            _id = user_info.team_id or _id
         elif type == "token_budget":
-            token_info = dict(user_info)
-            token = token_info["token"]
-            _id = token
-            spend = token_info["spend"]
-            max_budget = token_info["max_budget"]
-            user_id = token_info["user_id"]
-            user_info = f"""\nToken: {token}\nSpend: ${spend}\nMax Budget: ${max_budget}\nUser ID: {user_id}"""
-        elif type == "failed_tracking":
-            user_id = str(user_info)
-            _id = user_id
-            user_info = f"\nUser ID: {user_id}\n Error {error_message}"
-            message = "Failed Tracking Cost for" + user_info
-            await self.send_alert(
-                message=message, level="High", alert_type="budget_alerts"
-            )
-            return
-        elif type == "projected_limit_exceeded" and user_info is not None:
-            """
-            Input variables:
-            user_info = {
-                "key_alias": key_alias,
-                "projected_spend": projected_spend,
-                "projected_exceeded_date": projected_exceeded_date,
-            }
-            user_max_budget=soft_limit,
-            user_current_spend=new_spend
-            """
-            message = f"""\n🚨 `ProjectedLimitExceededError` 💸\n\n`Key Alias:` {user_info["key_alias"]} \n`Expected Day of Error`: {user_info["projected_exceeded_date"]} \n`Current Spend`: {user_current_spend} \n`Projected Spend at end of month`: {user_info["projected_spend"]} \n`Soft Limit`: {user_max_budget}"""
-            await self.send_alert(
-                message=message, level="High", alert_type="budget_alerts"
-            )
-            return
-        else:
-            user_info = str(user_info)
+            event_group = "key"
+            event_message += "Key Budget: "
+            _id = user_info.token
+        elif type == "projected_limit_exceeded":
+            event_group = "key"
+            event_message += "Key Budget: Projected Limit Exceeded"
+            event = "projected_limit_exceeded"
+            _id = user_info.token
 
         # percent of max_budget left to spend
-        if user_max_budget > 0:
-            percent_left = (user_max_budget - user_current_spend) / user_max_budget
+        if user_info.max_budget > 0:
+            percent_left = (
+                user_info.max_budget - user_info.spend
+            ) / user_info.max_budget
         else:
             percent_left = 0
-        verbose_proxy_logger.debug(
-            f"Budget Alerts: Percent left: {percent_left} for {user_info}"
-        )
-
-        ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
-        # - Alert once within 28d period
-        # - Cache this information
-        # - Don't re-alert, if alert already sent
-        _cache: DualCache = self.internal_usage_cache
 
         # check if crossed budget
-        if user_current_spend >= user_max_budget:
-            verbose_proxy_logger.debug("Budget Crossed for %s", user_info)
-            message = "Budget Crossed for" + user_info
-            result = await _cache.async_get_cache(key=message)
+        if user_info.spend >= user_info.max_budget:
+            event = "budget_crossed"
+            event_message += "Budget Crossed"
+        elif percent_left <= 0.05:
+            event = "threshold_crossed"
+            event_message += "5% Threshold Crossed"
+        elif percent_left <= 0.15:
+            event = "threshold_crossed"
+            event_message += "15% Threshold Crossed"
+
+        if event is not None and event_group is not None:
+            _cache_key = "budget_alerts:{}:{}".format(event, _id)
+            result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
-                await self.send_alert(
-                    message=message, level="High", alert_type="budget_alerts"
+                webhook_event = WebhookEvent(
+                    event=event,
+                    event_group=event_group,
+                    event_message=event_message,
+                    **user_info_json,
                 )
-                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
-            return
-
-        # check if 5% of max budget is left
-        if percent_left <= 0.05:
-            message = "5% budget left for" + user_info
-            cache_key = "alerting:{}".format(_id)
-            result = await _cache.async_get_cache(key=cache_key)
-            if result is None:
                 await self.send_alert(
-                    message=message, level="Medium", alert_type="budget_alerts"
+                    message=event_message + "\n\n" + user_info_str,
+                    level="High",
+                    alert_type="budget_alerts",
+                    user_info=webhook_event,
+                )
+                await _cache.async_set_cache(
+                    key=_cache_key,
+                    value="SENT",
+                    ttl=self.alerting_args.budget_alert_ttl,
                 )
 
-                await _cache.async_set_cache(key=cache_key, value="SENT", ttl=2419200)
-
             return
-
-        # check if 15% of max budget is left
-        if percent_left <= 0.15:
-            message = "15% budget left for" + user_info
-            result = await _cache.async_get_cache(key=message)
-            if result is None:
-                await self.send_alert(
-                    message=message, level="Low", alert_type="budget_alerts"
-                )
-                await _cache.async_set_cache(key=message, value="SENT", ttl=2419200)
-            return
-
         return
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str):
-        model_info = litellm.model_cost.get(litellm_model_name, {})
+    async def model_added_alert(
+        self, model_name: str, litellm_model_name: str, passed_model_info: Any
+    ):
+        base_model_from_user = getattr(passed_model_info, "base_model", None)
+        model_info = {}
+        base_model = ""
+        if base_model_from_user is not None:
+            model_info = litellm.model_cost.get(base_model_from_user, {})
+            base_model = f"Base Model: `{base_model_from_user}`\n"
+        else:
+            model_info = litellm.model_cost.get(litellm_model_name, {})
         model_info_str = ""
         for k, v in model_info.items():
             if k == "input_cost_per_token" or k == "output_cost_per_token":
@@ -681,6 +713,7 @@ class SlackAlerting(CustomLogger):
         message = f"""
 *🚅 New Model Added*
 Model Name: `{model_name}`
+{base_model}
 
 Usage OpenAI Python SDK:
 ```
@@ -715,6 +748,34 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
+        """
+        Sends structured alert to webhook, if set.
+
+        Currently only implemented for budget alerts
+
+        Returns -> True if sent, False if not.
+        """
+
+        webhook_url = os.getenv("WEBHOOK_URL", None)
+        if webhook_url is None:
+            raise Exception("Missing webhook_url from environment")
+
+        payload = webhook_event.model_dump_json()
+        headers = {"Content-type": "application/json"}
+
+        response = await self.async_http_handler.post(
+            url=webhook_url,
+            headers=headers,
+            data=payload,
+        )
+        if response.status_code == 200:
+            return True
+        else:
+            print("Error sending webhook alert. Error=", response.text)  # noqa
+
+        return False
+
     async def send_alert(
         self,
         message: str,
@@ -726,9 +787,11 @@ Model Info:
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
             "new_model_added",
             "cooldown_deployment",
         ],
+        user_info: Optional[WebhookEvent] = None,
         **kwargs,
     ):
         """
@@ -746,6 +809,19 @@ Model Info:
             message: str - what is the alert about
         """
         if self.alerting is None:
+            return
+
+        if (
+            "webhook" in self.alerting
+            and alert_type == "budget_alerts"
+            and user_info is not None
+        ):
+            await self.send_webhook_alert(webhook_event=user_info)
+
+        if "slack" not in self.alerting:
+            return
+
+        if alert_type not in self.alert_types:
             return
 
         from datetime import datetime
@@ -795,27 +871,37 @@ Model Info:
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
-        if "daily_reports" in self.alert_types:
-            model_id = (
-                kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
-            )
-            response_s: timedelta = end_time - start_time
-
-            final_value = response_s
-            total_tokens = 0
-
-            if isinstance(response_obj, litellm.ModelResponse):
-                completion_tokens = response_obj.usage.completion_tokens
-                final_value = float(response_s.total_seconds() / completion_tokens)
-
-            await self.async_update_daily_reports(
-                DeploymentMetrics(
-                    id=model_id,
-                    failed_request=False,
-                    latency_per_output_token=final_value,
-                    updated_at=litellm.utils.get_utc_datetime(),
+        try:
+            if "daily_reports" in self.alert_types:
+                model_id = (
+                    kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
                 )
+                response_s: timedelta = end_time - start_time
+
+                final_value = response_s
+                total_tokens = 0
+
+                if isinstance(response_obj, litellm.ModelResponse):
+                    completion_tokens = response_obj.usage.completion_tokens
+                    if completion_tokens is not None and completion_tokens > 0:
+                        final_value = float(
+                            response_s.total_seconds() / completion_tokens
+                        )
+
+                await self.async_update_daily_reports(
+                    DeploymentMetrics(
+                        id=model_id,
+                        failed_request=False,
+                        latency_per_output_token=final_value,
+                        updated_at=litellm.utils.get_utc_datetime(),
+                    )
+                )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: ",
+                e,
             )
+            pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Log failure + deployment latency"""
@@ -942,7 +1028,7 @@ Model Info:
             await self.send_alert(
                 message=_weekly_spend_message,
                 level="Low",
-                alert_type="daily_reports",
+                alert_type="spend_reports",
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)
@@ -993,7 +1079,7 @@ Model Info:
             await self.send_alert(
                 message=_spend_message,
                 level="Low",
-                alert_type="daily_reports",
+                alert_type="spend_reports",
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)

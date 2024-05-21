@@ -163,6 +163,39 @@ async def test_aimage_generation_bedrock_with_optional_params():
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:
+        pass  # Azure randomly raises these errors skip when they occur
+    except Exception as e:
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_aimage_generation_vertex_ai():
+    from test_amazing_vertex_completion import load_vertex_ai_credentials
+
+    litellm.set_verbose = True
+
+    load_vertex_ai_credentials()
+    try:
+        response = await litellm.aimage_generation(
+            prompt="An olympic size swimming pool",
+            model="vertex_ai/imagegeneration@006",
+            vertex_ai_project="adroit-crow-413218",
+            vertex_ai_location="us-central1",
+            n=1,
+        )
+        assert response.data is not None
+        assert len(response.data) > 0
+
+        for d in response.data:
+            assert isinstance(d, litellm.ImageObject)
+            print("data in response.data", d)
+            assert d.b64_json is not None
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.ContentPolicyViolationError:
         pass  # Azure randomly raises these errors - skip when they occur
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):

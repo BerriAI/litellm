@@ -5,7 +5,6 @@
 import sys, os
 import traceback
 from dotenv import load_dotenv
-from pydantic import ConfigDict
 
 load_dotenv()
 import os, io
@@ -14,28 +13,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the, system path
 import pytest, litellm
-from pydantic import BaseModel, VERSION
+from pydantic import BaseModel
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.utils import encrypt_value, ProxyLogging, DualCache
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from typing import Literal
-
-
-# Function to get Pydantic version
-def is_pydantic_v2() -> int:
-    return int(VERSION.split(".")[0])
-
-
-def get_model_config(arbitrary_types_allowed: bool = False) -> ConfigDict:
-    # Version-specific configuration
-    if is_pydantic_v2() >= 2:
-        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=arbitrary_types_allowed, protected_namespaces=())  # type: ignore
-    else:
-        from pydantic import Extra
-
-        model_config = ConfigDict(extra=Extra.allow, arbitrary_types_allowed=arbitrary_types_allowed)  # type: ignore
-
-    return model_config
 
 
 class DBModel(BaseModel):
@@ -43,7 +25,9 @@ class DBModel(BaseModel):
     model_name: str
     model_info: dict
     litellm_params: dict
-    model_config = get_model_config()
+
+    class Config:
+        protected_namespaces = ()
 
 
 @pytest.mark.asyncio
@@ -118,7 +102,7 @@ async def test_delete_deployment():
     pc = ProxyConfig()
 
     db_model = DBModel(
-        model_id="12340523",
+        model_id=deployment.model_info.id,
         model_name="gpt-3.5-turbo",
         litellm_params=encrypted_litellm_params,
         model_info={"id": deployment.model_info.id},

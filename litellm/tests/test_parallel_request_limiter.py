@@ -29,6 +29,37 @@ from datetime import datetime
 
 
 @pytest.mark.asyncio
+async def test_global_max_parallel_requests():
+    """
+    Test if ParallelRequestHandler respects 'global_max_parallel_requests'
+
+    data["metadata"]["global_max_parallel_requests"]
+    """
+    global_max_parallel_requests = 0
+    _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=100)
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler()
+
+    for _ in range(3):
+        try:
+            await parallel_request_handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={
+                    "metadata": {
+                        "global_max_parallel_requests": global_max_parallel_requests
+                    }
+                },
+                call_type="",
+            )
+            pytest.fail("Expected call to fail")
+        except Exception as e:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook():
     """
     Test if cache updated on call being received
