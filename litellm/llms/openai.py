@@ -96,7 +96,7 @@ class MistralConfig:
         safe_prompt: Optional[bool] = None,
         response_format: Optional[dict] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -211,7 +211,7 @@ class OpenAIConfig:
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -335,7 +335,7 @@ class OpenAITextCompletionConfig:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
