@@ -518,8 +518,8 @@
         "max_tokens": 4096,
         "max_input_tokens": 4097,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000002,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true
