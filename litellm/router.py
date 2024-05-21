@@ -374,13 +374,17 @@ class Router:
                 litellm.callbacks.append(self.leastbusy_logger)  # type: ignore
         elif routing_strategy == "usage-based-routing":
             self.lowesttpm_logger = LowestTPMLoggingHandler(
-                router_cache=self.cache, model_list=self.model_list
+                router_cache=self.cache,
+                model_list=self.model_list,
+                routing_args=routing_strategy_args
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
         elif routing_strategy == "usage-based-routing-v2":
             self.lowesttpm_logger_v2 = LowestTPMLoggingHandler_v2(
-                router_cache=self.cache, model_list=self.model_list
+                router_cache=self.cache,
+                model_list=self.model_list,
+                routing_args=routing_strategy_args
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowesttpm_logger_v2)  # type: ignore
