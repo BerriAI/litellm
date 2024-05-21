@@ -163,7 +163,7 @@ async def test_aimage_generation_bedrock_with_optional_params():
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:
-        pass  # Azure randomly raises these errors - skip when they occur
+        pass  # Azure randomly raises these errors skip when they occur
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
             pass
