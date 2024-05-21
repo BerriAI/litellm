@@ -251,6 +251,10 @@ class LiteLLMPromptInjectionParams(LiteLLMBase):
     llm_api_name: Optional[str] = None
     llm_api_system_prompt: Optional[str] = None
     llm_api_fail_call_string: Optional[str] = None
+    reject_as_response: Optional[bool] = Field(
+        default=False,
+        description="Return rejected request error message as a string to the user. Default behaviour is to raise an exception.",
+    )
 
     @root_validator(pre=True)
     def check_llm_api_params(cls, values):
