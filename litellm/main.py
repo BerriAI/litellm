@@ -79,6 +79,7 @@ from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.predibase import PredibaseChatCompletion
 from .llms.bedrock_httpx import BedrockLLM
+from .llms.vertex_httpx import VertexLLM
 from .llms.triton import TritonChatCompletion
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -118,6 +119,7 @@ huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
+vertex_chat_completion = VertexLLM()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -3854,6 +3856,36 @@ def image_generation(
                 model_response=model_response,
                 aimg_generation=aimg_generation,
             )
+        elif custom_llm_provider == "vertex_ai":
+            vertex_ai_project = (
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_location", None)
+                or optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
+            model_response = vertex_chat_completion.image_generation(
+                model=model,
+                prompt=prompt,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                optional_params=optional_params,
+                model_response=model_response,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                aimg_generation=aimg_generation,
+            )
+
         return model_response
     except Exception as e:
         ## Map to OpenAI Exception

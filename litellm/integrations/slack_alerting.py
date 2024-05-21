@@ -871,27 +871,37 @@ Model Info:
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
-        if "daily_reports" in self.alert_types:
-            model_id = (
-                kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
-            )
-            response_s: timedelta = end_time - start_time
-
-            final_value = response_s
-            total_tokens = 0
-
-            if isinstance(response_obj, litellm.ModelResponse):
-                completion_tokens = response_obj.usage.completion_tokens
-                final_value = float(response_s.total_seconds() / completion_tokens)
-
-            await self.async_update_daily_reports(
-                DeploymentMetrics(
-                    id=model_id,
-                    failed_request=False,
-                    latency_per_output_token=final_value,
-                    updated_at=litellm.utils.get_utc_datetime(),
+        try:
+            if "daily_reports" in self.alert_types:
+                model_id = (
+                    kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
                 )
+                response_s: timedelta = end_time - start_time
+
+                final_value = response_s
+                total_tokens = 0
+
+                if isinstance(response_obj, litellm.ModelResponse):
+                    completion_tokens = response_obj.usage.completion_tokens
+                    if completion_tokens is not None and completion_tokens > 0:
+                        final_value = float(
+                            response_s.total_seconds() / completion_tokens
+                        )
+
+                await self.async_update_daily_reports(
+                    DeploymentMetrics(
+                        id=model_id,
+                        failed_request=False,
+                        latency_per_output_token=final_value,
+                        updated_at=litellm.utils.get_utc_datetime(),
+                    )
+                )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: ",
+                e,
             )
+            pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Log failure + deployment latency"""
