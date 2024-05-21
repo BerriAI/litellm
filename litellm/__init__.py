@@ -724,6 +724,9 @@ from .utils import (
     get_supported_openai_params,
     get_api_base,
     get_first_chars_messages,
+    ModelResponse,
+    ImageResponse,
+    ImageObject,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
