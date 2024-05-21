@@ -376,6 +376,7 @@ openai_compatible_endpoints: List = [
     "api.groq.com/openai/v1",
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
+    "dashscope.aliyuncs.com/compatible-mode/v1"
 ]
 
 # this is maintained for Exception Mapping
@@ -389,6 +390,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
+    "dashscope",
 ]
 
 
@@ -615,6 +617,7 @@ provider_list: List = [
     "watsonx",
     "triton",
     "predibase",
+    "dashscope",
     "custom",  # custom apis
 ]
 
