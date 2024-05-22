@@ -134,6 +134,7 @@ async def test_acompletion_caching_on_router():
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.mark.asyncio
 async def test_completion_caching_on_router():
     # tests completion + caching on router
@@ -150,7 +151,7 @@ async def test_completion_caching_on_router():
                 "rpm": 1,
             },
         ]
-        
+
         messages = [
             {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
         ]
@@ -164,12 +165,12 @@ async def test_completion_caching_on_router():
             routing_strategy_args={"ttl": 10},
             routing_strategy="usage-based-routing",
         )
-        response1 = await router.completion(
+        response1 = await router.acompletion(
             model="gpt-3.5-turbo", messages=messages, temperature=1
         )
         print(f"response1: {response1}")
         await asyncio.sleep(10)
-        response2 = await router.completion(
+        response2 = await router.acompletion(
             model="gpt-3.5-turbo", messages=messages, temperature=1
         )
         print(f"response2: {response2}")
@@ -178,12 +179,11 @@ async def test_completion_caching_on_router():
 
         router.reset()
     except litellm.Timeout as e:
-        end_time = time.time()
-        print(f"timeout error occurred: {end_time - start_time}")
         pass
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.asyncio
 async def test_acompletion_caching_with_ttl_on_router():
