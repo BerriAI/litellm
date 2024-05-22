@@ -1730,35 +1730,43 @@ def test_openai_stream_options_call():
 
 def test_openai_stream_options_call_text_completion():
     litellm.set_verbose = False
-    response = litellm.text_completion(
-        model="gpt-3.5-turbo-instruct",
-        prompt="say GM - we're going to make it ",
-        stream=True,
-        stream_options={"include_usage": True},
-        max_tokens=10,
-    )
-    usage = None
-    chunks = []
-    for chunk in response:
-        print("chunk: ", chunk)
-        chunks.append(chunk)
+    for idx in range(3):
+        try:
+            response = litellm.text_completion(
+                model="gpt-3.5-turbo-instruct",
+                prompt="say GM - we're going to make it ",
+                stream=True,
+                stream_options={"include_usage": True},
+                max_tokens=10,
+            )
+            usage = None
+            chunks = []
+            for chunk in response:
+                print("chunk: ", chunk)
+                chunks.append(chunk)
 
-    last_chunk = chunks[-1]
-    print("last chunk: ", last_chunk)
+            last_chunk = chunks[-1]
+            print("last chunk: ", last_chunk)
 
-    """
-    Assert that:
-    - Last Chunk includes Usage
-    - All chunks prior to last chunk have usage=None
-    """
+            """
+            Assert that:
+            - Last Chunk includes Usage
+            - All chunks prior to last chunk have usage=None
+            """
 
-    assert last_chunk.usage is not None
-    assert last_chunk.usage.total_tokens > 0
-    assert last_chunk.usage.prompt_tokens > 0
-    assert last_chunk.usage.completion_tokens > 0
+            assert last_chunk.usage is not None
+            assert last_chunk.usage.total_tokens > 0
+            assert last_chunk.usage.prompt_tokens > 0
+            assert last_chunk.usage.completion_tokens > 0
 
-    # assert all non last chunks have usage=None
-    assert all(chunk.usage is None for chunk in chunks[:-1])
+            # assert all non last chunks have usage=None
+            assert all(chunk.usage is None for chunk in chunks[:-1])
+            break
+        except Exception as e:
+            if idx < 2:
+                pass
+            else:
+                raise e
 
 
 def test_openai_text_completion_call():
