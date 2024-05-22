@@ -68,6 +68,7 @@ interface ItemData {
   team_id: string;
   metadata: any;
   expires: any;
+  permissions: Record<string, any> | null;
   // Add any other properties that exist in the item data
 }
 
@@ -597,6 +598,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Text className="my-1">{selectedToken.key_alias ? selectedToken.key_alias : selectedToken.key_name}</Text>
         <Title>Token ID</Title>
         <Text className="my-1 text-[12px]">{selectedToken.token}</Text>
+        {
+          selectedToken.permissions != null ? (
+            <div>
+                <Title>Permissions</Title>
+                <pre>{JSON.stringify(selectedToken.permissions)}</pre>
+            </div>
+          ) : (
+            <></>
+          )
+        }
+              
         <Title>Metadata</Title>
         <Text className="my-1"><pre>{JSON.stringify(selectedToken.metadata)} </pre></Text>
       </Card>
