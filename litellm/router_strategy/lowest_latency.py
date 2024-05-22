@@ -84,6 +84,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                 response_ms: timedelta = end_time - start_time
                 time_to_first_token_response_time: Optional[timedelta] = None
+
                 if kwargs.get("stream", None) is not None and kwargs["stream"] == True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = (
@@ -91,7 +92,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     )
 
                 final_value = response_ms
-
+                time_to_first_token: Optional[float] = None
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
