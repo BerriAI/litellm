@@ -278,9 +278,12 @@ def test_completion_claude_3_function_call():
             model="anthropic/claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice={"type": "tool", "name": "get_weather"},
-            extra_headers={"anthropic-beta": "tools-2024-05-16"},
+            tool_choice={
+                "type": "function",
+                "function": {"name": "get_current_weather"},
+            },
         )
+
         # Add any assertions, here to check response args
         print(response)
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
