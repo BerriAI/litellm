@@ -125,6 +125,36 @@ Output from script
 
 </Tabs>
 
+## Allowing Non-Proxy Admins to access `/spend` endpoints 
+
+Use this when you want non-proxy admins to access `/spend` endpoints
+
+:::info
+
+Schedule a [meeting with us to get your Enterprise License](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+### Create Key 
+Create Key with with `permissions={"get_spend_routes": true}` 
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "permissions": {"get_spend_routes": true}
+    }'
+```
+
+### Use generated key on `/spend` endpoints
+
+Access spend Routes with newly generate keys
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
+  -H 'Authorization: Bearer sk-H16BKvrSNConSsBYLGc_7A'
+```
+
+
 
 ## Reset Team, API Key Spend - MASTER KEY ONLY
 
