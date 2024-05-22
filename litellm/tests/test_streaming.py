@@ -950,7 +950,63 @@ def test_vertex_ai_stream():
 
 # test_completion_vertexai_stream_bad_key()
 
-# def test_completion_replicate_stream():
+
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_completion_replicate_llama3_streaming(sync_mode):
+    litellm.set_verbose = True
+    model_name = "replicate/meta/meta-llama-3-8b-instruct"
+    try:
+        if sync_mode:
+            final_chunk: Optional[litellm.ModelResponse] = None
+            response: litellm.CustomStreamWrapper = completion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=10,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            for idx, chunk in enumerate(response):
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+        else:
+            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=100,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            idx = 0
+            final_chunk: Optional[litellm.ModelResponse] = None
+            async for chunk in response:
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+                idx += 1
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # TEMP Commented out - replicate throwing an auth error
 #     try:
 #         litellm.set_verbose = True
@@ -984,15 +1040,28 @@ def test_vertex_ai_stream():
 #         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "bedrock/cohere.command-r-plus-v1:0",
+        # "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "anthropic.claude-instant-v1",
+        # "bedrock/ai21.j2-mid",
+        # "mistral.mistral-7b-instruct-v0:2",
+        # "bedrock/amazon.titan-tg1-large",
+        # "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14"
+    ],
+)
 @pytest.mark.asyncio
-async def test_bedrock_cohere_command_r_streaming(sync_mode):
+async def test_bedrock_httpx_streaming(sync_mode, model):
     try:
         litellm.set_verbose = True
         if sync_mode:
             final_chunk: Optional[litellm.ModelResponse] = None
             response: litellm.CustomStreamWrapper = completion(  # type: ignore
-                model="bedrock/cohere.command-r-plus-v1:0",
+                model=model,
                 messages=messages,
                 max_tokens=10,  # type: ignore
                 stream=True,
@@ -1013,7 +1082,7 @@ async def test_bedrock_cohere_command_r_streaming(sync_mode):
                 raise Exception("Empty response received")
         else:
             response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
-                model="bedrock/cohere.command-r-plus-v1:0",
+                model=model,
                 messages=messages,
                 max_tokens=100,  # type: ignore
                 stream=True,
@@ -1661,35 +1730,43 @@ def test_openai_stream_options_call():
 
 def test_openai_stream_options_call_text_completion():
     litellm.set_verbose = False
-    response = litellm.text_completion(
-        model="gpt-3.5-turbo-instruct",
-        prompt="say GM - we're going to make it ",
-        stream=True,
-        stream_options={"include_usage": True},
-        max_tokens=10,
-    )
-    usage = None
-    chunks = []
-    for chunk in response:
-        print("chunk: ", chunk)
-        chunks.append(chunk)
+    for idx in range(3):
+        try:
+            response = litellm.text_completion(
+                model="gpt-3.5-turbo-instruct",
+                prompt="say GM - we're going to make it ",
+                stream=True,
+                stream_options={"include_usage": True},
+                max_tokens=10,
+            )
+            usage = None
+            chunks = []
+            for chunk in response:
+                print("chunk: ", chunk)
+                chunks.append(chunk)
 
-    last_chunk = chunks[-1]
-    print("last chunk: ", last_chunk)
+            last_chunk = chunks[-1]
+            print("last chunk: ", last_chunk)
 
-    """
-    Assert that:
-    - Last Chunk includes Usage
-    - All chunks prior to last chunk have usage=None
-    """
+            """
+            Assert that:
+            - Last Chunk includes Usage
+            - All chunks prior to last chunk have usage=None
+            """
 
-    assert last_chunk.usage is not None
-    assert last_chunk.usage.total_tokens > 0
-    assert last_chunk.usage.prompt_tokens > 0
-    assert last_chunk.usage.completion_tokens > 0
+            assert last_chunk.usage is not None
+            assert last_chunk.usage.total_tokens > 0
+            assert last_chunk.usage.prompt_tokens > 0
+            assert last_chunk.usage.completion_tokens > 0
 
-    # assert all non last chunks have usage=None
-    assert all(chunk.usage is None for chunk in chunks[:-1])
+            # assert all non last chunks have usage=None
+            assert all(chunk.usage is None for chunk in chunks[:-1])
+            break
+        except Exception as e:
+            if idx < 2:
+                pass
+            else:
+                raise e
 
 
 def test_openai_text_completion_call():

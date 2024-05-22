@@ -1,19 +1,10 @@
-from pydantic import ConfigDict, BaseModel, Field, root_validator, Json
+from pydantic import BaseModel, Extra, Field, root_validator, Json, validator
+from dataclasses import fields
 import enum
 from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
-import uuid
-import json
+import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
-
-try:
-    from pydantic import model_validator  # pydantic v2
-except ImportError:
-    from pydantic import root_validator  # pydantic v1
-
-    def model_validator(mode):
-        pre = mode == "before"
-        return root_validator(pre=pre)
 
 
 def hash_token(token: str):
@@ -44,9 +35,8 @@ class LiteLLMBase(BaseModel):
             # if using pydantic v1
             return self.__fields_set__
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
@@ -62,8 +52,18 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
 
 
 class LiteLLMRoutes(enum.Enum):
+    openai_route_names: List = [
+        "chat_completion",
+        "completion",
+        "embeddings",
+        "image_generation",
+        "audio_transcriptions",
+        "moderations",
+        "model_list",  # OpenAI /v1/models route
+    ]
     openai_routes: List = [
         # chat completions
+        "/engines/{model}/chat/completions",
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
@@ -87,11 +87,8 @@ class LiteLLMRoutes(enum.Enum):
         # models
         "/models",
         "/v1/models",
-    ]
-
-    # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes: List = [
-        "/global/spend/reset",
+        # token counter
+        "/utils/token_counter",
     ]
 
     info_routes: List = [
@@ -102,6 +99,11 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
+    ]
+
+    # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
+    master_key_only_routes: List = [
+        "/global/spend/reset",
     ]
 
     sso_only_routes: List = [
@@ -155,6 +157,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/end_users",
         "/global/spend/models",
         "/global/predict/spend/logs",
+        "/global/spend/report",
     ]
 
     public_routes: List = [
@@ -212,13 +215,19 @@ class LiteLLM_JWTAuth(LiteLLMBase):
         "global_spend_tracking_routes",
         "info_routes",
     ]
-    team_jwt_scope: str = "litellm_team"
-    team_id_jwt_field: str = "client_id"
+    team_id_jwt_field: Optional[str] = None
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
+    team_id_default: Optional[str] = Field(
+        default=None,
+        description="If no team_id given, default permissions/spend-tracking to this team.s",
+    )
     org_id_jwt_field: Optional[str] = None
     user_id_jwt_field: Optional[str] = None
+    user_id_upsert: bool = Field(
+        default=False, description="If user doesn't exist, upsert them into the db."
+    )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
 
@@ -243,8 +252,12 @@ class LiteLLMPromptInjectionParams(LiteLLMBase):
     llm_api_name: Optional[str] = None
     llm_api_system_prompt: Optional[str] = None
     llm_api_fail_call_string: Optional[str] = None
+    reject_as_response: Optional[bool] = Field(
+        default=False,
+        description="Return rejected request error message as a string to the user. Default behaviour is to raise an exception.",
+    )
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def check_llm_api_params(cls, values):
         llm_api_check = values.get("llm_api_check")
         if llm_api_check is True:
@@ -302,9 +315,8 @@ class ProxyChatCompletionRequest(LiteLLMBase):
     deployment_id: Optional[str] = None
     request_timeout: Optional[int] = None
 
-    model_config = ConfigDict(
-        extra = "allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
-    )
+    class Config:
+        extra = "allow"  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class ModelInfoDelete(LiteLLMBase):
@@ -331,12 +343,11 @@ class ModelInfo(LiteLLMBase):
         ]
     ]
 
-    model_config = ConfigDict(
-        extra = "allow",  # Allow extra fields
-        protected_namespaces = (),
-    )
+    class Config:
+        extra = Extra.allow  # Allow extra fields
+        protected_namespaces = ()
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def set_model_info(cls, values):
         if values.get("id") is None:
             values.update({"id": str(uuid.uuid4())})
@@ -362,11 +373,10 @@ class ModelParams(LiteLLMBase):
     litellm_params: dict
     model_info: ModelInfo
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def set_model_info(cls, values):
         if values.get("model_info") is None:
             values.update({"model_info": ModelInfo()})
@@ -402,9 +412,8 @@ class GenerateKeyRequest(GenerateRequestBase):
         {}
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -414,7 +423,7 @@ class GenerateKeyResponse(GenerateKeyRequest):
     user_id: Optional[str] = None
     token_id: Optional[str] = None
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def set_model_info(cls, values):
         if values.get("token") is not None:
             values.update({"key": values.get("token")})
@@ -454,9 +463,8 @@ class LiteLLM_ModelTable(LiteLLMBase):
     created_by: str
     updated_by: str
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class NewUserRequest(GenerateKeyRequest):
@@ -484,7 +492,7 @@ class UpdateUserRequest(GenerateRequestBase):
     user_role: Optional[str] = None
     max_budget: Optional[float] = None
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def check_user_info(cls, values):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
@@ -504,7 +512,7 @@ class NewEndUserRequest(LiteLLMBase):
         None  # if no equivalent model in allowed region - default all requests to this model
     )
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def check_user_info(cls, values):
         if values.get("max_budget") is not None and values.get("budget_id") is not None:
             raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
@@ -517,7 +525,7 @@ class Member(LiteLLMBase):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def check_user_info(cls, values):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
@@ -542,9 +550,8 @@ class TeamBase(LiteLLMBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class GlobalEndUsersSpend(LiteLLMBase):
@@ -563,7 +570,7 @@ class TeamMemberDeleteRequest(LiteLLMBase):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def check_user_info(cls, values):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
@@ -597,11 +604,10 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def set_model_info(cls, values):
         dict_fields = [
             "metadata",
@@ -637,9 +643,8 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -689,9 +694,8 @@ class KeyManagementSettings(LiteLLMBase):
 class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
-    model_config = ConfigDict(
-        extra = "allow",  # allow params not defined here, these fall in litellm.completion(**kwargs)
-    )
+    class Config:
+        extra = "allow"  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class DynamoDBArgs(LiteLLMBase):
@@ -713,6 +717,25 @@ class DynamoDBArgs(LiteLLMBase):
     aws_duration_seconds: Optional[int] = None
     assume_role_aws_role_name: Optional[str] = None
     assume_role_aws_session_name: Optional[str] = None
+
+
+class ConfigFieldUpdate(LiteLLMBase):
+    field_name: str
+    field_value: Any
+    config_type: Literal["general_settings"]
+
+
+class ConfigFieldDelete(LiteLLMBase):
+    config_type: Literal["general_settings"]
+    field_name: str
+
+
+class ConfigList(LiteLLMBase):
+    field_name: str
+    field_type: str
+    field_description: str
+    field_value: Any
+    stored_in_db: Optional[bool]
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -762,7 +785,11 @@ class ConfigGeneralSettings(LiteLLMBase):
         description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth",
     )
     max_parallel_requests: Optional[int] = Field(
-        None, description="maximum parallel requests for each api key"
+        None,
+        description="maximum parallel requests for each api key",
+    )
+    global_max_parallel_requests: Optional[int] = Field(
+        None, description="global max parallel requests to allow for a proxy instance."
     )
     infer_model_from_keys: Optional[bool] = Field(
         None,
@@ -832,9 +859,8 @@ class ConfigYAML(LiteLLMBase):
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
     )
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLM_VerificationToken(LiteLLMBase):
@@ -868,9 +894,8 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     user_id_rate_limits: Optional[dict] = None
     team_id_rate_limits: Optional[dict] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
@@ -900,7 +925,7 @@ class UserAPIKeyAuth(
     user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
     allowed_model_region: Optional[Literal["eu"]] = None
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
             values.update({"token": hash_token(values.get("api_key"))})
@@ -927,7 +952,7 @@ class LiteLLM_UserTable(LiteLLMBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def set_model_info(cls, values):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
@@ -935,9 +960,8 @@ class LiteLLM_UserTable(LiteLLMBase):
             values.update({"models": []})
         return values
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLM_EndUserTable(LiteLLMBase):
@@ -949,15 +973,14 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
-    @model_validator(mode="before")
+    @root_validator(pre=True)
     def set_model_info(cls, values):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
         return values
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLM_SpendLogs(LiteLLMBase):
@@ -995,3 +1018,30 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
+
+
+class TokenCountRequest(LiteLLMBase):
+    model: str
+    prompt: Optional[str] = None
+    messages: Optional[List[dict]] = None
+
+
+class TokenCountResponse(LiteLLMBase):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+
+
+class CallInfo(LiteLLMBase):
+    """Used for slack budget alerting"""
+
+    spend: float
+    max_budget: float
+    token: str = Field(description="Hashed value of that key")
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    user_email: Optional[str] = None
+    key_alias: Optional[str] = None
+    projected_exceeded_date: Optional[str] = None
+    projected_spend: Optional[float] = None

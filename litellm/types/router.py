@@ -1,6 +1,6 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
 import httpx
-from pydantic import ConfigDict, BaseModel, validator, Field, __version__ as pydantic_version
+from pydantic import BaseModel, validator, Field
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 import uuid, enum
@@ -12,9 +12,8 @@ class ModelConfig(BaseModel):
     tpm: int
     rpm: int
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class RouterConfig(BaseModel):
@@ -45,9 +44,8 @@ class RouterConfig(BaseModel):
         "latency-based-routing",
     ] = "simple-shuffle"
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class UpdateRouterConfig(BaseModel):
@@ -67,9 +65,8 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class ModelInfo(BaseModel):
@@ -79,6 +76,9 @@ class ModelInfo(BaseModel):
     db_model: bool = (
         False  # used for proxy - to separate models which are stored in the db vs. config.
     )
+    base_model: Optional[str] = (
+        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    )
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -87,9 +87,8 @@ class ModelInfo(BaseModel):
             id = str(id)
         super().__init__(id=id, **params)
 
-    model_config = ConfigDict(
-        extra = "allow",
-    )
+    class Config:
+        extra = "allow"
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -184,18 +183,9 @@ class GenericLiteLLMParams(BaseModel):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    model_config = ConfigDict(
-        extra = "allow",
-        arbitrary_types_allowed = True,
-    )
-    if pydantic_version.startswith("1"):
-        # pydantic v2 warns about using a Config class.
-        # But without this, pydantic v1 will raise an error:
-        #     RuntimeError: no validator found for <class 'openai.Timeout'>,
-        #     see `arbitrary_types_allowed` in Config
-        # Putting arbitrary_types_allowed = True in the ConfigDict doesn't work in pydantic v1.
-        class Config:
-            arbitrary_types_allowed = True
+    class Config:
+        extra = "allow"
+        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -254,18 +244,9 @@ class LiteLLM_Params(GenericLiteLLMParams):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
 
-    model_config = ConfigDict(
-        extra = "allow",
-        arbitrary_types_allowed = True,
-    )
-    if pydantic_version.startswith("1"):
-        # pydantic v2 warns about using a Config class.
-        # But without this, pydantic v1 will raise an error:
-        #     RuntimeError: no validator found for <class 'openai.Timeout'>,
-        #     see `arbitrary_types_allowed` in Config
-        # Putting arbitrary_types_allowed = True in the ConfigDict doesn't work in pydantic v1.
-        class Config:
-            arbitrary_types_allowed = True
+    class Config:
+        extra = "allow"
+        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -295,9 +276,8 @@ class updateDeployment(BaseModel):
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
 
-    model_config = ConfigDict(
-        protected_namespaces = (),
-    )
+    class Config:
+        protected_namespaces = ()
 
 
 class LiteLLMParamsTypedDict(TypedDict, total=False):
@@ -371,10 +351,9 @@ class Deployment(BaseModel):
             # if using pydantic v1
             return self.dict(**kwargs)
 
-    model_config = ConfigDict(
-        extra = "allow",
-        protected_namespaces = (),
-    )
+    class Config:
+        extra = "allow"
+        protected_namespaces = ()
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

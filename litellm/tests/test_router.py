@@ -689,6 +689,44 @@ def test_router_context_window_check_pre_call_check_out_group():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
+def test_filter_invalid_params_pre_call_check():
+    """
+    - gpt-3.5-turbo supports 'response_object'
+    - gpt-3.5-turbo-16k doesn't support 'response_object'
+
+    run pre-call check -> assert returned list doesn't include gpt-3.5-turbo-16k
+    """
+    try:
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo-16k",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ]
+
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+
+        filtered_deployments = router._pre_call_checks(
+            model="gpt-3.5-turbo",
+            healthy_deployments=model_list,
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            request_kwargs={"response_format": {"type": "json_object"}},
+        )
+        assert len(filtered_deployments) == 1
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+
 @pytest.mark.parametrize("allowed_model_region", ["eu", None])
 def test_router_region_pre_call_check(allowed_model_region):
     """
@@ -724,7 +762,7 @@ def test_router_region_pre_call_check(allowed_model_region):
         model="gpt-3.5-turbo",
         healthy_deployments=model_list,
         messages=[{"role": "user", "content": "Hey!"}],
-        allowed_model_region=allowed_model_region,
+        request_kwargs={"allowed_model_region": allowed_model_region},
     )
 
     if allowed_model_region is None:

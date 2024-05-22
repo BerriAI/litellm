@@ -142,6 +142,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return;
     }
 
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
+
     console.log("uiSelectedKey", uiSelectedKey);
 
     let newTopUserData = await adminTopEndUsersCall(
@@ -159,6 +165,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
     if (!startTime || !endTime || !accessToken) {
       return;
     }
+
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
 
     let top_tags = await tagsSpendLogsCall(accessToken, startTime.toISOString(), endTime.toISOString());
     setTopTagsData(top_tags.spend_per_tag);
@@ -200,7 +212,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             setKeySpendData(overall_spend);
             const top_keys = await adminTopKeysCall(accessToken);
             const filtered_keys = top_keys.map((k: any) => ({
-              key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
+              key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(
                 0,
                 10
               ),
@@ -225,6 +237,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
             total_spend_per_team = total_spend_per_team.map((tspt: any) => {
               tspt["name"] = tspt["team_id"] || "";
               tspt["value"] = tspt["total_spend"] || 0;
+              // round the value to 2 decimal places
+
+              tspt["value"] = tspt["value"].toFixed(2);
+              
+
               return tspt;
             })
 

@@ -153,7 +153,9 @@ async def test_end_user_specific_region():
         )
 
         ## MAKE CALL ##
-        key_gen = await generate_key(session=session, i=0, models=["gpt-3.5-turbo"])
+        key_gen = await generate_key(
+            session=session, i=0, models=["gpt-3.5-turbo-end-user-test"]
+        )
 
         key = key_gen["key"]
 
@@ -162,9 +164,9 @@ async def test_end_user_specific_region():
 
         print("SENDING USER PARAM - {}".format(end_user_obj["user_id"]))
         result = await client.chat.completions.with_raw_response.create(
-            model="gpt-3.5-turbo",
+            model="gpt-3.5-turbo-end-user-test",
             messages=[{"role": "user", "content": "Hey!"}],
             user=end_user_obj["user_id"],
         )
 
-        assert result.headers.get("x-litellm-model-id") == "1"
+        assert result.headers.get("x-litellm-model-region") == "eu"

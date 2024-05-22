@@ -15,11 +15,19 @@ from typing import Optional
 
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
-    def __init__(self, message, llm_provider, model, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 401
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -27,11 +35,19 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
 
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):  # type: ignore
-    def __init__(self, message, model, llm_provider, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        model,
+        llm_provider,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 404
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -39,12 +55,18 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
 
 class BadRequestError(openai.BadRequestError):  # type: ignore
     def __init__(
-        self, message, model, llm_provider, response: Optional[httpx.Response] = None
+        self,
+        message,
+        model,
+        llm_provider,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
         response = response or httpx.Response(
             status_code=self.status_code,
             request=httpx.Request(
@@ -57,18 +79,28 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
 
 
 class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
-    def __init__(self, message, model, llm_provider, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        model,
+        llm_provider,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 422
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
 
 
 class Timeout(openai.APITimeoutError):  # type: ignore
-    def __init__(self, message, model, llm_provider):
+    def __init__(
+        self, message, model, llm_provider, litellm_debug_info: Optional[str] = None
+    ):
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(
             request=request
@@ -77,6 +109,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
 
     # custom function to convert to str
     def __str__(self):
@@ -84,22 +117,38 @@ class Timeout(openai.APITimeoutError):  # type: ignore
 
 
 class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
-    def __init__(self, message, llm_provider, model, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 403
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
 
 
 class RateLimitError(openai.RateLimitError):  # type: ignore
-    def __init__(self, message, llm_provider, model, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 429
         self.message = message
         self.llm_provider = llm_provider
         self.modle = model
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -107,11 +156,45 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
 class ContextWindowExceededError(BadRequestError):  # type: ignore
-    def __init__(self, message, model, llm_provider, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        model,
+        llm_provider,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 400
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
+        super().__init__(
+            message=self.message,
+            model=self.model,  # type: ignore
+            llm_provider=self.llm_provider,  # type: ignore
+            response=response,
+        )  # Call the base class constructor with the parameters it needs
+
+
+# sub class of bad request error - meant to help us catch guardrails-related errors on proxy.
+class RejectedRequestError(BadRequestError):  # type: ignore
+    def __init__(
+        self,
+        message,
+        model,
+        llm_provider,
+        request_data: dict,
+        litellm_debug_info: Optional[str] = None,
+    ):
+        self.status_code = 400
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
+        self.request_data = request_data
+        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        response = httpx.Response(status_code=500, request=request)
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -122,11 +205,19 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
 
 class ContentPolicyViolationError(BadRequestError):  # type: ignore
     #  Error code: 400 - {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Image descriptions generated from your prompt may contain text that is not allowed by our safety system. If you believe this was done in error, your request may succeed if retried, or by adjusting your prompt.', 'param': None, 'type': 'invalid_request_error'}}
-    def __init__(self, message, model, llm_provider, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        model,
+        llm_provider,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 400
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -136,11 +227,19 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
 
 
 class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
-    def __init__(self, message, llm_provider, model, response: httpx.Response):
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.status_code = 503
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -149,33 +248,51 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
 class APIError(openai.APIError):  # type: ignore
     def __init__(
-        self, status_code, message, llm_provider, model, request: httpx.Request
+        self,
+        status_code,
+        message,
+        llm_provider,
+        model,
+        request: httpx.Request,
+        litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = status_code
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(self.message, request=request, body=None)  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIConnectionError(openai.APIConnectionError):  # type: ignore
-    def __init__(self, message, llm_provider, model, request: httpx.Request):
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        request: httpx.Request,
+        litellm_debug_info: Optional[str] = None,
+    ):
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
         self.status_code = 500
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(message=self.message, request=request)
 
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIResponseValidationError(openai.APIResponseValidationError):  # type: ignore
-    def __init__(self, message, llm_provider, model):
+    def __init__(
+        self, message, llm_provider, model, litellm_debug_info: Optional[str] = None
+    ):
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         response = httpx.Response(status_code=500, request=request)
+        self.litellm_debug_info = litellm_debug_info
         super().__init__(response=response, body=None, message=message)
 
 

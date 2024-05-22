@@ -5,6 +5,11 @@ from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
 
 
+class AnthropicMessagesToolChoice(TypedDict, total=False):
+    type: Required[Literal["auto", "any", "tool"]]
+    name: str
+
+
 class AnthopicMessagesAssistantMessageTextContentParam(TypedDict, total=False):
     type: Required[Literal["text"]]
 
