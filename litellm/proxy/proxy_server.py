@@ -1212,6 +1212,13 @@ async def user_api_key_auth(
                     and route in LiteLLMRoutes.sso_only_routes.value
                 ):
                     pass
+                elif (
+                    route in LiteLLMRoutes.global_spend_tracking_routes.value
+                    and getattr(valid_token, "permissions", None) is not None
+                    and "get_spend_routes" in getattr(valid_token, "permissions", None)
+                ):
+
+                    pass
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
@@ -2967,7 +2974,7 @@ async def generate_key_helper_fn(
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
 ):
-    global prisma_client, custom_db_client, user_api_key_cache, litellm_proxy_admin_name
+    global prisma_client, custom_db_client, user_api_key_cache, litellm_proxy_admin_name, premium_user
 
     if prisma_client is None and custom_db_client is None:
         raise Exception(
@@ -3062,6 +3069,14 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
+            if (
+                "get_spend_routes" in saved_token["permissions"]
+                and premium_user != True
+            ):
+                raise Exception(
+                    "get_spend_routes permission is only available for LiteLLM Enterprise users"
+                )
+
             saved_token["permissions"] = json.loads(saved_token["permissions"])
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(
