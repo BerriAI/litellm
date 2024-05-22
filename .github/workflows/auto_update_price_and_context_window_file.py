@@ -47,27 +47,40 @@ def write_to_file(file_path, data):
 def transform_remote_data(data):
     transformed = {}
     for row in data:
-        # Create a new dictionary with transformed data
+        # Add the fields 'max_tokens' and 'input_cost_per_token'
         obj = {
             "max_tokens": row["context_length"],
             "input_cost_per_token": float(row["pricing"]["prompt"]),
-            "output_cost_per_token": float(row["pricing"]["completion"]),
-            "litellm_provider": "openrouter",
-            "mode": "chat"
         }
 
-        # Add an field 'input_cost_per_image'
-        if "pricing" in row and "image" in row["pricing"]:
+        # Add 'max_output_tokens' as a field if it is not None
+        if "top_provider" in row and "max_completion_tokens" in row["top_provider"] and row["top_provider"]["max_completion_tokens"] is not None:
+            obj['max_output_tokens'] = int(row["top_provider"]["max_completion_tokens"])
+
+        # Add the field 'output_cost_per_token'
+        obj.update({
+            "output_cost_per_token": float(row["pricing"]["completion"]),
+        })
+
+        # Add field 'input_cost_per_image' if it exists and is non-zero
+        if "pricing" in row and "image" in row["pricing"] and float(row["pricing"]["image"]) != 0.0:
             obj['input_cost_per_image'] = float(row["pricing"]["image"])
 
-        # Add an additional field if the modality is 'multimodal'
+        # Add the fields 'litellm_provider' and 'mode'
+        obj.update({
+            "litellm_provider": "openrouter",
+            "mode": "chat"
+        })
+
+        # Add the 'supports_vision' field if the modality is 'multimodal'
         if row.get('architecture', {}).get('modality') == 'multimodal':
             obj['supports_vision'] = True
-        
+
         # Use a composite key to store the transformed object
         transformed[f'openrouter/{row["id"]}'] = obj
 
     return transformed
+
 
 # Load local data from a specified file
 def load_local_data(file_path):
