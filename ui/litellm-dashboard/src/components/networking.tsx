@@ -97,6 +97,82 @@ export const modelDeleteCall = async (
   }
 };
 
+export const budgetDeleteCall = async (
+  accessToken: string | null,
+  budget_id: string
+) => {
+  console.log(`budget_id in budget delete call: ${budget_id}`);
+
+  if (accessToken == null) {
+    return;
+  }
+
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/budget/delete`
+      : `/budget/delete`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        id: budget_id,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to create key: " + errorData, 10);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const budgetCreateCall = async (
+  accessToken: string,
+  formValues: Record<string, any> // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in budgetCreateCall:", formValues); // Log the form values before making the API call
+
+    console.log("Form Values after check:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/new` : `/budget/new`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error("Failed to create key: " + errorData, 10);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
 export const keyCreateCall = async (
   accessToken: string,
   userID: string,
@@ -1378,6 +1454,71 @@ export const serviceHealthCheck = async (
     return data;
   } catch (error) {
     console.error("Failed to perform health check:", error);
+    throw error;
+  }
+};
+
+export const getBudgetList = async (accessToken: String) => {
+  /**
+   * Get all configurable params for setting a budget
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/budget/list` : `/budget/list`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 10);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+export const getBudgetSettings = async (accessToken: String) => {
+  /**
+   * Get all configurable params for setting a budget
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/budget/settings`
+      : `/budget/settings`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 10);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
     throw error;
   }
 };
