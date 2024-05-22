@@ -199,7 +199,7 @@ async def test_end_user_specific_region():
 
 
 @pytest.mark.asyncio
-async def test_end_tpm_limits():
+async def test_enduser_tpm_limits_non_master_key():
     """
     1. budget_id = Create Budget with tpm_limit = 10
     2. create end_user with budget_id
@@ -226,6 +226,56 @@ async def test_end_tpm_limits():
 
     # chat completion 1
     client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
+
+    result = await client.chat.completions.create(
+        model="fake-openai-endpoint",
+        messages=[{"role": "user", "content": "Hey!"}],
+        user=end_user_id,
+    )
+
+    print("\nchat completion result 1=", result)
+
+    # chat completion 2
+    try:
+        result = await client.chat.completions.create(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": "Hey!"}],
+            user=end_user_id,
+        )
+        pytest.fail(
+            "User crossed their limit - this should have failed. instead got result = {}".format(
+                result
+            )
+        )
+    except Exception as e:
+        print("got exception 2 =", e)
+        assert "Crossed TPM, RPM Limit" in str(
+            e
+        ), f"Expected 'Crossed TPM, RPM Limit' but got {str(e)}"
+
+
+@pytest.mark.asyncio
+async def test_enduser_tpm_limits_with_master_key():
+    """
+    1. budget_id = Create Budget with tpm_limit = 10
+    2. create end_user with budget_id
+    3. Make /chat/completions calls
+    4. Sleep 1 second
+    4. Make  /chat/completions call -> expect this to fail because rate limit hit
+    """
+    async with aiohttp.ClientSession() as session:
+        # create a budget with budget_id = "free-tier"
+        budget_id = f"free-tier-{uuid.uuid4()}"
+        await new_budget(session, 0, budget_id=budget_id)
+
+        end_user_id = str(uuid.uuid4())
+
+        await new_end_user(
+            session=session, i=0, user_id=end_user_id, budget_id=budget_id
+        )
+
+    # chat completion 1
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
     result = await client.chat.completions.create(
         model="fake-openai-endpoint",
