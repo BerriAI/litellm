@@ -8248,6 +8248,142 @@ async def info_budget(data: BudgetRequest):
     return response
 
 
+@router.get(
+    "/budget/settings",
+    tags=["budget management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def budget_settings(
+    budget_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get list of configurable params + current value for a budget item + description of each field
+
+    Used on Admin UI.
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    ## get budget item from db
+    db_budget_row = await prisma_client.db.litellm_budgettable.find_first(
+        where={"budget_id": budget_id}
+    )
+
+    if db_budget_row is not None:
+        db_budget_row_dict = db_budget_row.model_dump(exclude_none=True)
+    else:
+        db_budget_row_dict = {}
+
+    allowed_args = {
+        "max_parallel_requests": {"type": "Integer"},
+        "tpm_limit": {"type": "Integer"},
+        "rpm_limit": {"type": "Integer"},
+        "budget_duration": {"type": "String"},
+        "max_budget": {"type": "Float"},
+        "soft_budget": {"type": "Float"},
+    }
+
+    return_val = []
+
+    for field_name, field_info in BudgetNew.model_fields.items():
+        if field_name in allowed_args:
+
+            _stored_in_db = True
+
+            _response_obj = ConfigList(
+                field_name=field_name,
+                field_type=allowed_args[field_name]["type"],
+                field_description=field_info.description or "",
+                field_value=db_budget_row_dict.get(field_name, None),
+                stored_in_db=_stored_in_db,
+            )
+            return_val.append(_response_obj)
+
+    return return_val
+
+
+@router.get(
+    "/budget/list",
+    tags=["budget management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_budget(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """List all the created budgets in proxy db. Used on Admin UI."""
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    response = await prisma_client.db.litellm_budgettable.find_many()
+
+    return response
+
+
+@router.post(
+    "/budget/delete",
+    tags=["budget management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_budget(
+    data: BudgetDeleteRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Delete budget"""
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    response = await prisma_client.db.litellm_budgettable.delete(
+        where={"budget_id": data.id}
+    )
+
+    return response
+
+
 #### MODEL MANAGEMENT ####
 
 
