@@ -2805,11 +2805,18 @@ class ProxyConfig:
         config_data = await proxy_config.get_config()
         litellm_settings = config_data.get("litellm_settings", {}) or {}
         success_callbacks = litellm_settings.get("success_callback", None)
+        failure_callbacks = litellm_settings.get("failure_callback", None)
 
         if success_callbacks is not None and isinstance(success_callbacks, list):
             for success_callback in success_callbacks:
                 if success_callback not in litellm.success_callback:
                     litellm.success_callback.append(success_callback)
+
+        # Add failure callbacks from DB to litellm
+        if failure_callbacks is not None and isinstance(failure_callbacks, list):
+            for failure_callback in failure_callbacks:
+                if failure_callback not in litellm.failure_callback:
+                    litellm.failure_callback.append(failure_callback)
         # we need to set env variables too
         environment_variables = config_data.get("environment_variables", {})
         for k, v in environment_variables.items():
