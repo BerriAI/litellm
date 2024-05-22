@@ -157,6 +157,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/end_users",
         "/global/spend/models",
         "/global/predict/spend/logs",
+        "/global/spend/report",
     ]
 
     public_routes: List = [

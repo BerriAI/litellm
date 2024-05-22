@@ -421,7 +421,6 @@ class LangFuseLogger:
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
-                    tags.append(f"cache_hit:{kwargs['cache_hit']}")
                     clean_metadata["cache_hit"] = kwargs["cache_hit"]
                 if existing_trace_id is None:
                     trace_params.update({"tags": tags})

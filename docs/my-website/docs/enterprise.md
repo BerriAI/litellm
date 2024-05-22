@@ -15,6 +15,7 @@ This covers:
 - ✅ **Custom SLAs**
 - ✅ [**Secure UI access with Single Sign-On**](../docs/proxy/ui.md#setup-ssoauth-for-ui)
 - ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
+- ✅ [**Invite Team Members to access `/spend` Routes**](../docs/proxy/cost_tracking#allowing-non-proxy-admins-to-access-spend-endpoints)
 
 
 ## [COMING SOON] AWS Marketplace Support
