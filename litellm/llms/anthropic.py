@@ -10,6 +10,7 @@ from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from .base import BaseLLM
 import httpx  # type: ignore
+from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
 
 
 class AnthropicConstants(Enum):
@@ -93,6 +94,7 @@ class AnthropicConfig:
             "max_tokens",
             "tools",
             "tool_choice",
+            "extra_headers",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -101,6 +103,17 @@ class AnthropicConfig:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
+            if param == "tool_choice":
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = None
+                if value == "auto":
+                    _tool_choice = {"type": "auto"}
+                elif value == "required":
+                    _tool_choice = {"type": "any"}
+                elif isinstance(value, dict):
+                    _tool_choice = {"type": "tool", "name": value["function"]["name"]}
+
+                if _tool_choice is not None:
+                    optional_params["tool_choice"] = _tool_choice
             if param == "stream" and value == True:
                 optional_params["stream"] = value
             if param == "stop":
@@ -504,7 +517,9 @@ class AnthropicChatCompletion(BaseLLM):
         ## Handle Tool Calling
         if "tools" in optional_params:
             _is_function_call = True
-            headers["anthropic-beta"] = "tools-2024-04-04"
+            if "anthropic-beta" not in headers:
+                # default to v1 of "anthropic-beta"
+                headers["anthropic-beta"] = "tools-2024-05-16"
 
             anthropic_tools = []
             for tool in optional_params["tools"]:

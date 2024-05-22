@@ -1,6 +1,6 @@
 from typing import List, Optional, Union
 
-from pydantic import ConfigDict, BaseModel, validator
+from pydantic import BaseModel, validator
 
 
 class EmbeddingRequest(BaseModel):
@@ -17,4 +17,7 @@ class EmbeddingRequest(BaseModel):
     litellm_call_id: Optional[str] = None
     litellm_logging_obj: Optional[dict] = None
     logger_fn: Optional[str] = None
-    model_config = ConfigDict(extra="allow")
+
+    class Config:
+        # allow kwargs
+        extra = "allow"

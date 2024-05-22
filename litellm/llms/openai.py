@@ -96,7 +96,7 @@ class MistralConfig:
         safe_prompt: Optional[bool] = None,
         response_format: Optional[dict] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -211,7 +211,7 @@ class OpenAIConfig:
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -233,6 +233,47 @@ class OpenAIConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self, model: str) -> list:
+        base_params = [
+            "frequency_penalty",
+            "logit_bias",
+            "logprobs",
+            "top_logprobs",
+            "max_tokens",
+            "n",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "stream",
+            "stream_options",
+            "temperature",
+            "top_p",
+            "tools",
+            "tool_choice",
+            "user",
+            "function_call",
+            "functions",
+            "max_retries",
+            "extra_headers",
+        ]  # works across all models
+
+        model_specific_params = []
+        if (
+            model != "gpt-3.5-turbo-16k" and model != "gpt-4"
+        ):  # gpt-4 does not support 'response_format'
+            model_specific_params.append("response_format")
+
+        return base_params + model_specific_params
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params(model)
+        for param, value in non_default_params.items():
+            if param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params
 
 
 class OpenAITextCompletionConfig:
@@ -294,7 +335,7 @@ class OpenAITextCompletionConfig:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

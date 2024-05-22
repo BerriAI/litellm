@@ -1,19 +1,33 @@
-import logging
+import logging, os, json
+from logging import Formatter
 
 set_verbose = False
-json_logs = False
+json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 handler = logging.StreamHandler()
 handler.setLevel(logging.DEBUG)
 
+
+class JsonFormatter(Formatter):
+    def __init__(self):
+        super(JsonFormatter, self).__init__()
+
+    def format(self, record):
+        json_record = {}
+        json_record["message"] = record.getMessage()
+        return json.dumps(json_record)
+
+
 # Create a formatter and set it for the handler
-formatter = logging.Formatter(
-    "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
-    datefmt="%H:%M:%S",
-)
+if json_logs:
+    handler.setFormatter(JsonFormatter())
+else:
+    formatter = logging.Formatter(
+        "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
-
-handler.setFormatter(formatter)
+    handler.setFormatter(formatter)
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")

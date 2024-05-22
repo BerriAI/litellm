@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, json
 import traceback
 from dotenv import load_dotenv
 
@@ -7,7 +7,7 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the, system path
+)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -38,7 +38,7 @@ def reset_callbacks():
 @pytest.mark.skip(reason="Local test")
 def test_response_model_none():
     """
-    Addresses - https://github.com/BerriAI/litellm/issues/2972
+    Addresses:https://github.com/BerriAI/litellm/issues/2972
     """
     x = completion(
         model="mymodel",
@@ -59,7 +59,7 @@ def test_completion_custom_provider_model_name():
             messages=messages,
             logger_fn=logger_fn,
         )
-        # Add any assertions here to, check the response
+        # Add assertions here to check the-response
         print(response)
         print(response["choices"][0]["finish_reason"])
     except litellm.Timeout as e:
@@ -93,7 +93,7 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
 
 def test_null_role_response():
     """
-    Test if api returns 'null' role, 'assistant' role is still returned
+    Test if the api returns 'null' role, 'assistant' role is still returned
     """
     import openai
 
@@ -278,8 +278,12 @@ def test_completion_claude_3_function_call():
             model="anthropic/claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice={
+                "type": "function",
+                "function": {"name": "get_current_weather"},
+            },
         )
+
         # Add any assertions, here to check response args
         print(response)
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
@@ -1053,6 +1057,25 @@ def test_completion_azure_gpt4_vision():
 # test_completion_azure_gpt4_vision()
 
 
+@pytest.mark.parametrize("model", ["gpt-3.5-turbo", "gpt-4", "gpt-4o"])
+def test_completion_openai_params(model):
+    litellm.drop_params = True
+    messages = [
+        {
+            "role": "user",
+            "content": """Generate JSON about Bill Gates: { "full_name": "", "title": "" }""",
+        }
+    ]
+
+    response = completion(
+        model=model,
+        messages=messages,
+        response_format={"type": "json_object"},
+    )
+
+    print(f"response: {response}")
+
+
 def test_completion_fireworks_ai():
     try:
         litellm.set_verbose = True
@@ -1161,28 +1184,28 @@ HF Tests we should pass
 # Test util to sort models to TGI, conv, None
 def test_get_hf_task_for_model():
     model = "glaiveai/glaive-coder-7b"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "meta-llama/Llama-2-7b-hf"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "facebook/blenderbot-400M-distill"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     model = "facebook/blenderbot-3B"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     # neither Conv or None
     model = "roneneldan/TinyStories-3M"
-    model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation"
 
@@ -1318,6 +1341,10 @@ def test_hf_test_completion_tgi():
 
 
 def mock_post(url, data=None, json=None, headers=None):
+
+    print(f"url={url}")
+    if "text-classification" in url:
+        raise Exception("Model not found")
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -2296,36 +2323,30 @@ def test_completion_azure_deployment_id():
 
 # test_completion_azure_deployment_id()
 
-# Only works for local endpoint
-# def test_completion_anthropic_openai_proxy():
-#     try:
-#         response = completion(
-#             model="custom_openai/claude-2",
-#             messages=messages,
-#             api_base="http://0.0.0.0:8000"
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_anthropic_openai_proxy()
+import asyncio
 
 
-def test_completion_replicate_llama3():
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_completion_replicate_llama3(sync_mode):
     litellm.set_verbose = True
     model_name = "replicate/meta/meta-llama-3-8b-instruct"
     try:
-        response = completion(
-            model=model_name,
-            messages=messages,
-        )
+        if sync_mode:
+            response = completion(
+                model=model_name,
+                messages=messages,
+            )
+        else:
+            response = await litellm.acompletion(
+                model=model_name,
+                messages=messages,
+            )
+            print(f"ASYNC REPLICATE RESPONSE - {response}")
         print(response)
         # Add any assertions here to check the response
-        response_str = response["choices"][0]["message"]["content"]
-        print("RESPONSE STRING\n", response_str)
-        if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
+        assert isinstance(response, litellm.ModelResponse)
+        response_format_tests(response=response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -2666,14 +2687,29 @@ def response_format_tests(response: litellm.ModelResponse):
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/cohere.command-r-plus-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "anthropic.claude-instant-v1",
+        "bedrock/ai21.j2-mid",
+        "mistral.mistral-7b-instruct-v0:2",
+        "bedrock/amazon.titan-tg1-large",
+        "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14",
+    ],
+)
 @pytest.mark.asyncio
-async def test_completion_bedrock_command_r(sync_mode):
+async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
 
     if sync_mode:
         response = completion(
-            model="bedrock/cohere.command-r-plus-v1:0",
+            model=model,
             messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            temperature=0.2,
+            max_tokens=200,
         )
 
         assert isinstance(response, litellm.ModelResponse)
@@ -2681,8 +2717,10 @@ async def test_completion_bedrock_command_r(sync_mode):
         response_format_tests(response=response)
     else:
         response = await litellm.acompletion(
-            model="bedrock/cohere.command-r-plus-v1:0",
+            model=model,
             messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            temperature=0.2,
+            max_tokens=100,
         )
 
         assert isinstance(response, litellm.ModelResponse)
@@ -2718,67 +2756,10 @@ def test_completion_bedrock_titan_null_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-def test_completion_bedrock_titan():
-    try:
-        response = completion(
-            model="bedrock/amazon.titan-tg1-large",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=200,
-            top_p=0.8,
-            logger_fn=logger_fn,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_bedrock_titan()
 
 
-def test_completion_bedrock_claude():
-    print("calling claude")
-    try:
-        response = completion(
-            model="anthropic.claude-instant-v1",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            logger_fn=logger_fn,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_bedrock_claude()
-
-
-def test_completion_bedrock_cohere():
-    print("calling bedrock cohere")
-    litellm.set_verbose = True
-    try:
-        response = completion(
-            model="bedrock/cohere.command-text-v14",
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.1,
-            max_tokens=10,
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_bedrock_cohere()
@@ -2802,23 +2783,6 @@ def test_completion_bedrock_cohere():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude_stream()
-
-# def test_completion_bedrock_ai21():
-#     try:
-#         litellm.set_verbose = False
-#         response = completion(
-#             model="bedrock/ai21.j2-mid",
-#             messages=messages,
-#             temperature=0.2,
-#             top_p=0.2,
-#             max_tokens=20
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
 
 
 ######## Test VLLM ########
@@ -3092,7 +3056,6 @@ def test_mistral_anyscale_stream():
         print(chunk["choices"][0]["delta"].get("content", ""), end="")
 
 
-# test_mistral_anyscale_stream()
 # test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
@@ -3242,6 +3205,7 @@ def test_completion_gemini():
         response = completion(model=model_name, messages=messages)
         # Add any assertions,here to check the response
         print(response)
+        assert response.choices[0]["index"] == 0
     except litellm.APIError as e:
         pass
     except Exception as e:
