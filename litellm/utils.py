@@ -5997,12 +5997,23 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
         )
-    else:  # assume passing in params for azure openai
+    elif custom_llm_provider == "azure":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="azure"
         )
         _check_valid_arg(supported_params=supported_params)
+
         optional_params = litellm.AzureOpenAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
+    else:  # assume openai-compatible endpoint
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider="openai"
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,

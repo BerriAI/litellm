@@ -9,6 +9,7 @@ from litellm.utils import (
     convert_to_model_response_object,
     TranscriptionResponse,
     get_secret,
+    UnsupportedParamsError,
 )
 from typing import Callable, Optional, BinaryIO, List
 from litellm import OpenAIConfig
@@ -142,6 +143,11 @@ class AzureOpenAIConfig(OpenAIConfig):
                     value == "none" or value == "auto" or isinstance(value, dict)
                 ):  # azure currently only supports 'none' or 'auto'
                     optional_params["tool_choice"] = value
+                elif litellm.drop_params == False:
+                    raise UnsupportedParamsError(
+                        status_code=500,
+                        message=f"Azure does not support {param}={value}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                    )
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
