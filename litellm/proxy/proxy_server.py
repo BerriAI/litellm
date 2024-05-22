@@ -3470,7 +3470,9 @@ async def startup_event():
     if prisma_client is not None and master_key is not None:
         # add master key to db
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
-            litellm_proxy_admin_name = os.getenv("PROXY_ADMIN_ID")
+            litellm_proxy_admin_name = os.getenv(
+                "PROXY_ADMIN_ID", litellm_proxy_admin_name
+            )
         asyncio.create_task(
             generate_key_helper_fn(
                 duration=None,
@@ -8188,8 +8190,39 @@ async def info_organization(data: OrganizationRequest):
 
 
 @router.post(
+    "/budget/new",
+    tags=["budget management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def new_budget(
+    budget_obj: BudgetNew,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Create a new budget object. Can apply this to teams, orgs, end-users, keys.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    response = await prisma_client.db.litellm_budgettable.create(
+        data={
+            **budget_obj.model_dump(exclude_none=True),  # type: ignore
+            "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        }  # type: ignore
+    )
+
+    return response
+
+
+@router.post(
     "/budget/info",
-    tags=["organization management"],
+    tags=["budget management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def info_budget(data: BudgetRequest):
