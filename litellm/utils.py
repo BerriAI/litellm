@@ -2018,6 +2018,7 @@ class Logging:
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
+                            user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
                     if callback == "s3":
@@ -2580,6 +2581,17 @@ class Logging:
                                 langfuse_secret=self.langfuse_secret,
                             )
                         langFuseLogger.log_event(
+                            start_time=start_time,
+                            end_time=end_time,
+                            response_obj=None,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                            status_message=str(exception),
+                            level="ERROR",
+                            kwargs=self.model_call_details,
+                        )
+                    if callback == "traceloop":
+                        traceloopLogger.log_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
