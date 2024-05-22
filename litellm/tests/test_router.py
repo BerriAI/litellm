@@ -762,7 +762,7 @@ def test_router_region_pre_call_check(allowed_model_region):
         model="gpt-3.5-turbo",
         healthy_deployments=model_list,
         messages=[{"role": "user", "content": "Hey!"}],
-        allowed_model_region=allowed_model_region,
+        request_kwargs={"allowed_model_region": allowed_model_region},
     )
 
     if allowed_model_region is None:
