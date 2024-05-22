@@ -23,6 +23,7 @@ import sys, os
 import traceback
 from dotenv import load_dotenv
 from fastapi import Request
+from fastapi.routing import APIRoute
 from datetime import datetime
 
 load_dotenv()
@@ -51,6 +52,13 @@ from litellm.proxy.proxy_server import (
     user_info,
     info_key_fn,
     new_team,
+    chat_completion,
+    completion,
+    embeddings,
+    image_generation,
+    audio_transcriptions,
+    moderations,
+    model_list,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
@@ -146,7 +154,38 @@ async def test_new_user_response(prisma_client):
         pytest.fail(f"Got exception {e}")
 
 
-def test_generate_and_call_with_valid_key(prisma_client):
+@pytest.mark.parametrize(
+    "api_route", [
+        # chat_completion
+        APIRoute(path="/engines/{model}/chat/completions", endpoint=chat_completion),
+        APIRoute(path="/openai/deployments/{model}/chat/completions", endpoint=chat_completion),
+        APIRoute(path="/chat/completions", endpoint=chat_completion),
+        APIRoute(path="/v1/chat/completions", endpoint=chat_completion),
+        # completion
+        APIRoute(path="/completions", endpoint=completion),
+        APIRoute(path="/v1/completions", endpoint=completion),
+        APIRoute(path="/engines/{model}/completions", endpoint=completion),
+        APIRoute(path="/openai/deployments/{model}/completions", endpoint=completion),
+        # embeddings
+        APIRoute(path="/v1/embeddings", endpoint=embeddings),
+        APIRoute(path="/embeddings", endpoint=embeddings),
+        APIRoute(path="/openai/deployments/{model}/embeddings", endpoint=embeddings),
+        # image generation
+        APIRoute(path="/v1/images/generations", endpoint=image_generation),
+        APIRoute(path="/images/generations", endpoint=image_generation),
+        # audio transcriptions
+        APIRoute(path="/v1/audio/transcriptions", endpoint=audio_transcriptions),
+        APIRoute(path="/audio/transcriptions", endpoint=audio_transcriptions),
+        # moderations
+        APIRoute(path="/v1/moderations", endpoint=moderations),
+        APIRoute(path="/moderations", endpoint=moderations),
+        # model_list
+        APIRoute(path= "/v1/models", endpoint=model_list),
+        APIRoute(path= "/models", endpoint=model_list),
+    ],
+    ids=lambda route: str(dict(route=route.endpoint.__name__, path=route.path)),
+)
+def test_generate_and_call_with_valid_key(prisma_client, api_route):
     # 1. Generate a Key, and use it to make a call
 
     print("prisma client=", prisma_client)
@@ -181,8 +220,12 @@ def test_generate_and_call_with_valid_key(prisma_client):
             )
             print("token from prisma", value_from_prisma)
 
-            request = Request(scope={"type": "http"})
-            request._url = URL(url="/chat/completions")
+            request = Request({
+                "type": "http",
+                "route": api_route,
+                "path": api_route.path,
+                "headers": [("Authorization", bearer_token)]
+            })
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)

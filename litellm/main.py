@@ -14,6 +14,7 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
+
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -78,6 +79,7 @@ from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.predibase import PredibaseChatCompletion
 from .llms.bedrock_httpx import BedrockLLM
+from .llms.vertex_httpx import VertexLLM
 from .llms.triton import TritonChatCompletion
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -117,6 +119,7 @@ huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
+vertex_chat_completion = VertexLLM()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -319,12 +322,13 @@ async def acompletion(
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "ollama_chat"
+            or custom_llm_provider == "replicate"
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
-            or (custom_llm_provider == "bedrock" and "cohere" in model)
+            or custom_llm_provider == "bedrock"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -366,6 +370,8 @@ async def acompletion(
 async def _async_streaming(response, model, custom_llm_provider, args):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
+        if asyncio.iscoroutine(response):
+            response = await response
         async for line in response:
             print_verbose(f"line in async streaming: {line}")
             yield line
@@ -480,7 +486,7 @@ def completion(
     response_format: Optional[dict] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
+    tool_choice: Optional[Union[str, dict]] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
@@ -551,7 +557,7 @@ def completion(
     model_info = kwargs.get("model_info", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
-    headers = kwargs.get("headers", None)
+    headers = kwargs.get("headers", None) or extra_headers
     num_retries = kwargs.get("num_retries", None)  ## deprecated
     max_retries = kwargs.get("max_retries", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
@@ -665,26 +671,13 @@ def completion(
         "supports_system_message",
         "region_name",
         "allowed_model_region",
+        "model_config",
     ]
 
     default_params = openai_params + litellm_params
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
-
-    ### TIMEOUT LOGIC ###
-    timeout = timeout or kwargs.get("request_timeout", 600) or 600
-    # set timeout for 10 minutes by default
-
-    if (
-        timeout is not None
-        and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
-    ):
-        read_timeout = timeout.read or 600
-        timeout = read_timeout  # default 10 min timeout
-    elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
 
     try:
         if base_url is not None:
@@ -724,6 +717,16 @@ def completion(
             model_response._hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
+
+        ### TIMEOUT LOGIC ###
+        timeout = timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+        if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
+            custom_llm_provider
+        ):
+            timeout = timeout.read or 600  # default 10 min timeout
+        elif not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
@@ -1190,7 +1193,7 @@ def completion(
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            model_response = replicate.completion(
+            model_response = replicate.completion(  # type: ignore
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1203,12 +1206,10 @@ def completion(
                 api_key=replicate_key,
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
+                acompletion=acompletion,
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
-                # don't try to access stream object,
-                model_response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="replicate")  # type: ignore
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) == True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1982,23 +1983,9 @@ def completion(
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            if "cohere" in model:
-                response = bedrock_chat_completion.completion(
-                    model=model,
-                    messages=messages,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    extra_headers=extra_headers,
-                    timeout=timeout,
-                    acompletion=acompletion,
-                )
-            else:
+            if (
+                "aws_bedrock_client" in optional_params
+            ):  # use old bedrock flow for aws_bedrock_client users.
                 response = bedrock.completion(
                     model=model,
                     messages=messages,
@@ -2034,7 +2021,22 @@ def completion(
                             custom_llm_provider="bedrock",
                             logging_obj=logging,
                         )
-
+            else:
+                response = bedrock_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                )
             if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
@@ -2860,6 +2862,7 @@ def embedding(
         "no-log",
         "region_name",
         "allowed_model_region",
+        "model_config",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -3760,6 +3763,7 @@ def image_generation(
             "cache",
             "region_name",
             "allowed_model_region",
+            "model_config",
         ]
         default_params = openai_params + litellm_params
         non_default_params = {
@@ -3852,6 +3856,36 @@ def image_generation(
                 model_response=model_response,
                 aimg_generation=aimg_generation,
             )
+        elif custom_llm_provider == "vertex_ai":
+            vertex_ai_project = (
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_location", None)
+                or optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
+            model_response = vertex_chat_completion.image_generation(
+                model=model,
+                prompt=prompt,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                optional_params=optional_params,
+                model_response=model_response,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                aimg_generation=aimg_generation,
+            )
+
         return model_response
     except Exception as e:
         ## Map to OpenAI Exception

@@ -364,6 +364,8 @@ response = completion(
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-1.5-flash-preview-0514   | `completion('gemini-1.5-flash-preview-0514', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-1.5-pro-preview-0514   | `completion('gemini-1.5-pro-preview-0514', messages)`, `completion('vertex_ai/gemini-1.5-pro-preview-0514', messages)` |
 
 
 
@@ -506,6 +508,31 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
 
+## Image Generation Models
+
+Usage 
+
+```python
+response = await litellm.aimage_generation(
+    prompt="An olympic size swimming pool",
+    model="vertex_ai/imagegeneration@006",
+    vertex_ai_project="adroit-crow-413218",
+    vertex_ai_location="us-central1",
+)
+```
+
+**Generating multiple images**
+
+Use the `n` parameter to pass how many images you want generated
+```python
+response = await litellm.aimage_generation(
+    prompt="An olympic size swimming pool",
+    model="vertex_ai/imagegeneration@006",
+    vertex_ai_project="adroit-crow-413218",
+    vertex_ai_location="us-central1",
+    n=1,
+)
+```
 
 ## Extra
 

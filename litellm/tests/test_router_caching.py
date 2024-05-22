@@ -136,6 +136,56 @@ async def test_acompletion_caching_on_router():
 
 
 @pytest.mark.asyncio
+async def test_completion_caching_on_router():
+    # tests completion + caching on router
+    try:
+        litellm.set_verbose = True
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 1000,
+                "rpm": 1,
+            },
+        ]
+
+        messages = [
+            {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
+        ]
+        router = Router(
+            model_list=model_list,
+            redis_host=os.environ["REDIS_HOST"],
+            redis_password=os.environ["REDIS_PASSWORD"],
+            redis_port=os.environ["REDIS_PORT"],
+            cache_responses=True,
+            timeout=30,
+            routing_strategy_args={"ttl": 10},
+            routing_strategy="usage-based-routing",
+        )
+        response1 = await router.acompletion(
+            model="gpt-3.5-turbo", messages=messages, temperature=1
+        )
+        print(f"response1: {response1}")
+        await asyncio.sleep(10)
+        response2 = await router.acompletion(
+            model="gpt-3.5-turbo", messages=messages, temperature=1
+        )
+        print(f"response2: {response2}")
+        assert len(response1.choices[0].message.content) > 0
+        assert len(response2.choices[0].message.content) > 0
+
+        router.reset()
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
 async def test_acompletion_caching_with_ttl_on_router():
     # tests acompletion + caching on router
     try:

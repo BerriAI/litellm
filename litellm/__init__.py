@@ -15,7 +15,9 @@ from litellm.proxy._types import (
 import httpx
 import dotenv
 
-dotenv.load_dotenv()
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
+if litellm_mode == "DEV":
+    dotenv.load_dotenv()
 #############################################
 if set_verbose == True:
     _turn_on_debug()
@@ -25,8 +27,8 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-callbacks: List[Callable] = []
-_custom_logger_compatible_callbacks: list = ["openmeter"]
+_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter"]
+callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
         Literal[
@@ -722,6 +724,9 @@ from .utils import (
     get_supported_openai_params,
     get_api_base,
     get_first_chars_messages,
+    ModelResponse,
+    ImageResponse,
+    ImageObject,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig

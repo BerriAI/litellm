@@ -5,7 +5,6 @@
 import sys, os
 import traceback
 from dotenv import load_dotenv
-from pydantic import ConfigDict
 
 load_dotenv()
 import os, io
@@ -26,7 +25,9 @@ class DBModel(BaseModel):
     model_name: str
     model_info: dict
     litellm_params: dict
-    model_config = ConfigDict(protected_namespaces=())
+
+    class Config:
+        protected_namespaces = ()
 
 
 @pytest.mark.asyncio
@@ -101,7 +102,7 @@ async def test_delete_deployment():
     pc = ProxyConfig()
 
     db_model = DBModel(
-        model_id="12340523",
+        model_id=deployment.model_info.id,
         model_name="gpt-3.5-turbo",
         litellm_params=encrypted_litellm_params,
         model_info={"id": deployment.model_info.id},
