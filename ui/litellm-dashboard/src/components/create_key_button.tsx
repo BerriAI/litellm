@@ -319,7 +319,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 >
                   <TextInput placeholder="" />
                 </Form.Item>
-                <Form.Item label="Metadata" name="metadata">
+
+                <Form.Item
+                  className="mt-8"
+                  label="Allowed Routes"
+                  name="permissions"
+                  
+                  help={`Select routes this key is allowed to access`}
+                >
+                  <Select defaultValue={null} placeholder="n/a" mode="multiple" defaultValue={['get_spend_routes', 'llm_routes']}>
+                    <Select.Option value="get_spend_routes">Spend Reporting Routes (/global/spend/report, etc) </Select.Option>
+                    <Select.Option value="llm_routes">LLM routes (/chat, /completions, /embeddings)</Select.Option>
+                  </Select>
+                </Form.Item>
+                
+                <Form.Item label="Metadata" name="metadata" className="mt-8">
                   <Input.TextArea
                     rows={4}
                     placeholder="Enter metadata as JSON"
