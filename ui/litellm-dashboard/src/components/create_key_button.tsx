@@ -106,26 +106,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         );
       }
 
-      if (formValues?.permissions != null) { 
-        /*
-        existing permissions = ["get_spend_logs"]
-        make this a dict like
-        {
-          "get_spend_logs": true
-        }
-        */
-
-        let permissionsForAPI: Record<string, boolean> = {};
-
-        for (let i = 0; i < formValues?.permissions?.length; i++) {
-          let permissionName: string = formValues?.permissions[i];
-          permissionsForAPI[permissionName] = true;
-        }
-        formValues.permissions = permissionsForAPI;
-        
-      } 
-
-
       message.info("Making API Call");
       setIsModalVisible(true);
       const response = await keyCreateCall(accessToken, userID, formValues);
@@ -214,7 +194,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Form.Item
               label="Models"
               name="models"
-              rules={[{ message: "Please select a model" }]}
+              rules={[{ required: true, message: "Please select a model" }]}
+              help="required"
             >
               <Select
                 mode="multiple"
@@ -339,19 +320,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <TextInput placeholder="" />
                 </Form.Item>
 
-                <Form.Item
-                  className="mt-8"
-                  label="Allowed Routes"
-                  name="permissions"
-                  
-                  help={`Select routes this key is allowed to access`}
-                >
-                  <Select placeholder="n/a" mode="multiple" defaultValue={['get_spend_routes', 'llm_routes']} value={['get_spend_routes', 'llm_routes']}>
-                    <Select.Option value="get_spend_routes">Spend Reporting Routes (/global/spend/report, etc) </Select.Option>
-                    <Select.Option value="llm_routes">LLM routes (/chat, /completions, /embeddings)</Select.Option>
-                  </Select>
-                </Form.Item>
-                
                 <Form.Item label="Metadata" name="metadata" className="mt-8">
                   <Input.TextArea
                     rows={4}
