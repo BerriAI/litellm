@@ -655,19 +655,6 @@ async def user_api_key_auth(
                     detail="'allow_user_auth' not set or set to False",
                 )
 
-        ### CHECK IF ADMIN ###
-        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
-        ### CHECK IF ADMIN ###
-        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
-        ## Check CACHE
-        valid_token = user_api_key_cache.get_cache(key=hash_token(api_key))
-        if (
-            valid_token is not None
-            and isinstance(valid_token, UserAPIKeyAuth)
-            and valid_token.user_role == "proxy_admin"
-        ):
-            return valid_token
-
         ## Check END-USER OBJECT
         request_data = await _read_request_body(request=request)
         _end_user_object = None
@@ -699,6 +686,27 @@ async def user_api_key_auth(
                     "Unable to find user in db. Error - {}".format(str(e))
                 )
                 pass
+
+        ### CHECK IF ADMIN ###
+        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
+        ### CHECK IF ADMIN ###
+        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
+        ## Check CACHE
+        valid_token = user_api_key_cache.get_cache(key=hash_token(api_key))
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.user_role == "proxy_admin"
+        ):
+            # update end-user params on valid token
+            valid_token.end_user_id = end_user_params.get("end_user_id")
+            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
+            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.allowed_model_region = end_user_params.get(
+                "allowed_model_region"
+            )
+
+            return valid_token
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -772,8 +780,17 @@ async def user_api_key_auth(
                         key=original_api_key, table_name="key"
                     )
             verbose_proxy_logger.debug("Token from db: %s", valid_token)
-        elif valid_token is not None:
+        elif valid_token is not None and isinstance(valid_token, UserAPIKeyAuth):
             verbose_proxy_logger.debug("API Key Cache Hit!")
+
+            # update end-user params on valid token
+            # These can change per request - it's important to update them here
+            valid_token.end_user_id = end_user_params.get("end_user_id")
+            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
+            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.allowed_model_region = end_user_params.get(
+                "allowed_model_region"
+            )
 
         user_id_information = None
         if valid_token:
