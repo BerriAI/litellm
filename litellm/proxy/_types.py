@@ -705,6 +705,10 @@ class BudgetRequest(LiteLLMBase):
     budgets: List[str]
 
 
+class BudgetDeleteRequest(LiteLLMBase):
+    id: str
+
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
