@@ -47,7 +47,7 @@ class AzureOpenAIError(Exception):
 
 class AzureOpenAIConfig(OpenAIConfig):
     """
-    Reference: https://platform.openai.com/docs/api-reference/chat/create
+    Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions
 
     The class `AzureOpenAIConfig` provides configuration for the OpenAI's Chat API interface, for use with Azure. It inherits from `OpenAIConfig`. Below are the parameters::
 
@@ -105,6 +105,45 @@ class AzureOpenAIConfig(OpenAIConfig):
         for param, value in non_default_params.items():
             if param == "token":
                 optional_params["azure_ad_token"] = value
+        return optional_params
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "function_call",
+            "functions",
+            "tools",
+            "tool_choice",
+            "top_p",
+            "log_probs",
+            "top_logprobs",
+            "response_format",
+            "seed",
+            "extra_headers",
+        ]
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params()
+        for param, value in non_default_params.items():
+            if param == "tool_choice":
+                if (
+                    value == "none" or value == "auto" or isinstance(value, dict)
+                ):  # azure currently only supports 'none' or 'auto'
+                    optional_params["tool_choice"] = value
+            if param in supported_openai_params:
+                optional_params[param] = value
         return optional_params
 
     def get_eu_regions(self) -> List[str]:
@@ -172,9 +211,7 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
     possible_azure_ad_token = req_token.json().get("access_token", None)
 
     if possible_azure_ad_token is None:
-        raise AzureOpenAIError(
-            status_code=422, message="Azure AD Token not returned"
-        )
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token not returned")
 
     return possible_azure_ad_token
 
@@ -245,7 +282,9 @@ class AzureChatCompletion(BaseLLM):
                         azure_client_params["api_key"] = api_key
                     elif azure_ad_token is not None:
                         if azure_ad_token.startswith("oidc/"):
-                            azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+                            azure_ad_token = get_azure_ad_token_from_oidc(
+                                azure_ad_token
+                            )
 
                         azure_client_params["azure_ad_token"] = azure_ad_token
 
