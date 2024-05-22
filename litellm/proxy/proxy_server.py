@@ -683,6 +683,17 @@ async def user_api_key_auth(
                     end_user_params["allowed_model_region"] = (
                         _end_user_object.allowed_model_region
                     )
+                    if _end_user_object.litellm_budget_table is not None:
+                        budget_info = _end_user_object.litellm_budget_table
+                        end_user_params["end_user_id"] = _end_user_object.user_id
+                        if budget_info.tpm_limit is not None:
+                            end_user_params["end_user_tpm_limit"] = (
+                                budget_info.tpm_limit
+                            )
+                        if budget_info.rpm_limit is not None:
+                            end_user_params["end_user_rpm_limit"] = (
+                                budget_info.rpm_limit
+                            )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     "Unable to find user in db. Error - {}".format(str(e))
@@ -1148,10 +1159,7 @@ async def user_api_key_auth(
             valid_token_dict.pop("token", None)
 
             if _end_user_object is not None:
-                valid_token_dict["allowed_model_region"] = (
-                    _end_user_object.allowed_model_region
-                )
-
+                valid_token_dict.update(end_user_params)
             """
             asyncio create task to update the user api key cache with the user db table as well
 
