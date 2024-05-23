@@ -25,6 +25,7 @@ from litellm.utils import (
 )
 from datetime import datetime
 import aiohttp, asyncio
+from litellm._logging import verbose_proxy_logger
 
 litellm.set_verbose = True
 
@@ -44,7 +45,6 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
-        _messages = data.get("messages", None)
         if "messages" in data and isinstance(data["messages"], list):
             text = ""
             for m in data["messages"]:  # assume messages is a list
@@ -59,6 +59,8 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         moderation_response = await llm_router.amoderation(
             model=self.model_name, input=text
         )
+
+        verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
         if moderation_response.results[0].flagged == True:
             raise HTTPException(
                 status_code=403, detail={"error": "Violated content safety policy"}
