@@ -20,6 +20,7 @@ import { Typography } from "antd";
 const CreateKeyPage = () => {
   const { Title, Paragraph } = Typography;
   const [userRole, setUserRole] = useState("");
+  const [premiumUser, setPremiumUser] = useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
@@ -68,6 +69,10 @@ const CreateKeyPage = () => {
         } else {
           console.log(`User Email is not set ${decoded}`);
         }
+
+        if (decoded.premium_user) {
+          setPremiumUser(decoded.premium_user);
+        }
       }
     }
   }, [token]);
@@ -104,6 +109,7 @@ const CreateKeyPage = () => {
           userRole={userRole}
           userEmail={userEmail}
           showSSOBanner={showSSOBanner}
+          premiumUser={premiumUser}
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
@@ -134,6 +140,7 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
               modelData={modelData}
               setModelData={setModelData}
+              premiumUser={premiumUser}
             />
           ) : page == "llm-playground" ? (
             <ChatUI
