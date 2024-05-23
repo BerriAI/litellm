@@ -219,7 +219,8 @@ async def get_end_user_object(
     # else, check db
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
-            where={"user_id": end_user_id}
+            where={"user_id": end_user_id},
+            include={"litellm_budget_table": True},
         )
 
         if response is None:
