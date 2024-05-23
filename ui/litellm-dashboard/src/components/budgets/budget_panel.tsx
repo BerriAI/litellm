@@ -108,7 +108,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
           <TableBody>
             {budgetList.map((value: budgetItem, index: number) => (
-              <TableRow>
+              <TableRow key={index}>
                 <TableCell>{value.budget_id}</TableCell>
                 <TableCell>
                   {value.max_budget ? value.max_budget : "n/a"}
