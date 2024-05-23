@@ -516,6 +516,27 @@ class ProxyLogging:
                 raise e
         return response
 
+    async def async_post_call_streaming_hook(
+        self,
+        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """
+        Allow user to modify outgoing streaming data -> per chunk
+
+        Covers:
+        1. /chat/completions
+        """
+        for callback in litellm.callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    await callback.async_post_call_streaming_hook(
+                        user_api_key_dict=user_api_key_dict, response=response
+                    )
+            except Exception as e:
+                raise e
+        return response
+
     async def post_call_streaming_hook(
         self,
         response: str,
