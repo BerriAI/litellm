@@ -497,7 +497,7 @@ async def user_api_key_auth(
                         litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                     )
                     if is_allowed:
-                        return UserAPIKeyAuth()
+                        return UserAPIKeyAuth(user_role="proxy_admin")
                     else:
                         allowed_routes = (
                             jwt_handler.litellm_jwtauth.admin_allowed_routes
