@@ -473,6 +473,45 @@ export const modelMetricsCall = async (
     throw error;
   }
 };
+export const streamingModelMetricsCall = async (
+  accessToken: String,
+  modelGroup: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
+  /**
+   * Get all models on proxy
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/model/streaming_metrics`
+      : `/model/streaming_metrics`;
+    if (modelGroup) {
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`;
+    }
+    // message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 10);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    // message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
 
 export const modelMetricsSlowResponsesCall = async (
   accessToken: String,
