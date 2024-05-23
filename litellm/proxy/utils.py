@@ -1097,9 +1097,11 @@ class PrismaClient:
                     t.models AS team_models,
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
+                    tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
                     LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
+                    LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                     LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                     WHERE v.token = '{token}'
                     """
