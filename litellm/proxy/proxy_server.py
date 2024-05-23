@@ -7605,16 +7605,12 @@ async def team_member_add(
     If user doesn't exist, new user row will also be added to User Table
 
     ```
-    curl -X POST 'http://0.0.0.0:8000/team/update' \
 
+    curl -X POST 'http://0.0.0.0:4000/team/member_add' \
     -H 'Authorization: Bearer sk-1234' \
-
     -H 'Content-Type: application/json' \
+    -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
 
-    -D '{
-        "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
-        "member": {"role": "user", "user_id": "krrish247652@berri.ai"}
-    }'
     ```
     """
     if prisma_client is None:
@@ -7684,6 +7680,26 @@ async def team_member_add(
         ):
 
             await prisma_client.insert_data(data=user_data, table_name="user")
+
+    # Check if trying to set a budget for team member
+    if data.max_budget_in_team is not None and new_member.user_id is not None:
+        # create a new budget item for this member
+        response = await prisma_client.db.litellm_budgettable.create(
+            data={
+                "max_budget": data.max_budget_in_team,
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }
+        )
+
+        _budget_id = response.budget_id
+        await prisma_client.db.litellm_teammembership.create(
+            data={
+                "team_id": data.team_id,
+                "user_id": new_member.user_id,
+                "budget_id": _budget_id,
+            }
+        )
 
     return team_row
 
