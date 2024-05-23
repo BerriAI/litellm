@@ -1874,6 +1874,9 @@ def get_logging_payload(
         # hash the api_key
         api_key = hash_token(api_key)
 
+    _model_id = metadata.get("model_info", {}).get("id", "")
+    _model_group = metadata.get("model_group", "")
+
     # clean up litellm metadata
     if isinstance(metadata, dict):
         clean_metadata = {}
@@ -1928,6 +1931,8 @@ def get_logging_payload(
         "request_tags": metadata.get("tags", []),
         "end_user": end_user_id or "",
         "api_base": litellm_params.get("api_base", ""),
+        "model_group": _model_group,
+        "model_id": _model_id,
     }
 
     verbose_proxy_logger.debug("SpendTable: created payload - payload: %s\n\n", payload)
