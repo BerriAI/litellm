@@ -3402,6 +3402,12 @@ async def async_data_generator(
     try:
         start_time = time.time()
         async for chunk in response:
+
+            ### CALL HOOKS ### - modify outgoing data
+            chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                user_api_key_dict=user_api_key_dict, response=chunk
+            )
+
             chunk = chunk.model_dump_json(exclude_none=True)
             try:
                 yield f"data: {chunk}\n\n"
