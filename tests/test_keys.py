@@ -729,7 +729,6 @@ async def test_key_delete_ui():
 
         # generate a admin UI key
         team = await generate_team(session=session)
-        print("generated team: ", team)
         admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
         print(
             "trying to delete key=",
@@ -754,7 +753,7 @@ async def test_key_model_list(model_access):
     """
     async with aiohttp.ClientSession() as session:
         new_team = await generate_team(session=session)
-        team_id = new_team["team_id"]
+        team_id = "litellm-dashboard"
         key_gen = await generate_key(
             session=session,
             i=0,
