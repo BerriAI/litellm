@@ -2327,6 +2327,18 @@ class ProxyConfig:
                                 imported_list.append(openai_moderations_object)
                             elif (
                                 isinstance(callback, str)
+                                and callback == "lakera_prompt_injection"
+                            ):
+                                from enterprise.enterprise_hooks.lakera_ai import (
+                                    _ENTERPRISE_lakeraAI_Moderation,
+                                )
+
+                                lakera_moderations_object = (
+                                    _ENTERPRISE_lakeraAI_Moderation()
+                                )
+                                imported_list.append(lakera_moderations_object)
+                            elif (
+                                isinstance(callback, str)
                                 and callback == "google_text_moderation"
                             ):
                                 from enterprise.enterprise_hooks.google_text_moderation import (
