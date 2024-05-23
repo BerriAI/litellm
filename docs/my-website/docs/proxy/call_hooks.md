@@ -17,6 +17,8 @@ This function is called just before a litellm completion call is made, and allow
 ```python
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
+from litellm.proxy.proxy_server import UserAPIKeyAuth, DualCache
+from typing import Optional, Literal
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
@@ -34,7 +36,7 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
             "image_generation",
             "moderation",
             "audio_transcription",
-        ]) -> Optional[dict, str, Exception]: 
+        ]): 
         data["model"] = "my-new-model"
         return data 
 
