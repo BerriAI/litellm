@@ -474,3 +474,74 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'
 ```
+
+
+## Advanced
+### Set Budgets for Members within a Team 
+
+Use this when you want to budget a users spend within a Team 
+
+
+#### Step 1. Create User
+
+Create a user with `user_id=ishaan`
+
+```shell
+curl --location 'http://0.0.0.0:4000/user/new' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "ishaan"
+}'
+```
+
+#### Step 2. Add User to an existing Team - set `max_budget_in_team`
+
+Set `max_budget_in_team` when adding a User to a team. We use the same `user_id` we set in Step 1
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/team/member_add' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32", "max_budget_in_team": 0.000000000001, "member": {"role": "user", "user_id": "ishaan"}}'
+```
+
+#### Step 3. Create a Key for user from Step 1
+
+Set `user_id=ishaan` from step 1
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "ishaan"
+}'
+```
+Response from `/key/generate`
+
+We use the `key` from this response in Step 4
+```shell
+{"models":[],"spend":0.0,"max_budget":null,"user_id":"ishaan","team_id":null,"max_parallel_requests":null,"metadata":{},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"soft_budget":null,"key_alias":null,"duration":null,"aliases":{},"config":{},"permissions":{},"model_max_budget":{},"key":"sk-RV-l2BJEZ_LYNChSx2EueQ","key_name":null,"expires":null,"token_id":null}% 
+```
+
+#### Step 4. Make /chat/completions requests for user
+
+Use the key from step 3 for this request. After 2-3 requests expect to see The following error `ExceededBudget: Crossed spend within team` 
+
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-RV-l2BJEZ_LYNChSx2EueQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "tes4"
+        }
+    ]
+}'
+```
+
