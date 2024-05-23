@@ -73,6 +73,7 @@ from .llms import (
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
+from .llms.databricks import DatabricksChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
@@ -111,6 +112,7 @@ from litellm.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
+databricks_chat_completions = DatabricksChatCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
 anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -329,6 +331,7 @@ async def acompletion(
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
             or custom_llm_provider == "bedrock"
+            or custom_llm_provider == "databricks"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -1615,6 +1618,61 @@ def completion(
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "databricks":
+            api_base = (
+                api_base  # for databricks we check in get_llm_provider and pass in the api base from there
+                or litellm.api_base
+                or os.getenv("DATABRICKS_API_BASE")
+            )
+
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key  # for databricks we check in get_llm_provider and pass in the api key from there
+                or litellm.databricks_key
+                or get_secret("DATABRICKS_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            ## COMPLETION CALL
+            try:
+                response = databricks_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                    custom_prompt_dict=custom_prompt_dict,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    encoding=encoding,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
+            if optional_params.get("stream", False):
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={"headers": headers},
+                )
         elif custom_llm_provider == "openrouter":
             api_base = api_base or litellm.api_base or "https://openrouter.ai/api/v1"
 

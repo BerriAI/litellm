@@ -568,7 +568,7 @@ class StreamingChoices(OpenAIObject):
         if delta is not None:
             if isinstance(delta, Delta):
                 self.delta = delta
-            if isinstance(delta, dict):
+            elif isinstance(delta, dict):
                 self.delta = Delta(**delta)
         else:
             self.delta = Delta()
@@ -676,7 +676,10 @@ class ModelResponse(OpenAIObject):
             created = created
         model = model
         if usage is not None:
-            usage = usage
+            if isinstance(usage, dict):
+                usage = Usage(**usage)
+            else:
+                usage = usage
         elif stream is None or stream == False:
             usage = Usage()
         elif (
@@ -11012,6 +11015,8 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "clarifai":
                 response_obj = self.handle_clarifai_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -11254,6 +11259,17 @@ class CustomStreamWrapper:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
                 response_obj = self.handle_openai_text_completion_chunk(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) == True
+                ):
+                    model_response.usage = response_obj["usage"]
+            elif self.custom_llm_provider == "databricks":
+                response_obj = litellm.DatabricksConfig()._chunk_parser(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
@@ -11672,6 +11688,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"
                 or self.custom_llm_provider == "predibase"
+                or self.custom_llm_provider == "databricks"
                 or self.custom_llm_provider == "bedrock"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
