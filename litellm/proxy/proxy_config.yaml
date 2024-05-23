@@ -20,16 +20,8 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings
 
 general_settings:
-  store_model_in_db: true
   master_key: sk-1234
   alerting: ["slack"]
 
 litellm_settings:
-  success_callback: ["langfuse"]
-  failure_callback: ["langfuse"]
-  default_team_settings:
-    - team_id: 7bf09cd5-217a-40d4-8634-fc31d9b88bf4
-      success_callback: ["langfuse"]
-      failure_callback: ["langfuse"]
-      langfuse_public_key: "os.environ/LANGFUSE_DEV_PUBLIC_KEY"
-      langfuse_secret_key: "os.environ/LANGFUSE_DEV_SK_KEY"
+  callbacks: custom_callbacks1.proxy_handler_instance
