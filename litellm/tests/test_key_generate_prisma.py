@@ -20,7 +20,7 @@
 # function to validate a request - async def user_auth(request: Request):
 
 import sys, os
-import traceback
+import traceback, uuid
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
@@ -128,9 +128,10 @@ async def test_new_user_response(prisma_client):
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
 
+        _team_id = "ishaan-special-team_{}".format(uuid.uuid4())
         await new_team(
             NewTeamRequest(
-                team_id="ishaan-special-team",
+                team_id=_team_id,
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role="proxy_admin", api_key="sk-1234", user_id="1234"
@@ -140,13 +141,13 @@ async def test_new_user_response(prisma_client):
         _response = await new_user(
             data=NewUserRequest(
                 models=["azure-gpt-3.5"],
-                team_id="ishaans-special-team",
+                team_id=_team_id,
                 tpm_limit=20,
             )
         )
         print(_response)
         assert _response.models == ["azure-gpt-3.5"]
-        assert _response.team_id == "ishaans-special-team"
+        assert _response.team_id == _team_id
         assert _response.tpm_limit == 20
 
     except Exception as e:
@@ -155,10 +156,14 @@ async def test_new_user_response(prisma_client):
 
 
 @pytest.mark.parametrize(
-    "api_route", [
+    "api_route",
+    [
         # chat_completion
         APIRoute(path="/engines/{model}/chat/completions", endpoint=chat_completion),
-        APIRoute(path="/openai/deployments/{model}/chat/completions", endpoint=chat_completion),
+        APIRoute(
+            path="/openai/deployments/{model}/chat/completions",
+            endpoint=chat_completion,
+        ),
         APIRoute(path="/chat/completions", endpoint=chat_completion),
         APIRoute(path="/v1/chat/completions", endpoint=chat_completion),
         # completion
@@ -180,8 +185,8 @@ async def test_new_user_response(prisma_client):
         APIRoute(path="/v1/moderations", endpoint=moderations),
         APIRoute(path="/moderations", endpoint=moderations),
         # model_list
-        APIRoute(path= "/v1/models", endpoint=model_list),
-        APIRoute(path= "/models", endpoint=model_list),
+        APIRoute(path="/v1/models", endpoint=model_list),
+        APIRoute(path="/models", endpoint=model_list),
     ],
     ids=lambda route: str(dict(route=route.endpoint.__name__, path=route.path)),
 )
@@ -220,12 +225,14 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             )
             print("token from prisma", value_from_prisma)
 
-            request = Request({
-                "type": "http",
-                "route": api_route,
-                "path": api_route.path,
-                "headers": [("Authorization", bearer_token)]
-            })
+            request = Request(
+                {
+                    "type": "http",
+                    "route": api_route,
+                    "path": api_route.path,
+                    "headers": [("Authorization", bearer_token)],
+                }
+            )
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
@@ -1049,6 +1056,7 @@ def test_generate_and_update_key(prisma_client):
     # 11. Generate a Key, cal key/info, call key/update, call key/info
     # Check if data gets updated
     # Check if untouched data does not get updated
+    import uuid
 
     print("prisma client=", prisma_client)
 
@@ -1061,18 +1069,20 @@ def test_generate_and_update_key(prisma_client):
 
             # create team "litellm-core-infra@gmail.com""
             print("creating team litellm-core-infra@gmail.com")
+            _team_1 = "litellm-core-infra@gmail.com_{}".format(uuid.uuid4())
             await new_team(
                 NewTeamRequest(
-                    team_id="litellm-core-infra@gmail.com",
+                    team_id=_team_1,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role="proxy_admin", api_key="sk-1234", user_id="1234"
                 ),
             )
 
+            _team_2 = "ishaan-special-team_{}".format(uuid.uuid4())
             await new_team(
                 NewTeamRequest(
-                    team_id="ishaan-special-team",
+                    team_id=_team_2,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role="proxy_admin", api_key="sk-1234", user_id="1234"
@@ -1081,7 +1091,7 @@ def test_generate_and_update_key(prisma_client):
 
             request = NewUserRequest(
                 metadata={"project": "litellm-project3"},
-                team_id="litellm-core-infra@gmail.com",
+                team_id=_team_1,
             )
 
             key = await new_user(request)
@@ -1098,7 +1108,7 @@ def test_generate_and_update_key(prisma_client):
             assert result["info"]["metadata"] == {
                 "project": "litellm-project3",
             }
-            assert result["info"]["team_id"] == "litellm-core-infra@gmail.com"
+            assert result["info"]["team_id"] == _team_1
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/update/key")
@@ -1117,7 +1127,7 @@ def test_generate_and_update_key(prisma_client):
             # update the team id
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id="ishaan-special-team"),
+                data=UpdateKeyRequest(key=generated_key, team_id=_team_2),
             )
             print("response2=", response2)
 
@@ -1131,7 +1141,7 @@ def test_generate_and_update_key(prisma_client):
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == "ishaan-special-team"
+            assert result["info"]["team_id"] == _team_2
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -2009,6 +2019,7 @@ async def test_proxy_load_test_db(prisma_client):
 @pytest.mark.asyncio()
 async def test_master_key_hashing(prisma_client):
     try:
+        import uuid
 
         print("prisma client=", prisma_client)
 
@@ -2020,10 +2031,9 @@ async def test_master_key_hashing(prisma_client):
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
 
+        _team_id = "ishaans-special-team_{}".format(uuid.uuid4())
         await new_team(
-            NewTeamRequest(
-                team_id="ishaans-special-team",
-            ),
+            NewTeamRequest(team_id=_team_id),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role="proxy_admin", api_key="sk-1234", user_id="1234"
             ),
@@ -2032,13 +2042,13 @@ async def test_master_key_hashing(prisma_client):
         _response = await new_user(
             data=NewUserRequest(
                 models=["azure-gpt-3.5"],
-                team_id="ishaans-special-team",
+                team_id=_team_id,
                 tpm_limit=20,
             )
         )
         print(_response)
         assert _response.models == ["azure-gpt-3.5"]
-        assert _response.team_id == "ishaans-special-team"
+        assert _response.team_id == _team_id
         assert _response.tpm_limit == 20
 
         bearer_token = "Bearer " + master_key
