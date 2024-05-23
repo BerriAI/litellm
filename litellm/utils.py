@@ -4659,6 +4659,11 @@ def completion_cost(
             or call_type == CallTypes.aimage_generation.value
         ):
             ### IMAGE GENERATION COST CALCULATION ###
+            if custom_llm_provider == "vertex_ai":
+                # https://cloud.google.com/vertex-ai/generative-ai/pricing
+                # Vertex Charges Flat $0.20 per image
+                return 0.020
+
             # fix size to match naming convention
             if "x" in size and "-x-" not in size:
                 size = size.replace("x", "-x-")
