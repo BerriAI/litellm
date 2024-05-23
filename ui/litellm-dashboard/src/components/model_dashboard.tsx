@@ -43,6 +43,7 @@ import {
   healthCheckCall,
   modelUpdateCall,
   modelMetricsCall,
+  streamingModelMetricsCall,
   modelExceptionsCall,
   modelMetricsSlowResponsesCall,
   getCallbacksCall,
@@ -259,6 +260,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>(
     []
   );
+  const [streamingModelMetrics, setStreamingModelMetrics] = useState<any[]>([]);
+  const [streamingModelMetricsCategories, setStreamingModelMetricsCategories] =
+    useState<any[]>([]);
   const [modelExceptions, setModelExceptions] = useState<any[]>([]);
   const [allExceptions, setAllExceptions] = useState<any[]>([]);
   const [failureTableData, setFailureTableData] = useState<any[]>([]);
@@ -558,6 +562,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         setModelMetrics(modelMetricsResponse.data);
         setModelMetricsCategories(modelMetricsResponse.all_api_bases);
 
+        const streamingModelMetricsResponse = await streamingModelMetricsCall(
+          accessToken,
+          _initial_model_group,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        );
+
+        // Assuming modelMetricsResponse now contains the metric data for the specified model group
+        setStreamingModelMetrics(streamingModelMetricsResponse.data);
+        setStreamingModelMetricsCategories(
+          streamingModelMetricsResponse.all_api_bases
+        );
+
         const modelExceptionsResponse = await modelExceptionsCall(
           accessToken,
           userID,
@@ -803,6 +820,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
       setModelMetrics(modelMetricsResponse.data);
       setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const streamingModelMetricsResponse = await streamingModelMetricsCall(
+        accessToken,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      );
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setStreamingModelMetrics(streamingModelMetricsResponse.data);
+      setStreamingModelMetricsCategories(
+        streamingModelMetricsResponse.all_api_bases
+      );
 
       const modelExceptionsResponse = await modelExceptionsCall(
         accessToken,
@@ -1573,7 +1603,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         )}
                       </TabPanel>
                       <TabPanel>
-                        <TimeToFirstToken />
+                        <TimeToFirstToken
+                          modelMetrics={streamingModelMetrics}
+                          modelMetricsCategories={
+                            streamingModelMetricsCategories
+                          }
+                          customTooltip={customTooltip}
+                        />
                       </TabPanel>
                     </TabPanels>
                   </TabGroup>
