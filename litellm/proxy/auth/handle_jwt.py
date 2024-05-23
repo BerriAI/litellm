@@ -167,10 +167,17 @@ class JWTHandler:
             for key in keys:
                 if kid is not None and key == kid:
                     public_key = keys[key]
+                elif (
+                    kid is not None
+                    and isinstance(key, dict)
+                    and key.get("kid", None) is not None
+                    and key["kid"] == kid
+                ):
+                    public_key = key
 
         if public_key is None:
             raise Exception(
-                f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}"
+                f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}, len(keys)={len(keys)}"
             )
 
         return public_key

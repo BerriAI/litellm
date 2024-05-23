@@ -12,7 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm.proxy._types import LiteLLM_JWTAuth
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.caching import DualCache
 from datetime import datetime, timedelta
@@ -602,3 +602,128 @@ async def test_user_token_output(
         assert team_result.team_rpm_limit == 99
         assert team_result.team_models == ["gpt-3.5-turbo", "gpt-4"]
     assert team_result.user_id == user_id
+
+
+@pytest.mark.parametrize("audience", [None, "litellm-proxy"])
+@pytest.mark.asyncio
+async def test_allowed_routes_admin(prisma_client, audience):
+    """
+    Add a check to make sure jwt proxy admin scope can access all allowed admin routes
+
+    - iterate through allowed endpoints
+    - check if admin passes user_api_key_auth for them
+    """
+    import jwt, json
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.backends import default_backend
+    from fastapi import Request
+    from starlette.datastructures import URL
+    from litellm.proxy.proxy_server import user_api_key_auth, new_team
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
+    import litellm
+    import uuid
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    os.environ.pop("JWT_AUDIENCE", None)
+    if audience:
+        os.environ["JWT_AUDIENCE"] = audience
+
+    # Generate a private / public key pair using RSA algorithm
+    key = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048, backend=default_backend()
+    )
+    # Get private key in PEM format
+    private_key = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    # Get public key in PEM format
+    public_key = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+    public_key_obj = serialization.load_pem_public_key(
+        public_key, backend=default_backend()
+    )
+
+    # Convert RSA public key object to JWK (JSON Web Key)
+    public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
+
+    assert isinstance(public_jwk, dict)
+
+    # set cache
+    cache = DualCache()
+
+    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=[public_jwk])
+
+    jwt_handler = JWTHandler()
+
+    jwt_handler.user_api_key_cache = cache
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="client_id")
+
+    # VALID TOKEN
+    ## GENERATE A TOKEN
+    # Assuming the current time is in UTC
+    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+
+    # Generate the JWT token
+    # But before, you should convert bytes to string
+    private_key_str = private_key.decode("utf-8")
+
+    ## admin token
+    payload = {
+        "sub": "user123",
+        "exp": expiration_time,  # set the token to expire in 10 minutes
+        "scope": "litellm_proxy_admin",
+        "aud": audience,
+    }
+
+    admin_token = jwt.encode(payload, private_key_str, algorithm="RS256")
+
+    # verify token
+
+    response = await jwt_handler.auth_jwt(token=admin_token)
+
+    ## RUN IT THROUGH USER API KEY AUTH
+
+    """
+    - 1. Initial call should fail -> team doesn't exist
+    - 2. Create team via admin token 
+    - 3. 2nd call w/ same team -> call should succeed -> assert UserAPIKeyAuth object correctly formatted
+    """
+
+    bearer_token = "Bearer " + admin_token
+
+    pseudo_routes = jwt_handler.litellm_jwtauth.admin_allowed_routes
+
+    actual_routes = []
+    for route in pseudo_routes:
+        if route in LiteLLMRoutes.__members__:
+            actual_routes.extend(LiteLLMRoutes[route].value)
+
+    for route in actual_routes:
+        request = Request(scope={"type": "http"})
+
+        request._url = URL(url=route)
+
+        ## 1. INITIAL TEAM CALL - should fail
+        # use generated key to auth in
+        setattr(
+            litellm.proxy.proxy_server,
+            "general_settings",
+            {
+                "enable_jwt_auth": True,
+            },
+        )
+        setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
+        try:
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+        except Exception as e:
+            raise e
