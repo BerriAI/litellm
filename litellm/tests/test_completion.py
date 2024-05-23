@@ -864,7 +864,7 @@ def test_completion_claude2_1():
         ]
         # test without max tokens
         response = completion(model="claude-2.1", messages=messages)
-        # Add any assertions here to check the response
+        # Add any-assertions here to check the response
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
