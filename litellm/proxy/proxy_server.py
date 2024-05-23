@@ -7454,7 +7454,7 @@ async def new_team(
 
     Example Request:
     ```
-    curl --location 'http://0.0.0.0:8000/team/new' \
+    curl --location 'http://0.0.0.0:4000/team/new' \
 
     --header 'Authorization: Bearer sk-1234' \
 
@@ -7475,6 +7475,18 @@ async def new_team(
 
     if data.team_id is None:
         data.team_id = str(uuid.uuid4())
+    else:
+        # Check if team_id exists already
+        _existing_team_id = await prisma_client.get_data(
+            team_id=data.team_id, table_name="team", query_type="find_unique"
+        )
+        if _existing_team_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Team id = {data.team_id} already exists. Please use a different team id."
+                },
+            )
 
     if (
         user_api_key_dict.user_role is None
