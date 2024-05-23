@@ -1884,6 +1884,16 @@ async def update_cache(
             # Calculate the new cost by adding the existing cost and response_cost
             existing_spend_obj.team_spend = existing_team_spend + response_cost
 
+        if (
+            existing_spend_obj is not None
+            and getattr(existing_spend_obj, "team_member_spend", None) is not None
+        ):
+            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
+            # Calculate the new cost by adding the existing cost and response_cost
+            existing_spend_obj.team_member_spend = (
+                existing_team_member_spend + response_cost
+            )
+
         # Update the cost column for the given token
         existing_spend_obj.spend = new_spend
         user_api_key_cache.set_cache(key=hashed_token, value=existing_spend_obj)
