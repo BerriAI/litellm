@@ -1,17 +1,19 @@
 import React from "react";
-import { LineChart } from "@tremor/react";
+import { LineChart, Callout, Button } from "@tremor/react";
 interface TimeToFirstTokenProps {
   modelMetrics: any[];
   modelMetricsCategories: string[];
   customTooltip: any;
+  premiumUser: boolean;
 }
 
 const TimeToFirstToken: React.FC<TimeToFirstTokenProps> = ({
   modelMetrics,
   modelMetricsCategories,
   customTooltip,
+  premiumUser,
 }) => {
-  return (
+  return premiumUser ? (
     <LineChart
       title="Time to First token (s)"
       className="h-72"
@@ -23,6 +25,18 @@ const TimeToFirstToken: React.FC<TimeToFirstTokenProps> = ({
       connectNulls={true}
       customTooltip={customTooltip}
     />
+  ) : (
+    <div>
+      <Callout title="Premium Feature" color="teal" className="mt-2 mb-4">
+        Premium features are available for users with a specific license, please
+        contact LiteLLM to unlock this limitation.
+      </Callout>
+      <Button variant="primary">
+        <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+          Get in touch
+        </a>
+      </Button>
+    </div>
   );
 };
 
