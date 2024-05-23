@@ -2315,6 +2315,18 @@ class ProxyConfig:
                                 imported_list.append(llama_guard_object)
                             elif (
                                 isinstance(callback, str)
+                                and callback == "openai_moderations"
+                            ):
+                                from enterprise.enterprise_hooks.openai_moderation import (
+                                    _ENTERPRISE_OpenAI_Moderation,
+                                )
+
+                                openai_moderations_object = (
+                                    _ENTERPRISE_OpenAI_Moderation()
+                                )
+                                imported_list.append(openai_moderations_object)
+                            elif (
+                                isinstance(callback, str)
                                 and callback == "google_text_moderation"
                             ):
                                 from enterprise.enterprise_hooks.google_text_moderation import (
