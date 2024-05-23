@@ -8607,6 +8607,102 @@ async def model_info_v2(
 
 
 @router.get(
+    "/model/streaming_metrics",
+    description="View time to first token for models in spend logs",
+    tags=["model management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_streaming_metrics(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _selected_model_group: Optional[str] = None,
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
+):
+    global prisma_client, llm_router
+    if prisma_client is None:
+        raise ProxyException(
+            message=CommonProxyErrors.db_not_connected_error.value,
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    startTime = startTime or datetime.now() - timedelta(days=7)  # show over past week
+    endTime = endTime or datetime.now()
+
+    sql_query = """
+        SELECT
+            api_base,
+            model_group,
+            model,
+            DATE_TRUNC('day', "startTime")::DATE AS day,
+            AVG(EXTRACT(epoch FROM ("completionStartTime" - "startTime")))  AS time_to_first_token
+        FROM
+            "LiteLLM_SpendLogs"
+        WHERE
+            "startTime" BETWEEN $2::timestamp AND $3::timestamp
+            AND "model_group" = $1 AND "cache_hit" != 'True'
+            AND "completionStartTime" IS NOT NULL
+            AND "completionStartTime" != "endTime"
+        GROUP BY
+            api_base,
+            model_group,
+            model,
+            day
+        ORDER BY
+            time_to_first_token DESC;
+    """
+
+    _all_api_bases = set()
+    db_response = await prisma_client.db.query_raw(
+        sql_query, _selected_model_group, startTime, endTime
+    )
+    _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
+    if db_response is not None:
+        for model_data in db_response:
+            _api_base = model_data["api_base"]
+            _model = model_data["model"]
+            _day = model_data["day"]
+            time_to_first_token = model_data["time_to_first_token"]
+            if _day not in _daily_entries:
+                _daily_entries[_day] = {}
+            _combined_model_name = str(_model)
+            if "https://" in _api_base:
+                _combined_model_name = str(_api_base)
+            if "/openai/" in _combined_model_name:
+                _combined_model_name = _combined_model_name.split("/openai/")[0]
+
+            _all_api_bases.add(_combined_model_name)
+            _daily_entries[_day][_combined_model_name] = time_to_first_token
+
+        """
+        each entry needs to be like this:
+        {
+            date: 'Jun 23',
+            'gpt-4-https://api.openai.com/v1/': 0.002,
+            'gpt-43-https://api.openai.com-12/v1/': 0.002,
+        }
+        """
+        # convert daily entries to list of dicts
+
+        response: List[dict] = []
+
+        # sort daily entries by date
+        _daily_entries = dict(sorted(_daily_entries.items(), key=lambda item: item[0]))
+        for day in _daily_entries:
+            entry = {"date": str(day)}
+            for model_key, latency in _daily_entries[day].items():
+                entry[model_key] = latency
+            response.append(entry)
+
+        return {
+            "data": response,
+            "all_api_bases": list(_all_api_bases),
+        }
+
+
+@router.get(
     "/model/metrics",
     description="View number of requests & avg latency per model on config.yaml",
     tags=["model management"],
@@ -8633,6 +8729,7 @@ async def model_metrics(
     sql_query = """
         SELECT
             api_base,
+            model_group,
             model,
             DATE_TRUNC('day', "startTime")::DATE AS day,
             AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) / SUM(total_tokens) AS avg_latency_per_token
@@ -8640,9 +8737,10 @@ async def model_metrics(
             "LiteLLM_SpendLogs"
         WHERE
             "startTime" BETWEEN $2::timestamp AND $3::timestamp
-            AND "model" = $1 AND "cache_hit" != 'True'
+            AND "model_group" = $1 AND "cache_hit" != 'True'
         GROUP BY
             api_base,
+            model_group,
             model,
             day
         HAVING
@@ -8655,6 +8753,7 @@ async def model_metrics(
         sql_query, _selected_model_group, startTime, endTime
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
+
     if db_response is not None:
         for model_data in db_response:
             _api_base = model_data["api_base"]
@@ -8738,7 +8837,7 @@ SELECT
 FROM
     "LiteLLM_SpendLogs"
 WHERE
-    "model" = $2
+    "model_group" = $2
     AND "cache_hit" != 'True'
     AND "startTime" >= $3::timestamp
     AND "startTime" <= $4::timestamp
