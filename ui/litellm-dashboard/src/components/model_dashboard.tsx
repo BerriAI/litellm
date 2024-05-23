@@ -91,6 +91,7 @@ interface ModelDashboardProps {
   userID: string | null;
   modelData: any;
   setModelData: any;
+  premiumUser: boolean;
 }
 
 interface EditModelModalProps {
@@ -233,6 +234,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   userID,
   modelData = { data: [] },
   setModelData,
+  premiumUser,
 }) => {
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
@@ -1609,6 +1611,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             streamingModelMetricsCategories
                           }
                           customTooltip={customTooltip}
+                          premiumUser={premiumUser}
                         />
                       </TabPanel>
                     </TabPanels>

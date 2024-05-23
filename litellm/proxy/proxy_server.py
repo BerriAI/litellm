@@ -174,7 +174,6 @@ except Exception as e:
 
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-
 ui_link = f"/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
@@ -9587,6 +9586,7 @@ async def fallback_login(request: Request):
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):
+    global premium_user
     try:
         import multipart
     except ImportError:
@@ -9662,6 +9662,7 @@ async def login(request: Request):
                 "user_email": user_id,
                 "user_role": "app_admin",  # this is the path without sso - we can assume only admins will use this
                 "login_method": "username_password",
+                "premium_user": premium_user,
             },
             "secret",
             algorithm="HS256",
@@ -9712,7 +9713,7 @@ def get_image():
 @app.get("/sso/callback", tags=["experimental"])
 async def auth_callback(request: Request):
     """Verify login"""
-    global general_settings, ui_access_mode
+    global general_settings, ui_access_mode, premium_user
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
@@ -9992,6 +9993,7 @@ async def auth_callback(request: Request):
             "user_email": user_email,
             "user_role": user_role,
             "login_method": "sso",
+            "premium_user": premium_user,
         },
         "secret",
         algorithm="HS256",
