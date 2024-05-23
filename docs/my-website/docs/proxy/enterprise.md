@@ -14,16 +14,12 @@ Features here are behind a commercial license in our `/enterprise` folder. [**Se
 
 Features: 
 - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
-- ✅ Content Moderation with LLM Guard
-- ✅ Content Moderation with LlamaGuard 
-- ✅ Content Moderation with Google Text Moderations 
+- ✅ Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations
 - ✅ Reject calls from Blocked User list 
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 - ✅ Don't log/store specific requests to Langfuse, Sentry, etc. (eg confidential LLM requests)
 - ✅ Tracking Spend for Custom Tags
 - ✅ Custom Branding + Routes on Swagger Docs
-
-
 
 
 ## Content Moderation
@@ -251,31 +247,17 @@ Here are the category specific values:
 | "legal" | legal_threshold: 0.1 |
 
 
-## Incognito Requests - Don't log anything
 
-When `no-log=True`, the request will **not be logged on any callbacks** and there will be **no server logs on litellm**
+### Content Moderation with OpenAI Moderations
 
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",            # proxy api-key
-    base_url="http://0.0.0.0:4000" # litellm proxy 
-)
+Use this if you want to reject /chat, /completions, /embeddings calls that fail OpenAI Moderations checks
 
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "no-log": True
-    }
-)
 
-print(response)
+How to enable this in your config.yaml: 
+
+```yaml 
+litellm_settings:
+   callbacks: ["openai_moderations"]
 ```
 
 
