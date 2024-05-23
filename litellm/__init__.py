@@ -97,6 +97,7 @@ ssl_verify: bool = True
 disable_streaming_logging: bool = False
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
+openai_moderations_model_name: Optional[str] = None
 presidio_ad_hoc_recognizers: Optional[str] = None
 google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
