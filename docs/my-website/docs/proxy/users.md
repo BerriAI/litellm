@@ -377,6 +377,12 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 </TabItem>
 <TabItem value="per-end-user" label="For End User">
 
+:::info 
+
+You can also create a budget id for a customer on the UI, under the 'Rate Limits' tab.
+
+:::
+
 Use this to set rate limits for `user` passed to `/chat/completions`, without needing to create a key for every user
 
 #### Step 1. Create Budget
