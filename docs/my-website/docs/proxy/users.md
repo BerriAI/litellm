@@ -375,6 +375,62 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 ```
 
 </TabItem>
+<TabItem value="per-end-user" label="For End User">
+
+Use this to set rate limits for `user` passed to `/chat/completions`, without needing to create a key for every user
+
+#### Step 1. Create Budget
+
+Set a `tpm_limit` on the budget (You can also pass `rpm_limit` if needed)
+
+```shell
+curl --location 'http://0.0.0.0:4000/budget/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+    "budget_id" : "free-tier",
+    "tpm_limit": 5
+}'
+```
+
+
+#### Step 2. Create `End-User` with Budget
+
+We use `budget_id="free-tier"` from Step 1 when creating this new end user
+
+```shell
+curl --location 'http://0.0.0.0:4000/end_user/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+    "user_id" : "palantir",
+    "budget_id": "free-tier"
+}'
+```
+
+
+#### Step 3. Pass end user id in `/chat/completions` requests
+
+Pass the `user_id` from Step 2 as `user="palantir"` 
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "user": "palantir",
+    "messages": [
+        {
+        "role": "user",
+        "content": "gm"
+        }
+    ]
+}'
+```
+
+
+</TabItem>
 </Tabs>
 
 ## Grant Access to new model 

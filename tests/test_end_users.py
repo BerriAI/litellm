@@ -99,7 +99,12 @@ async def generate_key(
 
 
 async def new_end_user(
-    session, i, user_id=str(uuid.uuid4()), model_region=None, default_model=None
+    session,
+    i,
+    user_id=str(uuid.uuid4()),
+    model_region=None,
+    default_model=None,
+    budget_id=None,
 ):
     url = "http://0.0.0.0:4000/end_user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -108,6 +113,10 @@ async def new_end_user(
         "allowed_model_region": model_region,
         "default_model": default_model,
     }
+
+    if budget_id is not None:
+        data["budget_id"] = budget_id
+    print("end user data: {}".format(data))
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -121,6 +130,23 @@ async def new_end_user(
             raise Exception(f"Request {i} did not return a 200 status code: {status}")
 
         return await response.json()
+
+
+async def new_budget(session, i, budget_id=None):
+    url = "http://0.0.0.0:4000/budget/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "budget_id": budget_id,
+        "tpm_limit": 2,
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"Response {i} (Status code: {status}):")
+        print(response_text)
+        print()
 
 
 @pytest.mark.asyncio
@@ -170,3 +196,93 @@ async def test_end_user_specific_region():
         )
 
         assert result.headers.get("x-litellm-model-region") == "eu"
+
+
+@pytest.mark.asyncio
+async def test_enduser_tpm_limits_non_master_key():
+    """
+    1. budget_id = Create Budget with tpm_limit = 10
+    2. create end_user with budget_id
+    3. Make /chat/completions calls
+    4. Sleep 1 second
+    4. Make  /chat/completions call -> expect this to fail because rate limit hit
+    """
+    async with aiohttp.ClientSession() as session:
+        # create a budget with budget_id = "free-tier"
+        budget_id = f"free-tier-{uuid.uuid4()}"
+        await new_budget(session, 0, budget_id=budget_id)
+        await asyncio.sleep(2)
+
+        end_user_id = str(uuid.uuid4())
+
+        await new_end_user(
+            session=session, i=0, user_id=end_user_id, budget_id=budget_id
+        )
+
+        ## MAKE CALL ##
+        key_gen = await generate_key(session=session, i=0, models=[])
+
+        key = key_gen["key"]
+
+    # chat completion 1
+    client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
+
+    # chat completion 2
+    passed = 0
+    for _ in range(10):
+        try:
+            result = await client.chat.completions.create(
+                model="fake-openai-endpoint",
+                messages=[{"role": "user", "content": "Hey!"}],
+                user=end_user_id,
+            )
+            passed += 1
+        except:
+            pass
+    print("Passed requests=", passed)
+
+    assert (
+        passed < 5
+    ), f"Sent 10 requests and end-user has tpm_limit of 2. Number requests passed: {passed}. Expected less than 5 to pass"
+
+
+@pytest.mark.asyncio
+async def test_enduser_tpm_limits_with_master_key():
+    """
+    1. budget_id = Create Budget with tpm_limit = 10
+    2. create end_user with budget_id
+    3. Make /chat/completions calls
+    4. Sleep 1 second
+    4. Make  /chat/completions call -> expect this to fail because rate limit hit
+    """
+    async with aiohttp.ClientSession() as session:
+        # create a budget with budget_id = "free-tier"
+        budget_id = f"free-tier-{uuid.uuid4()}"
+        await new_budget(session, 0, budget_id=budget_id)
+
+        end_user_id = str(uuid.uuid4())
+
+        await new_end_user(
+            session=session, i=0, user_id=end_user_id, budget_id=budget_id
+        )
+
+    # chat completion 1
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    # chat completion 2
+    passed = 0
+    for _ in range(10):
+        try:
+            result = await client.chat.completions.create(
+                model="fake-openai-endpoint",
+                messages=[{"role": "user", "content": "Hey!"}],
+                user=end_user_id,
+            )
+            passed += 1
+        except:
+            pass
+    print("Passed requests=", passed)
+
+    assert (
+        passed < 5
+    ), f"Sent 10 requests and end-user has tpm_limit of 2. Number requests passed: {passed}. Expected less than 5 to pass"

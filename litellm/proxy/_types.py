@@ -938,6 +938,11 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
 
+    # End User Params
+    end_user_id: Optional[str] = None
+    end_user_tpm_limit: Optional[int] = None
+    end_user_rpm_limit: Optional[int] = None
+
 
 class UserAPIKeyAuth(
     LiteLLM_VerificationTokenView
