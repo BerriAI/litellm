@@ -1702,6 +1702,19 @@ async def update_database(
                         response_cost
                         + prisma_client.team_list_transactons.get(team_id, 0)
                     )
+
+                    try:
+                        # Track spend of the team member within this team
+                        # key is "team_id::<value>::user_id::<value>"
+                        team_member_key = f"team_id::{team_id}::user_id::{user_id}"
+                        prisma_client.team_member_list_transactons[team_member_key] = (
+                            response_cost
+                            + prisma_client.team_member_list_transactons.get(
+                                team_member_key, 0
+                            )
+                        )
+                    except:
+                        pass
             except Exception as e:
                 verbose_proxy_logger.info(
                     f"Update Team DB failed to execute - {str(e)}\n{traceback.format_exc()}"
