@@ -563,6 +563,7 @@ class GlobalEndUsersSpend(LiteLLMBase):
 class TeamMemberAddRequest(LiteLLMBase):
     team_id: str
     member: Member
+    max_budget_in_team: Optional[float] = None  # Users max budget within the team
 
 
 class TeamMemberDeleteRequest(LiteLLMBase):
