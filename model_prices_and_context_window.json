@@ -3396,10 +3396,28 @@
         "mode": "chat",
         "supports_function_calling": true
       },
+      "anyscale/mistralai/Mixtral-8x22B-Instruct-v0.1": {
+        "max_tokens": 65536,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.00000090, 
+        "output_cost_per_token": 0.00000090,
+        "litellm_provider": "anyscale", 
+        "mode": "chat",
+      },
       "anyscale/HuggingFaceH4/zephyr-7b-beta": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
         "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000015, 
+        "output_cost_per_token": 0.00000015,
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/google/gemma-7b-it": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 0.00000015, 
         "output_cost_per_token": 0.00000015,
         "litellm_provider": "anyscale", 
@@ -3438,6 +3456,33 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000001, 
         "output_cost_per_token": 0.000001, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/codellama/CodeLlama-70b-Instruct-hf": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/meta-llama/Meta-Llama-3-8B-Instruct": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000015, 
+        "output_cost_per_token": 0.00000015, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/meta-llama/Meta-Llama-3-70B-Instruct": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000100, 
+        "output_cost_per_token": 0.00000100, 
         "litellm_provider": "anyscale", 
         "mode": "chat"
       },
