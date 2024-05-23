@@ -1272,6 +1272,12 @@
         "supports_function_calling": true,
         "supports_vision": true
     },
+    "vertex_ai/imagegeneration@006": {
+        "cost_per_image": 0.020,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "textembedding-gecko": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
