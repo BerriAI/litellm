@@ -107,7 +107,10 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
             """
             _json_response = response.json()
             _results = _json_response.get("results", [])
-            flagged = _results.get("flagged", False)
+            if len(_results) <= 0:
+                return
+
+            flagged = _results[0].get("flagged", False)
 
             if flagged == True:
                 raise HTTPException(
