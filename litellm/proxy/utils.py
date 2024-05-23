@@ -551,6 +551,7 @@ class PrismaClient:
     end_user_list_transactons: dict = {}
     key_list_transactons: dict = {}
     team_list_transactons: dict = {}
+    team_member_list_transactons: dict = {}  # key is ["team_id" + "user_id"]
     org_list_transactons: dict = {}
     spend_log_transactions: List = []
 
@@ -1096,9 +1097,11 @@ class PrismaClient:
                     t.models AS team_models,
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
+                    tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
                     LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
+                    LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                     LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                     WHERE v.token = '{token}'
                     """
@@ -2234,6 +2237,56 @@ async def update_spend(
                                 data={"spend": {"increment": response_cost}},
                             )
                 prisma_client.team_list_transactons = (
+                    {}
+                )  # Clear the remaining transactions after processing all batches in the loop.
+                break
+            except httpx.ReadTimeout:
+                if i >= n_retry_times:  # If we've reached the maximum number of retries
+                    raise  # Re-raise the last exception
+                # Optionally, sleep for a bit before retrying
+                await asyncio.sleep(2**i)  # Exponential backoff
+            except Exception as e:
+                import traceback
+
+                error_msg = (
+                    f"LiteLLM Prisma Client Exception - update team spend: {str(e)}"
+                )
+                print_verbose(error_msg)
+                error_traceback = error_msg + "\n" + traceback.format_exc()
+                end_time = time.time()
+                _duration = end_time - start_time
+                asyncio.create_task(
+                    proxy_logging_obj.failure_handler(
+                        original_exception=e,
+                        duration=_duration,
+                        call_type="update_spend",
+                        traceback_str=error_traceback,
+                    )
+                )
+                raise e
+
+    ### UPDATE TEAM Membership TABLE with spend ###
+    if len(prisma_client.team_member_list_transactons.keys()) > 0:
+        for i in range(n_retry_times + 1):
+            start_time = time.time()
+            try:
+                async with prisma_client.db.tx(
+                    timeout=timedelta(seconds=60)
+                ) as transaction:
+                    async with transaction.batch_() as batcher:
+                        for (
+                            key,
+                            response_cost,
+                        ) in prisma_client.team_member_list_transactons.items():
+                            # key is "team_id::<value>::user_id::<value>"
+                            team_id = key.split("::")[1]
+                            user_id = key.split("::")[3]
+
+                            batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                where={"team_id": team_id, "user_id": user_id},
+                                data={"spend": {"increment": response_cost}},
+                            )
+                prisma_client.team_member_list_transactons = (
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
                 break
