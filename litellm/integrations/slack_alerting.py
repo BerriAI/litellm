@@ -6,7 +6,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm, threading
 from typing import List, Literal, Any, Union, Optional, Dict
 from litellm.caching import DualCache
-import asyncio
+import asyncio, time
 import aiohttp
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import datetime
@@ -375,6 +375,9 @@ class SlackAlerting(CustomLogger):
             keys=combined_metrics_keys
         )  # [1, 2, None, ..]
 
+        if combined_metrics_values is None:
+            return False
+
         all_none = True
         for val in combined_metrics_values:
             if val is not None and val > 0:
@@ -426,7 +429,7 @@ class SlackAlerting(CustomLogger):
         ]
 
         # format alert -> return the litellm model name + api base
-        message = f"\n\nHere are today's key metrics 📈: \n\n"
+        message = f"\n\nTime: `{time.time()}`s\nHere are today's key metrics 📈: \n\n"
 
         message += "\n\n*❗️ Top Deployments with Most Failed Requests:*\n\n"
         if not top_5_failed:
@@ -476,6 +479,8 @@ class SlackAlerting(CustomLogger):
         await self.internal_usage_cache.async_batch_set_cache(
             cache_list=combined_metrics_cache_keys
         )
+
+        message += f"\n\nNext Run is in: `{time.time() + self.alerting_args.daily_report_frequency}`s"
 
         # send alert
         await self.send_alert(message=message, level="Low", alert_type="daily_reports")
@@ -928,40 +933,26 @@ Model Info:
 
         report_sent = await self.internal_usage_cache.async_get_cache(
             key=SlackAlertingCacheKeys.report_sent_key.value
-        )  # None | datetime
+        )  # None | float
 
-        current_time = litellm.utils.get_utc_datetime()
+        current_time = time.time()
 
         if report_sent is None:
-            _current_time = current_time.isoformat()
             await self.internal_usage_cache.async_set_cache(
                 key=SlackAlertingCacheKeys.report_sent_key.value,
-                value=_current_time,
+                value=current_time,
             )
-        else:
+        elif isinstance(report_sent, float):
             # Check if current time - interval >= time last sent
-            delta_naive = timedelta(seconds=self.alerting_args.daily_report_frequency)
-            if isinstance(report_sent, str):
-                report_sent = dt.fromisoformat(report_sent)
+            interval_seconds = self.alerting_args.daily_report_frequency
 
-            # Ensure report_sent is an aware datetime object
-            if report_sent.tzinfo is None:
-                report_sent = report_sent.replace(tzinfo=timezone.utc)
-
-            # Calculate delta as an aware datetime object with the same timezone as report_sent
-            delta = report_sent - delta_naive
-
-            current_time_utc = current_time.astimezone(timezone.utc)
-            delta_utc = delta.astimezone(timezone.utc)
-
-            if current_time_utc >= delta_utc:
+            if current_time - report_sent >= interval_seconds:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
-                _current_time = current_time.isoformat()
                 await self.internal_usage_cache.async_set_cache(
                     key=SlackAlertingCacheKeys.report_sent_key.value,
-                    value=_current_time,
+                    value=current_time,
                 )
                 report_sent_bool = True
 
