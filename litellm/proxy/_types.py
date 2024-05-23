@@ -648,6 +648,20 @@ class LiteLLM_BudgetTable(LiteLLMBase):
         protected_namespaces = ()
 
 
+class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
+    """
+    Used to track spend of a user_id within a team_id
+    """
+
+    spend: Optional[float] = None
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    budget_id: Optional[str] = None
+
+    class Config:
+        protected_namespaces = ()
+
+
 class NewOrganizationRequest(LiteLLM_BudgetTable):
     organization_id: Optional[str] = None
     organization_alias: str
@@ -938,6 +952,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
+    team_member_spend: Optional[float] = None
 
     # End User Params
     end_user_id: Optional[str] = None
