@@ -112,6 +112,11 @@ const Settings: React.FC<SettingsPageProps> = ({
     "daily_reports": "Weekly/Monthly Spend Reports",
   }
 
+  const moderation_hooks: Record<string, string> = {
+    "openai_moderations": "OpenAI Moderation Check",
+    "google_text_moderation": "Google Text Moderation Check",
+  }
+
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
       return;
@@ -342,13 +347,11 @@ const Settings: React.FC<SettingsPageProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-      <Callout title="[UI] Presidio PII + Guardrails Coming Soon. https://docs.litellm.ai/docs/proxy/pii_masking" color="sky">
-
-</Callout>
         <TabGroup>
         <TabList variant="line" defaultValue="1">
           <Tab value="1">Logging Callbacks</Tab>
           <Tab value="2">Alerting</Tab>
+          <Tab value="2">Content Moderation</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -446,6 +449,54 @@ const Settings: React.FC<SettingsPageProps> = ({
 
         </Card>
             
+          </TabPanel>
+          <TabPanel>
+            <Card>
+            <Callout title="[UI] Presidio PII + Guardrails Coming Soon. https://docs.litellm.ai/docs/proxy/pii_masking" color="sky">
+              </Callout>
+
+              <Table>
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell>Moderation Options</TableHeaderCell>
+          </TableRow>
+        </TableHead>
+          
+        <TableBody>
+          {Object.entries(moderation_hooks).map(([key, value], index) => (
+            <TableRow key={index}>
+              <TableCell>
+              <Switch
+                    id="switch"
+                    name="switch"
+                    checked={isAlertOn(key)}
+                    onChange={() => handleSwitchChange(key)}
+                  />
+              </TableCell>
+              <TableCell>
+              <Text>{value}</Text>
+              </TableCell>
+              <TableCell>
+              <TextInput name={key} type="password" defaultValue={alertToWebhooks && alertToWebhooks[key] ? alertToWebhooks[key] : catchAllWebhookURL as string}>
+                
+              </TextInput>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+        </Table>
+        <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
+          Save Changes
+        </Button>
+
+        <Button onClick={() => serviceHealthCheck(accessToken, "slack")} className="mx-2">
+            Test Alerts
+          </Button>
+
+              
+            </Card>
           </TabPanel>
           </TabPanels>
           </TabGroup>
