@@ -286,7 +286,7 @@ That's it, start your proxy
 
 Test it with this request -> expect it to get rejected by LiteLLM Proxy
 
-```curl
+```shell
 curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
