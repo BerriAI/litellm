@@ -8796,7 +8796,7 @@ SELECT
 FROM
     "LiteLLM_SpendLogs"
 WHERE
-    "model" = $2
+    "model_group" = $2
     AND "cache_hit" != 'True'
     AND "startTime" >= $3::timestamp
     AND "startTime" <= $4::timestamp
