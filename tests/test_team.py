@@ -8,7 +8,13 @@ from openai import AsyncOpenAI
 
 
 async def new_user(
-    session, i, user_id=None, budget=None, budget_duration=None, models=["azure-models"]
+    session,
+    i,
+    user_id=None,
+    budget=None,
+    budget_duration=None,
+    models=["azure-models"],
+    team_id=None,
 ):
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -22,6 +28,9 @@ async def new_user(
 
     if user_id is not None:
         data["user_id"] = user_id
+
+    if team_id is not None:
+        data["team_id"] = team_id
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -37,7 +46,9 @@ async def new_user(
         return await response.json()
 
 
-async def add_member(session, i, team_id, user_id=None, user_email=None):
+async def add_member(
+    session, i, team_id, user_id=None, user_email=None, max_budget=None
+):
     url = "http://0.0.0.0:4000/team/member_add"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id, "member": {"role": "user"}}
@@ -45,6 +56,9 @@ async def add_member(session, i, team_id, user_id=None, user_email=None):
         data["member"]["user_email"] = user_email
     elif user_id is not None:
         data["member"]["user_id"] = user_id
+
+    if max_budget is not None:
+        data["max_budget_in_team"] = max_budget
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -475,3 +489,50 @@ async def test_team_alias():
         key = key_gen["key"]
         ## Test key
         response = await chat_completion(session=session, key=key, model="cheap-model")
+
+
+@pytest.mark.asyncio
+async def test_users_in_team_budget():
+    """
+    - Create Team
+    - Create User
+    - Add User to team with budget = 0.0000001
+    - Make Call 1 -> pass
+    - Make Call 2 -> fail
+    """
+    get_user = f"krrish_{time.time()}@berri.ai"
+    async with aiohttp.ClientSession() as session:
+        team = await new_team(session, 0, user_id=get_user)
+        print("New team=", team)
+        key_gen = await new_user(
+            session,
+            0,
+            user_id=get_user,
+            budget=10,
+            budget_duration="5s",
+            team_id=team["team_id"],
+            models=["fake-openai-endpoint"],
+        )
+        key = key_gen["key"]
+
+        # Add user to team
+        await add_member(
+            session, 0, team_id=team["team_id"], user_id=get_user, max_budget=0.0000001
+        )
+
+        # Call 1
+        result = await chat_completion(session, key, model="fake-openai-endpoint")
+        print("Call 1 passed", result)
+
+        await asyncio.sleep(2)
+
+        # Call 2
+        try:
+            await chat_completion(session, key, model="fake-openai-endpoint")
+            pytest.fail(
+                "Call 2 should have failed. The user crossed their budget within their team"
+            )
+        except Exception as e:
+            print("got exception, this is expected")
+            print(e)
+            assert "Crossed spend within team" in str(e)
