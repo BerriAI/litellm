@@ -9,6 +9,7 @@ import Teams from "@/components/teams";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
+import BudgetPanel from "@/components/budgets/budget_panel";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
@@ -106,14 +107,13 @@ const CreateKeyPage = () => {
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
-          <Sidebar
-            setPage={setPage}
-            userRole={userRole}
-            defaultSelectedKey={null}
-          />
-
+            <Sidebar
+              setPage={setPage}
+              userRole={userRole}
+              defaultSelectedKey={null}
+            />
           </div>
-        
+
           {page == "api-keys" ? (
             <UserDashboard
               userID={userID}
@@ -169,20 +169,22 @@ const CreateKeyPage = () => {
               showSSOBanner={showSSOBanner}
             />
           ) : page == "api_ref" ? (
-              <APIRef/>
+            <APIRef />
           ) : page == "settings" ? (
             <Settings
               userID={userID}
               userRole={userRole}
               accessToken={accessToken}
             />
-          )  : page == "general-settings" ? (
-              <GeneralSettings
-                userID={userID}
-                userRole={userRole}
-                accessToken={accessToken}
-                modelData={modelData}
-              />
+          ) : page == "budgets" ? (
+            <BudgetPanel accessToken={accessToken} />
+          ) : page == "general-settings" ? (
+            <GeneralSettings
+              userID={userID}
+              userRole={userRole}
+              accessToken={accessToken}
+              modelData={modelData}
+            />
           ) : (
             <Usage
               userID={userID}
