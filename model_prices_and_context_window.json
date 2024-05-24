@@ -3390,9 +3390,10 @@
         "output_cost_per_token": 0.00000015,
         "litellm_provider": "anyscale", 
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "source": "https://docs.anyscale.com/preview/endpoints/text-generation/supported-models/mistralai-Mistral-7B-Instruct-v0.1"
       },
-      "anyscale/Mixtral-8x7B-Instruct-v0.1": {
+      "anyscale/mistralai/Mixtral-8x7B-Instruct-v0.1": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
         "max_output_tokens": 16384,
@@ -3400,7 +3401,19 @@
         "output_cost_per_token": 0.00000015,
         "litellm_provider": "anyscale", 
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "source": "https://docs.anyscale.com/preview/endpoints/text-generation/supported-models/mistralai-Mixtral-8x7B-Instruct-v0.1"
+      },
+      "anyscale/mistralai/Mixtral-8x22B-Instruct-v0.1": {
+        "max_tokens": 65536,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.00000090, 
+        "output_cost_per_token": 0.00000090,
+        "litellm_provider": "anyscale", 
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://docs.anyscale.com/preview/endpoints/text-generation/supported-models/mistralai-Mixtral-8x22B-Instruct-v0.1"
       },
       "anyscale/HuggingFaceH4/zephyr-7b-beta": {
         "max_tokens": 16384,
@@ -3410,6 +3423,16 @@
         "output_cost_per_token": 0.00000015,
         "litellm_provider": "anyscale", 
         "mode": "chat"
+      },
+      "anyscale/google/gemma-7b-it": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000015, 
+        "output_cost_per_token": 0.00000015,
+        "litellm_provider": "anyscale", 
+        "mode": "chat",
+        "source": "https://docs.anyscale.com/preview/endpoints/text-generation/supported-models/google-gemma-7b-it"
       },
       "anyscale/meta-llama/Llama-2-7b-chat-hf": {
         "max_tokens": 4096,
@@ -3446,6 +3469,36 @@
         "output_cost_per_token": 0.000001, 
         "litellm_provider": "anyscale", 
         "mode": "chat"
+      },
+      "anyscale/codellama/CodeLlama-70b-Instruct-hf": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat",
+        "source" : "https://docs.anyscale.com/preview/endpoints/text-generation/supported-models/codellama-CodeLlama-70b-Instruct-hf"
+      },
+      "anyscale/meta-llama/Meta-Llama-3-8B-Instruct": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000015, 
+        "output_cost_per_token": 0.00000015, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat",
+        "source": "https://docs.anyscale.com/preview/endpoints/text-generation/supported-models/meta-llama-Meta-Llama-3-8B-Instruct"
+      },
+      "anyscale/meta-llama/Meta-Llama-3-70B-Instruct": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000100, 
+        "output_cost_per_token": 0.00000100, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat",
+        "source" : "https://docs.anyscale.com/preview/endpoints/text-generation/supported-models/meta-llama-Meta-Llama-3-70B-Instruct"
       },
       "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {
         "max_tokens": 3072, 
