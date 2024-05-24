@@ -730,6 +730,7 @@ from .utils import (
     ModelResponse,
     ImageResponse,
     ImageObject,
+    get_provider_fields,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig

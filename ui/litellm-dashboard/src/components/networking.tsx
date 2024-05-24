@@ -62,6 +62,40 @@ export const modelCreateCall = async (
   }
 };
 
+export const modelSettingsCall = async (accessToken: String) => {
+  /**
+   * Get all configurable params for setting a model
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/model/settings`
+      : `/model/settings`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 10);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+
 export const modelDeleteCall = async (
   accessToken: string,
   model_id: string
