@@ -179,6 +179,7 @@ const sidebars = {
         "observability/sentry",
         "observability/lago",
         "observability/openmeter",
+        "observability/openlit_integration",
         "observability/promptlayer_integration",
         "observability/wandb_integration",
         "observability/langsmith_integration",
