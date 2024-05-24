@@ -24,7 +24,7 @@ import {
   Tab,
   Callout,
 } from "@tremor/react";
-import { getCallbacksCall, setCallbacksCall, serviceHealthCheck } from "./networking";
+import { getCallbacksCall, setCallbacksCall, serviceHealthCheck, getContentModerationSettigs } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 
@@ -94,6 +94,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
   const [alertToWebhooks, setAlertToWebhooks] = useState<Record<string, string>>({});
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
+  const [contentModerationSettings, setContentModerationSettings] = useState<any>({});
 
 
   const handleSwitchChange = (alertName: string) => {
@@ -149,13 +150,33 @@ const Settings: React.FC<SettingsPageProps> = ({
         }
       }
 
-      setAlerts(alerts_data);
+      setAlerts(alerts_data);    
     });
+
+    getContentModerationSettigs(accessToken, userID, userRole).then((data) => {
+      console.log("content_moderation_settings", data);
+      setContentModerationSettings(data);
+    });
+  
   }, [accessToken, userRole, userID]);
 
 
   const isAlertOn = (alertName: string) => {
     return activeAlerts && activeAlerts.includes(alertName);
+  }
+
+  const isModerationOn = (moderationKey: string) => {
+    return contentModerationSettings && contentModerationSettings[moderationKey].status;
+  }
+
+  const handleModerationSwitchChange = (moderationKey: string) => {
+    setContentModerationSettings({
+      ...contentModerationSettings,
+      [moderationKey]: {
+        ...contentModerationSettings[moderationKey],
+        status: !contentModerationSettings[moderationKey].status
+      }
+    });
   }
 
   const handleAddCallback = () => {
@@ -342,13 +363,11 @@ const Settings: React.FC<SettingsPageProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-      <Callout title="[UI] Presidio PII + Guardrails Coming Soon. https://docs.litellm.ai/docs/proxy/pii_masking" color="sky">
-
-</Callout>
         <TabGroup>
         <TabList variant="line" defaultValue="1">
           <Tab value="1">Logging Callbacks</Tab>
           <Tab value="2">Alerting</Tab>
+          <Tab value="2">Content Moderation</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -440,12 +459,57 @@ const Settings: React.FC<SettingsPageProps> = ({
             Test Alerts
           </Button>
 
-      
-
-
-
+    
         </Card>
-            
+          </TabPanel>
+          <TabPanel>
+            <Card>
+            <Callout title="[UI] Presidio PII + Guardrails Coming Soon. https://docs.litellm.ai/docs/proxy/pii_masking" color="sky">
+              </Callout>
+
+              <Table>
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell></TableHeaderCell>
+          </TableRow>
+        </TableHead>
+          
+        <TableBody>
+
+          {
+            Object.entries(contentModerationSettings).map(([key, value], index) => (
+              <TableRow key={index}>
+                <TableCell>
+                  <Text>{value.ui_name}</Text>
+                  </TableCell>
+                <TableCell>
+                
+                <Switch
+                    id="switch"
+                    name="switch"
+                    checked={isModerationOn(key)}
+                    onChange={() => handleModerationSwitchChange(key)}
+                  />
+              </TableCell>
+
+            </TableRow>
+          ))}
+        </TableBody>
+
+        </Table>
+        <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
+          Save Changes
+        </Button>
+
+        <Button onClick={() => serviceHealthCheck(accessToken, "slack")} className="mx-2">
+            Test 
+          </Button>
+
+              
+            </Card>
           </TabPanel>
           </TabPanels>
           </TabGroup>
