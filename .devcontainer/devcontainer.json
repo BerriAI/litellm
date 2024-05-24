@@ -44,11 +44,8 @@
 	},
 
 	// More info: https://aka.ms/dev-containers-non-root.
-	"remoteUser": "root",
+	// "remoteUser": "litellm",
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pipx install poetry && poetry install -E extra_proxy -E proxy",
-	"features": {
-		"ghcr.io/devcontainers-contrib/features/actions-runner:1": {}
-	}
+	"postCreateCommand": "pipx install poetry && poetry install -E extra_proxy -E proxy"
 }
