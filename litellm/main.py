@@ -2332,11 +2332,6 @@ def batch_completion(
     """
     args = locals()
 
-    # extra kw for dealing with exceptions
-    return_exceptions = args.get("kwargs").get("return_exceptions", False)
-    if "return_exceptions" in args.get("kwargs"):
-        args.get("kwargs").pop("return_exceptions")
-
     batch_messages = messages
     completions = []
     model = model
@@ -2391,15 +2386,14 @@ def batch_completion(
 
         # Retrieve the results from the futures
         # results = [future.result() for future in completions]
-        if return_exceptions:
-            results = []
-            for future in completions:
-                try:
-                    results.append(future.result())
-                except Exception as exc:
-                    results.append(exc)
-        else:  # original
-           results = [future.result() for future in completions]
+        # return exceptions if any
+        results = []
+        for future in completions:
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                results.append(exc)
+
     return results
 
 
