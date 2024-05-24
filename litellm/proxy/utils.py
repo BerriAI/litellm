@@ -2713,3 +2713,66 @@ html_form = """
 </body>
 </html>
 """
+
+
+missing_keys_html_form = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f4f4f9;
+                color: #333;
+                margin: 20px;
+                line-height: 1.6;
+            }
+            .container {
+                max-width: 600px;
+                margin: auto;
+                padding: 20px;
+                background: #fff;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            }
+            h1 {
+                font-size: 24px;
+                margin-bottom: 20px;
+            }
+            pre {
+                background: #f8f8f8;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                overflow-x: auto;
+                font-size: 14px;
+            }
+            .env-var {
+                font-weight: normal;
+            }
+            .comment {
+                font-weight: normal;
+                color: #777;
+            }
+        </style>
+        <title>Environment Setup Instructions</title>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Environment Setup Instructions</h1>
+            <p>Please add the following configurations to your environment variables:</p>
+            <pre>
+<span class="env-var">LITELLM_MASTER_KEY="sk-1234"</span> <span class="comment"># make this unique. must start with `sk-`.</span>
+<span class="env-var">DATABASE_URL="postgres://..."</span> <span class="comment"># Need a postgres database? (Check out Supabase, Neon, etc)</span>
+
+<span class="comment">## OPTIONAL ##</span>
+<span class="env-var">PORT=4000</span> <span class="comment"># DO THIS FOR RENDER/RAILWAY</span>
+<span class="env-var">STORE_MODEL_IN_DB="True"</span> <span class="comment"># Allow storing models in db</span>
+            </pre>
+        </div>
+    </body>
+    </html>
+    """
