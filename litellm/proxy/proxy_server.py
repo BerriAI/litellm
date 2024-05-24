@@ -9364,6 +9364,36 @@ async def delete_model(model_info: ModelInfoDelete):
         )
 
 
+@router.get(
+    "/model/settings",
+    description="Returns provider name, description, and required parameters for each provider",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def model_settings():
+    """
+    Used by UI to generate 'model add' page
+    {
+        field_name=field_name,
+        field_type=allowed_args[field_name]["type"], # string/int
+        field_description=field_info.description or "", # human-friendly description
+        field_value=general_settings.get(field_name, None), # example value
+    }
+    """
+
+    returned_list = []
+    for provider in litellm.provider_list:
+        returned_list.append(
+            ProviderInfo(
+                name=provider,
+                fields=litellm.get_provider_fields(custom_llm_provider=provider),
+            )
+        )
+
+    return returned_list
+
+
 #### EXPERIMENTAL QUEUING ####
 async def _litellm_chat_completions_worker(data, user_api_key_dict):
     """

@@ -19,6 +19,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from .base import BaseLLM
 import httpx  # type: ignore
 from litellm.types.llms.databricks import GenericStreamingChunk
+from litellm.types.utils import ProviderField
 
 
 class DatabricksError(Exception):
@@ -75,6 +76,23 @@ class DatabricksConfig:
             )
             and v is not None
         }
+
+    def get_required_params(self) -> List[ProviderField]:
+        """For a given provider, return it's required fields with a description"""
+        return [
+            ProviderField(
+                field_name="api_key",
+                field_type="string",
+                field_description="Your Databricks API Key.",
+                field_value="dapi...",
+            ),
+            ProviderField(
+                field_name="api_base",
+                field_type="string",
+                field_description="Your Databricks API Base.",
+                field_value="https://adb-..",
+            ),
+        ]
 
     def get_supported_openai_params(self):
         return ["stream", "stop", "temperature", "top_p", "max_tokens", "n"]
