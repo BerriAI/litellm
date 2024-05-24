@@ -8632,7 +8632,16 @@ def exception_type(
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
-                    if original_exception.status_code == 401:
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"{exception_provider} - {message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
                             message=f"{exception_provider} - {message}",
@@ -9145,6 +9154,7 @@ def exception_type(
                             ),
                         ),
                     )
+
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
@@ -9825,7 +9835,16 @@ def exception_type(
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
-                    if original_exception.status_code == 401:
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"AzureException - {original_exception.message}",
+                            llm_provider="azure",
+                            model=model,
+                            litellm_debug_info=extra_information,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
                             message=f"AzureException - {original_exception.message}",
@@ -9842,7 +9861,7 @@ def exception_type(
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
                         )
-                    if original_exception.status_code == 422:
+                    elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
                             message=f"AzureException - {original_exception.message}",
