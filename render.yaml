@@ -8,5 +8,5 @@ services:
       - key: PORT
         value: 4000
     numInstances: 1
-    healthCheckPath: /health
+    healthCheckPath: /health/liveliness
     autoDeploy: true
