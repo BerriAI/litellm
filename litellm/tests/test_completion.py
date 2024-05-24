@@ -131,6 +131,27 @@ def test_completion_azure_command_r():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_databricks(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        response: litellm.ModelResponse = completion(
+            model="databricks/databricks-dbrx-instruct",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )  # type: ignore
+
+    else:
+        response: litellm.ModelResponse = await litellm.acompletion(
+            model="databricks/databricks-dbrx-instruct",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )  # type: ignore
+    print(f"response: {response}")
+
+    response_format_tests(response=response)
+
+
 # @pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio

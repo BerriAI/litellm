@@ -133,6 +133,7 @@ const sidebars = {
         "providers/cohere", 
         "providers/anyscale",
         "providers/huggingface", 
+        "providers/databricks",
         "providers/watsonx",
         "providers/predibase",
         "providers/triton-inference-server",
