@@ -815,7 +815,6 @@ Model Info:
 
         payload = webhook_event.model_dump_json()
         email_event = {
-            "from": "support@alerts.litellm.ai",
             "to": recipient_email,
             "subject": event_name,
             "html": email_html_content,
@@ -823,8 +822,6 @@ Model Info:
         headers = {"Content-type": "application/json"}
 
         response = await send_email(
-            sender_name=email_event["from"],
-            sender_email=email_event["from"],
             receiver_email=email_event["to"],
             subject=email_event["subject"],
             html=email_event["html"],
@@ -879,6 +876,7 @@ Model Info:
             and alert_type == "budget_alerts"
             and user_info is not None
         ):
+            # only send budget alerts over Email
             await self.send_email_alert_using_smtp(webhook_event=user_info)
 
         if "slack" not in self.alerting:
