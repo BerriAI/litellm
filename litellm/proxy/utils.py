@@ -1819,7 +1819,7 @@ async def _cache_user_row(
     return
 
 
-async def send_email(sender_name, sender_email, receiver_email, subject, html):
+async def send_email(receiver_email, subject, html):
     """
     smtp_host,
     smtp_port,
@@ -1829,13 +1829,27 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
     sender_email,
     """
     ## SERVER SETUP ##
+    from litellm.proxy.proxy_server import premium_user
+    from litellm.proxy.proxy_server import CommonProxyErrors
+
+    # Check if user is premium - This is an Enterprise only Feature
+    if premium_user != True:
+        raise Exception(
+            f"Trying to use Email Alerting\n {CommonProxyErrors.not_premium_user.value}"
+        )
+    # Done Checking
+
     smtp_host = os.getenv("SMTP_HOST")
     smtp_port = os.getenv("SMTP_PORT", 587)  # default to port 587
     smtp_username = os.getenv("SMTP_USERNAME")
     smtp_password = os.getenv("SMTP_PASSWORD")
+    sender_email = os.getenv("SMTP_SENDER_EMAIL", None)
+    if sender_email is None:
+        raise Exception("Trying to use SMTP, but SMTP_SENDER_EMAIL is not set")
+
     ## EMAIL SETUP ##
     email_message = MIMEMultipart()
-    email_message["From"] = f"{sender_name} <{sender_email}>"
+    email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
 
@@ -1843,7 +1857,6 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        print_verbose(f"SMTP Connection Init")
         # Establish a secure connection with the SMTP server
         with smtplib.SMTP(smtp_host, smtp_port) as server:
             if os.getenv("SMTP_TLS", "True") != "False":
