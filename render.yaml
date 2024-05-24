@@ -4,9 +4,7 @@ services:
     env: docker
     plan: starter # or 'standard', 'standard-plus', etc.
     region: oregon # or another region
-    image: 
-      name: ghcr.io/berriai/litellm
-      tag: main-stable
+    dockerImage: ghcr.io/berriai/litellm:main-stable
     envVars:
       - key: PORT
         value: 4000
