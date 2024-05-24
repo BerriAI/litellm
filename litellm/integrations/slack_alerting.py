@@ -663,10 +663,10 @@ class SlackAlerting(CustomLogger):
         # check if crossed budget
         if user_info.spend >= user_info.max_budget:
             event = "budget_crossed"
-            event_message += "Budget Crossed"
+            event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
         elif percent_left <= 0.05:
             event = "threshold_crossed"
-            event_message += "5% Threshold Crossed"
+            event_message += "5% Threshold Crossed "
         elif percent_left <= 0.15:
             event = "threshold_crossed"
             event_message += "15% Threshold Crossed"
@@ -781,6 +781,57 @@ Model Info:
 
         return False
 
+    async def send_email_alert_using_smtp(self, webhook_event: WebhookEvent) -> bool:
+        """
+        Sends structured Email alert to an SMTP server
+
+        Currently only implemented for budget alerts
+
+        Returns -> True if sent, False if not.
+        """
+        from litellm.proxy.utils import send_email
+
+        event_name = webhook_event.event_message
+        recipient_email = webhook_event.user_email
+        user_name = webhook_event.user_id
+        max_budget = webhook_event.max_budget
+        email_html_content = "Alert from LiteLLM Server"
+        if recipient_email is None:
+            verbose_proxy_logger.error(
+                "Trying to send email alert to no recipient", extra=webhook_event.dict()
+            )
+
+        if webhook_event.event == "budget_crossed":
+            email_html_content = f"""
+            <h1>LiteLLM</h1>
+
+            <p> Hi {user_name}, <br/>
+
+            Your LLM API usage this month has reached your account's monthly budget of ${max_budget} <br /> <br />
+
+            API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
+
+            If you have any questions, please send an email to support@berri.ai <br /> <br />
+
+            Best, <br />
+            The LiteLLM team <br />
+            """
+
+        payload = webhook_event.model_dump_json()
+        email_event = {
+            "to": recipient_email,
+            "subject": f"LiteLLM: {event_name}",
+            "html": email_html_content,
+        }
+
+        response = await send_email(
+            receiver_email=email_event["to"],
+            subject=email_event["subject"],
+            html=email_event["html"],
+        )
+
+        return False
+
     async def send_alert(
         self,
         message: str,
@@ -822,6 +873,14 @@ Model Info:
             and user_info is not None
         ):
             await self.send_webhook_alert(webhook_event=user_info)
+
+        if (
+            "email" in self.alerting
+            and alert_type == "budget_alerts"
+            and user_info is not None
+        ):
+            # only send budget alerts over Email
+            await self.send_email_alert_using_smtp(webhook_event=user_info)
 
         if "slack" not in self.alerting:
             return
