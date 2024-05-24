@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: psf/black@stable
         with:
+          python-version: '3.12'
           options: "--check --diff"
           src: "./litellm"
           use_pyproject: true
@@ -48,6 +49,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: psf/black@stable
         with:
+          python-version: '3.12'
           options: "--check --diff"
           src: "./tests"
           use_pyproject: true
