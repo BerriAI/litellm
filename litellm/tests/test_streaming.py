@@ -6,7 +6,6 @@ import traceback
 import time, pytest
 from pydantic import BaseModel
 from typing import Tuple
-from unittest.mock import patch, MagicMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
