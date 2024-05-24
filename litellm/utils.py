@@ -10646,7 +10646,8 @@ class CustomStreamWrapper:
             data_json = json.loads(chunk[5:])  # chunk.startswith("data:"):
             try:
                 if len(data_json["choices"]) > 0:
-                    text = data_json["choices"][0]["delta"].get("content", "")
+                    delta = data_json["choices"][0]["delta"]
+                    text = "" if delta is None else delta.get("content", "")
                     if data_json["choices"][0].get("finish_reason", None):
                         is_finished = True
                         finish_reason = data_json["choices"][0]["finish_reason"]
@@ -11414,12 +11415,14 @@ class CustomStreamWrapper:
                 model_response.id = original_chunk.id
                 self.response_id = original_chunk.id
                 if len(original_chunk.choices) > 0:
+                    delta = original_chunk.choices[0].delta
                     if (
-                        original_chunk.choices[0].delta.function_call is not None
-                        or original_chunk.choices[0].delta.tool_calls is not None
+                        delta is not None and (
+                           delta.function_call is not None
+                           or delta.tool_calls is not None
+                        )
                     ):
                         try:
-                            delta = original_chunk.choices[0].delta
                             model_response.system_fingerprint = (
                                 original_chunk.system_fingerprint
                             )
@@ -11478,7 +11481,7 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta()
                     else:
                         try:
-                            delta = dict(original_chunk.choices[0].delta)
+                            delta = dict() if original_chunk.choices[0].delta is None else dict(original_chunk.choices[0].delta)
                             print_verbose(f"original delta: {delta}")
                             model_response.choices[0].delta = Delta(**delta)
                             print_verbose(
