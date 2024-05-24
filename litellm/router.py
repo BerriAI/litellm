@@ -3345,7 +3345,7 @@ class Router:
                     special_params = ["response_object"]
                     # check if all params are supported
                     for k, v in non_default_params.items():
-                        if k not in supported_openai_params and k in special_params:
+                        if k not in supported_openai_params:
                             # if not -> invalid model
                             verbose_router_logger.debug(
                                 f"INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k={k}"
