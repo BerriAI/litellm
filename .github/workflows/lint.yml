@@ -56,5 +56,5 @@ jobs:
         with:
           options: "--check --diff"
           src: "./tests"
-           version: "~= 23.0"
+          version: "~= 23.0"
 
