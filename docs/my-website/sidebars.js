@@ -136,6 +136,7 @@ const sidebars = {
         "providers/databricks",
         "providers/watsonx",
         "providers/predibase",
+        "providers/clarifai",
         "providers/triton-inference-server",
         "providers/ollama", 
         "providers/perplexity", 
