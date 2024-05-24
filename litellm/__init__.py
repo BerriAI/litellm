@@ -732,7 +732,7 @@ from .utils import (
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
-from .llms.databricks import DatabricksConfig
+from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
