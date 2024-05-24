@@ -663,10 +663,10 @@ class SlackAlerting(CustomLogger):
         # check if crossed budget
         if user_info.spend >= user_info.max_budget:
             event = "budget_crossed"
-            event_message += "Budget Crossed"
+            event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
         elif percent_left <= 0.05:
             event = "threshold_crossed"
-            event_message += "5% Threshold Crossed"
+            event_message += "5% Threshold Crossed "
         elif percent_left <= 0.15:
             event = "threshold_crossed"
             event_message += "15% Threshold Crossed"
@@ -796,6 +796,10 @@ Model Info:
         user_name = webhook_event.user_id
         max_budget = webhook_event.max_budget
         email_html_content = "Alert from LiteLLM Server"
+        if recipient_email is None:
+            verbose_proxy_logger.error(
+                "Trying to send email alert to no recipient", extra=webhook_event.dict()
+            )
 
         if webhook_event.event == "budget_crossed":
             email_html_content = f"""
@@ -819,7 +823,6 @@ Model Info:
             "subject": event_name,
             "html": email_html_content,
         }
-        headers = {"Content-type": "application/json"}
 
         response = await send_email(
             receiver_email=email_event["to"],
