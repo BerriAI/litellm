@@ -460,23 +460,27 @@ def test_completion_azure_stream_content_filter_no_delta():
 
         response = litellm.CustomStreamWrapper(
             completion_stream=completion_stream,
-            model="azure/gpt-4o",
+            model="gpt-4-0613",
             custom_llm_provider="cached_response",
-            messages=[{"role": "user", "content": "Hey"}],
-            stream=True,
-            call_type="completion",
-            start_time=time.time(),
-            litellm_call_id="12345",
-            function_id="1245",
-        ),
+            logging_obj=litellm.Logging(
+                model="gpt-4-0613",
+                messages=[{"role": "user", "content": "Hey"}],
+                stream=True,
+                call_type="completion",
+                start_time=time.time(),
+                litellm_call_id="12345",
+                function_id="1245",
+            ),
+        )
 
         for idx, chunk in enumerate(response):
             complete_response = ""
             for idx, chunk in enumerate(response):
                 # print
-                chunk, finished = streaming_format_tests(idx, chunk)
-                complete_response += chunk
-                if finished:
+                delta = chunk.choices[0].delta
+                content = delta.content if delta else None
+                complete_response += content or ""
+                if chunk.choices[0].finish_reason is not None:
                     break
             assert len(complete_response) > 0
 
