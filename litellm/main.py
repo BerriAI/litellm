@@ -2535,6 +2535,7 @@ def batch_completion(
         list: A list of completion results.
     """
     args = locals()
+
     batch_messages = messages
     completions = []
     model = model
@@ -2588,7 +2589,15 @@ def batch_completion(
                     completions.append(future)
 
         # Retrieve the results from the futures
-        results = [future.result() for future in completions]
+        # results = [future.result() for future in completions]
+        # return exceptions if any
+        results = []
+        for future in completions:
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                results.append(exc)
+
     return results
 
 
