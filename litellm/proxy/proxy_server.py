@@ -8819,9 +8819,7 @@ async def model_info_v2(
     if llm_model_list is None or not isinstance(llm_model_list, list):
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": f"Invalid llm model list. llm_model_list={llm_model_list}"
-            },
+            detail={"error": f"No models on proxy, yet."},
         )
 
     # Load existing config

@@ -1,16 +1,26 @@
-version: "3.9"
+version: "3.11"
 services:
   litellm:
     build:
       context: .
       args:
         target: runtime
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ghcr.io/berriai/litellm:main-stable
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
-    volumes:
-      - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
-    # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
-    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
-
+    environment:
+        DATABASE_URL: "postgresql://postgres:example@db:5432/postgres"
+        LITELLM_MASTER_KEY: sk-1234
+        STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+ 
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: example
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
 # ...rest of your docker-compose config if any
