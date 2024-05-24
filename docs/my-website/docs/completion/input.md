@@ -60,6 +60,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
 |Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ | | |
 |Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
+|ClarifAI| ✅ | ✅ | | | |  |   | |  |   | | | | | |
 
 :::note
 
