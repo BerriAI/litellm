@@ -1062,12 +1062,19 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
+                # collect information for alerting
+
+                if isinstance(user_id_information, list):
+                    user_id_information = user_id_information[0]
+                user_email = user_id_information.get("user_email", None)
                 call_info = CallInfo(
                     token=valid_token.token,
                     spend=valid_token.spend,
                     max_budget=valid_token.max_budget,
                     user_id=valid_token.user_id,
                     team_id=valid_token.team_id,
+                    user_email=user_email,
+                    key_alias=valid_token.key_alias,
                 )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
