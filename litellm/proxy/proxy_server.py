@@ -1062,11 +1062,18 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
-                # collect information for alerting
 
-                if isinstance(user_id_information, list):
-                    user_id_information = user_id_information[0]
-                user_email = user_id_information.get("user_email", None)
+                ####################################
+                # collect information for alerting #
+                ####################################
+
+                user_email = None
+                # Check if the token has any user id information
+                if user_id_information is not None:
+                    if isinstance(user_id_information, list):
+                        user_id_information = user_id_information[0]
+                    user_email = user_id_information.get("user_email", None)
+
                 call_info = CallInfo(
                     token=valid_token.token,
                     spend=valid_token.spend,
@@ -1082,6 +1089,10 @@ async def user_api_key_auth(
                         user_info=call_info,
                     )
                 )
+
+                ####################################
+                # collect information for alerting #
+                ####################################
 
                 if valid_token.spend >= valid_token.max_budget:
                     raise Exception(
