@@ -568,7 +568,7 @@ class StreamingChoices(OpenAIObject):
         if delta is not None:
             if isinstance(delta, Delta):
                 self.delta = delta
-            if isinstance(delta, dict):
+            elif isinstance(delta, dict):
                 self.delta = Delta(**delta)
         else:
             self.delta = Delta()
@@ -676,7 +676,10 @@ class ModelResponse(OpenAIObject):
             created = created
         model = model
         if usage is not None:
-            usage = usage
+            if isinstance(usage, dict):
+                usage = Usage(**usage)
+            else:
+                usage = usage
         elif stream is None or stream == False:
             usage = Usage()
         elif (
@@ -763,7 +766,13 @@ class EmbeddingResponse(OpenAIObject):
     _hidden_params: dict = {}
 
     def __init__(
-        self, model=None, usage=None, stream=False, response_ms=None, data=None
+        self,
+        model=None,
+        usage=None,
+        stream=False,
+        response_ms=None,
+        data=None,
+        **params,
     ):
         object = "list"
         if response_ms:
@@ -5035,6 +5044,19 @@ def get_optional_params_embeddings(
 
     default_params = {"user": None, "encoding_format": None, "dimensions": None}
 
+    def _check_valid_arg(supported_params: Optional[list]):
+        if supported_params is None:
+            return
+        unsupported_params = {}
+        for k in non_default_params.keys():
+            if k not in supported_params:
+                unsupported_params[k] = non_default_params[k]
+        if unsupported_params and not litellm.drop_params:
+            raise UnsupportedParamsError(
+                status_code=500,
+                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+            )
+
     non_default_params = {
         k: v
         for k, v in passed_params.items()
@@ -5059,6 +5081,18 @@ def get_optional_params_embeddings(
         for k in keys:
             non_default_params.pop(k, None)
         final_params = {**non_default_params, **kwargs}
+        return final_params
+    if custom_llm_provider == "databricks":
+        supported_params = get_supported_openai_params(
+            model=model or "",
+            custom_llm_provider="databricks",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.DatabricksEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
         return final_params
     if custom_llm_provider == "vertex_ai":
         if len(non_default_params.keys()) > 0:
@@ -5846,6 +5880,14 @@ def get_optional_params(
         optional_params = litellm.MistralConfig().map_openai_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
+    elif custom_llm_provider == "databricks":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.DatabricksConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6333,7 +6375,11 @@ def get_first_chars_messages(kwargs: dict) -> str:
         return ""
 
 
-def get_supported_openai_params(model: str, custom_llm_provider: str) -> Optional[list]:
+def get_supported_openai_params(
+    model: str,
+    custom_llm_provider: str,
+    request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
+) -> Optional[list]:
     """
     Returns the supported openai params for a given model + provider
 
@@ -6506,6 +6552,11 @@ def get_supported_openai_params(model: str, custom_llm_provider: str) -> Optiona
             "frequency_penalty",
             "presence_penalty",
         ]
+    elif custom_llm_provider == "databricks":
+        if request_type == "chat_completion":
+            return litellm.DatabricksConfig().get_supported_openai_params()
+        elif request_type == "embeddings":
+            return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
         return ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
     elif custom_llm_provider == "vertex_ai":
@@ -11017,6 +11068,8 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "clarifai":
                 response_obj = self.handle_clarifai_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -11259,6 +11312,17 @@ class CustomStreamWrapper:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
                 response_obj = self.handle_openai_text_completion_chunk(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) == True
+                ):
+                    model_response.usage = response_obj["usage"]
+            elif self.custom_llm_provider == "databricks":
+                response_obj = litellm.DatabricksConfig()._chunk_parser(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
@@ -11677,6 +11741,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"
                 or self.custom_llm_provider == "predibase"
+                or self.custom_llm_provider == "databricks"
                 or self.custom_llm_provider == "bedrock"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):

@@ -7,8 +7,12 @@ _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 
 class AsyncHTTPHandler:
     def __init__(
-        self, timeout: httpx.Timeout = _DEFAULT_TIMEOUT, concurrent_limit=1000
+        self,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        concurrent_limit=1000,
     ):
+        if timeout is None:
+            timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
         self.client = httpx.AsyncClient(
             timeout=timeout,
@@ -59,7 +63,7 @@ class AsyncHTTPHandler:
 class HTTPHandler:
     def __init__(
         self,
-        timeout: Optional[httpx.Timeout] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         concurrent_limit=1000,
         client: Optional[httpx.Client] = None,
     ):
