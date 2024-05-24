@@ -1,13 +1,12 @@
 services:
   - type: web
     name: openai-proxy
-    env: docker
-    plan: starter # or 'standard', 'standard-plus', etc.
-    region: oregon # or another region
-    dockerImage: ghcr.io/berriai/litellm:main-stable
+    runtime: image
+    image:
+      url: ghcr.io/berriai/litellm:main-stable
     envVars:
       - key: PORT
         value: 4000
-    instances: 1
+    numInstances: 1
     healthCheckPath: /health
     autoDeploy: true
