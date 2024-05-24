@@ -1,36 +1,18 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # VLLM
 
 LiteLLM supports all models on VLLM.
 
-🚀[Code Tutorial](https://github.com/BerriAI/litellm/blob/main/cookbook/VLLM_Model_Testing.ipynb)
+# Quick Start
 
+## Usage - litellm.completion (calling vLLM endpoint)
+vLLM Provides an OpenAI compatible endpoints - here's how to call it with LiteLLM 
 
-:::info
-
-To call a HOSTED VLLM Endpoint use [these docs](./openai_compatible.md)
-
-:::
-
-### Quick Start
-```
-pip install litellm vllm
-```
-```python
-import litellm 
-
-response = litellm.completion(
-            model="vllm/facebook/opt-125m", # add a vllm prefix so litellm knows the custom_llm_provider==vllm
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80)
-
-print(response)
-```
-
-### Calling hosted VLLM Server
 In order to use litellm to call a hosted vllm server add the following to your completion call
 
-* `custom_llm_provider == "openai"`
+* `model="openai/<your-vllm-model-name>"` 
 * `api_base = "your-hosted-vllm-server"`
 
 ```python
@@ -40,6 +22,93 @@ response = litellm.completion(
             model="openai/facebook/opt-125m", # pass the vllm model name
             messages=messages,
             api_base="https://hosted-vllm-api.co",
+            temperature=0.2,
+            max_tokens=80)
+
+print(response)
+```
+
+
+## Usage -  LiteLLM Proxy Server (calling vLLM endpoint)
+
+Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
+
+1. Modify the config.yaml 
+
+  ```yaml
+  model_list:
+    - model_name: my-model
+      litellm_params:
+        model: openai/facebook/opt-125m  # add openai/ prefix to route as OpenAI provider
+        api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
+  ```
+
+2. Start the proxy 
+
+  ```bash
+  $ litellm --config /path/to/config.yaml
+  ```
+
+3. Send Request to LiteLLM Proxy Server
+
+  <Tabs>
+
+  <TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+  ```python
+  import openai
+  client = openai.OpenAI(
+      api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
+      base_url="http://0.0.0.0:4000" # litellm-proxy-base url
+  )
+
+  response = client.chat.completions.create(
+      model="my-model",
+      messages = [
+          {
+              "role": "user",
+              "content": "what llm are you"
+          }
+      ],
+  )
+
+  print(response)
+  ```
+  </TabItem>
+
+  <TabItem value="curl" label="curl">
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "my-model",
+      "messages": [
+          {
+          "role": "user",
+          "content": "what llm are you"
+          }
+      ],
+  }'
+  ```
+  </TabItem>
+
+  </Tabs>
+
+
+## Extras - for `vllm pip package`
+### Using - `litellm.completion`
+
+```
+pip install litellm vllm
+```
+```python
+import litellm 
+
+response = litellm.completion(
+            model="vllm/facebook/opt-125m", # add a vllm prefix so litellm knows the custom_llm_provider==vllm
+            messages=messages,
             temperature=0.2,
             max_tokens=80)
 
