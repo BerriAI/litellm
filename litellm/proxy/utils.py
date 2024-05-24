@@ -1835,7 +1835,7 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
     smtp_password = os.getenv("SMTP_PASSWORD")
     ## EMAIL SETUP ##
     email_message = MIMEMultipart()
-    email_message["From"] = f"{sender_name} <{sender_email}>"
+    email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
 
@@ -1843,7 +1843,6 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        print_verbose(f"SMTP Connection Init")
         # Establish a secure connection with the SMTP server
         with smtplib.SMTP(smtp_host, smtp_port) as server:
             if os.getenv("SMTP_TLS", "True") != "False":
