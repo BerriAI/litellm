@@ -440,33 +440,45 @@ def test_completion_azure_stream_content_filter_no_delta():
                 }            
         ]
 
-        stream_iterator = iter(chunks)
+        chunk_list = []
+        for chunk in chunks:
+            new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+            if "choices" in chunk and isinstance(chunk["choices"], list):
+                new_choices = []
+                for choice in chunk["choices"]:
+                    if isinstance(choice, litellm.utils.StreamingChoices):
+                        _new_choice = choice
+                    elif isinstance(choice, dict):
+                        _new_choice = litellm.utils.StreamingChoices(**choice)
+                    new_choices.append(_new_choice)
+                new_chunk.choices = new_choices
+            chunk_list.append(new_chunk)
+
+        completion_stream = ModelResponseListIterator(model_responses=chunk_list)
 
         litellm.set_verbose = True
 
-        logging_obj = litellm.Logging(
-            model="berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=messages,
-            stream=True,
-            litellm_call_id="1234",
-            function_id="function_id",
-            call_type="acompletion",
-            start_time=time.time(),
-        )
         response = litellm.CustomStreamWrapper(
-            completion_stream=stream_iterator,
+            completion_stream=completion_stream,
             model="azure/gpt-4o",
-            custom_llm_provider="azure",
-            logging_obj=logging_obj,
-        )
-        complete_response = ""
+            custom_llm_provider="cached_response",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+
         for idx, chunk in enumerate(response):
-            # print
-            chunk, finished = streaming_format_tests(idx, chunk)
-            complete_response += chunk
-            if finished:
-                break
-        assert len(complete_response) > 0
+            complete_response = ""
+            for idx, chunk in enumerate(response):
+                # print
+                chunk, finished = streaming_format_tests(idx, chunk)
+                complete_response += chunk
+                if finished:
+                    break
+            assert len(complete_response) > 0
 
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
