@@ -1,5 +1,4 @@
-
-# Clarifai
+# 🆕 Clarifai
 Anthropic, OpenAI, Mistral, Llama and Gemini LLMs are Supported on Clarifai. 
 
 ## Pre-Requisites
