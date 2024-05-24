@@ -820,7 +820,7 @@ Model Info:
         payload = webhook_event.model_dump_json()
         email_event = {
             "to": recipient_email,
-            "subject": event_name,
+            "subject": f"LiteLLM: {event_name}",
             "html": email_html_content,
         }
 
