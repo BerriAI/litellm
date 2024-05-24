@@ -44,7 +44,7 @@ jobs:
         with:
           options: "--check --diff"
           src: "./litellm"
-          use_pyproject: true
+          version: "~= 23.0"
   black-linter-tests:
     runs-on: ubuntu-latest
     steps:
@@ -56,5 +56,5 @@ jobs:
         with:
           options: "--check --diff"
           src: "./tests"
-          use_pyproject: true
+           version: "~= 23.0"
 
