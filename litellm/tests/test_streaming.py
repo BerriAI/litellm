@@ -6,6 +6,7 @@ import traceback
 import time, pytest
 from pydantic import BaseModel
 from typing import Tuple
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -233,6 +234,243 @@ def test_completion_azure_stream_special_char():
         response_str += part.choices[0].delta.content or ""
     print(f"response_str: {response_str}")
     assert len(response_str) > 0
+
+
+def test_completion_azure_stream_content_filter_no_delta():
+    """
+    Tests streaming from Azure when the chunks have no delta because they represent the filtered content
+    """
+    try:
+        chunks = [
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": "",
+                        "role": "assistant"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": "This"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " is"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " a"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " dummy"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " response"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "",
+                "choices": [
+                    {
+                    "finish_reason": None,
+                    "index": 0,
+                    "content_filter_offsets": {
+                        "check_offset": 35159,
+                        "start_offset": 35159,
+                        "end_offset": 36150
+                    },
+                    "content_filter_results": {
+                        "hate": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "self_harm": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "sexual": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "violence": {
+                        "filtered": False,
+                        "severity": "safe"
+                        }
+                    }
+                    }
+                ],
+                "created": 0,
+                "model": "",
+                "object": ""
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": "."
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {},
+                    "finish_reason": "stop",
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "",
+                "choices": [
+                    {
+                    "finish_reason": None,
+                    "index": 0,
+                    "content_filter_offsets": {
+                        "check_offset": 36150,
+                        "start_offset": 36060,
+                        "end_offset": 37029
+                    },
+                    "content_filter_results": {
+                        "hate": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "self_harm": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "sexual": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "violence": {
+                        "filtered": False,
+                        "severity": "safe"
+                        }
+                    }
+                    }
+                ],
+                "created": 0,
+                "model": "",
+                "object": ""
+                }            
+        ]
+
+        stream_iterator = iter(chunks)
+
+        litellm.set_verbose = True
+
+        logging_obj = litellm.Logging(
+            model="berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=messages,
+            stream=True,
+            litellm_call_id="1234",
+            function_id="function_id",
+            call_type="acompletion",
+            start_time=time.time(),
+        )
+        response = litellm.CustomStreamWrapper(
+            completion_stream=stream_iterator,
+            model="azure/gpt-4o",
+            custom_llm_provider="azure",
+            logging_obj=logging_obj,
+        )
+        complete_response = ""
+        for idx, chunk in enumerate(response):
+            # print
+            chunk, finished = streaming_format_tests(idx, chunk)
+            complete_response += chunk
+            if finished:
+                break
+        assert len(complete_response) > 0
+
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 def test_completion_cohere_stream_bad_key():
