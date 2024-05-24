@@ -33,7 +33,7 @@ jobs:
       - run: poetry install
       - name: Run flake8 (https://flake8.pycqa.org/en/latest/)
         run: poetry run flake8
-  black-linter:
+  black-linter-litellm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -42,3 +42,13 @@ jobs:
           options: "--check --diff"
           src: "./litellm"
           use_pyproject: true
+  black-linter-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: psf/black@stable
+        with:
+          options: "--check --diff"
+          src: "./tests"
+          use_pyproject: true
+
