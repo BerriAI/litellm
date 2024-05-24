@@ -91,6 +91,7 @@ from litellm.proxy.utils import (
     reset_budget,
     hash_token,
     html_form,
+    missing_keys_html_form,
     _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
@@ -5140,6 +5141,13 @@ async def moderations(
 
 #### DEV UTILS ####
 
+# @router.get(
+#     "/utils/available_routes",
+#     tags=["llm utils"],
+#     dependencies=[Depends(user_api_key_auth)],
+# )
+# async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
+
 
 @router.post(
     "/utils/token_counter",
@@ -9582,7 +9590,8 @@ async def google_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
-    global premium_user
+    global premium_user, prisma_client, master_key
+
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
@@ -9600,6 +9609,12 @@ async def google_login(request: Request):
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,
             )
+
+    ####### Detect DB + MASTER KEY in .env #######
+    if prisma_client is None and master_key is None:
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=missing_keys_html_form, status_code=200)
 
     # get url from request
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
