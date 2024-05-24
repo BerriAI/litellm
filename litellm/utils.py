@@ -34,7 +34,7 @@ from dataclasses import (
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.caching import DualCache
-from litellm.types.utils import CostPerToken
+from litellm.types.utils import CostPerToken, ProviderField
 
 oidc_cache = DualCache()
 
@@ -7325,6 +7325,15 @@ def load_test_model(
             "status": "failed",
             "exception": e,
         }
+
+
+def get_provider_fields(custom_llm_provider: str) -> List[ProviderField]:
+    """Return the fields required for each provider"""
+
+    if custom_llm_provider == "databricks":
+        return litellm.DatabricksConfig().get_required_params()
+    else:
+        return []
 
 
 def validate_environment(model: Optional[str] = None) -> dict:

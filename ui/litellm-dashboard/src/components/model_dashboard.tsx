@@ -48,6 +48,7 @@ import {
   modelMetricsSlowResponsesCall,
   getCallbacksCall,
   setCallbacksCall,
+  modelSettingsCall,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -84,6 +85,7 @@ import { UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
+import DynamicFields from "./model_add/dynamic_form";
 interface ModelDashboardProps {
   accessToken: string | null;
   token: string | null;
@@ -107,14 +109,27 @@ interface RetryPolicyObject {
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
+interface ProviderFields {
+  field_name: string;
+  field_type: string;
+  field_description: string;
+  field_value: string;
+}
+
+interface ProviderSettings {
+  name: string;
+  fields: ProviderFields[];
+}
+
 enum Providers {
   OpenAI = "OpenAI",
   Azure = "Azure",
   Anthropic = "Anthropic",
-  Google_AI_Studio = "Gemini (Google AI Studio)",
+  Google_AI_Studio = "Google AI Studio",
   Bedrock = "Amazon Bedrock",
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
+  Databricks = "Databricks",
 }
 
 const provider_map: Record<string, string> = {
@@ -125,6 +140,7 @@ const provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
+  Databricks: "databricks",
 };
 
 const retry_policy_map: Record<string, string> = {
@@ -247,6 +263,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     isNaN(Number(key))
   );
 
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>(
+    []
+  );
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
@@ -514,6 +533,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
+        const _providerSettings = await modelSettingsCall(accessToken);
+        setProviderSettings(_providerSettings);
+
         // Replace with your actual API call for model data
         const modelDataResponse = await modelInfoCall(
           accessToken,
@@ -945,6 +967,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   console.log(`selectedProvider: ${selectedProvider}`);
   console.log(`providerModels.length: ${providerModels.length}`);
+
+  const providerKey = Object.keys(Providers).find(
+    (key) => (Providers as { [index: string]: any })[key] === selectedProvider
+  );
+
+  let dynamicProviderForm: ProviderSettings | undefined = undefined;
+  if (providerKey) {
+    dynamicProviderForm = providerSettings.find(
+      (provider) => provider.name === provider_map[providerKey]
+    );
+  }
+
   return (
     <div style={{ width: "100%", height: "100%" }}>
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -1278,6 +1312,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       ))}
                     </Select>
                   </Form.Item>
+
                   <Form.Item
                     rules={[{ required: true, message: "Required" }]}
                     label="Public Model Name"
@@ -1340,8 +1375,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       </Text>
                     </Col>
                   </Row>
+                  {dynamicProviderForm !== undefined &&
+                    dynamicProviderForm.fields.length > 0 && (
+                      <DynamicFields
+                        fields={dynamicProviderForm.fields}
+                        selectedProvider={dynamicProviderForm.name}
+                      />
+                    )}
                   {selectedProvider != Providers.Bedrock &&
-                    selectedProvider != Providers.Vertex_AI && (
+                    selectedProvider != Providers.Vertex_AI &&
+                    dynamicProviderForm === undefined && (
                       <Form.Item
                         rules={[{ required: true, message: "Required" }]}
                         label="API Key"

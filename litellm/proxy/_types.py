@@ -5,6 +5,7 @@ from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
 import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
+from litellm.types.utils import ProviderField
 
 
 def hash_token(token: str):
@@ -362,6 +363,11 @@ class ModelInfo(LiteLLMBase):
         if values.get("base_model") is None:
             values.update({"base_model": None})
         return values
+
+
+class ProviderInfo(LiteLLMBase):
+    name: str
+    fields: List[ProviderField]
 
 
 class BlockUsers(LiteLLMBase):

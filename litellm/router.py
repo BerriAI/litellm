@@ -3342,10 +3342,14 @@ class Router:
                     non_default_params = litellm.utils.get_non_default_params(
                         passed_params=request_kwargs
                     )
+                    special_params = ["response_object"]
                     # check if all params are supported
                     for k, v in non_default_params.items():
-                        if k not in supported_openai_params:
+                        if k not in supported_openai_params and k in special_params:
                             # if not -> invalid model
+                            verbose_router_logger.debug(
+                                f"INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k={k}"
+                            )
                             invalid_model_indices.append(idx)
 
         if len(invalid_model_indices) == len(_returned_deployments):
@@ -3420,6 +3424,7 @@ class Router:
         ## get healthy deployments
         ### get all deployments
         healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
+
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = [
@@ -3510,7 +3515,7 @@ class Router:
             if _allowed_model_region is None:
                 _allowed_model_region = "n/a"
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
             )
 
         if (
