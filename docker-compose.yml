@@ -10,7 +10,6 @@ services:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
     environment:
         DATABASE_URL: "postgresql://postgres:example@db:5432/postgres"
-        LITELLM_MASTER_KEY: sk-1234
         STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
  
   db:

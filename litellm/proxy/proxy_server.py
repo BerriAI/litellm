@@ -9609,7 +9609,7 @@ async def google_login(request: Request):
             )
 
     ####### Detect DB + MASTER KEY in .env #######
-    if prisma_client is None and master_key is None:
+    if prisma_client is None or master_key is None:
         from fastapi.responses import HTMLResponse
 
         return HTMLResponse(content=missing_keys_html_form, status_code=200)
