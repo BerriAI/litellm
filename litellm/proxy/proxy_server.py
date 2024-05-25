@@ -8035,7 +8035,7 @@ async def new_team(
 
     ## ADD TO TEAM TABLE
     # Check budget_duration and budget_reset_at
-    if data.budget_duration:
+    if data.budget_duration is not None:
         duration_s = _duration_in_seconds(duration=data.budget_duration)
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
@@ -8124,6 +8124,15 @@ async def update_team(
             status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
+
+    # Check budget_duration and budget_reset_at
+    if data.budget_duration is not None:
+        duration_s = _duration_in_seconds(duration=data.budget_duration)
+        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+
+        # set the budget duration and budget_reset_at in DB
+        data.budget_duration = duration_s
+        data.budget_reset_at = reset_at
 
     updated_kv = data.json(exclude_none=True)
     team_row = await prisma_client.update_data(
