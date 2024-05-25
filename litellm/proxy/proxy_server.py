@@ -8034,19 +8034,15 @@ async def new_team(
         _model_id = model_dict.id
 
     ## ADD TO TEAM TABLE
-    # Check budget_duration and budget_reset_at
-    if data.budget_duration is not None:
-        duration_s = _duration_in_seconds(duration=data.budget_duration)
-        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-
-        # set the budget duration and budget_reset_at in DB
-        data.budget_duration = duration_s
-        data.budget_reset_at = reset_at
-
     complete_team_data = LiteLLM_TeamTable(
         **data.json(),
-        model_id=_model_id,
     )
+
+    # If budget_duration is set, set `budget_reset_at`
+    if complete_team_data.budget_duration is not None:
+        duration_s = _duration_in_seconds(duration=complete_team_data.budget_duration)
+        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        complete_team_data.budget_reset_at = reset_at
 
     team_row = await prisma_client.insert_data(
         data=complete_team_data.json(exclude_none=True), table_name="team"

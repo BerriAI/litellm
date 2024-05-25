@@ -2137,3 +2137,51 @@ async def test_reset_spend_authentication(prisma_client):
             "Tried to access route=/global/spend/reset, which is only for MASTER KEY"
             in e.message
         )
+
+
+@pytest.mark.asyncio()
+async def test_create_update_team(prisma_client):
+    """
+    - Set max_budget, budget_duration, max_budget, tpm_limit, rpm_limit
+    - Assert response has correct values
+
+    - Update max_budget, budget_duration, max_budget, tpm_limit, rpm_limit
+    - Assert response has correct values
+
+    - Call team_info and assert response has correct values
+    """
+    print("prisma client=", prisma_client)
+
+    master_key = "sk-1234"
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    import datetime
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    _team_id = "test-team_{}".format(uuid.uuid4())
+    response = await new_team(
+        NewTeamRequest(
+            team_id=_team_id,
+            max_budget=20,
+            budget_duration="30d",
+            tpm_limit=20,
+            rpm_limit=20,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+        ),
+    )
+
+    print("RESPONSE from new_team", response)
+
+    assert response["team_id"] == _team_id
+    assert response["max_budget"] == 20
+    assert response["tpm_limit"] == 20
+    assert response["rpm_limit"] == 20
+    assert response["budget_duration"] == "30d"
+    assert response["budget_reset_at"] is not None and isinstance(
+        response["budget_reset_at"], datetime.datetime
+    )
