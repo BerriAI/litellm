@@ -612,6 +612,8 @@ class UpdateTeamRequest(LiteLLMBase):
     max_budget: Optional[float] = None
     models: Optional[list] = None
     blocked: Optional[bool] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
 
 class DeleteTeamRequest(LiteLLMBase):
