@@ -740,76 +740,81 @@ class SlackAlerting(CustomLogger):
         ttl = 1hr
         max_alerts_size = 10
         """
-        _id = provider + region_name
+        try:
 
-        outage_value: Optional[OutageModel] = await self.internal_usage_cache.async_get_cache(key=_id)  # type: ignore
+            _id = provider + region_name
 
-        if (
-            getattr(exception, "status_code", None) is not None
-            and exception.status_code != 408  # type: ignore
-            and exception.status_code < 500  # type: ignore
-        ):
-            return
+            outage_value: Optional[OutageModel] = await self.internal_usage_cache.async_get_cache(key=_id)  # type: ignore
 
-        if outage_value is None:
-            outage_value = OutageModel(
-                provider=provider,
-                region_name=region_name,
-                alerts=[exception.message],
-                deployment_ids=[deployment_id],
-                minor_alert_sent=False,
-                major_alert_sent=False,
-                last_updated_at=time.time(),
-            )
+            if (
+                getattr(exception, "status_code", None) is not None
+                and exception.status_code != 408  # type: ignore
+                and exception.status_code < 500  # type: ignore
+            ):
+                return
 
-            ## add to cache ##
-            await self.internal_usage_cache.async_set_cache(
-                key=_id, value=outage_value, ttl=self.alerting_args.outage_alert_ttl
-            )
-            return
+            if outage_value is None:
+                outage_value = OutageModel(
+                    provider=provider,
+                    region_name=region_name,
+                    alerts=[exception.message],
+                    deployment_ids=[deployment_id],
+                    minor_alert_sent=False,
+                    major_alert_sent=False,
+                    last_updated_at=time.time(),
+                )
 
-        outage_value["alerts"].append(exception.message)
-        outage_value["deployment_ids"].append(deployment_id)
-        outage_value["last_updated_at"] = time.time()
+                ## add to cache ##
+                await self.internal_usage_cache.async_set_cache(
+                    key=_id, value=outage_value, ttl=self.alerting_args.outage_alert_ttl
+                )
+                return
 
-        ## MINOR OUTAGE ALERT SENT ##
-        if (
-            outage_value["minor_alert_sent"] == False
-            and len(outage_value["alerts"])
-            > self.alerting_args.minor_outage_alert_threshold
-        ):
-            msg = "{} {} is having a **Minor Service Outage**.\n\n**Errors**\n{}\n\nLast Check:{}".format(
-                provider,
-                region_name,
-                outage_value["alerts"],
-                outage_value["last_updated_at"],
-            )
-            # send minor alert
-            _result_val = self.send_alert(
-                message=msg, level="Medium", alert_type="outage_alerts"
-            )
-            if _result_val is not None:
-                await _result_val
-            # set to true
-            outage_value["minor_alert_sent"] = True
-        elif (
-            outage_value["major_alert_sent"] == False
-            and len(outage_value["alerts"])
-            > self.alerting_args.major_outage_alert_threshold
-        ):
-            msg = "{} {} is having a **Major Service Outage**.\n\n**Errors**\n{}\n\nLast Check:{}".format(
-                provider,
-                region_name,
-                outage_value["alerts"],
-                outage_value["last_updated_at"],
-            )
-            # send minor alert
-            await self.send_alert(message=msg, level="High", alert_type="outage_alerts")
-            # set to true
-            outage_value["major_alert_sent"] = True
+            outage_value["alerts"].append(exception.message)
+            outage_value["deployment_ids"].append(deployment_id)
+            outage_value["last_updated_at"] = time.time()
+            ## MINOR OUTAGE ALERT SENT ##
+            if (
+                outage_value["minor_alert_sent"] == False
+                and len(outage_value["alerts"])
+                >= self.alerting_args.minor_outage_alert_threshold
+            ):
+                msg = "{} {} is having a **Minor Service Outage**.\n\n**Errors**\n{}\n\nLast Check:{}".format(
+                    provider,
+                    region_name,
+                    outage_value["alerts"],
+                    outage_value["last_updated_at"],
+                )
+                # send minor alert
+                _result_val = self.send_alert(
+                    message=msg, level="Medium", alert_type="outage_alerts"
+                )
+                if _result_val is not None:
+                    await _result_val
+                # set to true
+                outage_value["minor_alert_sent"] = True
+            elif (
+                outage_value["major_alert_sent"] == False
+                and len(outage_value["alerts"])
+                >= self.alerting_args.major_outage_alert_threshold
+            ):
+                msg = "{} {} is having a **Major Service Outage**.\n\n**Errors**\n{}\n\nLast Check:{}".format(
+                    provider,
+                    region_name,
+                    outage_value["alerts"],
+                    outage_value["last_updated_at"],
+                )
+                # send minor alert
+                await self.send_alert(
+                    message=msg, level="High", alert_type="outage_alerts"
+                )
+                # set to true
+                outage_value["major_alert_sent"] = True
 
-        ## update cache ##
-        await self.internal_usage_cache.async_set_cache(key=_id, value=outage_value)
+            ## update cache ##
+            await self.internal_usage_cache.async_set_cache(key=_id, value=outage_value)
+        except Exception as e:
+            pass
 
     async def model_added_alert(
         self, model_name: str, litellm_model_name: str, passed_model_info: Any
