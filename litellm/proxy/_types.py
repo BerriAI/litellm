@@ -7,6 +7,19 @@ import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
+AlertType = Literal[
+    "llm_exceptions",
+    "llm_too_slow",
+    "llm_requests_hanging",
+    "budget_alerts",
+    "db_exceptions",
+    "daily_reports",
+    "spend_reports",
+    "cooldown_deployment",
+    "new_model_added",
+    "outage_alerts",
+]
+
 
 def hash_token(token: str):
     import hashlib
@@ -855,17 +868,7 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
     )
-    alert_types: Optional[
-        List[
-            Literal[
-                "llm_exceptions",
-                "llm_too_slow",
-                "llm_requests_hanging",
-                "budget_alerts",
-                "db_exceptions",
-            ]
-        ]
-    ] = Field(
+    alert_types: Optional[List[AlertType]] = Field(
         None,
         description="List of alerting types. By default it is all alerts",
     )

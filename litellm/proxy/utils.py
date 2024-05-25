@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     Member,
     CallInfo,
     WebhookEvent,
+    AlertType,
 )
 from litellm.caching import DualCache, RedisCache
 from litellm.router import Deployment, ModelInfo, LiteLLM_Params
@@ -79,19 +80,7 @@ class ProxyLogging:
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
-        self.alert_types: List[
-            Literal[
-                "llm_exceptions",
-                "llm_too_slow",
-                "llm_requests_hanging",
-                "budget_alerts",
-                "db_exceptions",
-                "daily_reports",
-                "spend_reports",
-                "cooldown_deployment",
-                "new_model_added",
-            ]
-        ] = [
+        self.alert_types: List[AlertType] = [
             "llm_exceptions",
             "llm_too_slow",
             "llm_requests_hanging",
@@ -101,6 +90,7 @@ class ProxyLogging:
             "spend_reports",
             "cooldown_deployment",
             "new_model_added",
+            "outage_alerts",
         ]
         self.slack_alerting_instance = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
@@ -114,21 +104,7 @@ class ProxyLogging:
         alerting: Optional[List],
         alerting_threshold: Optional[float],
         redis_cache: Optional[RedisCache],
-        alert_types: Optional[
-            List[
-                Literal[
-                    "llm_exceptions",
-                    "llm_too_slow",
-                    "llm_requests_hanging",
-                    "budget_alerts",
-                    "db_exceptions",
-                    "daily_reports",
-                    "spend_reports",
-                    "cooldown_deployment",
-                    "new_model_added",
-                ]
-            ]
-        ] = None,
+        alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
     ):
         self.alerting = alerting
@@ -2592,13 +2568,13 @@ def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
     return
 
 
-def _is_user_proxy_admin(user_id_information=None):
-    if (
-        user_id_information == None
-        or len(user_id_information) == 0
-        or user_id_information[0] == None
-    ):
+def _is_user_proxy_admin(user_id_information: Optional[list]):
+    if user_id_information is None:
         return False
+
+    if len(user_id_information) == 0 or user_id_information[0] is None:
+        return False
+
     _user = user_id_information[0]
     if (
         _user.get("user_role", None) is not None
