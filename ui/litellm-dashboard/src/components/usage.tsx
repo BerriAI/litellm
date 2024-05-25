@@ -3,7 +3,7 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem, DateRangePicker, DateRangePickerValue } from "@tremor/react";
+import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem, DateRangePicker, DateRangePickerValue, DonutChart} from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -16,6 +16,7 @@ import {
   modelMetricsCall,
   modelAvailableCall,
   modelInfoCall,
+  adminspendByProvider,
 } from "./networking";
 import { start } from "repl";
 
@@ -115,6 +116,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
@@ -210,6 +212,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
           if (userRole == "Admin" || userRole == "Admin Viewer") {
             const overall_spend = await adminSpendLogsCall(accessToken);
             setKeySpendData(overall_spend);
+
+            const provider_spend = await adminspendByProvider(accessToken, token, startTime, endTime);
+            console.log("provider_spend", provider_spend);
+            setSpendByProvider(provider_spend);
+
+
             const top_keys = await adminTopKeysCall(accessToken);
             const filtered_keys = top_keys.map((k: any) => ({
               key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(
@@ -373,6 +381,44 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Col numColSpan={1}>
                 
               </Col>
+              <Col numColSpan={2}>
+              <Card className="mb-2">
+                <Title>✨ Spend by Provider</Title>
+                <Grid numItems={2}>
+                  <Col numColSpan={1}>
+                    <DonutChart
+                      className="mt-4 h-40"
+                      variant="pie"
+                      data={spendByProvider}
+                      index="provider"
+                      category="spend"
+                    />
+                  </Col>
+                  <Col numColSpan={1}>
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Provider</TableHeaderCell>
+                          <TableHeaderCell>Spend</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {spendByProvider.map((provider) => (
+                          <TableRow key={provider.provider}>
+                            <TableCell>{provider.provider}</TableCell>
+                            <TableCell>
+                              {parseFloat(provider.spend.toFixed(2)) < 0.00001
+                                ? "less than 0.00"
+                                : provider.spend.toFixed(2)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Col>
+                </Grid>
+              </Card>
+            </Col>
             </Grid>
             </TabPanel>
             <TabPanel>
@@ -382,6 +428,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Title>Total Spend Per Team</Title>
                 <BarList
                   data={totalSpendPerTeam}
+                  
                 />
               </Card>
               <Card>
