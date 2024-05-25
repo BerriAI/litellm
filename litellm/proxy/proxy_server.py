@@ -5884,6 +5884,111 @@ async def view_spend_tags(
 
 
 @router.get(
+    "/global/spend/provider",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def get_global_spend_provider(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view spend",
+    ),
+):
+    """
+    Get breakdown of spend per provider
+    [
+        {
+            "provider": "Azure OpenAI",
+            "spend": 20
+        },
+        {
+            "provider": "OpenAI",
+            "spend": 10
+        },
+        {
+            "provider": "VertexAI",
+            "spend": 30
+        }
+    ]
+    """
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+    global prisma_client, llm_router
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        sql_query = """
+
+        SELECT
+        model_id,
+        SUM(spend) AS spend
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime" BETWEEN $1::date AND $2::date
+        GROUP BY model_id
+        """
+
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj
+        )
+        if db_response is None:
+            return []
+
+        ###################################
+        # Convert model_id -> to Provider #
+        ###################################
+
+        # we use the in memory router for this
+        ui_response = []
+        for row in db_response:
+            _model_id = row["model_id"]
+            _provider = "Unknown"
+            if llm_router is not None:
+                _deployment = llm_router.get_deployment(model_id=_model_id)
+                if _deployment is not None:
+                    try:
+                        _, _provider, _, _ = litellm.get_llm_provider(
+                            model=_deployment.litellm_params.model,
+                            custom_llm_provider=_deployment.litellm_params.custom_llm_provider,
+                            api_base=_deployment.litellm_params.api_base,
+                            litellm_params=_deployment.litellm_params,
+                        )
+                    except:
+                        pass
+
+                ui_response.append(
+                    {
+                        "provider": _provider,
+                        "spend": row["spend"],
+                    }
+                )
+        return ui_response
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
     "/global/spend/report",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
