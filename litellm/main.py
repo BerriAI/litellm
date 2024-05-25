@@ -2099,6 +2099,7 @@ def completion(
                     extra_headers=extra_headers,
                     timeout=timeout,
                     acompletion=acompletion,
+                    client=client,
                 )
             if optional_params.get("stream", False):
                 ## LOGGING
