@@ -1,9 +1,16 @@
-import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem, DateRangePicker, DateRangePickerValue, DonutChart} from "@tremor/react";
+import { 
+  Grid, Col, Text, 
+  LineChart, TabPanel, TabPanels, 
+  TabGroup, TabList, Tab, Select, SelectItem, 
+  DateRangePicker, DateRangePickerValue, 
+  DonutChart,
+  AreaChart,
+} from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -17,6 +24,8 @@ import {
   modelAvailableCall,
   modelInfoCall,
   adminspendByProvider,
+  adminGlobalActivity,
+  adminGlobalActivityPerModel,
 } from "./networking";
 import { start } from "repl";
 
@@ -27,6 +36,13 @@ interface UsagePageProps {
   userID: string | null;
   keys: any[] | null;
 }
+
+interface GlobalActivityData {
+  sum_api_requests: number;
+  sum_total_tokens: number;
+  daily_data: { date: string; api_requests: number; total_tokens: number }[];
+}
+
 
 type CustomTooltipTypeBar = {
   payload: any;
@@ -117,6 +133,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
+  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
+  const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
@@ -265,6 +283,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
             console.log("spend/user result", spend_user_call);
 
+            let global_activity_response = await adminGlobalActivity(accessToken, startTime, endTime);
+            setGlobalActivity(global_activity_response)
+
+            let global_activity_per_model = await adminGlobalActivityPerModel(accessToken, startTime, endTime);
+            console.log("global activity per model", global_activity_per_model);
+            setGlobalActivityPerModel(global_activity_per_model)
+
+
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
               accessToken,
@@ -326,6 +352,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
           <Tab>End User Usage</Tab>
            <Tab>Tag Based Usage</Tab>
         </TabList>
+        <TabPanels>
+          <TabPanel>
+
+          <TabGroup>
+            <TabList variant="solid" className="mt-1">
+            <Tab>Cost</Tab>
+            <Tab>Activity</Tab>
+          </TabList>
         <TabPanels>
           <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full">
@@ -420,6 +454,76 @@ const UsagePage: React.FC<UsagePageProps> = ({
               </Card>
             </Col>
             </Grid>
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={1} className="gap-2 h-[75vh] w-full">
+                <Card>
+                <Title>All Up</Title>
+                <Grid numItems={2}>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                <AreaChart
+                    className="h-40"
+                    data={globalActivity.daily_data}
+                    index="date"
+                    colors={['cyan']}
+                    categories={['api_requests']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+
+                </Col>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                <BarChart
+                    className="h-40"
+                    data={globalActivity.daily_data}
+                    index="date"
+                    colors={['cyan']}
+                    categories={['total_tokens']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+                </Col>
+                </Grid>
+                
+
+                </Card>
+
+                {globalActivityPerModel.map((globalActivity, index) => (
+                <Card key={index}>
+                  <Title>{globalActivity.model}</Title>
+                  <Grid numItems={2}>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                      <AreaChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['api_requests']}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                      <BarChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['total_tokens']}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                  </Grid>
+                </Card>
+              ))}
+
+                
+              </Grid>
+            </TabPanel>
+            </TabPanels>
+            </TabGroup>
+
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full">
