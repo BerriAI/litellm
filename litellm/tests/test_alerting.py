@@ -589,7 +589,7 @@ async def test_outage_alerting_called(
         mock_send_alert.assert_called_once()
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        for _ in range(3):
+        for _ in range(6):
             try:
                 await router.acompletion(
                     model=model,
