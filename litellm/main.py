@@ -420,6 +420,8 @@ def mock_completion(
                 api_key="mock-key",
             )
         if isinstance(mock_response, Exception):
+            if isinstance(mock_response, openai.APIError):
+                raise mock_response
             raise litellm.APIError(
                 status_code=500,  # type: ignore
                 message=str(mock_response),
@@ -463,7 +465,9 @@ def mock_completion(
 
         return model_response
 
-    except:
+    except Exception as e:
+        if isinstance(e, openai.APIError):
+            raise e
         traceback.print_exc()
         raise Exception("Mock completion response failed")
 
@@ -864,6 +868,7 @@ def completion(
             user=user,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            custom_llm_provider=custom_llm_provider,
         )
         if mock_response:
             return mock_completion(
