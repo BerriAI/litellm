@@ -555,16 +555,30 @@ async def test_outage_alerting_called(
                 ),
             ),
         )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": model,
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": api_base,
+                    "vertex_location": vertex_location,
+                    "vertex_project": vertex_project,
+                },
+            }
+        ],
+        num_retries=0,
+        allowed_fails=100,
+    )
     with patch.object(
         slack_alerting, "outage_alerts", new=AsyncMock()
     ) as mock_send_alert:
         try:
-            await litellm.acompletion(
+            await router.acompletion(
                 model=model,
                 messages=[{"role": "user", "content": "Hey!"}],
-                api_base=api_base,
-                vertex_location=vertex_location,
-                vertex_project=vertex_project,
                 mock_response=error_to_raise,
             )
         except Exception as e:
@@ -575,17 +589,14 @@ async def test_outage_alerting_called(
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         for _ in range(3):
             try:
-                await litellm.acompletion(
+                await router.acompletion(
                     model=model,
                     messages=[{"role": "user", "content": "Hey!"}],
-                    api_base=api_base,
-                    vertex_location=vertex_location,
-                    vertex_project=vertex_project,
                     mock_response=error_to_raise,
                 )
             except Exception as e:
                 pass
-
+        await asyncio.sleep(3)
         if error_code == 500 or error_code == 408:
             mock_send_alert.assert_called_once()
         else:
