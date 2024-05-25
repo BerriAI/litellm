@@ -1093,7 +1093,7 @@ class CallInfo(LiteLLMBase):
     """Used for slack budget alerting"""
 
     spend: float
-    max_budget: float
+    max_budget: Optional[float] = None
     token: str = Field(description="Hashed value of that key")
     user_id: Optional[str] = None
     team_id: Optional[str] = None
