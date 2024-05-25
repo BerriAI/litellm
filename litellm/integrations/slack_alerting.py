@@ -18,6 +18,10 @@ from litellm.proxy._types import WebhookEvent
 import random
 
 
+# we use this for the email header, please send a test email if you change this. verify it looks good on email
+LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+
+
 class LiteLLMBase(BaseModel):
     """
     Implements default functions, all pydantic objects should have.
@@ -785,7 +789,7 @@ Model Info:
 
         # make sure this is a premium user
         from litellm.proxy.proxy_server import premium_user
-        from litellm.proxy.proxy_server import CommonProxyErrors
+        from litellm.proxy.proxy_server import CommonProxyErrors, prisma_client
 
         if premium_user != True:
             raise Exception(
@@ -800,9 +804,6 @@ Model Info:
             and recipient_user_id is not None
             and prisma_client is not None
         ):
-            # try looking up this info in DB
-            from litellm.proxy.proxy_server import prisma_client
-
             user_row = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": recipient_user_id}
             )
@@ -820,7 +821,7 @@ Model Info:
                 "Trying to send email alert to no recipient", extra=webhook_event.dict()
             )
         email_html_content = f"""
-            <h1>LiteLLM</h1>
+            <img src="{LITELLM_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
 
             <p> Hi {recipient_email}, <br/>
  
@@ -829,6 +830,8 @@ Model Info:
             Key: <pre>{key_token}</pre> <br>
 
             <h2>Usage Example</h2>
+
+            Detailed Documentation on <a href="https://docs.litellm.ai/docs/proxy/user_keys">Usage with OpenAI Python SDK, Langchain, LlamaIndex, Curl</a>
 
             <pre>
 
@@ -850,7 +853,6 @@ Model Info:
 
             </pre>
 
-            Detailed Documentation on <a href="https://docs.litellm.ai/docs/proxy/user_keys">Usage with OpenAI Python SDK, Langchain, LlamaIndex, Curl</a>
 
             If you have any questions, please send an email to support@berri.ai <br /> <br />
 
@@ -895,7 +897,7 @@ Model Info:
 
         if webhook_event.event == "budget_crossed":
             email_html_content = f"""
-            <h1>LiteLLM</h1>
+            <img src="{LITELLM_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
 
             <p> Hi {user_name}, <br/>
 
