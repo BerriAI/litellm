@@ -5919,6 +5919,8 @@ async def get_global_spend_provider(
         }
     ]
     """
+    from collections import defaultdict
+
     if start_date is None or end_date is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -5941,7 +5943,7 @@ async def get_global_spend_provider(
         model_id,
         SUM(spend) AS spend
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" BETWEEN $1::date AND $2::date
+        WHERE "startTime" BETWEEN $1::date AND $2::date AND length(model_id) > 0
         GROUP BY model_id
         """
 
@@ -5957,6 +5959,7 @@ async def get_global_spend_provider(
 
         # we use the in memory router for this
         ui_response = []
+        provider_spend_mapping: defaultdict = defaultdict(int)
         for row in db_response:
             _model_id = row["model_id"]
             _provider = "Unknown"
@@ -5970,15 +5973,13 @@ async def get_global_spend_provider(
                             api_base=_deployment.litellm_params.api_base,
                             litellm_params=_deployment.litellm_params,
                         )
+                        provider_spend_mapping[_provider] += row["spend"]
                     except:
                         pass
 
-                ui_response.append(
-                    {
-                        "provider": _provider,
-                        "spend": row["spend"],
-                    }
-                )
+        for provider, spend in provider_spend_mapping.items():
+            ui_response.append({"provider": provider, "spend": spend})
+
         return ui_response
 
     except Exception as e:
