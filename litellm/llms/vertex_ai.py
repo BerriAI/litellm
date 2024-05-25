@@ -376,17 +376,31 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
         assistant_content = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
-            if assistant_text:
-                assistant_content.append(PartType(text=assistant_text))
-            if messages[msg_i].get(
+            if isinstance(messages[msg_i]["content"], list):
+                _parts = []
+                for element in messages[msg_i]["content"]:
+                    if isinstance(element, dict):
+                        if element["type"] == "text":
+                            _part = PartType(text=element["text"])
+                            _parts.append(_part)
+                        elif element["type"] == "image_url":
+                            image_url = element["image_url"]["url"]
+                            _part = _process_gemini_image(image_url=image_url)
+                            _parts.append(_part)  # type: ignore
+                assistant_content.extend(_parts)
+            elif messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke convertion
                 assistant_content.extend(
                     convert_to_gemini_tool_call_invoke(messages[msg_i]["tool_calls"])
                 )
+            else:
+                assistant_text = (
+                    messages[msg_i].get("content") or ""
+                )  # either string or none
+                if assistant_text:
+                    assistant_content.append(PartType(text=assistant_text))
+
             msg_i += 1
 
         if assistant_content:
