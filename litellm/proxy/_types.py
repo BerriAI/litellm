@@ -1101,3 +1101,11 @@ class CallInfo(LiteLLMBase):
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
+
+
+class WebhookEvent(CallInfo):
+    event: Literal[
+        "budget_crossed", "threshold_crossed", "projected_limit_exceeded", "key_created"
+    ]
+    event_group: Literal["user", "key", "team", "proxy"]
+    event_message: str  # human-readable description of event
