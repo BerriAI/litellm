@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from enum import Enum
 from datetime import datetime as dt, timedelta, timezone
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import WebhookEvent
 import random
 
 
@@ -37,12 +38,6 @@ class SlackAlertingArgs(LiteLLMBase):
     )
     report_check_interval: int = 5 * 60  # 5 minutes
     budget_alert_ttl: int = 24 * 60 * 60  # 24 hours
-
-
-class WebhookEvent(CallInfo):
-    event: Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
-    event_group: Literal["user", "key", "team", "proxy"]
-    event_message: str  # human-readable description of event
 
 
 class DeploymentMetrics(LiteLLMBase):
@@ -778,6 +773,103 @@ Model Info:
             return True
         else:
             print("Error sending webhook alert. Error=", response.text)  # noqa
+
+        return False
+
+    async def send_key_created_email(self, webhook_event: WebhookEvent) -> bool:
+        from litellm.proxy.utils import send_email
+
+        if self.alerting is None or "email" not in self.alerting:
+            # do nothing if user does not want email alerts
+            return False
+
+        # make sure this is a premium user
+        from litellm.proxy.proxy_server import premium_user
+        from litellm.proxy.proxy_server import CommonProxyErrors
+
+        if premium_user != True:
+            raise Exception(
+                f"Trying to use Email Alerting on key creation\n {CommonProxyErrors.not_premium_user.value}"
+            )
+
+        event_name = webhook_event.event_message
+        recipient_email = webhook_event.user_email
+        recipient_user_id = webhook_event.user_id
+        if (
+            recipient_email is None
+            and recipient_user_id is not None
+            and prisma_client is not None
+        ):
+            # try looking up this info in DB
+            from litellm.proxy.proxy_server import prisma_client
+
+            user_row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": recipient_user_id}
+            )
+
+            if user_row is not None:
+                recipient_email = user_row.user_email
+
+        key_name = webhook_event.key_alias
+        key_token = webhook_event.token
+        key_budget = webhook_event.max_budget
+
+        email_html_content = "Alert from LiteLLM Server"
+        if recipient_email is None:
+            verbose_proxy_logger.error(
+                "Trying to send email alert to no recipient", extra=webhook_event.dict()
+            )
+        email_html_content = f"""
+            <h1>LiteLLM</h1>
+
+            <p> Hi {recipient_email}, <br/>
+ 
+            I'm happy to provide you with an OpenAI Proxy API Key, loaded with ${key_budget} per month. <br /> <br />
+
+            Key: <pre>{key_token}</pre> <br>
+
+            <h2>Usage Example</h2>
+
+            <pre>
+
+            import openai
+            client = openai.OpenAI(
+                api_key="{key_token}",
+                base_url={os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")}
+            )
+
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo", # model to send to the proxy
+                messages = [
+                    {{
+                        "role": "user",
+                        "content": "this is a test request, write a short poem"
+                    }}
+                ]
+            )
+
+            </pre>
+
+            Detailed Documentation on <a href="https://docs.litellm.ai/docs/proxy/user_keys">Usage with OpenAI Python SDK, Langchain, LlamaIndex, Curl</a>
+
+            If you have any questions, please send an email to support@berri.ai <br /> <br />
+
+            Best, <br />
+            The LiteLLM team <br />
+            """
+
+        payload = webhook_event.model_dump_json()
+        email_event = {
+            "to": recipient_email,
+            "subject": f"LiteLLM: {event_name}",
+            "html": email_html_content,
+        }
+
+        response = await send_email(
+            receiver_email=email_event["to"],
+            subject=email_event["subject"],
+            html=email_event["html"],
+        )
 
         return False
 
