@@ -1072,6 +1072,42 @@ export const adminGlobalActivity = async (accessToken: String, startTime: String
 };
 
 
+export const adminGlobalActivityPerModel = async (accessToken: String, startTime: String | undefined, endTime: String | undefined) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/model` : `/global/activity/model`;
+
+    if (startTime && endTime) {
+      url += `?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    const requestOptions: {
+      method: string;
+      headers: {
+        Authorization: string;
+      };
+    } = {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    };
+
+    const response = await fetch(url, requestOptions);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch spend data:", error);
+    throw error;
+  }
+};
+
+
 export const adminTopModelsCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl
