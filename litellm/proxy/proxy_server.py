@@ -5961,6 +5961,10 @@ async def get_global_activity(
         sum_total_tokens = 0
         daily_data = []
         for row in db_response:
+            # cast date to datetime
+            _date_obj = datetime.fromisoformat(row["date"])
+            row["date"] = _date_obj.strftime("%b %d")
+
             daily_data.append(row)
             sum_api_requests += row.get("api_requests", 0)
             sum_total_tokens += row.get("total_tokens", 0)
