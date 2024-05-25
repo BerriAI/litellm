@@ -486,7 +486,7 @@ def test_completion_bedrock_mistral_completion_auth():
             messages=messages,
             max_tokens=10,
             temperature=0.1,
-        )
+        )  # type: ignore
         # Add any assertions here to check the response
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
@@ -501,3 +501,21 @@ def test_completion_bedrock_mistral_completion_auth():
 
 
 # test_completion_bedrock_mistral_completion_auth()
+
+
+def test_bedrock_ptu():
+    """
+    Check if a url with 'modelId' passed in, is created correctly
+
+    Reference: https://github.com/BerriAI/litellm/issues/3805
+    """
+
+    from openai.types.chat import ChatCompletion
+
+    response = litellm.completion(
+        model="bedrock/amazon.my-incorrect-model",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        model_id="amazon.titan-text-lite-v1",
+    )
+
+    ChatCompletion.model_validate(response.model_dump(), strict=True)
