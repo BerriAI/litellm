@@ -827,7 +827,9 @@ Model Info:
  
             I'm happy to provide you with an OpenAI Proxy API Key, loaded with ${key_budget} per month. <br /> <br />
 
+            <b>
             Key: <pre>{key_token}</pre> <br>
+            </b>
 
             <h2>Usage Example</h2>
 
@@ -901,7 +903,7 @@ Model Info:
 
             <p> Hi {user_name}, <br/>
 
-            Your LLM API usage this month has reached your account's monthly budget of ${max_budget} <br /> <br />
+            Your LLM API usage this month has reached your account's <b> monthly budget of ${max_budget} </b> <br /> <br />
 
             API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
 
