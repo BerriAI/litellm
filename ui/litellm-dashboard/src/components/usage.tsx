@@ -25,6 +25,7 @@ import {
   modelInfoCall,
   adminspendByProvider,
   adminGlobalActivity,
+  adminGlobalActivityPerModel,
 } from "./networking";
 import { start } from "repl";
 
@@ -126,6 +127,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
   const [globalActivity, setGlobalActivity] = useState<any[]>([]);
+  const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
@@ -276,6 +278,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
             let global_activity_response = await adminGlobalActivity(accessToken, startTime, endTime);
             setGlobalActivity(global_activity_response)
+
+            let global_activity_per_model = await adminGlobalActivityPerModel(accessToken, startTime, endTime);
+            console.log("global activity per model", global_activity_per_model);
+            setGlobalActivityPerModel(global_activity_per_model)
 
 
           } else if (userRole == "App Owner") {
@@ -453,6 +459,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     className="h-40"
                     data={globalActivity.daily_data}
                     index="date"
+                    colors={['cyan']}
                     categories={['api_requests']}
                     onValueChange={(v) => console.log(v)}
                   />
@@ -464,6 +471,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     className="h-40"
                     data={globalActivity.daily_data}
                     index="date"
+                    colors={['cyan']}
                     categories={['total_tokens']}
                     onValueChange={(v) => console.log(v)}
                   />
@@ -472,6 +480,38 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 
 
                 </Card>
+
+                {globalActivityPerModel.map((globalActivity, index) => (
+                <Card key={index}>
+                  <Title>{globalActivity.model}</Title>
+                  <Grid numItems={2}>
+                    <Col>
+                      <Subtitle>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                      <AreaChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['api_requests']}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                    <Col>
+                      <Subtitle>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                      <BarChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['total_tokens']}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                  </Grid>
+                </Card>
+              ))}
+
+                
               </Grid>
             </TabPanel>
             </TabPanels>
