@@ -1112,3 +1112,8 @@ class WebhookEvent(CallInfo):
     ]
     event_group: Literal["user", "key", "team", "proxy"]
     event_message: str  # human-readable description of event
+
+
+class SpecialModelNames(enum.Enum):
+    all_team_models = "all-team-models"
+    all_proxy_models = "all-proxy-models"
