@@ -612,7 +612,6 @@ class UpdateTeamRequest(LiteLLMBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
 
 
 class DeleteTeamRequest(LiteLLMBase):

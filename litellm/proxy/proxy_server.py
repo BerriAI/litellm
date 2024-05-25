@@ -8121,16 +8121,16 @@ async def update_team(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
+    updated_kv = data.json(exclude_none=True)
+
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
         duration_s = _duration_in_seconds(duration=data.budget_duration)
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
-        # set the budget duration and budget_reset_at in DB
-        data.budget_duration = duration_s
-        data.budget_reset_at = reset_at
+        # set the budget_reset_at in DB
+        updated_kv["budget_reset_at"] = reset_at
 
-    updated_kv = data.json(exclude_none=True)
     team_row = await prisma_client.update_data(
         update_key_values=updated_kv,
         data=updated_kv,
