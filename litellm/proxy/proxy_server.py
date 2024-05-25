@@ -263,9 +263,7 @@ class ProxyException(Exception):
 
 
 class UserAPIKeyCacheTTLEnum(enum.Enum):
-    key_information_cache = 600
-    user_information_cache = 600
-    global_proxy_spend = 60
+    in_memory_cache_ttl = 60  # 1 min ttl ## configure via `general_settings::user_api_key_cache_ttl: <your-value>`
 
 
 class SpecialModelNames(enum.Enum):
@@ -343,7 +341,9 @@ master_key = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
 custom_db_client: Optional[DBClient] = None
-user_api_key_cache = DualCache()
+user_api_key_cache = DualCache(
+    default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+)
 redis_usage_cache: Optional[RedisCache] = (
     None  # redis cache used for tracking spend, tpm/rpm limits
 )
@@ -594,7 +594,6 @@ async def user_api_key_auth(
                         await user_api_key_cache.async_set_cache(
                             key="{}:spend".format(litellm_proxy_admin_name),
                             value=global_proxy_spend,
-                            ttl=UserAPIKeyCacheTTLEnum.global_proxy_spend.value,
                         )
                     if global_proxy_spend is not None:
                         user_info = CallInfo(
@@ -924,7 +923,6 @@ async def user_api_key_auth(
                                 await user_api_key_cache.async_set_cache(
                                     key=_id["user_id"],
                                     value=_id,
-                                    ttl=UserAPIKeyCacheTTLEnum.user_information_cache.value,
                                 )
 
                 verbose_proxy_logger.debug(
@@ -1026,7 +1024,6 @@ async def user_api_key_auth(
                         await user_api_key_cache.async_set_cache(
                             key=_cache_key,
                             value=team_member_info,
-                            ttl=UserAPIKeyCacheTTLEnum.user_information_cache.value,
                         )
 
                     if (
@@ -1196,7 +1193,6 @@ async def user_api_key_auth(
                     await user_api_key_cache.async_set_cache(
                         key="{}:spend".format(litellm_proxy_admin_name),
                         value=global_proxy_spend,
-                        ttl=UserAPIKeyCacheTTLEnum.global_proxy_spend.value,
                     )
 
                 if global_proxy_spend is not None:
@@ -1229,7 +1225,6 @@ async def user_api_key_auth(
             await user_api_key_cache.async_set_cache(
                 key=api_key,
                 value=valid_token,
-                ttl=UserAPIKeyCacheTTLEnum.key_information_cache.value,
             )
             valid_token_dict = valid_token.model_dump(exclude_none=True)
             valid_token_dict.pop("token", None)
@@ -2658,6 +2653,15 @@ class ProxyConfig:
 
             if master_key is not None and isinstance(master_key, str):
                 litellm_master_key_hash = hash_token(master_key)
+            ### USER API KEY CACHE IN-MEMORY TTL ###
+            user_api_key_cache_ttl = general_settings.get(
+                "user_api_key_cache_ttl", None
+            )
+            if user_api_key_cache_ttl is not None:
+                user_api_key_cache.update_cache_ttl(
+                    default_in_memory_ttl=float(user_api_key_cache_ttl),
+                    default_redis_ttl=None,  # user_api_key_cache is an in-memory cache
+                )
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
