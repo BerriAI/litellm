@@ -8,6 +8,7 @@ Get alerts for:
 - Budget Tracking per key/user
 - Spend Reports - Weekly & Monthly spend per Team, Tag
 - Failed db read/writes
+- Model outage alerting
 - Daily Reports:
     - **LLM** Top 5 slowest deployments
     - **LLM** Top 5 deployments with most failed requests
@@ -74,21 +75,19 @@ general_settings:
 All Possible Alert Types
 
 ```python
-alert_types: 
-Optional[
-List[
-    Literal[
-        "llm_exceptions",
-        "llm_too_slow",
-        "llm_requests_hanging",
-        "budget_alerts",
-        "db_exceptions",
-        "daily_reports",
-        "spend_reports",
-        "cooldown_deployment",
-        "new_model_added",
-    ]
+AlertType = Literal[
+    "llm_exceptions",
+    "llm_too_slow",
+    "llm_requests_hanging",
+    "budget_alerts",
+    "db_exceptions",
+    "daily_reports",
+    "spend_reports",
+    "cooldown_deployment",
+    "new_model_added",
+    "outage_alerts",
 ]
+
 ```
 
 
