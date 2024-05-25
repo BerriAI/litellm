@@ -1,7 +1,7 @@
 #### What this does ####
 #    Class for sending Slack Alerts #
 import dotenv, os, traceback
-from litellm.proxy._types import UserAPIKeyAuth, CallInfo
+from litellm.proxy._types import UserAPIKeyAuth, CallInfo, AlertType
 from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm, threading
 from typing import List, Literal, Any, Union, Optional, Dict
@@ -31,20 +31,6 @@ class OutageModel(TypedDict):
     last_updated_at: float
 
 
-AlertType = Literal[
-    "llm_exceptions",
-    "llm_too_slow",
-    "llm_requests_hanging",
-    "budget_alerts",
-    "db_exceptions",
-    "daily_reports",
-    "spend_reports",
-    "cooldown_deployment",
-    "new_model_added",
-    "outage_alerts",
-]
-
-
 class LiteLLMBase(BaseModel):
     """
     Implements default functions, all pydantic objects should have.
@@ -65,8 +51,8 @@ class SlackAlertingArgs(LiteLLMBase):
     )
     report_check_interval: int = 5 * 60  # 5 minutes
     budget_alert_ttl: int = 24 * 60 * 60  # 24 hours
-    outage_alert_ttl: int = 1 * 60 * 60  # 1 hour
-    minor_outage_alert_threshold: int = 3
+    outage_alert_ttl: int = 1 * 60  # 1 minute ttl
+    minor_outage_alert_threshold: int = 5
     major_outage_alert_threshold: int = 10
     max_outage_alert_list_size: int = 10  # prevent memory leak
 

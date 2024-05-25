@@ -484,9 +484,9 @@ async def user_api_key_auth(
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
                 # check if valid token
-                valid_token = await jwt_handler.auth_jwt(token=api_key)
+                jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
                 # get scopes
-                scopes = jwt_handler.get_scopes(token=valid_token)
+                scopes = jwt_handler.get_scopes(token=jwt_valid_token)
 
                 # check if admin
                 is_admin = jwt_handler.is_admin(scopes=scopes)
@@ -509,7 +509,9 @@ async def user_api_key_auth(
                             f"Admin not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
                         )
                 # get team id
-                team_id = jwt_handler.get_team_id(token=valid_token, default_value=None)
+                team_id = jwt_handler.get_team_id(
+                    token=jwt_valid_token, default_value=None
+                )
 
                 if team_id is None and jwt_handler.is_required_team_id() == True:
                     raise Exception(
@@ -539,7 +541,9 @@ async def user_api_key_auth(
                     )
 
                 # [OPTIONAL] track spend for an org id - `LiteLLM_OrganizationTable`
-                org_id = jwt_handler.get_org_id(token=valid_token, default_value=None)
+                org_id = jwt_handler.get_org_id(
+                    token=jwt_valid_token, default_value=None
+                )
                 if org_id is not None:
                     _ = await get_org_object(
                         org_id=org_id,
@@ -548,7 +552,9 @@ async def user_api_key_auth(
                     )
                 # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
                 user_object = None
-                user_id = jwt_handler.get_user_id(token=valid_token, default_value=None)
+                user_id = jwt_handler.get_user_id(
+                    token=jwt_valid_token, default_value=None
+                )
                 if user_id is not None:
                     # get the user object
                     user_object = await get_user_object(
@@ -561,7 +567,7 @@ async def user_api_key_auth(
                 # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
                 end_user_object = None
                 end_user_id = jwt_handler.get_end_user_id(
-                    token=valid_token, default_value=None
+                    token=jwt_valid_token, default_value=None
                 )
                 if end_user_id is not None:
                     # get the end-user object
@@ -595,7 +601,7 @@ async def user_api_key_auth(
                             user_id=litellm_proxy_admin_name,
                             max_budget=litellm.max_budget,
                             spend=global_proxy_spend,
-                            token=valid_token["token"],
+                            token=jwt_valid_token["token"],
                         )
                         asyncio.create_task(
                             proxy_logging_obj.budget_alerts(
@@ -693,7 +699,9 @@ async def user_api_key_auth(
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         ## Check CACHE
-        valid_token = user_api_key_cache.get_cache(key=hash_token(api_key))
+        valid_token: Optional[UserAPIKeyAuth] = user_api_key_cache.get_cache(
+            key=hash_token(api_key)
+        )
         if (
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
@@ -762,23 +770,19 @@ async def user_api_key_auth(
         original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
-        valid_token = user_api_key_cache.get_cache(key=api_key)
+        valid_token: Optional[UserAPIKeyAuth] = user_api_key_cache.get_cache(  # type: ignore
+            key=api_key
+        )
         if valid_token is None:
             ## check db
             verbose_proxy_logger.debug("api key: %s", api_key)
             if prisma_client is not None:
-                valid_token = await prisma_client.get_data(
+                _valid_token: Optional[BaseModel] = await prisma_client.get_data(
                     token=api_key, table_name="combined_view"
                 )
-            elif custom_db_client is not None:
-                try:
-                    valid_token = await custom_db_client.get_data(
-                        key=api_key, table_name="key"
-                    )
-                except:
-                    # (Patch: For DynamoDB Backwards Compatibility)
-                    valid_token = await custom_db_client.get_data(
-                        key=original_api_key, table_name="key"
+                if _valid_token is not None:
+                    valid_token = UserAPIKeyAuth(
+                        **_valid_token.model_dump(exclude_none=True)
                     )
             verbose_proxy_logger.debug("Token from db: %s", valid_token)
         elif valid_token is not None and isinstance(valid_token, UserAPIKeyAuth):
@@ -793,8 +797,8 @@ async def user_api_key_auth(
                 "allowed_model_region"
             )
 
-        user_id_information = None
-        if valid_token:
+        user_id_information: Optional[List] = None
+        if valid_token is not None:
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
@@ -915,16 +919,13 @@ async def user_api_key_auth(
                             table_name="user",
                             query_type="find_all",
                         )
-                        for _id in user_id_information:
-                            await user_api_key_cache.async_set_cache(
-                                key=_id["user_id"],
-                                value=_id,
-                                ttl=UserAPIKeyCacheTTLEnum.user_information_cache.value,
-                            )
-                    if custom_db_client is not None:
-                        user_id_information = await custom_db_client.get_data(
-                            key=valid_token.user_id, table_name="user"
-                        )
+                        if user_id_information is not None:
+                            for _id in user_id_information:
+                                await user_api_key_cache.async_set_cache(
+                                    key=_id["user_id"],
+                                    value=_id,
+                                    ttl=UserAPIKeyCacheTTLEnum.user_information_cache.value,
+                                )
 
                 verbose_proxy_logger.debug(
                     f"user_id_information: {user_id_information}"
@@ -1067,12 +1068,13 @@ async def user_api_key_auth(
                 # collect information for alerting #
                 ####################################
 
-                user_email = None
+                user_email: Optional[str] = None
                 # Check if the token has any user id information
                 if user_id_information is not None:
-                    if isinstance(user_id_information, list):
-                        user_id_information = user_id_information[0]
-                    user_email = user_id_information.get("user_email", None)
+                    specific_user_id_information = user_id_information[0]
+                    _user_email = specific_user_id_information.get("user_email", None)
+                    if _user_email is not None:
+                        user_email = str(_user_email)
 
                 call_info = CallInfo(
                     token=valid_token.token,
@@ -1229,24 +1231,11 @@ async def user_api_key_auth(
                 value=valid_token,
                 ttl=UserAPIKeyCacheTTLEnum.key_information_cache.value,
             )
-            valid_token_dict = _get_pydantic_json_dict(valid_token)
+            valid_token_dict = valid_token.model_dump(exclude_none=True)
             valid_token_dict.pop("token", None)
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
-            """
-            asyncio create task to update the user api key cache with the user db table as well
-
-            This makes the user row data accessible to pre-api call hooks.
-            """
-            if custom_db_client is not None:
-                asyncio.create_task(
-                    _cache_user_row(
-                        user_id=valid_token.user_id,
-                        cache=user_api_key_cache,
-                        db=custom_db_client,
-                    )
-                )
 
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
                 if route in LiteLLMRoutes.openai_routes.value:
@@ -9633,7 +9622,7 @@ async def google_login(request: Request):
             )
 
     ####### Detect DB + MASTER KEY in .env #######
-    if prisma_client is None and master_key is None:
+    if prisma_client is None or master_key is None:
         from fastapi.responses import HTMLResponse
 
         return HTMLResponse(content=missing_keys_html_form, status_code=200)
@@ -10760,7 +10749,10 @@ async def get_config():
                 }
             )
 
-        _router_settings = llm_router.get_settings()
+        if llm_router is None:
+            _router_settings = {}
+        else:
+            _router_settings = llm_router.get_settings()
         return {
             "status": "success",
             "callbacks": _data_to_return,
@@ -10950,6 +10942,10 @@ async def health_services_endpoint(
                             test_message = f"Budget Alert test alert"
                         elif alert_type == "db_exceptions":
                             test_message = f"DB Exception test alert"
+                        elif alert_type == "outage_alerts":
+                            test_message = f"Outage Alert Exception test alert"
+                        elif alert_type == "daily_reports":
+                            test_message = f"Daily Reports test alert"
 
                         await proxy_logging_obj.alerting_handler(
                             message=test_message, level="Low", alert_type=alert_type
