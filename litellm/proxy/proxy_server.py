@@ -6059,20 +6059,6 @@ async def get_global_activity_model(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    """
-    litellm/proxy/proxy_server.py:219: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
-    litellm/proxy/proxy_server.py:6087: error: Need type annotation for "spend_by_model" (hint: "spend_by_model: Dict[<type>, <type>] = ...")  [var-annotated]
-    litellm/proxy/proxy_server.py:6105: error: "object" has no attribute "append"  [attr-defined]
-    litellm/proxy/proxy_server.py:6113: error: Argument "key" to "sorted" has incompatible type "Callable[[tuple[Any, dict[str, object]]], object]"; expected "Callable[[tuple[Any, dict[str, object]]], SupportsDunderLT[Any] | SupportsDunderGT[Any]]"  [arg-type]
-    litellm/proxy/proxy_server.py:6113: error: Incompatible return value type (got "object", expected "SupportsDunderLT[Any] | SupportsDunderGT[Any]")  [return-value]
-    litellm/proxy/proxy_server.py:6121: error: No overload variant of "sorted" matches argument types "object", "Callable[[Any], Any]"  [call-overload]
-    litellm/proxy/proxy_server.py:6121: note: Possible overload variants:
-    litellm/proxy/proxy_server.py:6121: note:     def [SupportsRichComparisonT] sorted(Iterable[SupportsRichComparisonT], /, *, key: None = ..., reverse: bool = ...) -> list[SupportsRichComparisonT]
-    litellm/proxy/proxy_server.py:6121: note:     def [_T] sorted(Iterable[_T], /, *, key: Callable[[_T], SupportsDunderLT[Any] | SupportsDunderGT[Any]], reverse: bool = ...) -> list[_T]
-    litellm/proxy/proxy_server.py:6121: error: Value of type Never is not indexable  [index]
-    Found 6 errors in 1 file (checked 1 source file)
-    """
-
     global prisma_client, llm_router, premium_user
     try:
         if prisma_client is None:
@@ -6126,7 +6112,6 @@ async def get_global_activity_model(
         )
 
         response = []
-
         for model, data in model_ui_data.items():
             _sort_daily_data = sorted(data["daily_data"], key=lambda x: x["date"])
 
