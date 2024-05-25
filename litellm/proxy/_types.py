@@ -18,6 +18,7 @@ AlertType = Literal[
     "cooldown_deployment",
     "new_model_added",
     "outage_alerts",
+    "region_outage_alerts",
 ]
 
 
