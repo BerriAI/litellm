@@ -17,9 +17,12 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import WebhookEvent
 import random
 
-
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+EMAIL_LOGO_URL = os.getenv(
+    "SMTP_SENDER_LOGO", "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+)
+EMAIL_SUPPORT_CONTACT = os.getenv("EMAIL_SUPPORT_CONTACT", "support@berri.ai")
 
 
 class LiteLLMBase(BaseModel):
@@ -821,7 +824,7 @@ Model Info:
                 "Trying to send email alert to no recipient", extra=webhook_event.dict()
             )
         email_html_content = f"""
-            <img src="{LITELLM_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
+            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
 
             <p> Hi {recipient_email}, <br/>
  
@@ -856,7 +859,7 @@ Model Info:
             </pre>
 
 
-            If you have any questions, please send an email to support@berri.ai <br /> <br />
+            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
 
             Best, <br />
             The LiteLLM team <br />
@@ -899,7 +902,7 @@ Model Info:
 
         if webhook_event.event == "budget_crossed":
             email_html_content = f"""
-            <img src="{LITELLM_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
+            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
 
             <p> Hi {user_name}, <br/>
 
@@ -907,7 +910,7 @@ Model Info:
 
             API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
 
-            If you have any questions, please send an email to support@berri.ai <br /> <br />
+            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
 
             Best, <br />
             The LiteLLM team <br />
