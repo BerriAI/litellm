@@ -6286,7 +6286,9 @@ def get_model_region(
     return None
 
 
-def get_api_base(model: str, optional_params: dict) -> Optional[str]:
+def get_api_base(
+    model: str, optional_params: Union[dict, LiteLLM_Params]
+) -> Optional[str]:
     """
     Returns the api base used for calling the model.
 
@@ -6306,7 +6308,9 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     """
 
     try:
-        if "model" in optional_params:
+        if isinstance(optional_params, LiteLLM_Params):
+            _optional_params = optional_params
+        elif "model" in optional_params:
             _optional_params = LiteLLM_Params(**optional_params)
         else:  # prevent needing to copy and pop the dict
             _optional_params = LiteLLM_Params(
@@ -6699,6 +6703,8 @@ def get_llm_provider(
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
 
     For router -> Can also give the whole litellm param dict -> this function will extract the relevant details
+
+    Raises Error - if unable to map model to a provider
     """
     try:
         ## IF LITELLM PARAMS GIVEN ##

@@ -868,6 +868,7 @@ def completion(
             user=user,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            custom_llm_provider=custom_llm_provider,
         )
         if mock_response:
             return mock_completion(

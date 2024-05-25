@@ -572,6 +572,8 @@ async def test_outage_alerting_called(
         num_retries=0,
         allowed_fails=100,
     )
+
+    slack_alerting.update_values(llm_router=router)
     with patch.object(
         slack_alerting, "outage_alerts", new=AsyncMock()
     ) as mock_send_alert:
