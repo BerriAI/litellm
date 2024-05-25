@@ -994,6 +994,46 @@ export const adminTopEndUsersCall = async (
     throw error;
   }
 };
+export const adminspendByProvider = async (accessToken: String, keyToken: String | null, startTime: String | undefined, endTime: String | undefined) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/provider` : `/global/spend/provider`;
+
+    if (startTime && endTime) {
+      url += `?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    if (keyToken) {
+      url += `&api_key=${keyToken}`;
+    }
+
+    const requestOptions: {
+      method: string;
+      headers: {
+        Authorization: string;
+      };
+    } = {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    };
+
+    const response = await fetch(url, requestOptions);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 10);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch spend data:", error);
+    throw error;
+  }
+};
 
 export const adminTopModelsCall = async (accessToken: String) => {
   try {
