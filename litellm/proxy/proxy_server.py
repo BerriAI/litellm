@@ -8033,7 +8033,16 @@ async def new_team(
 
         _model_id = model_dict.id
 
-    ## ADD TO TEAM TABLE -> the user api key settings are overriding the data we passed i
+    ## ADD TO TEAM TABLE
+    # Check budget_duration and budget_reset_at
+    if data.budget_duration:
+        duration_s = _duration_in_seconds(duration=data.budget_duration)
+        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+
+        # set the budget duration and budget_reset_at in DB
+        data.budget_duration = duration_s
+        data.budget_reset_at = reset_at
+
     complete_team_data = LiteLLM_TeamTable(
         **data.json(),
         model_id=_model_id,
