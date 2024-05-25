@@ -12,6 +12,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     Member,
     CallInfo,
+    WebhookEvent,
 )
 from litellm.caching import DualCache, RedisCache
 from litellm.router import Deployment, ModelInfo, LiteLLM_Params
