@@ -328,6 +328,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
         </TabList>
         <TabPanels>
           <TabPanel>
+
+          <TabGroup>
+            <TabList variant="solid">
+            <Tab>Cost</Tab>
+            <Tab>Activity</Tab>
+          </TabList>
+        <TabPanels>
+          <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full">
               <Col numColSpan={2}>
                 <Card>
@@ -420,6 +428,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
               </Card>
             </Col>
             </Grid>
+            </TabPanel>
+            </TabPanels>
+            </TabGroup>
+
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full">
