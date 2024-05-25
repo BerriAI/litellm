@@ -199,6 +199,7 @@ const CreateKeyPage = () => {
               token={token}
               accessToken={accessToken}
               keys={keys}
+              premiumUser={premiumUser}
             />
           )}
         </div>
