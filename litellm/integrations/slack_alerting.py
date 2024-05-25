@@ -655,6 +655,9 @@ class SlackAlerting(CustomLogger):
             _id = user_info.token
 
         # percent of max_budget left to spend
+        if user_info.max_budget is None:
+            return
+
         if user_info.max_budget > 0:
             percent_left = (
                 user_info.max_budget - user_info.spend
