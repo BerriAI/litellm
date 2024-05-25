@@ -42,7 +42,7 @@ import smtplib, re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
-from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.integrations.slack_alerting import SlackAlerting, AlertType
 from typing_extensions import overload
 
 
@@ -78,19 +78,7 @@ class ProxyLogging:
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
-        self.alert_types: List[
-            Literal[
-                "llm_exceptions",
-                "llm_too_slow",
-                "llm_requests_hanging",
-                "budget_alerts",
-                "db_exceptions",
-                "daily_reports",
-                "spend_reports",
-                "cooldown_deployment",
-                "new_model_added",
-            ]
-        ] = [
+        self.alert_types: List[AlertType] = [
             "llm_exceptions",
             "llm_too_slow",
             "llm_requests_hanging",
@@ -100,6 +88,7 @@ class ProxyLogging:
             "spend_reports",
             "cooldown_deployment",
             "new_model_added",
+            "outage_alerts",
         ]
         self.slack_alerting_instance = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
@@ -113,21 +102,7 @@ class ProxyLogging:
         alerting: Optional[List],
         alerting_threshold: Optional[float],
         redis_cache: Optional[RedisCache],
-        alert_types: Optional[
-            List[
-                Literal[
-                    "llm_exceptions",
-                    "llm_too_slow",
-                    "llm_requests_hanging",
-                    "budget_alerts",
-                    "db_exceptions",
-                    "daily_reports",
-                    "spend_reports",
-                    "cooldown_deployment",
-                    "new_model_added",
-                ]
-            ]
-        ] = None,
+        alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
     ):
         self.alerting = alerting

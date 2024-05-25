@@ -3876,13 +3876,13 @@ class Router:
                 _api_base = litellm.get_api_base(
                     model=_model_name, optional_params=temp_litellm_params
                 )
-                asyncio.create_task(
-                    proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
-                        alert_type="cooldown_deployment",
-                        level="Low",
-                    )
-                )
+                # asyncio.create_task(
+                #     proxy_logging_obj.slack_alerting_instance.send_alert(
+                #         message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
+                #         alert_type="cooldown_deployment",
+                #         level="Low",
+                #     )
+                # )
         except Exception as e:
             pass
 
