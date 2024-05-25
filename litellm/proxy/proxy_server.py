@@ -3007,7 +3007,7 @@ class ProxyConfig:
             general_settings["alert_types"] = _general_settings["alert_types"]
             proxy_logging_obj.alert_types = general_settings["alert_types"]
             proxy_logging_obj.slack_alerting_instance.update_values(
-                alert_types=general_settings["alert_types"]
+                alert_types=general_settings["alert_types"], llm_router=llm_router
             )
 
         if "alert_to_webhook_url" in _general_settings:
@@ -3015,7 +3015,8 @@ class ProxyConfig:
                 "alert_to_webhook_url"
             ]
             proxy_logging_obj.slack_alerting_instance.update_values(
-                alert_to_webhook_url=general_settings["alert_to_webhook_url"]
+                alert_to_webhook_url=general_settings["alert_to_webhook_url"],
+                llm_router=llm_router,
             )
 
     async def _update_general_settings(self, db_general_settings: Optional[Json]):
@@ -3582,6 +3583,9 @@ async def startup_event():
 
     ## Error Tracking ##
     error_tracking()
+
+    ## UPDATE SLACK ALERTING ##
+    proxy_logging_obj.slack_alerting_instance.update_values(llm_router=llm_router)
 
     db_writer_client = HTTPHandler()
 
