@@ -13,6 +13,8 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
 from litellm import RateLimitError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from unittest.mock import patch, AsyncMock, Mock
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -509,13 +511,28 @@ def test_bedrock_ptu():
 
     Reference: https://github.com/BerriAI/litellm/issues/3805
     """
+    client = HTTPHandler()
 
-    from openai.types.chat import ChatCompletion
+    with patch.object(client, "post", new=Mock()) as mock_client_post:
+        litellm.set_verbose = True
+        from openai.types.chat import ChatCompletion
 
-    response = litellm.completion(
-        model="bedrock/amazon.my-incorrect-model",
-        messages=[{"role": "user", "content": "What's AWS?"}],
-        model_id="amazon.titan-text-lite-v1",
-    )
+        model_id = (
+            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
+        )
+        try:
+            response = litellm.completion(
+                model="bedrock/anthropic.claude-instant-v1",
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                model_id=model_id,
+                client=client,
+            )
+        except Exception as e:
+            pass
 
-    ChatCompletion.model_validate(response.model_dump(), strict=True)
+        assert "url" in mock_client_post.call_args.kwargs
+        assert (
+            mock_client_post.call_args.kwargs["url"]
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/invoke"
+        )
+        mock_client_post.assert_called_once()
