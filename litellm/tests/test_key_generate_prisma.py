@@ -50,6 +50,7 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
     user_info,
+    team_info,
     info_key_fn,
     new_team,
     update_team,
@@ -2214,4 +2215,21 @@ async def test_create_update_team(prisma_client):
     assert _updated_info["budget_duration"] == "2d"
     assert _updated_info["budget_reset_at"] is not None and isinstance(
         _updated_info["budget_reset_at"], datetime.datetime
+    )
+
+    # now hit team_info
+    response = await team_info(team_id=_team_id)
+
+    print("RESPONSE from team_info", response)
+
+    _team_info = response["team_info"]
+    _team_info = dict(_team_info)
+
+    assert _team_info["team_id"] == _team_id
+    assert _team_info["max_budget"] == 30
+    assert _team_info["tpm_limit"] == 30
+    assert _team_info["rpm_limit"] == 30
+    assert _team_info["budget_duration"] == "2d"
+    assert _team_info["budget_reset_at"] is not None and isinstance(
+        _team_info["budget_reset_at"], datetime.datetime
     )
