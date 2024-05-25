@@ -565,7 +565,6 @@ class TeamBase(LiteLLMBase):
     # Budget fields
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
 
     models: list = []
     blocked: bool = False
