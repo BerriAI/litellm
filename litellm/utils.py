@@ -2027,6 +2027,7 @@ class Logging:
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
+                            user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
                     if callback == "s3":
@@ -2589,6 +2590,17 @@ class Logging:
                                 langfuse_secret=self.langfuse_secret,
                             )
                         langFuseLogger.log_event(
+                            start_time=start_time,
+                            end_time=end_time,
+                            response_obj=None,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                            status_message=str(exception),
+                            level="ERROR",
+                            kwargs=self.model_call_details,
+                        )
+                    if callback == "traceloop":
+                        traceloopLogger.log_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
@@ -6286,7 +6298,9 @@ def get_model_region(
     return None
 
 
-def get_api_base(model: str, optional_params: dict) -> Optional[str]:
+def get_api_base(
+    model: str, optional_params: Union[dict, LiteLLM_Params]
+) -> Optional[str]:
     """
     Returns the api base used for calling the model.
 
@@ -6306,7 +6320,9 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     """
 
     try:
-        if "model" in optional_params:
+        if isinstance(optional_params, LiteLLM_Params):
+            _optional_params = optional_params
+        elif "model" in optional_params:
             _optional_params = LiteLLM_Params(**optional_params)
         else:  # prevent needing to copy and pop the dict
             _optional_params = LiteLLM_Params(
@@ -6699,6 +6715,8 @@ def get_llm_provider(
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
 
     For router -> Can also give the whole litellm param dict -> this function will extract the relevant details
+
+    Raises Error - if unable to map model to a provider
     """
     try:
         ## IF LITELLM PARAMS GIVEN ##
@@ -8632,7 +8650,16 @@ def exception_type(
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
-                    if original_exception.status_code == 401:
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"{exception_provider} - {message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
                             message=f"{exception_provider} - {message}",
@@ -9145,6 +9172,7 @@ def exception_type(
                             ),
                         ),
                     )
+
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
@@ -9825,7 +9853,16 @@ def exception_type(
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
-                    if original_exception.status_code == 401:
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"AzureException - {original_exception.message}",
+                            llm_provider="azure",
+                            model=model,
+                            litellm_debug_info=extra_information,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
                             message=f"AzureException - {original_exception.message}",
@@ -9842,7 +9879,7 @@ def exception_type(
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
                         )
-                    if original_exception.status_code == 422:
+                    elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
                             message=f"AzureException - {original_exception.message}",

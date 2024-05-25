@@ -3324,7 +3324,7 @@ class Router:
                     invalid_model_indices.append(idx)
                     continue
 
-            ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_object' param
+            ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params == False:
                 # get supported params
                 model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -3342,10 +3342,10 @@ class Router:
                     non_default_params = litellm.utils.get_non_default_params(
                         passed_params=request_kwargs
                     )
-                    special_params = ["response_object"]
+                    special_params = ["response_format"]
                     # check if all params are supported
                     for k, v in non_default_params.items():
-                        if k not in supported_openai_params:
+                        if k not in supported_openai_params and k in special_params:
                             # if not -> invalid model
                             verbose_router_logger.debug(
                                 f"INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k={k}"
@@ -3876,13 +3876,13 @@ class Router:
                 _api_base = litellm.get_api_base(
                     model=_model_name, optional_params=temp_litellm_params
                 )
-                asyncio.create_task(
-                    proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
-                        alert_type="cooldown_deployment",
-                        level="Low",
-                    )
-                )
+                # asyncio.create_task(
+                #     proxy_logging_obj.slack_alerting_instance.send_alert(
+                #         message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
+                #         alert_type="cooldown_deployment",
+                #         level="Low",
+                #     )
+                # )
         except Exception as e:
             pass
 

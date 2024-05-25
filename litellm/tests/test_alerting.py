@@ -1,10 +1,11 @@
 # What is this?
 ## Tests slack alerting on proxy logging object
 
-import sys, json, uuid, random
+import sys, json, uuid, random, httpx
 import os
 import io, asyncio
 from datetime import datetime, timedelta
+from typing import Optional
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -23,6 +24,7 @@ from unittest.mock import AsyncMock
 import pytest
 from litellm.router import AlertingConfig, Router
 from litellm.proxy._types import CallInfo
+from openai import APIError
 
 
 @pytest.mark.parametrize(
@@ -495,3 +497,109 @@ async def test_webhook_alerting(alerting_type):
                 user_info=user_info,
             )
         mock_send_alert.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "model, api_base, llm_provider, vertex_project, vertex_location",
+    [
+        ("gpt-3.5-turbo", None, "openai", None, None),
+        (
+            "azure/gpt-3.5-turbo",
+            "https://openai-gpt-4-test-v-1.openai.azure.com",
+            "azure",
+            None,
+            None,
+        ),
+        ("gemini-pro", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+    ],
+)
+@pytest.mark.parametrize("error_code", [500, 408, 400])
+@pytest.mark.asyncio
+async def test_outage_alerting_called(
+    model, api_base, llm_provider, vertex_project, vertex_location, error_code
+):
+    """
+    If call fails, outage alert is called
+
+    If multiple calls fail, outage alert is sent
+    """
+    slack_alerting = SlackAlerting(alerting=["webhook"])
+
+    litellm.callbacks = [slack_alerting]
+
+    error_to_raise: Optional[APIError] = None
+
+    if error_code == 400:
+        print("RAISING 400 ERROR CODE")
+        error_to_raise = litellm.BadRequestError(
+            message="this is a bad request",
+            model=model,
+            llm_provider=llm_provider,
+        )
+    elif error_code == 408:
+        print("RAISING 408 ERROR CODE")
+        error_to_raise = litellm.Timeout(
+            message="A timeout occurred", model=model, llm_provider=llm_provider
+        )
+    elif error_code == 500:
+        print("RAISING 500 ERROR CODE")
+        error_to_raise = litellm.ServiceUnavailableError(
+            message="API is unavailable",
+            model=model,
+            llm_provider=llm_provider,
+            response=httpx.Response(
+                status_code=503,
+                request=httpx.Request(
+                    method="completion",
+                    url="https://github.com/BerriAI/litellm",
+                ),
+            ),
+        )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": model,
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": api_base,
+                    "vertex_location": vertex_location,
+                    "vertex_project": vertex_project,
+                },
+            }
+        ],
+        num_retries=0,
+        allowed_fails=100,
+    )
+
+    slack_alerting.update_values(llm_router=router)
+    with patch.object(
+        slack_alerting, "outage_alerts", new=AsyncMock()
+    ) as mock_send_alert:
+        try:
+            await router.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "Hey!"}],
+                mock_response=error_to_raise,
+            )
+        except Exception as e:
+            pass
+
+        mock_send_alert.assert_called_once()
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        for _ in range(3):
+            try:
+                await router.acompletion(
+                    model=model,
+                    messages=[{"role": "user", "content": "Hey!"}],
+                    mock_response=error_to_raise,
+                )
+            except Exception as e:
+                pass
+        await asyncio.sleep(3)
+        if error_code == 500 or error_code == 408:
+            mock_send_alert.assert_called_once()
+        else:
+            mock_send_alert.assert_not_called()
