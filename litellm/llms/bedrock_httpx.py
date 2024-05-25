@@ -552,6 +552,7 @@ class BedrockLLM(BaseLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        modelId = optional_params.pop("model_id", None) or model
         provider = model.split(".")[0]
 
         ## CREDENTIALS ##
@@ -609,9 +610,9 @@ class BedrockLLM(BaseLLM):
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
         if (stream is not None and stream == True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke-with-response-stream"
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke"
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
