@@ -52,6 +52,7 @@ from litellm.proxy.proxy_server import (
     user_info,
     info_key_fn,
     new_team,
+    update_team,
     chat_completion,
     completion,
     embeddings,
@@ -73,6 +74,7 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     GenerateKeyRequest,
     NewTeamRequest,
+    UpdateTeamRequest,
     UserAPIKeyAuth,
     LiteLLM_UpperboundKeyGenerateParams,
 )
@@ -2184,4 +2186,32 @@ async def test_create_update_team(prisma_client):
     assert response["budget_duration"] == "30d"
     assert response["budget_reset_at"] is not None and isinstance(
         response["budget_reset_at"], datetime.datetime
+    )
+
+    # updating team budget duration and reset at
+
+    response = await update_team(
+        UpdateTeamRequest(
+            team_id=_team_id,
+            max_budget=30,
+            budget_duration="2d",
+            tpm_limit=30,
+            rpm_limit=30,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+        ),
+    )
+
+    print("RESPONSE from update_team", response)
+    _updated_info = response["data"]
+    _updated_info = dict(_updated_info)
+
+    assert _updated_info["team_id"] == _team_id
+    assert _updated_info["max_budget"] == 30
+    assert _updated_info["tpm_limit"] == 30
+    assert _updated_info["rpm_limit"] == 30
+    assert _updated_info["budget_duration"] == "2d"
+    assert _updated_info["budget_reset_at"] is not None and isinstance(
+        _updated_info["budget_reset_at"], datetime.datetime
     )
