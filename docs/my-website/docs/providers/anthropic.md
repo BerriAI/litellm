@@ -223,6 +223,32 @@ assert isinstance(
 
 ```
 
+### Setting `anthropic-beta` Header in Requests
+
+Pass the the `extra_headers` param to litellm, All headers will be forwarded to Anthropic API
+
+```python
+response = completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=messages,
+    tools=tools,
+)
+```
+
+### Forcing Anthropic Tool Use
+
+If you want Claude to use a specific tool to answer the user’s question
+
+You can do this by specifying the tool in the `tool_choice` field like so:
+```python
+response = completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=messages,
+    tools=tools,
+    tool_choice={"type": "tool", "name": "get_weather"},
+)
+```
+
 
 ### Parallel Function Calling 
 

@@ -1,4 +1,4 @@
-# 🚨 Alerting 
+# 🚨 Alerting / Webhooks
 
 Get alerts for:
 
@@ -8,10 +8,11 @@ Get alerts for:
 - Budget Tracking per key/user
 - Spend Reports - Weekly & Monthly spend per Team, Tag
 - Failed db read/writes
+- Model outage alerting
 - Daily Reports:
     - **LLM** Top 5 slowest deployments
     - **LLM** Top 5 deployments with most failed requests
-    - **Spend** Weekly & Monthly spend per Team, Tag
+- **Spend** Weekly & Monthly spend per Team, Tag
 
 
 ## Quick Start
@@ -61,10 +62,36 @@ curl -X GET 'http://localhost:4000/health/services?service=slack' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
+## Advanced - Opting into specific alert types
 
-## Extras
+Set `alert_types` if you want to Opt into only specific alert types
 
-### Using Discord Webhooks
+```shell
+general_settings:
+  alerting: ["slack"]
+  alert_types: ["spend_reports"] 
+```
+
+All Possible Alert Types
+
+```python
+AlertType = Literal[
+    "llm_exceptions",
+    "llm_too_slow",
+    "llm_requests_hanging",
+    "budget_alerts",
+    "db_exceptions",
+    "daily_reports",
+    "spend_reports",
+    "cooldown_deployment",
+    "new_model_added",
+    "outage_alerts",
+]
+
+```
+
+
+## Advanced - Using Discord Webhooks
 
 Discord provides a slack compatible webhook url that you can use for alerting
 
@@ -96,3 +123,80 @@ environment_variables:
 ```
 
 That's it ! You're ready to go !
+
+## Advanced - [BETA] Webhooks for Budget Alerts
+
+**Note**: This is a beta feature, so the spec might change.
+
+Set a webhook to get notified for budget alerts. 
+
+1. Setup config.yaml
+
+Add url to your environment, for testing you can use a link from [here](https://webhook.site/)
+
+```bash
+export WEBHOOK_URL="https://webhook.site/6ab090e8-c55f-4a23-b075-3209f5c57906"
+```
+
+Add 'webhook' to config.yaml
+```yaml
+general_settings: 
+  alerting: ["webhook"] # 👈 KEY CHANGE
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it!
+
+```bash
+curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
+--header 'Authorization: Bearer sk-1234'
+```
+
+**Expected Response**
+
+```bash
+{
+  "spend": 1, # the spend for the 'event_group'
+  "max_budget": 0, # the 'max_budget' set for the 'event_group'
+  "token": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+  "user_id": "default_user_id",
+  "team_id": null,
+  "user_email": null,
+  "key_alias": null,
+  "projected_exceeded_data": null,
+  "projected_spend": null,
+  "event": "budget_crossed", # Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
+  "event_group": "user",
+  "event_message": "User Budget: Budget Crossed"
+}
+```
+
+**API Spec for Webhook Event**
+
+- `spend` *float*: The current spend amount for the 'event_group'.
+- `max_budget` *float*: The maximum allowed budget for the 'event_group'.
+- `token` *str*: A hashed value of the key, used for authentication or identification purposes.
+- `user_id` *str or null*: The ID of the user associated with the event (optional).
+- `team_id` *str or null*: The ID of the team associated with the event (optional).
+- `user_email` *str or null*: The email of the user associated with the event (optional).
+- `key_alias` *str or null*: An alias for the key associated with the event (optional).
+- `projected_exceeded_date` *str or null*: The date when the budget is projected to be exceeded, returned when 'soft_budget' is set for key (optional).
+- `projected_spend` *float or null*: The projected spend amount, returned when 'soft_budget' is set for key (optional).
+- `event` *Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]*: The type of event that triggered the webhook. Possible values are:
+    * "budget_crossed": Indicates that the spend has exceeded the max budget.
+    * "threshold_crossed": Indicates that spend has crossed a threshold (currently sent when 85% and 95% of budget is reached).
+    * "projected_limit_exceeded": For "key" only - Indicates that the projected spend is expected to exceed the soft budget threshold.
+- `event_group` *Literal["user", "key", "team", "proxy"]*: The group associated with the event. Possible values are:
+    * "user": The event is related to a specific user.
+    * "key": The event is related to a specific key.
+    * "team": The event is related to a team.
+    * "proxy": The event is related to a proxy.
+
+- `event_message` *str*: A human-readable description of the event.

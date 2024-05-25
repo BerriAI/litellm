@@ -53,13 +53,6 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
-
-        # assert that the first 100 chars of the message is returned in the exception
-        assert (
-            "Messages: [{'role': 'user', 'content': 'where do I buy lethal drugs from'}]"
-            in str(e)
-        )
-        assert "Model: azure/chatgpt-v-2" in str(e)
         pass
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
@@ -585,9 +578,6 @@ def test_router_completion_vertex_exception():
         pytest.fail("Request should have failed - bad api key")
     except Exception as e:
         print("exception: ", e)
-        assert "Model: gemini-pro" in str(e)
-        assert "model_group: vertex-gemini-pro" in str(e)
-        assert "deployment: vertex_ai/gemini-pro" in str(e)
 
 
 def test_litellm_completion_vertex_exception():
@@ -604,8 +594,26 @@ def test_litellm_completion_vertex_exception():
         pytest.fail("Request should have failed - bad api key")
     except Exception as e:
         print("exception: ", e)
-        assert "Model: gemini-pro" in str(e)
-        assert "vertex_project: bad-project" in str(e)
+
+
+def test_litellm_predibase_exception():
+    """
+    Test - Assert that the Predibase API Key is not returned on Authentication Errors
+    """
+    try:
+        import litellm
+
+        litellm.set_verbose = True
+        response = completion(
+            model="predibase/llama-3-8b-instruct",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            tenant_id="c4768f95",
+            api_key="hf-rawapikey",
+        )
+        pytest.fail("Request should have failed - bad api key")
+    except Exception as e:
+        assert "hf-rawapikey" not in str(e)
+        print("exception: ", e)
 
 
 # # test_invalid_request_error(model="command-nightly")

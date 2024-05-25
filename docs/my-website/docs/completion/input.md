@@ -41,25 +41,26 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 
 | Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers | 
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|--|
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |  |  |  | ✅ | ✅ | 
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |  | ✅ | ✅ | ✅ | ✅ | 
+|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ 
 |OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
 |Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
 |Anyscale | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
 |Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
-|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |
-|VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
-|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
+|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ | | | | |
+|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
+|VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   | | | | | ✅ | | |
+|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (for anthropic) | |
 |Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |
 |Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
-|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   |
+|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ | | |
+|Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
+|ClarifAI| ✅ | ✅ | | | |  |   | |  |   | | | | | |
 
 :::note
 

@@ -105,6 +105,9 @@ def test_parallel_function_call(model):
             # Step 4: send the info for each function call and function response to the model
             for tool_call in tool_calls:
                 function_name = tool_call.function.name
+                if function_name not in available_functions:
+                    # the model called a function that does not exist in available_functions - don't try calling anything
+                    return
                 function_to_call = available_functions[function_name]
                 function_args = json.loads(tool_call.function.arguments)
                 function_response = function_to_call(
@@ -124,7 +127,6 @@ def test_parallel_function_call(model):
                 model=model, messages=messages, temperature=0.2, seed=22
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
-            return second_response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

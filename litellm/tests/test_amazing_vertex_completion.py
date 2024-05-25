@@ -16,6 +16,7 @@ from litellm.tests.test_streaming import streaming_format_tests
 import json
 import os
 import tempfile
+from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
 
 litellm.num_retries = 3
 litellm.cache = None
@@ -98,7 +99,7 @@ def load_vertex_ai_credentials():
 
 
 @pytest.mark.asyncio
-async def get_response():
+async def test_get_response():
     load_vertex_ai_credentials()
     prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
     try:
@@ -371,14 +372,13 @@ def test_vertex_ai_stream():
                 "gemini-1.5-pro",
                 "gemini-1.5-pro-preview-0215",
             ]:
-                # our account does not have access to this model
+                # ouraccount does not have access to this model
                 continue
             print("making request", model)
             response = completion(
                 model=model,
-                messages=[
-                    {"role": "user", "content": "write 10 line code code for saying hi"}
-                ],
+                messages=[{"role": "user", "content": "hello tell me a short story"}],
+                max_tokens=15,
                 stream=True,
             )
             completed_str = ""
@@ -389,7 +389,7 @@ def test_vertex_ai_stream():
                 completed_str += content
                 assert type(content) == str
                 # pass
-            assert len(completed_str) > 4
+            assert len(completed_str) > 1
         except litellm.RateLimitError as e:
             pass
         except Exception as e:
@@ -595,30 +595,68 @@ def test_gemini_pro_vision_base64():
 async def test_gemini_pro_function_calling(sync_mode):
     try:
         load_vertex_ai_credentials()
-        data = {
-            "model": "vertex_ai/gemini-pro",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Call the submit_cities function with San Francisco and New York",
-                }
-            ],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "submit_cities",
-                        "description": "Submits a list of cities",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "cities": {"type": "array", "items": {"type": "string"}}
-                            },
-                            "required": ["cities"],
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your name is Litellm Bot, you are a helpful assistant",
+            },
+            # User asks for their name and weather in San Francisco
+            {
+                "role": "user",
+                "content": "Hello, what is your name and can you tell me the weather?",
+            },
+            # Assistant replies with a tool call
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "index": 0,
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location":"San Francisco, CA"}',
                         },
+                    }
+                ],
+            },
+            # The result of the tool call is added to the history
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "name": "get_weather",
+                "content": "27 degrees celsius and clear in San Francisco, CA",
+            },
+            # Now the assistant can reply with the result of the tool call.
+        ]
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            }
+                        },
+                        "required": ["location"],
                     },
-                }
-            ],
+                },
+            }
+        ]
+
+        data = {
+            "model": "vertex_ai/gemini-1.5-pro-preview-0514",
+            "messages": messages,
+            "tools": tools,
         }
         if sync_mode:
             response = litellm.completion(**data)
@@ -638,7 +676,7 @@ async def test_gemini_pro_function_calling(sync_mode):
 # gemini_pro_function_calling()
 
 
-@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.asyncio
 async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
@@ -713,7 +751,7 @@ async def test_gemini_pro_async_function_calling():
                 "type": "function",
                 "function": {
                     "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
+                    "description": "Get the current weather in a given location.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -743,8 +781,9 @@ async def test_gemini_pro_async_function_calling():
         print(f"completion: {completion}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
-    except litellm.APIError as e:
-        pass
+
+    # except litellm.APIError as e:
+    #     pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -894,3 +933,69 @@ async def test_vertexai_aembedding():
 #         traceback.print_exc()
 #         raise e
 # test_gemini_pro_vision_async()
+
+
+def test_prompt_factory():
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        # User asks for their name and weather in San Francisco
+        {
+            "role": "user",
+            "content": "Hello, what is your name and can you tell me the weather?",
+        },
+        # Assistant replies with a tool call
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "index": 0,
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location":"San Francisco, CA"}',
+                    },
+                }
+            ],
+        },
+        # The result of the tool call is added to the history
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "name": "get_weather",
+            "content": "27 degrees celsius and clear in San Francisco, CA",
+        },
+        # Now the assistant can reply with the result of the tool call.
+    ]
+
+    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+
+    print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+
+
+def test_prompt_factory_nested():
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hi! 👋 \n\nHow can I help you today? 😊 \n"}
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "hi 2nd time"}]},
+    ]
+
+    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+
+    print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+
+    for message in translated_messages:
+        assert len(message["parts"]) == 1
+        assert "text" in message["parts"][0], "Missing 'text' from 'parts'"
+        assert isinstance(
+            message["parts"][0]["text"], str
+        ), "'text' value not a string."

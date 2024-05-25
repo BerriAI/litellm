@@ -55,12 +55,9 @@ class JWTHandler:
             return True
         return False
 
-    def is_team(self, scopes: list) -> bool:
-        if self.litellm_jwtauth.team_jwt_scope in scopes:
-            return True
-        return False
-
-    def get_end_user_id(self, token: dict, default_value: Optional[str]) -> str:
+    def get_end_user_id(
+        self, token: dict, default_value: Optional[str]
+    ) -> Optional[str]:
         try:
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
                 user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
@@ -70,12 +67,35 @@ class JWTHandler:
             user_id = default_value
         return user_id
 
+    def is_required_team_id(self) -> bool:
+        """
+        Returns:
+        - True: if 'team_id_jwt_field' is set
+        - False: if not
+        """
+        if self.litellm_jwtauth.team_id_jwt_field is None:
+            return False
+        return True
+
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
-            team_id = token[self.litellm_jwtauth.team_id_jwt_field]
+            if self.litellm_jwtauth.team_id_jwt_field is not None:
+                team_id = token[self.litellm_jwtauth.team_id_jwt_field]
+            elif self.litellm_jwtauth.team_id_default is not None:
+                team_id = self.litellm_jwtauth.team_id_default
+            else:
+                team_id = None
         except KeyError:
             team_id = default_value
         return team_id
+
+    def is_upsert_user_id(self) -> bool:
+        """
+        Returns:
+        - True: if 'user_id_upsert' is set
+        - False: if not
+        """
+        return self.litellm_jwtauth.user_id_upsert
 
     def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
@@ -147,10 +167,17 @@ class JWTHandler:
             for key in keys:
                 if kid is not None and key == kid:
                     public_key = keys[key]
+                elif (
+                    kid is not None
+                    and isinstance(key, dict)
+                    and key.get("kid", None) is not None
+                    and key["kid"] == kid
+                ):
+                    public_key = key
 
         if public_key is None:
             raise Exception(
-                f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}"
+                f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}, len(keys)={len(keys)}"
             )
 
         return public_key
@@ -165,7 +192,7 @@ class JWTHandler:
         decode_options = None
         if audience is None:
             decode_options = {"verify_aud": False}
-        
+
         from jwt.algorithms import RSAAlgorithm
 
         header = jwt.get_unverified_header(token)
@@ -207,12 +234,14 @@ class JWTHandler:
                 raise Exception(f"Validation fails: {str(e)}")
         elif public_key is not None and isinstance(public_key, str):
             try:
-                cert = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
+                cert = x509.load_pem_x509_certificate(
+                    public_key.encode(), default_backend()
+                )
 
                 # Extract public key
                 key = cert.public_key().public_bytes(
                     serialization.Encoding.PEM,
-                    serialization.PublicFormat.SubjectPublicKeyInfo
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
                 )
 
                 # decode the token using the public key
@@ -221,7 +250,7 @@ class JWTHandler:
                     key,
                     algorithms=algorithms,
                     audience=audience,
-                    options=decode_options
+                    options=decode_options,
                 )
                 return payload
 

@@ -26,7 +26,7 @@ all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes
 
 def common_checks(
     request_body: dict,
-    team_object: LiteLLM_TeamTable,
+    team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
     end_user_object: Optional[LiteLLM_EndUserTable],
     global_proxy_spend: Optional[float],
@@ -45,13 +45,14 @@ def common_checks(
     6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     """
     _model = request_body.get("model", None)
-    if team_object.blocked == True:
+    if team_object is not None and team_object.blocked == True:
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
     # 2. If user can call model
     if (
         _model is not None
+        and team_object is not None
         and len(team_object.models) > 0
         and _model not in team_object.models
     ):
@@ -65,7 +66,8 @@ def common_checks(
             )
     # 3. If team is in budget
     if (
-        team_object.max_budget is not None
+        team_object is not None
+        and team_object.max_budget is not None
         and team_object.spend is not None
         and team_object.spend > team_object.max_budget
     ):
@@ -121,18 +123,8 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     """
     for allowed_route in allowed_routes:
         if (
-            allowed_route == LiteLLMRoutes.openai_routes.name
-            and user_route in LiteLLMRoutes.openai_routes.value
-        ):
-            return True
-        elif (
-            allowed_route == LiteLLMRoutes.info_routes.name
-            and user_route in LiteLLMRoutes.info_routes.value
-        ):
-            return True
-        elif (
-            allowed_route == LiteLLMRoutes.management_routes.name
-            and user_route in LiteLLMRoutes.management_routes.value
+            allowed_route in LiteLLMRoutes.__members__
+            and user_route in LiteLLMRoutes[allowed_route].value
         ):
             return True
         elif allowed_route == user_route:
@@ -150,17 +142,11 @@ def allowed_routes_check(
     """
 
     if user_role == "proxy_admin":
-        if litellm_proxy_roles.admin_allowed_routes is None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route, allowed_routes=["management_routes"]
-            )
-            return is_allowed
-        elif litellm_proxy_roles.admin_allowed_routes is not None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route,
-                allowed_routes=litellm_proxy_roles.admin_allowed_routes,
-            )
-            return is_allowed
+        is_allowed = _allowed_routes_check(
+            user_route=user_route,
+            allowed_routes=litellm_proxy_roles.admin_allowed_routes,
+        )
+        return is_allowed
 
     elif user_role == "team":
         if litellm_proxy_roles.team_allowed_routes is None:
@@ -217,7 +203,8 @@ async def get_end_user_object(
     # else, check db
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
-            where={"user_id": end_user_id}
+            where={"user_id": end_user_id},
+            include={"litellm_budget_table": True},
         )
 
         if response is None:
@@ -239,6 +226,7 @@ async def get_user_object(
     user_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    user_id_upsert: bool,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -252,7 +240,7 @@ async def get_user_object(
         return None
 
     # check if in cache
-    cached_user_obj = user_api_key_cache.async_get_cache(key=user_id)
+    cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
     if cached_user_obj is not None:
         if isinstance(cached_user_obj, dict):
             return LiteLLM_UserTable(**cached_user_obj)
@@ -260,16 +248,27 @@ async def get_user_object(
             return cached_user_obj
     # else, check db
     try:
+
         response = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": user_id}
         )
 
         if response is None:
-            raise Exception
+            if user_id_upsert:
+                response = await prisma_client.db.litellm_usertable.create(
+                    data={"user_id": user_id}
+                )
+            else:
+                raise Exception
 
-        return LiteLLM_UserTable(**response.dict())
-    except Exception as e:  # if end-user not in db
-        raise Exception(
+        _response = LiteLLM_UserTable(**dict(response))
+
+        # save the user object to cache
+        await user_api_key_cache.async_set_cache(key=user_id, value=_response)
+
+        return _response
+    except Exception as e:  # if user not in db
+        raise ValueError(
             f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call."
         )
 
@@ -290,7 +289,7 @@ async def get_team_object(
         )
 
     # check if in cache
-    cached_team_obj = user_api_key_cache.async_get_cache(key=team_id)
+    cached_team_obj = await user_api_key_cache.async_get_cache(key=team_id)
     if cached_team_obj is not None:
         if isinstance(cached_team_obj, dict):
             return LiteLLM_TeamTable(**cached_team_obj)
@@ -305,7 +304,11 @@ async def get_team_object(
         if response is None:
             raise Exception
 
-        return LiteLLM_TeamTable(**response.dict())
+        _response = LiteLLM_TeamTable(**response.dict())
+        # save the team object to cache
+        await user_api_key_cache.async_set_cache(key=response.team_id, value=_response)
+
+        return _response
     except Exception as e:
         raise Exception(
             f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."

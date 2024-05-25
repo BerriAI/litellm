@@ -89,6 +89,7 @@ model_list:
     litellm_params:
       model: text-completion-openai/gpt-3.5-turbo-instruct
 litellm_settings:
+  # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
   drop_params: True
   # max_budget: 100 
   # budget_duration: 30d
