@@ -37,6 +37,13 @@ interface UsagePageProps {
   keys: any[] | null;
 }
 
+interface GlobalActivityData {
+  sum_api_requests: number;
+  sum_total_tokens: number;
+  daily_data: { date: string; api_requests: number; total_tokens: number }[];
+}
+
+
 type CustomTooltipTypeBar = {
   payload: any;
   active: boolean | undefined;
@@ -126,7 +133,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
-  const [globalActivity, setGlobalActivity] = useState<any[]>([]);
+  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
@@ -454,7 +461,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 <Title>All Up</Title>
                 <Grid numItems={2}>
                 <Col>
-                <Subtitle>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
                 <AreaChart
                     className="h-40"
                     data={globalActivity.daily_data}
@@ -466,7 +473,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
                 </Col>
                 <Col>
-                <Subtitle>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
                 <BarChart
                     className="h-40"
                     data={globalActivity.daily_data}
@@ -486,7 +493,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   <Title>{globalActivity.model}</Title>
                   <Grid numItems={2}>
                     <Col>
-                      <Subtitle>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
                       <AreaChart
                         className="h-40"
                         data={globalActivity.daily_data}
@@ -497,7 +504,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                       />
                     </Col>
                     <Col>
-                      <Subtitle>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
                       <BarChart
                         className="h-40"
                         data={globalActivity.daily_data}
