@@ -7,7 +7,6 @@ import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
-import warnings
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
