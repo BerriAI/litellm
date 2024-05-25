@@ -8036,6 +8036,7 @@ async def new_team(
     ## ADD TO TEAM TABLE
     complete_team_data = LiteLLM_TeamTable(
         **data.json(),
+        model_id=_model_id,
     )
 
     # If budget_duration is set, set `budget_reset_at`
