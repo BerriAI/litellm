@@ -5402,6 +5402,25 @@ async def generate_key_fn(
         response["soft_budget"] = (
             data.soft_budget
         )  # include the user-input soft budget in the response
+        event = WebhookEvent(
+            event="key_created",
+            event_group="key",
+            event_message=f"API Key Created",
+            token=response.get("token", ""),
+            spend=response.get("spend", 0.0),
+            max_budget=response.get("max_budget", 0.0),
+            user_id=response.get("user_id", None),
+            team_id=response.get("team_id", "Default Team"),
+            key_alias=response.get("key_alias", None),
+        )
+
+        # If user configured email alerting - send an Email letting their end-user know the key was created
+        asyncio.create_task(
+            proxy_logging_obj.slack_alerting_instance.send_key_created_email(
+                webhook_event=event,
+            )
+        )
+
         return GenerateKeyResponse(**response)
     except Exception as e:
         traceback.print_exc()

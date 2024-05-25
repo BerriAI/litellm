@@ -1096,7 +1096,7 @@ class CallInfo(LiteLLMBase):
     """Used for slack budget alerting"""
 
     spend: float
-    max_budget: float
+    max_budget: Optional[float] = None
     token: str = Field(description="Hashed value of that key")
     user_id: Optional[str] = None
     team_id: Optional[str] = None
@@ -1104,3 +1104,11 @@ class CallInfo(LiteLLMBase):
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
+
+
+class WebhookEvent(CallInfo):
+    event: Literal[
+        "budget_crossed", "threshold_crossed", "projected_limit_exceeded", "key_created"
+    ]
+    event_group: Literal["user", "key", "team", "proxy"]
+    event_message: str  # human-readable description of event
