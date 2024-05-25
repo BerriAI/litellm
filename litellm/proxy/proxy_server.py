@@ -8040,11 +8040,14 @@ async def new_team(
     ## ADD TO TEAM TABLE
     complete_team_data = LiteLLM_TeamTable(
         **data.json(),
-        max_parallel_requests=user_api_key_dict.max_parallel_requests,
-        budget_duration=user_api_key_dict.budget_duration,
-        budget_reset_at=user_api_key_dict.budget_reset_at,
         model_id=_model_id,
     )
+
+    # If budget_duration is set, set `budget_reset_at`
+    if complete_team_data.budget_duration is not None:
+        duration_s = _duration_in_seconds(duration=complete_team_data.budget_duration)
+        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        complete_team_data.budget_reset_at = reset_at
 
     team_row = await prisma_client.insert_data(
         data=complete_team_data.json(exclude_none=True), table_name="team"
@@ -8124,6 +8127,15 @@ async def update_team(
         )
 
     updated_kv = data.json(exclude_none=True)
+
+    # Check budget_duration and budget_reset_at
+    if data.budget_duration is not None:
+        duration_s = _duration_in_seconds(duration=data.budget_duration)
+        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+
+        # set the budget_reset_at in DB
+        updated_kv["budget_reset_at"] = reset_at
+
     team_row = await prisma_client.update_data(
         update_key_values=updated_kv,
         data=updated_kv,
