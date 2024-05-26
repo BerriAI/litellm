@@ -12,3 +12,13 @@ class ProviderField(TypedDict):
     field_type: Literal["string"]
     field_description: str
     field_value: str
+
+
+class ModelInfo(TypedDict):
+    max_tokens: int
+    max_input_tokens: int
+    max_output_tokens: int
+    input_cost_per_token: float
+    output_cost_per_token: float
+    litellm_provider: str
+    mode: str
