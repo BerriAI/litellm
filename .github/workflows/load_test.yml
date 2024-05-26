@@ -27,9 +27,9 @@ jobs:
         uses: BerriAI/locust-github-action@master
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
-          URL:  "https://litellm-database-docker-build-production.up.railway.app/"
-          USERS: "100"
-          RATE: "10"
+          URL:  "https://post-release-load-test-proxy.onrender.com/"
+          USERS: "20"
+          RATE: "20"
           RUNTIME: "300s"
       - name: Process Load Test Stats
         run: |
