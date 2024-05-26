@@ -109,6 +109,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           <Menu.Item key="12" onClick={() => setPage("api_ref")}>
             <Text>API Reference</Text>
           </Menu.Item>
+          <Menu.Item key="14" onClick={() => setPage("model-hub")}>
+            <Text>Model Hub</Text>
+          </Menu.Item>
         </Menu>
       </Sider>
     </Layout>
