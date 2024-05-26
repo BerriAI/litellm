@@ -837,6 +837,7 @@ class ConfigList(LiteLLMBase):
     field_value: Any
     stored_in_db: Optional[bool]
     field_default_value: Any
+    premium_field: bool = False
 
 
 class ConfigGeneralSettings(LiteLLMBase):

@@ -25,13 +25,18 @@ interface alertingSettingsItem {
   field_default_value: any;
   field_description: string;
   stored_in_db: boolean | null;
+  premium_field: boolean;
 }
 
 interface AlertingSettingsProps {
   accessToken: string | null;
+  premiumUser: boolean;
 }
 
-const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken }) => {
+const AlertingSettings: React.FC<AlertingSettingsProps> = ({
+  accessToken,
+  premiumUser,
+}) => {
   const [alertingSettings, setAlertingSettings] = useState<
     alertingSettingsItem[]
   >([]);
@@ -116,6 +121,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken }) => {
       handleInputChange={handleInputChange}
       handleResetField={handleResetField}
       handleSubmit={handleSubmit}
+      premiumUser={premiumUser}
     />
   );
 };
