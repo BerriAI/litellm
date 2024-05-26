@@ -10,6 +10,7 @@ import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
+import ModelHub from "@/components/model_hub";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
@@ -193,7 +194,17 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
               modelData={modelData}
             />
-          ) : (
+            ) : page == "model-hub" ? (
+              <ModelHub
+              userID={userID}
+              userRole={userRole}
+              token={token}
+              accessToken={accessToken}
+              keys={keys}
+              premiumUser={premiumUser}
+            />
+            )
+            : (
             <Usage
               userID={userID}
               userRole={userRole}
