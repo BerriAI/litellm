@@ -51,9 +51,10 @@ const sidebars = {
           label: "Logging",
           items: ["proxy/logging", "proxy/streaming_logging"],
         },
+        "proxy/ui",
+        "proxy/email",
         "proxy/team_based_routing",
         "proxy/customer_routing",
-        "proxy/ui",
         "proxy/token_auth",
         {
           type: "category",
