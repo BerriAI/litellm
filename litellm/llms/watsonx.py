@@ -1,6 +1,7 @@
+import json, types, time  # noqa: E401
+import asyncio
 from datetime import datetime
 from enum import Enum
-import json, types, time  # noqa: E401
 from contextlib import asynccontextmanager, contextmanager
 from typing import (
     Callable,
@@ -13,8 +14,6 @@ from typing import (
     Any,
     Union,
     List,
-    ContextManager,
-    AsyncContextManager,
 )
 
 import httpx  # type: ignore
@@ -286,7 +285,8 @@ class IBMWatsonXAI(BaseLLM):
         )
 
     def _get_api_params(
-        self, params: dict, 
+        self,
+        params: dict,
         print_verbose: Optional[Callable] = None,
         generate_token: Optional[bool] = True,
     ) -> dict:
@@ -395,8 +395,10 @@ class IBMWatsonXAI(BaseLLM):
             "region_name": region_name,
             "api_version": api_version,
         }
-    
-    def _process_text_gen_response(self, json_resp: dict, model_response: ModelResponse=None) -> ModelResponse:
+
+    def _process_text_gen_response(
+        self, json_resp: dict, model_response: Union[ModelResponse, None] = None
+    ) -> ModelResponse:
         if "results" not in json_resp:
             raise WatsonXAIError(
                 status_code=500,
@@ -410,7 +412,9 @@ class IBMWatsonXAI(BaseLLM):
         model_response["choices"][0]["message"]["content"] = generated_text
         model_response["finish_reason"] = json_resp["results"][0]["stop_reason"]
         if json_resp.get("created_at"):
-            model_response["created"] = datetime.fromisoformat(json_resp["created_at"]).timestamp()
+            model_response["created"] = datetime.fromisoformat(
+                json_resp["created_at"]
+            ).timestamp()
         else:
             model_response["created"] = int(time.time())
         usage = Usage(
@@ -442,7 +446,9 @@ class IBMWatsonXAI(BaseLLM):
         Reference: https://cloud.ibm.com/apidocs/watsonx-ai#text-generation
         """
         if client is not None:
-            print_verbose("'client' parameter passed: Using IBM Watsonx.ai client for text generation.")
+            print_verbose(
+                "'client' parameter passed: Using IBM Watsonx.ai client for text generation."
+            )
             return self.client_completion(
                 client=client,
                 model=model,
@@ -520,7 +526,9 @@ class IBMWatsonXAI(BaseLLM):
                 streamwrapper = process_stream_response(resp.iter_lines())
             return streamwrapper
 
-        async def handle_stream_request_async(request_params: dict) -> litellm.CustomStreamWrapper:
+        async def handle_stream_request_async(
+            request_params: dict,
+        ) -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
             async with self.request_manager.async_request(
@@ -547,7 +555,7 @@ class IBMWatsonXAI(BaseLLM):
             elif stream:
                 # streaming text generation
                 return handle_stream_request(req_params)
-            elif (acompletion is True):
+            elif acompletion is True:
                 # async text generation
                 return handle_text_request_async(req_params)
             else:
@@ -557,10 +565,10 @@ class IBMWatsonXAI(BaseLLM):
             raise e
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
-        
+
     def client_completion(
         self,
-        client: object,
+        client,
         model: str,
         messages: list,
         custom_prompt_dict: dict,
@@ -578,9 +586,9 @@ class IBMWatsonXAI(BaseLLM):
         Send a text generation request to the IBM Watsonx.ai API via an ibm_watsonx_ai.client.Client object.
         """
         from ibm_watsonx_ai.foundation_models import ModelInference
-        from ibm_watsonx_ai.client import APIClient
+        # from ibm_watsonx_ai.client import APIClient
 
-        client: APIClient
+        # client: APIClient
         stream = optional_params.pop("stream", False)
         # Load default configs
         config = IBMWatsonXAIConfig.get_config()
@@ -590,30 +598,36 @@ class IBMWatsonXAI(BaseLLM):
 
         # Make prompt to send to model
         provider = model.split("/")[0]
-        model_name = "/".join(model.split("/")[1:])
         prompt = convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
-        api_params = self._get_api_params(optional_params, print_verbose=print_verbose, generate_token=False)
-        model_inference:ModelInference = self.init_watsonx_model_with_client(
+        api_params = self._get_api_params(
+            optional_params, print_verbose=print_verbose, generate_token=False
+        )
+        project_id = (
+            getattr(client, "default_project_id", None) or
+            getattr(client, "project_id", None) or 
+            api_params.get("project_id")
+        )
+        model_inference: ModelInference = self.init_watsonx_model_with_client(
             model_id=model,
             watsonx_client=client,
-            project_id=client.project_id or api_params.get("project_id"),
+            project_id=project_id,
             space_id=api_params.get("space_id"),
             verify=api_params.get("verify", False),
             validate=api_params.get("validate", False),
             model_params=optional_params,
         )
         model_response["model"] = model
-        
+
         def handle_text_request(prompt: str) -> ModelResponse:
             raw_resp = model_inference.generate(prompt, async_mode=False)
             return self._process_text_gen_response(raw_resp, model_response)
-        
+
         async def handle_text_request_async(prompt: str) -> ModelResponse:
             raw_resp = model_inference.generate(prompt, async_mode=True)
             return self._process_text_gen_response(raw_resp, model_response)
-        
+
         def handle_stream_request(prompt: str) -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
@@ -625,8 +639,10 @@ class IBMWatsonXAI(BaseLLM):
                 logging_obj=logging_obj,
             )
             return streamwrapper
-        
-        async def handle_stream_request_async(prompt: str) -> litellm.CustomStreamWrapper:
+
+        async def handle_stream_request_async(
+            prompt: str,
+        ) -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
             stream = model_inference.generate_text_stream(prompt, raw_response=True)
@@ -644,13 +660,12 @@ class IBMWatsonXAI(BaseLLM):
         elif stream:
             # streaming text generation
             return handle_stream_request(prompt)
-        elif (acompletion is True):
+        elif acompletion is True:
             # async text generation
             return handle_text_request_async(prompt)
         else:
             # regular text generation
             return handle_text_request(prompt)
-        
 
     def embedding(
         self,
@@ -733,7 +748,9 @@ class IBMWatsonXAI(BaseLLM):
             return process_embedding_response(json_resp)
 
         async def handle_aembedding(request_params: dict) -> ModelResponse:
-            async with request_manager.async_request(request_params, input=input) as resp:
+            async with request_manager.async_request(
+                request_params, input=input
+            ) as resp:
                 json_resp = resp.json()
             return process_embedding_response(json_resp)
 
@@ -784,14 +801,13 @@ class IBMWatsonXAI(BaseLLM):
             return json_resp
         return [res["model_id"] for res in json_resp["resources"]]
 
-
     def init_watsonx_model_with_client(
         self,
-        model_id: str,
-        watsonx_client: object,
+        model_id,
+        watsonx_client,
         project_id: Optional[str] = None,
         space_id: Optional[str] = None,
-        verify: Optional[Union[bool,str]] = None,
+        verify: Optional[Union[bool, str]] = False,
         validate: Optional[bool] = False,
         model_params: Optional[dict] = None,
     ):
@@ -809,17 +825,19 @@ class IBMWatsonXAI(BaseLLM):
         model_params (dict): A dictionary containing additional parameters to pass to the model (see IBMWatsonXConfig for a list of supported parameters).
         """
 
-        from ibm_watsonx_ai import APIClient
         from ibm_watsonx_ai.foundation_models import ModelInference
+        # from ibm_watsonx_ai import APIClient
 
-        watsonx_client: APIClient
+        # watsonx_client: APIClient = watsonx_client
         if project_id is None:
-            project_id = watsonx_client.project_id
+            project_id = getattr(watsonx_client, "default_project_id", None) or getattr(
+                watsonx_client, "project_id", None
+            )
 
         if model_id.startswith("deployment/"):
             # deployment models are passed in as 'deployment/<deployment_id>'
             assert space_id is not None, "space_id is required for deployment models"
-            deployment_id = '/'.join(model_id.split("/")[1:])
+            deployment_id = "/".join(model_id.split("/")[1:])
             model_id = None
         else:
             space_id = None
@@ -837,6 +855,7 @@ class IBMWatsonXAI(BaseLLM):
         )
         return model
 
+
 class RequestManager:
     """
     Returns a context manager that manages the response from the request.
@@ -846,10 +865,10 @@ class RequestManager:
     ```python
     request_params = dict(method="POST", url="https://api.example.com", headers={"Authorization" : "Bearer token"}, json={"key": "value"})
     request_manager = RequestManager(logging_obj=logging_obj)
-    async with request_manager.request(request_params) as resp:
+    with request_manager.request(request_params) as resp:
         ...
     # or
-    with request_manager.async_request(request_params) as resp:
+    async with request_manager.async_request(request_params) as resp:
         ...
     ```
     """
@@ -896,7 +915,7 @@ class RequestManager:
 
     @contextmanager
     def request(
-        self, 
+        self,
         request_params: dict,
         stream: bool = False,
         input: Optional[Any] = None,
@@ -911,7 +930,16 @@ class RequestManager:
         if stream:
             request_params["stream"] = stream
         try:
-            resp = requests.request(**request_params)
+            retries = 0
+            while retries < 3:
+                resp = requests.request(**request_params)
+                if resp.status_code in [429, 503, 504, 520]:
+                    # to handle rate limiting and service unavailable errors
+                    # see: ibm_watsonx_ai.foundation_models.inference.base_model_inference.BaseModelInference._send_inference_payload
+                    time.sleep(2**retries)
+                    retries += 1
+                else:
+                    break
             if not resp.ok:
                 raise WatsonXAIError(
                     status_code=resp.status_code,
@@ -925,7 +953,7 @@ class RequestManager:
 
     @asynccontextmanager
     async def async_request(
-        self, 
+        self,
         request_params: dict,
         stream: bool = False,
         input: Optional[Any] = None,
@@ -947,11 +975,20 @@ class RequestManager:
             if "json" in request_params:
                 request_params["data"] = json.dumps(request_params.pop("json", {}))
             method = request_params.pop("method")
-            if method.upper() == "POST":
-                resp = await self.async_handler.post(**request_params)
-            else:
-                resp = await self.async_handler.get(**request_params)
-            if resp.status_code not in [200, 201]:
+            retries = 0
+            while retries < 3:
+                if method.upper() == "POST":
+                    resp = await self.async_handler.post(**request_params)
+                else:
+                    resp = await self.async_handler.get(**request_params)
+                if resp.status_code in [429, 503, 504, 520]:
+                    # to handle rate limiting and service unavailable errors
+                    # see: ibm_watsonx_ai.foundation_models.inference.base_model_inference.BaseModelInference._send_inference_payload
+                    await asyncio.sleep(2**retries)
+                    retries += 1
+                else:
+                    break
+            if resp.is_error:
                 raise WatsonXAIError(
                     status_code=resp.status_code,
                     message=f"Error {resp.status_code} ({resp.reason}): {resp.text}",
