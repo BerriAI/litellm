@@ -88,7 +88,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 textDecoration: "underline",
               }}
             >
-              Request hosted proxy
+              Get enterpise license
             </a>
           </div>
         ) : null}

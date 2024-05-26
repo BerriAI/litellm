@@ -36,6 +36,7 @@ interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  premiumUser: boolean;
 }
 
 interface AlertingVariables {
@@ -88,6 +89,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   accessToken,
   userRole,
   userID,
+  premiumUser,
 }) => {
   const [callbacks, setCallbacks] =
     useState<AlertingObject[]>(defaultLoggingObject);
@@ -460,12 +462,32 @@ const Settings: React.FC<SettingsPageProps> = ({
                       ([key, value], index) => (
                         <TableRow key={index}>
                           <TableCell>
-                            <Switch
-                              id="switch"
-                              name="switch"
-                              checked={isAlertOn(key)}
-                              onChange={() => handleSwitchChange(key)}
-                            />
+                            {key == "region_outage_alerts" ? (
+                              premiumUser ? (
+                                <Switch
+                                  id="switch"
+                                  name="switch"
+                                  checked={isAlertOn(key)}
+                                  onChange={() => handleSwitchChange(key)}
+                                />
+                              ) : (
+                                <Button className="flex items-center justify-center">
+                                  <a
+                                    href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                                    target="_blank"
+                                  >
+                                    ✨ Enterprise Feature
+                                  </a>
+                                </Button>
+                              )
+                            ) : (
+                              <Switch
+                                id="switch"
+                                name="switch"
+                                checked={isAlertOn(key)}
+                                onChange={() => handleSwitchChange(key)}
+                              />
+                            )}
                           </TableCell>
                           <TableCell>
                             <Text>{value}</Text>
@@ -499,7 +521,10 @@ const Settings: React.FC<SettingsPageProps> = ({
               </Card>
             </TabPanel>
             <TabPanel>
-              <AlertingSettings accessToken={accessToken} />
+              <AlertingSettings
+                accessToken={accessToken}
+                premiumUser={premiumUser}
+              />
             </TabPanel>
           </TabPanels>
         </TabGroup>

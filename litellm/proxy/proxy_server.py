@@ -9918,6 +9918,9 @@ async def alerting_settings(
                 field_value=_slack_alerting_args_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
                 field_default_value=field_info.default,
+                premium_field=(
+                    True if field_name == "region_outage_alert_ttl" else False
+                ),
             )
             return_val.append(_response_obj)
     return return_val
