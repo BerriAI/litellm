@@ -3200,6 +3200,8 @@ def embedding(
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+                client=client,
+                print_verbose=print_verbose,
             )
         else:
             args = locals()

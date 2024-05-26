@@ -667,6 +667,29 @@ class IBMWatsonXAI(BaseLLM):
             # regular text generation
             return handle_text_request(prompt)
 
+    def _process_embedding_response(self, json_resp: dict, model_response:Union[ModelResponse,None]=None) -> ModelResponse:
+        if model_response is None:
+            model_response = ModelResponse(model=json_resp.get("model_id", None))
+        results = json_resp.get("results", [])
+        embedding_response = []
+        for idx, result in enumerate(results):
+            embedding_response.append(
+                {
+                    "object": "embedding",
+                    "index": idx,
+                    "embedding": result["embedding"],
+                }
+            )
+        model_response["object"] = "list"
+        model_response["data"] = embedding_response
+        input_tokens = json_resp.get("input_token_count", 0)
+        model_response.usage = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=0,
+            total_tokens=input_tokens,
+        )
+        return model_response
+
     def embedding(
         self,
         model: str,
@@ -676,7 +699,9 @@ class IBMWatsonXAI(BaseLLM):
         model_response=None,
         optional_params=None,
         encoding=None,
+        print_verbose=None,
         aembedding=None,
+        client=None,
     ):
         """
         Send a text embedding request to the IBM Watsonx.ai API.
@@ -689,6 +714,23 @@ class IBMWatsonXAI(BaseLLM):
             if k not in optional_params:
                 optional_params[k] = v
 
+        model_response['model'] = model
+        if client is not None:
+            print_verbose(
+                "'client' parameter passed: Using IBM Watsonx.ai client for text embeddings."
+            )
+            return self.client_embedding(
+                client=client,
+                model=model,
+                input=input,
+                api_key=api_key,
+                logging_obj=logging_obj,
+                model_response=model_response,
+                optional_params=optional_params,
+                encoding=encoding,
+                aembedding=aembedding,
+            )
+        
         # Load auth variables from environment variables
         if isinstance(input, str):
             input = [input]
@@ -720,49 +762,95 @@ class IBMWatsonXAI(BaseLLM):
         }
         request_manager = RequestManager(logging_obj)
 
-        def process_embedding_response(json_resp: dict) -> ModelResponse:
-            results = json_resp.get("results", [])
-            embedding_response = []
-            for idx, result in enumerate(results):
-                embedding_response.append(
-                    {
-                        "object": "embedding",
-                        "index": idx,
-                        "embedding": result["embedding"],
-                    }
-                )
-            model_response["object"] = "list"
-            model_response["data"] = embedding_response
-            model_response["model"] = model
-            input_tokens = json_resp.get("input_token_count", 0)
-            model_response.usage = Usage(
-                prompt_tokens=input_tokens,
-                completion_tokens=0,
-                total_tokens=input_tokens,
-            )
-            return model_response
-
         def handle_embedding(request_params: dict) -> ModelResponse:
             with request_manager.request(request_params, input=input) as resp:
                 json_resp = resp.json()
-            return process_embedding_response(json_resp)
+            logging_obj.post_call(
+                original_response=json.dumps(json_resp),
+                input=input,
+                api_key=api_params.get("api_key"),
+            )
+            return self._process_embedding_response(json_resp, model_response)
 
         async def handle_aembedding(request_params: dict) -> ModelResponse:
             async with request_manager.async_request(
                 request_params, input=input
             ) as resp:
                 json_resp = resp.json()
-            return process_embedding_response(json_resp)
+            logging_obj.post_call(
+                original_response=json.dumps(json_resp),
+                input=input,
+                api_key=api_params.get("api_key"),
+            )
+            return self._process_embedding_response(json_resp, model_response)
 
         try:
             if aembedding is True:
-                return handle_embedding(req_params)
-            else:
                 return handle_aembedding(req_params)
+            else:
+                return handle_embedding(req_params)
         except WatsonXAIError as e:
             raise e
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
+        
+    def client_embedding(
+        self,
+        client,
+        model: str,
+        input: Union[list, str],
+        api_key: Optional[str] = None,
+        logging_obj=None,
+        model_response=None,
+        optional_params=None,
+        encoding=None,
+        aembedding=None,
+    ):
+        from ibm_watsonx_ai.foundation_models import Embeddings
+
+        if optional_params is None:
+            optional_params = {}
+        
+        concurrency_limit = optional_params.pop("concurrency_limit", 10)
+        project_id = (
+            getattr(client, "default_project_id", None) or
+            getattr(client, "project_id", None) or
+            optional_params.pop("project_id", None)
+        )
+
+        embeddings = Embeddings(
+            model_id=model,
+            api_client=client,
+            project_id=project_id,
+            space_id=optional_params.get("space_id"),
+            params=optional_params,
+        )
+        if isinstance(input, str):
+            input = [input]
+        
+        async def handle_aembedding(input: list) -> ModelResponse:
+            results:List[List[float]] = embeddings.embed_documents(input, concurrency_limit=concurrency_limit)
+            json_resp = {"results": [{"embedding": result} for result in results], "model_id": model}
+            logging_obj.post_call(
+                original_response=json.dumps(json_resp),
+                input=input
+            )
+            return self._process_embedding_response(json_resp, model_response)
+        
+        def handle_embedding(input: list) -> ModelResponse:
+            results:List[List[float]] = embeddings.embed_documents(input, concurrency_limit=concurrency_limit)
+            json_resp = {"results": [{"embedding": result} for result in results], "model_id": model}
+            logging_obj.post_call(
+                original_response=json.dumps(json_resp),
+                input=input
+            )
+            return self._process_embedding_response(json_resp, model_response)
+        
+        if aembedding is True:
+            return handle_aembedding(input)
+        else:
+            return handle_embedding(input)
+        
 
     def generate_iam_token(self, api_key=None, **params):
         headers = {}
