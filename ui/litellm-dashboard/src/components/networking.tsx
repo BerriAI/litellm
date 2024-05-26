@@ -589,7 +589,7 @@ export const modelHubCall = async (
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/info` : `/model_group/info`;
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
