@@ -2061,6 +2061,7 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging,
                 timeout=timeout,  # type: ignore
+                client=client
             )
             if (
                 "stream" in optional_params

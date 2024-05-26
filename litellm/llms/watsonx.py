@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 import json, types, time  # noqa: E401
 from contextlib import asynccontextmanager, contextmanager
@@ -285,7 +286,9 @@ class IBMWatsonXAI(BaseLLM):
         )
 
     def _get_api_params(
-        self, params: dict, print_verbose: Optional[Callable] = None
+        self, params: dict, 
+        print_verbose: Optional[Callable] = None,
+        generate_token: Optional[bool] = True,
     ) -> dict:
         """
         Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
@@ -365,7 +368,7 @@ class IBMWatsonXAI(BaseLLM):
                 status_code=401,
                 message="Error: Watsonx URL not set. Set WX_URL in environment variables or pass in as a parameter.",
             )
-        if token is None and api_key is not None:
+        if token is None and api_key is not None and generate_token:
             # generate the auth token
             if print_verbose is not None:
                 print_verbose("Generating IAM token for Watsonx.ai")
@@ -392,6 +395,31 @@ class IBMWatsonXAI(BaseLLM):
             "region_name": region_name,
             "api_version": api_version,
         }
+    
+    def _process_text_gen_response(self, json_resp: dict, model_response: ModelResponse=None) -> ModelResponse:
+        if "results" not in json_resp:
+            raise WatsonXAIError(
+                status_code=500,
+                message=f"Error: Invalid response from Watsonx.ai API: {json_resp}",
+            )
+        if model_response is None:
+            model_response = ModelResponse(model=json_resp.get("model_id", None))
+        generated_text = json_resp["results"][0]["generated_text"]
+        prompt_tokens = json_resp["results"][0]["input_token_count"]
+        completion_tokens = json_resp["results"][0]["generated_token_count"]
+        model_response["choices"][0]["message"]["content"] = generated_text
+        model_response["finish_reason"] = json_resp["results"][0]["stop_reason"]
+        if json_resp.get("created_at"):
+            model_response["created"] = datetime.fromisoformat(json_resp["created_at"]).timestamp()
+        else:
+            model_response["created"] = int(time.time())
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        setattr(model_response, "usage", usage)
+        return model_response
 
     def completion(
         self,
@@ -407,11 +435,30 @@ class IBMWatsonXAI(BaseLLM):
         litellm_params=None,
         logger_fn=None,
         timeout=None,
+        client=None,
     ):
         """
         Send a text generation request to the IBM Watsonx.ai API.
         Reference: https://cloud.ibm.com/apidocs/watsonx-ai#text-generation
         """
+        if client is not None:
+            print_verbose("'client' parameter passed: Using IBM Watsonx.ai client for text generation.")
+            return self.client_completion(
+                client=client,
+                model=model,
+                messages=messages,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                acompletion=acompletion,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,
+            )
+
         stream = optional_params.pop("stream", False)
 
         # Load default configs
@@ -426,27 +473,7 @@ class IBMWatsonXAI(BaseLLM):
         prompt = convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
-
-        def process_text_gen_response(json_resp: dict) -> ModelResponse:
-            if "results" not in json_resp:
-                raise WatsonXAIError(
-                    status_code=500,
-                    message=f"Error: Invalid response from Watsonx.ai API: {json_resp}",
-                )
-            generated_text = json_resp["results"][0]["generated_text"]
-            prompt_tokens = json_resp["results"][0]["input_token_count"]
-            completion_tokens = json_resp["results"][0]["generated_token_count"]
-            model_response["choices"][0]["message"]["content"] = generated_text
-            model_response["finish_reason"] = json_resp["results"][0]["stop_reason"]
-            model_response["created"] = int(time.time())
-            model_response["model"] = model
-            usage = Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            )
-            setattr(model_response, "usage", usage)
-            return model_response
+        model_response["model"] = model
 
         def process_stream_response(
             stream_resp: Union[Iterator[str], AsyncIterator],
@@ -470,7 +497,7 @@ class IBMWatsonXAI(BaseLLM):
             ) as resp:
                 json_resp = resp.json()
 
-            return process_text_gen_response(json_resp)
+            return self._process_text_gen_response(json_resp, model_response)
 
         async def handle_text_request_async(request_params: dict) -> ModelResponse:
             async with self.request_manager.async_request(
@@ -479,7 +506,7 @@ class IBMWatsonXAI(BaseLLM):
                 timeout=timeout,
             ) as resp:
                 json_resp = resp.json()
-            return process_text_gen_response(json_resp)
+            return self._process_text_gen_response(json_resp, model_response)
 
         def handle_stream_request(request_params: dict) -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
@@ -530,6 +557,100 @@ class IBMWatsonXAI(BaseLLM):
             raise e
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
+        
+    def client_completion(
+        self,
+        client: object,
+        model: str,
+        messages: list,
+        custom_prompt_dict: dict,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        logging_obj,
+        optional_params=None,
+        acompletion=None,
+        litellm_params=None,
+        logger_fn=None,
+        timeout=None,
+    ):
+        """
+        Send a text generation request to the IBM Watsonx.ai API via an ibm_watsonx_ai.client.Client object.
+        """
+        from ibm_watsonx_ai.foundation_models import ModelInference
+        from ibm_watsonx_ai.client import APIClient
+
+        client: APIClient
+        stream = optional_params.pop("stream", False)
+        # Load default configs
+        config = IBMWatsonXAIConfig.get_config()
+        for k, v in config.items():
+            if k not in optional_params:
+                optional_params[k] = v
+
+        # Make prompt to send to model
+        provider = model.split("/")[0]
+        model_name = "/".join(model.split("/")[1:])
+        prompt = convert_messages_to_prompt(
+            model, messages, provider, custom_prompt_dict
+        )
+        api_params = self._get_api_params(optional_params, print_verbose=print_verbose, generate_token=False)
+        model_inference:ModelInference = self.init_watsonx_model_with_client(
+            model_id=model,
+            watsonx_client=client,
+            project_id=client.project_id or api_params.get("project_id"),
+            space_id=api_params.get("space_id"),
+            verify=api_params.get("verify", False),
+            validate=api_params.get("validate", False),
+            model_params=optional_params,
+        )
+        model_response["model"] = model
+        
+        def handle_text_request(prompt: str) -> ModelResponse:
+            raw_resp = model_inference.generate(prompt, async_mode=False)
+            return self._process_text_gen_response(raw_resp, model_response)
+        
+        async def handle_text_request_async(prompt: str) -> ModelResponse:
+            raw_resp = model_inference.generate(prompt, async_mode=True)
+            return self._process_text_gen_response(raw_resp, model_response)
+        
+        def handle_stream_request(prompt: str) -> litellm.CustomStreamWrapper:
+            # stream the response - generated chunks will be handled
+            # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
+            stream = model_inference.generate_text_stream(prompt, raw_response=True)
+            streamwrapper = litellm.CustomStreamWrapper(
+                stream,
+                model=model,
+                custom_llm_provider="watsonx",
+                logging_obj=logging_obj,
+            )
+            return streamwrapper
+        
+        async def handle_stream_request_async(prompt: str) -> litellm.CustomStreamWrapper:
+            # stream the response - generated chunks will be handled
+            # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
+            stream = model_inference.generate_text_stream(prompt, raw_response=True)
+            streamwrapper = litellm.CustomStreamWrapper(
+                stream,
+                model=model,
+                custom_llm_provider="watsonx",
+                logging_obj=logging_obj,
+            )
+            return streamwrapper
+
+        if stream and (acompletion is True):
+            # stream and async text generation
+            return handle_stream_request_async(prompt)
+        elif stream:
+            # streaming text generation
+            return handle_stream_request(prompt)
+        elif (acompletion is True):
+            # async text generation
+            return handle_text_request_async(prompt)
+        else:
+            # regular text generation
+            return handle_text_request(prompt)
+        
 
     def embedding(
         self,
@@ -663,128 +784,181 @@ class IBMWatsonXAI(BaseLLM):
             return json_resp
         return [res["model_id"] for res in json_resp["resources"]]
 
+
+    def init_watsonx_model_with_client(
+        self,
+        model_id: str,
+        watsonx_client: object,
+        project_id: Optional[str] = None,
+        space_id: Optional[str] = None,
+        verify: Optional[Union[bool,str]] = None,
+        validate: Optional[bool] = False,
+        model_params: Optional[dict] = None,
+    ):
+        """
+        Initialize a watsonx.ai model for inference.
+        Args:
+        model_id (str): The model ID to use for inference. If this is a model deployed in a deployment space, the model_id should be in the format 'deployment/<deployment_id>' and the space_id to the deploymend space should be provided.
+        wx_credentials (dict): A dictionary containing 'apikey' and 'url' keys for the watsonx.ai instance.
+        watsonx_client (object): An instance of the ibm_watsonx_ai.APIClient class.
+        project_id (str): The project ID for the watsonx.ai instance.
+        space_id (str): The space ID for the deployment space.
+        verify (bool): Whether to verify the SSL certificate of calls to the watsonx url.
+        validate (bool): Whether to validate the model_id at initialization.
+        watsonx_client (object): An instance of the ibm_watsonx_ai.APIClient class. If this is provided, the model will be initialized using the provided client.
+        model_params (dict): A dictionary containing additional parameters to pass to the model (see IBMWatsonXConfig for a list of supported parameters).
+        """
+
+        from ibm_watsonx_ai import APIClient
+        from ibm_watsonx_ai.foundation_models import ModelInference
+
+        watsonx_client: APIClient
+        if project_id is None:
+            project_id = watsonx_client.project_id
+
+        if model_id.startswith("deployment/"):
+            # deployment models are passed in as 'deployment/<deployment_id>'
+            assert space_id is not None, "space_id is required for deployment models"
+            deployment_id = '/'.join(model_id.split("/")[1:])
+            model_id = None
+        else:
+            space_id = None
+            deployment_id = None
+
+        model = ModelInference(
+            model_id=model_id,
+            params=model_params,
+            api_client=watsonx_client,
+            project_id=project_id,
+            deployment_id=deployment_id,
+            verify=verify,
+            validate=validate,
+            space_id=space_id,
+        )
+        return model
+
 class RequestManager:
+    """
+    Returns a context manager that manages the response from the request.
+    if async_ is True, returns an async context manager, otherwise returns a regular context manager.
+
+    Usage:
+    ```python
+    request_params = dict(method="POST", url="https://api.example.com", headers={"Authorization" : "Bearer token"}, json={"key": "value"})
+    request_manager = RequestManager(logging_obj=logging_obj)
+    async with request_manager.request(request_params) as resp:
+        ...
+    # or
+    with request_manager.async_request(request_params) as resp:
+        ...
+    ```
+    """
+
+    def __init__(self, logging_obj=None):
+        self.logging_obj = logging_obj
+
+    def pre_call(
+        self,
+        request_params: dict,
+        input: Optional[Any] = None,
+    ):
+        if self.logging_obj is None:
+            return
+        request_str = (
+            f"response = {request_params['method']}(\n"
+            f"\turl={request_params['url']},\n"
+            f"\tjson={request_params.get('json')},\n"
+            f")"
+        )
+        self.logging_obj.pre_call(
+            input=input,
+            api_key=request_params["headers"].get("Authorization"),
+            additional_args={
+                "complete_input_dict": request_params.get("json"),
+                "request_str": request_str,
+            },
+        )
+
+    def post_call(self, resp, request_params):
+        if self.logging_obj is None:
+            return
+        self.logging_obj.post_call(
+            input=input,
+            api_key=request_params["headers"].get("Authorization"),
+            original_response=json.dumps(resp.json()),
+            additional_args={
+                "status_code": resp.status_code,
+                "complete_input_dict": request_params.get(
+                    "data", request_params.get("json")
+                ),
+            },
+        )
+
+    @contextmanager
+    def request(
+        self, 
+        request_params: dict,
+        stream: bool = False,
+        input: Optional[Any] = None,
+        timeout=None,
+    ) -> Generator[requests.Response, None, None]:
         """
-        Returns a context manager that manages the response from the request.
-        if async_ is True, returns an async context manager, otherwise returns a regular context manager.
-
-        Usage:
-        ```python
-        request_params = dict(method="POST", url="https://api.example.com", headers={"Authorization" : "Bearer token"}, json={"key": "value"})
-        request_manager = RequestManager(logging_obj=logging_obj)
-        async with request_manager.request(request_params) as resp:
-            ...
-        # or
-        with request_manager.async_request(request_params) as resp:
-            ...
-        ```
+        Returns a context manager that yields the response from the request.
         """
-
-        def __init__(self, logging_obj=None):
-            self.logging_obj = logging_obj
-
-        def pre_call(
-            self,
-            request_params: dict,
-            input: Optional[Any] = None,
-        ):
-            if self.logging_obj is None:
-                return
-            request_str = (
-                f"response = {request_params['method']}(\n"
-                f"\turl={request_params['url']},\n"
-                f"\tjson={request_params.get('json')},\n"
-                f")"
-            )
-            self.logging_obj.pre_call(
-                input=input,
-                api_key=request_params["headers"].get("Authorization"),
-                additional_args={
-                    "complete_input_dict": request_params.get("json"),
-                    "request_str": request_str,
-                },
-            )
-
-        def post_call(self, resp, request_params):
-            if self.logging_obj is None:
-                return
-            self.logging_obj.post_call(
-                input=input,
-                api_key=request_params["headers"].get("Authorization"),
-                original_response=json.dumps(resp.json()),
-                additional_args={
-                    "status_code": resp.status_code,
-                    "complete_input_dict": request_params.get(
-                        "data", request_params.get("json")
-                    ),
-                },
-            )
-
-        @contextmanager
-        def request(
-            self, 
-            request_params: dict,
-            stream: bool = False,
-            input: Optional[Any] = None,
-            timeout=None,
-        ) -> Generator[requests.Response, None, None]:
-            """
-            Returns a context manager that yields the response from the request.
-            """
-            self.pre_call(request_params, input)
-            if timeout:
-                request_params["timeout"] = timeout
-            if stream:
-                request_params["stream"] = stream
-            try:
-                resp = requests.request(**request_params)
-                if not resp.ok:
-                    raise WatsonXAIError(
-                        status_code=resp.status_code,
-                        message=f"Error {resp.status_code} ({resp.reason}): {resp.text}",
-                    )
-                yield resp
-            except Exception as e:
-                raise WatsonXAIError(status_code=500, message=str(e))
-            if not stream:
-                self.post_call(resp, request_params)
-
-        @asynccontextmanager
-        async def async_request(
-            self, 
-            request_params: dict,
-            stream: bool = False,
-            input: Optional[Any] = None,
-            timeout=None,
-        ) -> AsyncGenerator[httpx.Response, None]:
-            self.pre_call(request_params, input)
-            if timeout:
-                request_params["timeout"] = timeout
-            if stream:
-                request_params["stream"] = stream
-            try:
-                # async with AsyncHTTPHandler(timeout=timeout) as client:
-                self.async_handler = AsyncHTTPHandler(
-                    timeout=httpx.Timeout(
-                        timeout=request_params.pop("timeout", 600.0), connect=5.0
-                    ),
+        self.pre_call(request_params, input)
+        if timeout:
+            request_params["timeout"] = timeout
+        if stream:
+            request_params["stream"] = stream
+        try:
+            resp = requests.request(**request_params)
+            if not resp.ok:
+                raise WatsonXAIError(
+                    status_code=resp.status_code,
+                    message=f"Error {resp.status_code} ({resp.reason}): {resp.text}",
                 )
-                # async_handler.client.verify = False
-                if "json" in request_params:
-                    request_params["data"] = json.dumps(request_params.pop("json", {}))
-                method = request_params.pop("method")
-                if method.upper() == "POST":
-                    resp = await self.async_handler.post(**request_params)
-                else:
-                    resp = await self.async_handler.get(**request_params)
-                if resp.status_code not in [200, 201]:
-                    raise WatsonXAIError(
-                        status_code=resp.status_code,
-                        message=f"Error {resp.status_code} ({resp.reason}): {resp.text}",
-                    )
-                yield resp
-                # await async_handler.close()
-            except Exception as e:
-                raise WatsonXAIError(status_code=500, message=str(e))
-            if not stream:
-                self.post_call(resp, request_params)
+            yield resp
+        except Exception as e:
+            raise WatsonXAIError(status_code=500, message=str(e))
+        if not stream:
+            self.post_call(resp, request_params)
+
+    @asynccontextmanager
+    async def async_request(
+        self, 
+        request_params: dict,
+        stream: bool = False,
+        input: Optional[Any] = None,
+        timeout=None,
+    ) -> AsyncGenerator[httpx.Response, None]:
+        self.pre_call(request_params, input)
+        if timeout:
+            request_params["timeout"] = timeout
+        if stream:
+            request_params["stream"] = stream
+        try:
+            # async with AsyncHTTPHandler(timeout=timeout) as client:
+            self.async_handler = AsyncHTTPHandler(
+                timeout=httpx.Timeout(
+                    timeout=request_params.pop("timeout", 600.0), connect=5.0
+                ),
+            )
+            # async_handler.client.verify = False
+            if "json" in request_params:
+                request_params["data"] = json.dumps(request_params.pop("json", {}))
+            method = request_params.pop("method")
+            if method.upper() == "POST":
+                resp = await self.async_handler.post(**request_params)
+            else:
+                resp = await self.async_handler.get(**request_params)
+            if resp.status_code not in [200, 201]:
+                raise WatsonXAIError(
+                    status_code=resp.status_code,
+                    message=f"Error {resp.status_code} ({resp.reason}): {resp.text}",
+                )
+            yield resp
+            # await async_handler.close()
+        except Exception as e:
+            raise WatsonXAIError(status_code=500, message=str(e))
+        if not stream:
+            self.post_call(resp, request_params)
