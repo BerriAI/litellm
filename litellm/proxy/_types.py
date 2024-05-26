@@ -642,6 +642,7 @@ class ResetTeamBudgetRequest(LiteLLMBase):
     team_id: str
     spend: float
     budget_reset_at: datetime
+    updated_at: datetime
 
 
 class DeleteTeamRequest(LiteLLMBase):
