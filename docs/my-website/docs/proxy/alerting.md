@@ -203,6 +203,10 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 
 ## Advanced - Region-outage alerting (✨ Enterprise feature)
 
+:::info
+[Get a free 2-week license](https://forms.gle/P518LXsAZ7PhXpDn8)
+:::
+
 Setup alerts if a provider region is having an outage. 
 
 ```yaml
