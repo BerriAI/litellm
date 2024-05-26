@@ -125,6 +125,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
+from litellm.integrations.slack_alerting import SlackAlertingArgs, SlackAlerting
 
 try:
     from litellm._version import version
@@ -3048,6 +3049,13 @@ class ProxyConfig:
             general_settings["global_max_parallel_requests"] = _general_settings[
                 "global_max_parallel_requests"
             ]
+
+        ## ALERTING ARGS ##
+        if "alerting_args" in _general_settings:
+            general_settings["alerting_args"] = _general_settings["alerting_args"]
+            proxy_logging_obj.slack_alerting_instance.update_values(
+                alerting_args=general_settings["alerting_args"],
+            )
 
     async def add_deployment(
         self,
@@ -8894,6 +8902,7 @@ async def budget_settings(
                 field_description=field_info.description or "",
                 field_value=db_budget_row_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
+                field_default_value=field_info.default,
             )
             return_val.append(_response_obj)
 
@@ -9789,6 +9798,149 @@ async def model_settings():
         )
 
     return returned_list
+
+
+#### ALERTING MANAGEMENT ENDPOINTS ####
+
+
+@router.get(
+    "/alerting/settings",
+    description="Return the configurable alerting param, description, and current value",
+    tags=["alerting"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def alerting_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    global proxy_logging_obj, prisma_client
+    """
+    Used by UI to generate 'alerting settings' page
+    {
+        field_name=field_name,
+        field_type=allowed_args[field_name]["type"], # string/int
+        field_description=field_info.description or "", # human-friendly description
+        field_value=general_settings.get(field_name, None), # example value
+    }
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    ## get general settings from db
+    db_general_settings = await prisma_client.db.litellm_config.find_first(
+        where={"param_name": "general_settings"}
+    )
+
+    if db_general_settings is not None and db_general_settings.param_value is not None:
+        db_general_settings_dict = dict(db_general_settings.param_value)
+        alerting_args_dict: dict = db_general_settings_dict.get("alerting_args", {})  # type: ignore
+    else:
+        alerting_args_dict = {}
+
+    allowed_args = {
+        "daily_report_frequency": {"type": "Integer"},
+        "report_check_interval": {"type": "Integer"},
+        "budget_alert_ttl": {"type": "Integer"},
+        "outage_alert_ttl": {"type": "Integer"},
+        "region_outage_alert_ttl": {"type": "Integer"},
+        "minor_outage_alert_threshold": {"type": "Integer"},
+        "major_outage_alert_threshold": {"type": "Integer"},
+        "max_outage_alert_list_size": {"type": "Integer"},
+    }
+
+    _slack_alerting: SlackAlerting = proxy_logging_obj.slack_alerting_instance
+    _slack_alerting_args_dict = _slack_alerting.alerting_args.model_dump()
+
+    return_val = []
+
+    for field_name, field_info in SlackAlertingArgs.model_fields.items():
+        if field_name in allowed_args:
+
+            _stored_in_db: Optional[bool] = None
+            if field_name in alerting_args_dict:
+                _stored_in_db = True
+            else:
+                _stored_in_db = False
+
+            _response_obj = ConfigList(
+                field_name=field_name,
+                field_type=allowed_args[field_name]["type"],
+                field_description=field_info.description or "",
+                field_value=_slack_alerting_args_dict.get(field_name, None),
+                stored_in_db=_stored_in_db,
+                field_default_value=field_info.default,
+            )
+            return_val.append(_response_obj)
+    return return_val
+
+
+# @router.post(
+#     "/alerting/update",
+#     description="Update the slack alerting settings. Persist value in db.",
+#     tags=["alerting"],
+#     dependencies=[Depends(user_api_key_auth)],
+#     include_in_schema=False,
+# )
+# async def alerting_update(
+#     data: SlackAlertingArgs,
+#     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+# ):
+#     """Allows updating slack alerting values. Used by UI."""
+#     global prisma_client
+#     if prisma_client is None:
+#         raise HTTPException(
+#             status_code=400,
+#             detail={"error": CommonProxyErrors.db_not_connected_error.value},
+#         )
+
+#     if user_api_key_dict.user_role != "proxy_admin":
+#         raise HTTPException(
+#             status_code=400,
+#             detail={"error": CommonProxyErrors.not_allowed_access.value},
+#         )
+
+#     ## get general settings from db
+#     db_general_settings = await prisma_client.db.litellm_config.find_first(
+#         where={"param_name": "general_settings"}
+#     )
+#     ### update value
+
+#     alerting_args_dict = {}
+#     if db_general_settings is None or db_general_settings.param_value is None:
+#         general_settings = {}
+#         alerting_args_dict = {}
+#     else:
+#         general_settings = dict(db_general_settings.param_value)
+#         _alerting_args_dict = general_settings.get("alerting_args", None)
+#         if _alerting_args_dict is not None and isinstance(_alerting_args_dict, dict):
+#             alerting_args_dict = _alerting_args_dict
+
+
+#     alerting_args_dict = data.model
+
+#     response = await prisma_client.db.litellm_config.upsert(
+#         where={"param_name": "general_settings"},
+#         data={
+#             "create": {"param_name": "general_settings", "param_value": json.dumps(general_settings)},  # type: ignore
+#             "update": {"param_value": json.dumps(general_settings)},  # type: ignore
+#         },
+#     )
+
+#     return response
 
 
 #### EXPERIMENTAL QUEUING ####
@@ -10934,6 +11086,7 @@ async def get_config_list(
                 field_description=field_info.description or "",
                 field_value=general_settings.get(field_name, None),
                 stored_in_db=_stored_in_db,
+                field_default_value=field_info.default,
             )
             return_val.append(_response_obj)
 

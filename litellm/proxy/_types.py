@@ -800,6 +800,7 @@ class ConfigList(LiteLLMBase):
     field_description: str
     field_value: Any
     stored_in_db: Optional[bool]
+    field_default_value: Any
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -877,7 +878,9 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
     )
-
+    alerting_args: Optional[Dict] = Field(
+        None, description="Controllable params for slack alerting - e.g. ttl in cache."
+    )
     alerting_threshold: Optional[int] = Field(
         None,
         description="sends alerts if requests hang for 5min+",
