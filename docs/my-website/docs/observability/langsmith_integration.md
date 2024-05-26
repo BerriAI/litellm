@@ -71,6 +71,23 @@ response = litellm.completion(
 )
 print(response)
 ```
+
+### Make LiteLLM Proxy use Custom `LANGSMITH_BASE_URL`
+
+If you're using a custom LangSmith instance, you can set the
+`LANGSMITH_BASE_URL` environment variable to point to your instance.
+For example, you can make LiteLLM Proxy log to a local LangSmith instance with
+this config:
+
+```yaml
+litellm_settings:
+  success_callback: ["langsmith"]
+
+environment_variables:
+  LANGSMITH_BASE_URL: "http://localhost:1984"
+  LANGSMITH_PROJECT: "litellm-proxy"
+```
+
 ## Support & Talk to Founders
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)

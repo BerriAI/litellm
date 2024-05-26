@@ -5,6 +5,21 @@ from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
 import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
+from litellm.types.utils import ProviderField
+
+AlertType = Literal[
+    "llm_exceptions",
+    "llm_too_slow",
+    "llm_requests_hanging",
+    "budget_alerts",
+    "db_exceptions",
+    "daily_reports",
+    "spend_reports",
+    "cooldown_deployment",
+    "new_model_added",
+    "outage_alerts",
+    "region_outage_alerts",
+]
 
 
 def hash_token(token: str):
@@ -87,9 +102,9 @@ class LiteLLMRoutes(enum.Enum):
         # models
         "/models",
         "/v1/models",
+        # token counter
+        "/utils/token_counter",
     ]
-
-    llm_utils_routes: List = ["utils/token_counter"]
 
     info_routes: List = [
         "/key/info",
@@ -157,6 +172,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/end_users",
         "/global/spend/models",
         "/global/predict/spend/logs",
+        "/global/spend/report",
     ]
 
     public_routes: List = [
@@ -251,6 +267,10 @@ class LiteLLMPromptInjectionParams(LiteLLMBase):
     llm_api_name: Optional[str] = None
     llm_api_system_prompt: Optional[str] = None
     llm_api_fail_call_string: Optional[str] = None
+    reject_as_response: Optional[bool] = Field(
+        default=False,
+        description="Return rejected request error message as a string to the user. Default behaviour is to raise an exception.",
+    )
 
     @root_validator(pre=True)
     def check_llm_api_params(cls, values):
@@ -357,6 +377,11 @@ class ModelInfo(LiteLLMBase):
         if values.get("base_model") is None:
             values.update({"base_model": None})
         return values
+
+
+class ProviderInfo(LiteLLMBase):
+    name: str
+    fields: List[ProviderField]
 
 
 class BlockUsers(LiteLLMBase):
@@ -537,7 +562,11 @@ class TeamBase(LiteLLMBase):
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+
+    # Budget fields
     max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+
     models: list = []
     blocked: bool = False
 
@@ -558,6 +587,7 @@ class GlobalEndUsersSpend(LiteLLMBase):
 class TeamMemberAddRequest(LiteLLMBase):
     team_id: str
     member: Member
+    max_budget_in_team: Optional[float] = None  # Users max budget within the team
 
 
 class TeamMemberDeleteRequest(LiteLLMBase):
@@ -573,6 +603,21 @@ class TeamMemberDeleteRequest(LiteLLMBase):
 
 
 class UpdateTeamRequest(LiteLLMBase):
+    """
+    UpdateTeamRequest, used by /team/update when you need to update a team
+
+    team_id: str
+    team_alias: Optional[str] = None
+    organization_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: Optional[list] = None
+    blocked: Optional[bool] = None
+    budget_duration: Optional[str] = None
+    """
+
     team_id: str  # required
     team_alias: Optional[str] = None
     organization_id: Optional[str] = None
@@ -582,6 +627,23 @@ class UpdateTeamRequest(LiteLLMBase):
     max_budget: Optional[float] = None
     models: Optional[list] = None
     blocked: Optional[bool] = None
+    budget_duration: Optional[str] = None
+
+
+class ResetTeamBudgetRequest(LiteLLMBase):
+    """
+    internal type used to reset the budget on a team
+    used by reset_budget()
+
+    team_id: str
+    spend: float
+    budget_reset_at: datetime
+    """
+
+    team_id: str
+    spend: float
+    budget_reset_at: datetime
+    updated_at: datetime
 
 
 class DeleteTeamRequest(LiteLLMBase):
@@ -642,6 +704,20 @@ class LiteLLM_BudgetTable(LiteLLMBase):
         protected_namespaces = ()
 
 
+class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
+    """
+    Used to track spend of a user_id within a team_id
+    """
+
+    spend: Optional[float] = None
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    budget_id: Optional[str] = None
+
+    class Config:
+        protected_namespaces = ()
+
+
 class NewOrganizationRequest(LiteLLM_BudgetTable):
     organization_id: Optional[str] = None
     organization_alias: str
@@ -671,8 +747,37 @@ class OrganizationRequest(LiteLLMBase):
     organizations: List[str]
 
 
+class BudgetNew(LiteLLMBase):
+    budget_id: str = Field(default=None, description="The unique budget id.")
+    max_budget: Optional[float] = Field(
+        default=None,
+        description="Requests will fail if this budget (in USD) is exceeded.",
+    )
+    soft_budget: Optional[float] = Field(
+        default=None,
+        description="Requests will NOT fail if this is exceeded. Will fire alerting though.",
+    )
+    max_parallel_requests: Optional[int] = Field(
+        default=None, description="Max concurrent requests allowed for this budget id."
+    )
+    tpm_limit: Optional[int] = Field(
+        default=None, description="Max tokens per minute, allowed for this budget id."
+    )
+    rpm_limit: Optional[int] = Field(
+        default=None, description="Max requests per minute, allowed for this budget id."
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Max duration budget should be set for (e.g. '1hr', '1d', '28d')",
+    )
+
+
 class BudgetRequest(LiteLLMBase):
     budgets: List[str]
+
+
+class BudgetDeleteRequest(LiteLLMBase):
+    id: str
 
 
 class KeyManagementSystem(enum.Enum):
@@ -731,6 +836,8 @@ class ConfigList(LiteLLMBase):
     field_description: str
     field_value: Any
     stored_in_db: Optional[bool]
+    field_default_value: Any
+    premium_field: bool = False
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -800,17 +907,7 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
     )
-    alert_types: Optional[
-        List[
-            Literal[
-                "llm_exceptions",
-                "llm_too_slow",
-                "llm_requests_hanging",
-                "budget_alerts",
-                "db_exceptions",
-            ]
-        ]
-    ] = Field(
+    alert_types: Optional[List[AlertType]] = Field(
         None,
         description="List of alerting types. By default it is all alerts",
     )
@@ -818,7 +915,9 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
     )
-
+    alerting_args: Optional[Dict] = Field(
+        None, description="Controllable params for slack alerting - e.g. ttl in cache."
+    )
     alerting_threshold: Optional[int] = Field(
         None,
         description="sends alerts if requests hang for 5min+",
@@ -907,6 +1006,12 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
+    team_member_spend: Optional[float] = None
+
+    # End User Params
+    end_user_id: Optional[str] = None
+    end_user_tpm_limit: Optional[int] = None
+    end_user_rpm_limit: Optional[int] = None
 
 
 class UserAPIKeyAuth(
@@ -1026,3 +1131,30 @@ class TokenCountResponse(LiteLLMBase):
     request_model: str
     model_used: str
     tokenizer_type: str
+
+
+class CallInfo(LiteLLMBase):
+    """Used for slack budget alerting"""
+
+    spend: float
+    max_budget: Optional[float] = None
+    token: str = Field(description="Hashed value of that key")
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    user_email: Optional[str] = None
+    key_alias: Optional[str] = None
+    projected_exceeded_date: Optional[str] = None
+    projected_spend: Optional[float] = None
+
+
+class WebhookEvent(CallInfo):
+    event: Literal[
+        "budget_crossed", "threshold_crossed", "projected_limit_exceeded", "key_created"
+    ]
+    event_group: Literal["user", "key", "team", "proxy"]
+    event_message: str  # human-readable description of event
+
+
+class SpecialModelNames(enum.Enum):
+    all_team_models = "all-team-models"
+    all_proxy_models = "all-proxy-models"

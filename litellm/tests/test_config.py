@@ -102,7 +102,7 @@ async def test_delete_deployment():
     pc = ProxyConfig()
 
     db_model = DBModel(
-        model_id="12340523",
+        model_id=deployment.model_info.id,
         model_name="gpt-3.5-turbo",
         litellm_params=encrypted_litellm_params,
         model_info={"id": deployment.model_info.id},

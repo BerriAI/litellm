@@ -177,6 +177,32 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
+# sub class of bad request error - meant to help us catch guardrails-related errors on proxy.
+class RejectedRequestError(BadRequestError):  # type: ignore
+    def __init__(
+        self,
+        message,
+        model,
+        llm_provider,
+        request_data: dict,
+        litellm_debug_info: Optional[str] = None,
+    ):
+        self.status_code = 400
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
+        self.request_data = request_data
+        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        response = httpx.Response(status_code=500, request=request)
+        super().__init__(
+            message=self.message,
+            model=self.model,  # type: ignore
+            llm_provider=self.llm_provider,  # type: ignore
+            response=response,
+        )  # Call the base class constructor with the parameters it needs
+
+
 class ContentPolicyViolationError(BadRequestError):  # type: ignore
     #  Error code: 400 - {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Image descriptions generated from your prompt may contain text that is not allowed by our safety system. If you believe this was done in error, your request may succeed if retried, or by adjusting your prompt.', 'param': None, 'type': 'invalid_request_error'}}
     def __init__(

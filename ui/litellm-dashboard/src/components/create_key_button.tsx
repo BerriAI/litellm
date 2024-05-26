@@ -319,7 +319,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 >
                   <TextInput placeholder="" />
                 </Form.Item>
-                <Form.Item label="Metadata" name="metadata">
+
+                <Form.Item label="Metadata" name="metadata" className="mt-8">
                   <Input.TextArea
                     rows={4}
                     placeholder="Enter metadata as JSON"

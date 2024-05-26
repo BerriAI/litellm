@@ -1,6 +1,6 @@
 # What is this?
 ## Initial implementation of calling bedrock via httpx client (allows for async calls).
-## V0 - just covers cohere command-r support
+## V1 - covers cohere + anthropic claude-3 support
 
 import os, types
 import json
@@ -29,13 +29,22 @@ from litellm.utils import (
     get_secret,
     Logging,
 )
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt, cohere_message_pt
+import litellm, uuid
+from .prompt_templates.factory import (
+    prompt_factory,
+    custom_prompt,
+    cohere_message_pt,
+    construct_tool_use_system_prompt,
+    extract_between_tags,
+    parse_xml_params,
+    contains_tag,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from .base import BaseLLM
 import httpx  # type: ignore
-from .bedrock import BedrockError, convert_messages_to_prompt
+from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
 from litellm.types.llms.bedrock import *
+import urllib.parse
 
 
 class AmazonCohereChatConfig:
@@ -280,7 +289,8 @@ class BedrockLLM(BaseLLM):
         messages: List,
         print_verbose,
         encoding,
-    ) -> ModelResponse:
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
+        provider = model.split(".")[0]
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -297,26 +307,210 @@ class BedrockLLM(BaseLLM):
             raise BedrockError(message=response.text, status_code=422)
 
         try:
-            model_response.choices[0].message.content = completion_response["text"]  # type: ignore
+            if provider == "cohere":
+                if "text" in completion_response:
+                    outputText = completion_response["text"]  # type: ignore
+                elif "generations" in completion_response:
+                    outputText = completion_response["generations"][0]["text"]
+                    model_response["finish_reason"] = map_finish_reason(
+                        completion_response["generations"][0]["finish_reason"]
+                    )
+            elif provider == "anthropic":
+                if model.startswith("anthropic.claude-3"):
+                    json_schemas: dict = {}
+                    _is_function_call = False
+                    ## Handle Tool Calling
+                    if "tools" in optional_params:
+                        _is_function_call = True
+                        for tool in optional_params["tools"]:
+                            json_schemas[tool["function"]["name"]] = tool[
+                                "function"
+                            ].get("parameters", None)
+                    outputText = completion_response.get("content")[0].get("text", None)
+                    if outputText is not None and contains_tag(
+                        "invoke", outputText
+                    ):  # OUTPUT PARSE FUNCTION CALL
+                        function_name = extract_between_tags("tool_name", outputText)[0]
+                        function_arguments_str = extract_between_tags(
+                            "invoke", outputText
+                        )[0].strip()
+                        function_arguments_str = (
+                            f"<invoke>{function_arguments_str}</invoke>"
+                        )
+                        function_arguments = parse_xml_params(
+                            function_arguments_str,
+                            json_schema=json_schemas.get(
+                                function_name, None
+                            ),  # check if we have a json schema for this function name)
+                        )
+                        _message = litellm.Message(
+                            tool_calls=[
+                                {
+                                    "id": f"call_{uuid.uuid4()}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_name,
+                                        "arguments": json.dumps(function_arguments),
+                                    },
+                                }
+                            ],
+                            content=None,
+                        )
+                        model_response.choices[0].message = _message  # type: ignore
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
+                    if (
+                        _is_function_call == True
+                        and stream is not None
+                        and stream == True
+                    ):
+                        print_verbose(
+                            f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
+                        )
+                        # return an iterator
+                        streaming_model_response = ModelResponse(stream=True)
+                        streaming_model_response.choices[0].finish_reason = getattr(
+                            model_response.choices[0], "finish_reason", "stop"
+                        )
+                        # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
+                        streaming_choice = litellm.utils.StreamingChoices()
+                        streaming_choice.index = model_response.choices[0].index
+                        _tool_calls = []
+                        print_verbose(
+                            f"type of model_response.choices[0]: {type(model_response.choices[0])}"
+                        )
+                        print_verbose(
+                            f"type of streaming_choice: {type(streaming_choice)}"
+                        )
+                        if isinstance(model_response.choices[0], litellm.Choices):
+                            if getattr(
+                                model_response.choices[0].message, "tool_calls", None
+                            ) is not None and isinstance(
+                                model_response.choices[0].message.tool_calls, list
+                            ):
+                                for tool_call in model_response.choices[
+                                    0
+                                ].message.tool_calls:
+                                    _tool_call = {**tool_call.dict(), "index": 0}
+                                    _tool_calls.append(_tool_call)
+                            delta_obj = litellm.utils.Delta(
+                                content=getattr(
+                                    model_response.choices[0].message, "content", None
+                                ),
+                                role=model_response.choices[0].message.role,
+                                tool_calls=_tool_calls,
+                            )
+                            streaming_choice.delta = delta_obj
+                            streaming_model_response.choices = [streaming_choice]
+                            completion_stream = ModelResponseIterator(
+                                model_response=streaming_model_response
+                            )
+                            print_verbose(
+                                f"Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
+                            )
+                            return litellm.CustomStreamWrapper(
+                                completion_stream=completion_stream,
+                                model=model,
+                                custom_llm_provider="cached_response",
+                                logging_obj=logging_obj,
+                            )
+
+                    model_response["finish_reason"] = map_finish_reason(
+                        completion_response.get("stop_reason", "")
+                    )
+                    _usage = litellm.Usage(
+                        prompt_tokens=completion_response["usage"]["input_tokens"],
+                        completion_tokens=completion_response["usage"]["output_tokens"],
+                        total_tokens=completion_response["usage"]["input_tokens"]
+                        + completion_response["usage"]["output_tokens"],
+                    )
+                    setattr(model_response, "usage", _usage)
+                else:
+                    outputText = completion_response["completion"]
+
+                    model_response["finish_reason"] = completion_response["stop_reason"]
+            elif provider == "ai21":
+                outputText = (
+                    completion_response.get("completions")[0].get("data").get("text")
+                )
+            elif provider == "meta":
+                outputText = completion_response["generation"]
+            elif provider == "mistral":
+                outputText = completion_response["outputs"][0]["text"]
+                model_response["finish_reason"] = completion_response["outputs"][0][
+                    "stop_reason"
+                ]
+            else:  # amazon titan
+                outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
-            raise BedrockError(message=response.text, status_code=422)
+            raise BedrockError(
+                message="Error processing={}, Received error={}".format(
+                    response.text, str(e)
+                ),
+                status_code=422,
+            )
+
+        try:
+            if (
+                len(outputText) > 0
+                and hasattr(model_response.choices[0], "message")
+                and getattr(model_response.choices[0].message, "tool_calls", None)
+                is None
+            ):
+                model_response["choices"][0]["message"]["content"] = outputText
+            elif (
+                hasattr(model_response.choices[0], "message")
+                and getattr(model_response.choices[0].message, "tool_calls", None)
+                is not None
+            ):
+                pass
+            else:
+                raise Exception()
+        except:
+            raise BedrockError(
+                message=json.dumps(outputText), status_code=response.status_code
+            )
+
+        if stream and provider == "ai21":
+            streaming_model_response = ModelResponse(stream=True)
+            streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
+                0
+            ].finish_reason
+            # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
+            streaming_choice = litellm.utils.StreamingChoices()
+            streaming_choice.index = model_response.choices[0].index
+            delta_obj = litellm.utils.Delta(
+                content=getattr(model_response.choices[0].message, "content", None),
+                role=model_response.choices[0].message.role,
+            )
+            streaming_choice.delta = delta_obj
+            streaming_model_response.choices = [streaming_choice]
+            mri = ModelResponseIterator(model_response=streaming_model_response)
+            return CustomStreamWrapper(
+                completion_stream=mri,
+                model=model,
+                custom_llm_provider="cached_response",
+                logging_obj=logging_obj,
+            )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        prompt_tokens = int(
-            response.headers.get(
-                "x-amzn-bedrock-input-token-count",
-                len(encoding.encode("".join(m.get("content", "") for m in messages))),
-            )
+        bedrock_input_tokens = response.headers.get(
+            "x-amzn-bedrock-input-token-count", None
         )
+        bedrock_output_tokens = response.headers.get(
+            "x-amzn-bedrock-output-token-count", None
+        )
+
+        prompt_tokens = int(
+            bedrock_input_tokens or litellm.token_counter(messages=messages)
+        )
+
         completion_tokens = int(
-            response.headers.get(
-                "x-amzn-bedrock-output-token-count",
-                len(
-                    encoding.encode(
-                        model_response.choices[0].message.content,  # type: ignore
-                        disallowed_special=(),
-                    )
-                ),
+            bedrock_output_tokens
+            or litellm.token_counter(
+                text=model_response.choices[0].message.content,  # type: ignore
+                count_response_tokens=True,
             )
         )
 
@@ -330,6 +524,16 @@ class BedrockLLM(BaseLLM):
         setattr(model_response, "usage", usage)
 
         return model_response
+
+    def encode_model_id(self, model_id: str) -> str:
+        """
+        Double encode the model ID to ensure it matches the expected double-encoded format.
+        Args:
+            model_id (str): The model ID to encode.
+        Returns:
+            str: The double-encoded model ID.
+        """
+        return urllib.parse.quote(model_id, safe="")
 
     def completion(
         self,
@@ -359,6 +563,13 @@ class BedrockLLM(BaseLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        modelId = optional_params.pop("model_id", None)
+        if modelId is not None:
+            modelId = self.encode_model_id(model_id=modelId)
+        else:
+            modelId = model
+
+        provider = model.split(".")[0]
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
@@ -414,19 +625,18 @@ class BedrockLLM(BaseLLM):
         else:
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-        if stream is not None and stream == True:
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke-with-response-stream"
+        if (stream is not None and stream == True) and provider != "ai21":
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke"
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
-        provider = model.split(".")[0]
         prompt, chat_history = self.convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
         inference_params = copy.deepcopy(optional_params)
-
+        json_schemas: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
                 ## LOAD CONFIG
@@ -453,8 +663,114 @@ class BedrockLLM(BaseLLM):
                         True  # cohere requires stream = True in inference params
                     )
                 data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "anthropic":
+            if model.startswith("anthropic.claude-3"):
+                # Separate system prompt from rest of message
+                system_prompt_idx: list[int] = []
+                system_messages: list[str] = []
+                for idx, message in enumerate(messages):
+                    if message["role"] == "system":
+                        system_messages.append(message["content"])
+                        system_prompt_idx.append(idx)
+                if len(system_prompt_idx) > 0:
+                    inference_params["system"] = "\n".join(system_messages)
+                    messages = [
+                        i for j, i in enumerate(messages) if j not in system_prompt_idx
+                    ]
+                # Format rest of message according to anthropic guidelines
+                messages = prompt_factory(
+                    model=model, messages=messages, custom_llm_provider="anthropic_xml"
+                )  # type: ignore
+                ## LOAD CONFIG
+                config = litellm.AmazonAnthropicClaude3Config.get_config()
+                for k, v in config.items():
+                    if (
+                        k not in inference_params
+                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                        inference_params[k] = v
+                ## Handle Tool Calling
+                if "tools" in inference_params:
+                    _is_function_call = True
+                    for tool in inference_params["tools"]:
+                        json_schemas[tool["function"]["name"]] = tool["function"].get(
+                            "parameters", None
+                        )
+                    tool_calling_system_prompt = construct_tool_use_system_prompt(
+                        tools=inference_params["tools"]
+                    )
+                    inference_params["system"] = (
+                        inference_params.get("system", "\n")
+                        + tool_calling_system_prompt
+                    )  # add the anthropic tool calling prompt to the system prompt
+                    inference_params.pop("tools")
+                data = json.dumps({"messages": messages, **inference_params})
+            else:
+                ## LOAD CONFIG
+                config = litellm.AmazonAnthropicConfig.get_config()
+                for k, v in config.items():
+                    if (
+                        k not in inference_params
+                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                        inference_params[k] = v
+                data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "ai21":
+            ## LOAD CONFIG
+            config = litellm.AmazonAI21Config.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "mistral":
+            ## LOAD CONFIG
+            config = litellm.AmazonMistralConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "amazon":  # amazon titan
+            ## LOAD CONFIG
+            config = litellm.AmazonTitanConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps(
+                {
+                    "inputText": prompt,
+                    "textGenerationConfig": inference_params,
+                }
+            )
+        elif provider == "meta":
+            ## LOAD CONFIG
+            config = litellm.AmazonLlamaConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in inference_params
+                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+            data = json.dumps({"prompt": prompt, **inference_params})
         else:
-            raise Exception("UNSUPPORTED PROVIDER")
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": inference_params,
+                },
+            )
+            raise Exception(
+                "Bedrock HTTPX: Unsupported provider={}, model={}".format(
+                    provider, model
+                )
+            )
 
         ## COMPLETION CALL
 
@@ -482,7 +798,7 @@ class BedrockLLM(BaseLLM):
         if acompletion:
             if isinstance(client, HTTPHandler):
                 client = None
-            if stream:
+            if stream == True and provider != "ai21":
                 return self.async_streaming(
                     model=model,
                     messages=messages,
@@ -511,7 +827,7 @@ class BedrockLLM(BaseLLM):
                 encoding=encoding,
                 logging_obj=logging_obj,
                 optional_params=optional_params,
-                stream=False,
+                stream=stream,  # type: ignore
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 headers=prepped.headers,
@@ -528,7 +844,7 @@ class BedrockLLM(BaseLLM):
             self.client = HTTPHandler(**_params)  # type: ignore
         else:
             self.client = client
-        if stream is not None and stream == True:
+        if (stream is not None and stream == True) and provider != "ai21":
             response = self.client.post(
                 url=prepped.url,
                 headers=prepped.headers,  # type: ignore
@@ -541,7 +857,7 @@ class BedrockLLM(BaseLLM):
                     status_code=response.status_code, message=response.text
                 )
 
-            decoder = AWSEventStreamDecoder()
+            decoder = AWSEventStreamDecoder(model=model)
 
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
             streaming_response = CustomStreamWrapper(
@@ -550,15 +866,24 @@ class BedrockLLM(BaseLLM):
                 custom_llm_provider="bedrock",
                 logging_obj=logging_obj,
             )
+
+            ## LOGGING
+            logging_obj.post_call(
+                input=messages,
+                api_key="",
+                original_response=streaming_response,
+                additional_args={"complete_input_dict": data},
+            )
             return streaming_response
 
-        response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
-
         try:
+            response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=response.text)
+        except httpx.TimeoutException as e:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return self.process_response(
             model=model,
@@ -591,7 +916,7 @@ class BedrockLLM(BaseLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> ModelResponse:
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         if client is None:
             _params = {}
             if timeout is not None:
@@ -602,12 +927,20 @@ class BedrockLLM(BaseLLM):
         else:
             self.client = client  # type: ignore
 
-        response = await self.client.post(api_base, headers=headers, data=data)  # type: ignore
+        try:
+            response = await self.client.post(api_base, headers=headers, data=data)  # type: ignore
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            error_code = err.response.status_code
+            raise BedrockError(status_code=error_code, message=response.text)
+        except httpx.TimeoutException as e:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
+
         return self.process_response(
             model=model,
             response=response,
             model_response=model_response,
-            stream=stream,
+            stream=stream if isinstance(stream, bool) else False,
             logging_obj=logging_obj,
             api_key="",
             data=data,
@@ -650,7 +983,7 @@ class BedrockLLM(BaseLLM):
         if response.status_code != 200:
             raise BedrockError(status_code=response.status_code, message=response.text)
 
-        decoder = AWSEventStreamDecoder()
+        decoder = AWSEventStreamDecoder(model=model)
 
         completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
         streaming_response = CustomStreamWrapper(
@@ -659,6 +992,15 @@ class BedrockLLM(BaseLLM):
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
         )
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=streaming_response,
+            additional_args={"complete_input_dict": data},
+        )
+
         return streaming_response
 
     def embedding(self, *args, **kwargs):
@@ -676,10 +1018,69 @@ def get_response_stream_shape():
 
 
 class AWSEventStreamDecoder:
-    def __init__(self) -> None:
+    def __init__(self, model: str) -> None:
         from botocore.parsers import EventStreamJSONParser
 
+        self.model = model
         self.parser = EventStreamJSONParser()
+
+    def _chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
+        text = ""
+        is_finished = False
+        finish_reason = ""
+        if "outputText" in chunk_data:
+            text = chunk_data["outputText"]
+        # ai21 mapping
+        if "ai21" in self.model:  # fake ai21 streaming
+            text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
+            is_finished = True
+            finish_reason = "stop"
+        ######## bedrock.anthropic mappings ###############
+        elif "completion" in chunk_data:  # not claude-3
+            text = chunk_data["completion"]  # bedrock.anthropic
+            stop_reason = chunk_data.get("stop_reason", None)
+            if stop_reason != None:
+                is_finished = True
+                finish_reason = stop_reason
+        elif "delta" in chunk_data:
+            if chunk_data["delta"].get("text", None) is not None:
+                text = chunk_data["delta"]["text"]
+            stop_reason = chunk_data["delta"].get("stop_reason", None)
+            if stop_reason != None:
+                is_finished = True
+                finish_reason = stop_reason
+        ######## bedrock.mistral mappings ###############
+        elif "outputs" in chunk_data:
+            if (
+                len(chunk_data["outputs"]) == 1
+                and chunk_data["outputs"][0].get("text", None) is not None
+            ):
+                text = chunk_data["outputs"][0]["text"]
+            stop_reason = chunk_data.get("stop_reason", None)
+            if stop_reason != None:
+                is_finished = True
+                finish_reason = stop_reason
+        ######## bedrock.cohere mappings ###############
+        # meta mapping
+        elif "generation" in chunk_data:
+            text = chunk_data["generation"]  # bedrock.meta
+        # cohere mapping
+        elif "text" in chunk_data:
+            text = chunk_data["text"]  # bedrock.cohere
+        # cohere mapping for finish reason
+        elif "finish_reason" in chunk_data:
+            finish_reason = chunk_data["finish_reason"]
+            is_finished = True
+        elif chunk_data.get("completionReason", None):
+            is_finished = True
+            finish_reason = chunk_data["completionReason"]
+        return GenericStreamingChunk(
+            **{
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+        )
 
     def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GenericStreamingChunk]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
@@ -693,12 +1094,7 @@ class AWSEventStreamDecoder:
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    streaming_chunk: GenericStreamingChunk = GenericStreamingChunk(
-                        text=_data.get("text", ""),
-                        is_finished=_data.get("is_finished", False),
-                        finish_reason=_data.get("finish_reason", ""),
-                    )
-                    yield streaming_chunk
+                    yield self._chunk_parser(chunk_data=_data)
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
@@ -713,12 +1109,7 @@ class AWSEventStreamDecoder:
                 message = self._parse_message_from_event(event)
                 if message:
                     _data = json.loads(message)
-                    streaming_chunk: GenericStreamingChunk = GenericStreamingChunk(
-                        text=_data.get("text", ""),
-                        is_finished=_data.get("is_finished", False),
-                        finish_reason=_data.get("finish_reason", ""),
-                    )
-                    yield streaming_chunk
+                    yield self._chunk_parser(chunk_data=_data)
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()

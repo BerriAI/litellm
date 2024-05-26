@@ -54,11 +54,11 @@ def test_async_fallbacks(caplog):
 
     async def _make_request():
         try:
-            response = await router.acompletion(
+            await router.acompletion(
                 model="gpt-3.5-turbo", messages=messages, max_tokens=1
             )
             router.reset()
-        except litellm.Timeout as e:
+        except litellm.Timeout:
             pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
@@ -68,8 +68,7 @@ def test_async_fallbacks(caplog):
     asyncio.run(_make_request())
     captured_logs = [rec.message for rec in caplog.records]
 
-    # on circle ci the captured logs get some async task exception logs - filter them out
-    "Task exception was never retrieved"
+    # on circle ci the captured logs get some async task exception logs - filter them out "Task exception was never retrieved"
     captured_logs = [
         log
         for log in captured_logs
@@ -82,7 +81,7 @@ def test_async_fallbacks(caplog):
     # Define the expected log messages
     # - error request, falling back notice, success notice
     expected_logs = [
-        "litellm.acompletion(model=gpt-3.5-turbo)\x1b[31m Exception OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}\x1b[0m",
+        "litellm.acompletion(model=gpt-3.5-turbo)\x1b[31m Exception AuthenticationError: OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}\x1b[0m",
         "Falling back to model_group = azure/gpt-3.5-turbo",
         "litellm.acompletion(model=azure/chatgpt-v-2)\x1b[32m 200 OK\x1b[0m",
         "Successful fallback b/w models.",
