@@ -4,9 +4,10 @@ import { modelHubCall } from "./networking";
 
 import { Card, Text, Title, Grid, Button } from "@tremor/react";
 
-import { RightOutlined } from '@ant-design/icons';
+import { RightOutlined, CopyOutlined } from '@ant-design/icons';
 
-import { Modal } from 'antd';
+import { Modal, Tooltip } from 'antd';
+
 
 
 interface ModelHubProps {
@@ -43,11 +44,14 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
 }) => {
 
+
+
   const [modelHubData, setModelHubData] = useState(null);
 
   const [isModalVisible, setIsModalVisible] = useState(false);
 
   const [selectedModel, setSelectedModel] = useState(null);
+
 
 
   useEffect(() => {
@@ -69,8 +73,6 @@ const ModelHub: React.FC<ModelHubProps> = ({
         console.log("ModelHubData:", _modelHubData);
 
         setModelHubData(_modelHubData.data);
-
-        
 
       } catch (error) {
 
@@ -118,6 +120,14 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
 
 
+  const copyToClipboard = (text) => {
+
+    navigator.clipboard.writeText(text);
+
+  };
+
+
+
   return (
 
     <div>
@@ -126,34 +136,41 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
       <div style={{ width: '100%' }}>
 
-      <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
 
           {modelHubData && modelHubData.map((model: any) => (
-    <Card
 
-    key={model.model_id}
+            <Card
 
-    className="mt-5 mx-8"
+              key={model.model_id}
 
-  >
+              className="mt-5 mx-8"
 
-    <pre>
+            >
 
-    <Title level={4}>{model.model_name}</Title>
+              <pre>
 
-    </pre>
+                <Title level={4}>{model.model_name}</Title>
 
-    <div style={{ marginTop: 'auto', textAlign: 'right' }}>
+              </pre>
 
-      <a href="#" onClick={() => showModal(model)} style={{ color: '#1890ff', fontSize: 'smaller' }}>
+              <div style={{ marginTop: 'auto', textAlign: 'right' }}>
 
-        View more <RightOutlined />
+                <Tooltip title="Copy Model Name">
 
-      </a>
+                  <CopyOutlined onClick={() => copyToClipboard(model.model_name)} style={{ cursor: 'pointer', marginRight: '10px' }} />
 
-    </div>
+                </Tooltip>
 
-  </Card>
+                <a href="#" onClick={() => showModal(model)} style={{ color: '#1890ff', fontSize: 'smaller' }}>
+
+                  View more <RightOutlined />
+
+                </a>
+
+              </div>
+
+            </Card>
 
           ))}
 
