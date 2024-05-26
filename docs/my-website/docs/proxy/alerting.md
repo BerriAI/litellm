@@ -200,3 +200,27 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
     * "proxy": The event is related to a proxy.
 
 - `event_message` *str*: A human-readable description of the event.
+
+## Advanced - Region-outage alerting (✨ Enterprise feature)
+
+Setup alerts if a provider region is having an outage. 
+
+```yaml
+general_settings:
+    alerting: ["slack"]
+    alert_types: ["region_outage_alerts"] 
+```
+
+By default this will trigger if multiple models in a region fail 5+ requests in 1 minute. '400' status code errors are not counted (i.e. BadRequestErrors).
+
+Control thresholds with: 
+
+```yaml
+general_settings:
+    alerting: ["slack"]
+    alert_types: ["region_outage_alerts"] 
+    alerting_args:
+        region_outage_alert_ttl: 60 # time-window in seconds
+        minor_outage_alert_threshold: 5 # number of errors to trigger a minor alert
+        major_outage_alert_threshold: 10 # number of errors to trigger a major alert
+```
