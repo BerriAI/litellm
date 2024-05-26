@@ -207,6 +207,41 @@ export const budgetCreateCall = async (
     throw error;
   }
 };
+
+export const alertingSettingsCall = async (accessToken: String) => {
+  /**
+   * Get all configurable params for setting a model
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/alerting/settings`
+      : `/alerting/settings`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      message.error(errorData, 10);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+
 export const keyCreateCall = async (
   accessToken: string,
   userID: string,
@@ -995,9 +1030,16 @@ export const adminTopEndUsersCall = async (
   }
 };
 
-export const adminspendByProvider = async (accessToken: String, keyToken: String | null, startTime: String | undefined, endTime: String | undefined) => {
+export const adminspendByProvider = async (
+  accessToken: String,
+  keyToken: String | null,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/provider` : `/global/spend/provider`;
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/spend/provider`
+      : `/global/spend/provider`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -1036,9 +1078,15 @@ export const adminspendByProvider = async (accessToken: String, keyToken: String
   }
 };
 
-export const adminGlobalActivity = async (accessToken: String, startTime: String | undefined, endTime: String | undefined) => {
+export const adminGlobalActivity = async (
+  accessToken: String,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity` : `/global/activity`;
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/activity`
+      : `/global/activity`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -1071,10 +1119,15 @@ export const adminGlobalActivity = async (accessToken: String, startTime: String
   }
 };
 
-
-export const adminGlobalActivityPerModel = async (accessToken: String, startTime: String | undefined, endTime: String | undefined) => {
+export const adminGlobalActivityPerModel = async (
+  accessToken: String,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/model` : `/global/activity/model`;
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/activity/model`
+      : `/global/activity/model`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -1106,7 +1159,6 @@ export const adminGlobalActivityPerModel = async (accessToken: String, startTime
     throw error;
   }
 };
-
 
 export const adminTopModelsCall = async (accessToken: String) => {
   try {
