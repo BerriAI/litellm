@@ -411,3 +411,18 @@ class AlertingConfig(BaseModel):
 
     webhook_url: str
     alerting_threshold: Optional[float] = 300
+
+
+class ModelGroupInfo(BaseModel):
+    model_group: str
+    providers: List[str]
+    max_input_tokens: Optional[float] = None
+    max_output_tokens: Optional[float] = None
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    mode: Literal[
+        "chat", "embedding", "completion", "image_generation", "audio_transcription"
+    ]
+    supports_parallel_function_calling: bool = Field(default=False)
+    supports_vision: bool = Field(default=False)
+    supports_function_calling: bool = Field(default=False)
