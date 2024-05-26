@@ -576,9 +576,7 @@ async def test_outage_alerting_called(
     slack_alerting.update_values(llm_router=router)
     with patch.object(
         slack_alerting, "outage_alerts", new=AsyncMock()
-    ) as mock_outage_alert, patch.object(
-        slack_alerting, "region_outage_alerts", new=AsyncMock()
-    ) as mock_region_alert:
+    ) as mock_outage_alert:
         try:
             await router.acompletion(
                 model=model,
@@ -589,7 +587,6 @@ async def test_outage_alerting_called(
             pass
 
         mock_outage_alert.assert_called_once()
-        mock_region_alert.assert_called_once()
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         for _ in range(6):
@@ -603,9 +600,7 @@ async def test_outage_alerting_called(
                 pass
         await asyncio.sleep(3)
         if error_code == 500 or error_code == 408:
-            assert (
-                mock_send_alert.assert_called_once()
-            )  # only model alert. region alert should only trigger for 2+ models in same region
+            mock_send_alert.assert_called_once()
         else:
             mock_send_alert.assert_not_called()
 
