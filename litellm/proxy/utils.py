@@ -92,7 +92,7 @@ class ProxyLogging:
             "new_model_added",
             "outage_alerts",
         ]
-        self.slack_alerting_instance = SlackAlerting(
+        self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
             alert_types=self.alert_types,

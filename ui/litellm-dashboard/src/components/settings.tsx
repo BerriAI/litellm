@@ -31,7 +31,7 @@ import {
 } from "./networking";
 import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
-
+import AlertingSettings from "./alerting/alerting_settings";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -117,6 +117,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     db_exceptions: "Database Exceptions (Read/Write)",
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
+    region_outage_alerts: "Region Outage Alerts",
   };
 
   useEffect(() => {
@@ -365,7 +366,8 @@ const Settings: React.FC<SettingsPageProps> = ({
         <TabGroup>
           <TabList variant="line" defaultValue="1">
             <Tab value="1">Logging Callbacks</Tab>
-            <Tab value="2">Alerting</Tab>
+            <Tab value="2">Alerting Types</Tab>
+            <Tab value="2">Alerting Settings</Tab>
           </TabList>
           <TabPanels>
             <TabPanel>
@@ -495,6 +497,9 @@ const Settings: React.FC<SettingsPageProps> = ({
                   Test Alerts
                 </Button>
               </Card>
+            </TabPanel>
+            <TabPanel>
+              <AlertingSettings accessToken={accessToken} />
             </TabPanel>
           </TabPanels>
         </TabGroup>
