@@ -27,9 +27,9 @@ const TimeToFirstToken: React.FC<TimeToFirstTokenProps> = ({
     />
   ) : (
     <div>
-      <Callout title="Premium Feature" color="teal" className="mt-2 mb-4">
-        Premium features are available for users with a specific license, please
-        contact LiteLLM to unlock this limitation.
+      <Callout title="✨ Enterprise Feature" color="teal" className="mt-2 mb-4">
+        Enterprise features are available for users with a specific license,
+        please contact LiteLLM to unlock this limitation.
       </Callout>
       <Button variant="primary">
         <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
