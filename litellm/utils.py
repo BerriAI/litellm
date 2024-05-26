@@ -34,7 +34,7 @@ from dataclasses import (
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.caching import DualCache
-from litellm.types.utils import CostPerToken, ProviderField
+from litellm.types.utils import CostPerToken, ProviderField, ModelInfo
 
 oidc_cache = DualCache()
 
@@ -7092,7 +7092,7 @@ def get_max_tokens(model: str):
         )
 
 
-def get_model_info(model: str):
+def get_model_info(model: str) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window),
     input_cost_per_token, output_cost_per_token  for a given model.
@@ -7154,7 +7154,7 @@ def get_model_info(model: str):
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
             return {
-                "max_tokens": max_tokens,
+                "max_tokens": max_tokens,  # type: ignore
                 "input_cost_per_token": 0,
                 "output_cost_per_token": 0,
                 "litellm_provider": "huggingface",

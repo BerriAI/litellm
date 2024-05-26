@@ -2,7 +2,7 @@ import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Callable, get_args
+from typing import Optional, List, Callable, get_args, Set
 import secrets, subprocess
 import hashlib, uuid
 import warnings
@@ -106,7 +106,7 @@ import pydantic
 from litellm.proxy._types import *
 from litellm.caching import DualCache, RedisCache
 from litellm.proxy.health_check import perform_health_check
-from litellm.router import LiteLLM_Params, Deployment, updateDeployment
+from litellm.router import LiteLLM_Params, Deployment, updateDeployment, ModelGroupInfo
 from litellm.router import ModelInfo as RouterModelInfo
 from litellm._logging import verbose_router_logger, verbose_proxy_logger
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -9728,6 +9728,58 @@ async def model_info_v1(
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
+
+
+@router.get(
+    "/model_group/info",
+    description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def model_group_info(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Returns model info at the model group level.
+    """
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+
+    if llm_model_list is None:
+        raise HTTPException(
+            status_code=500, detail={"error": "LLM Model List not loaded in"}
+        )
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500, detail={"error": "LLM Router is not loaded in"}
+        )
+    all_models: List[dict] = []
+    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
+    if llm_model_list is None:
+        proxy_model_list = []
+    else:
+        proxy_model_list = [m["model_name"] for m in llm_model_list]
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict, proxy_model_list=proxy_model_list
+    )
+    team_models = get_team_models(
+        user_api_key_dict=user_api_key_dict, proxy_model_list=proxy_model_list
+    )
+    all_models_str = get_complete_model_list(
+        key_models=key_models,
+        team_models=team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=user_model,
+        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+    )
+
+    model_groups: List[ModelGroupInfo] = []
+    for model in all_models_str:
+
+        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        if _model_group_info is not None:
+            model_groups.append(_model_group_info)
+
+    return {"data": model_groups}
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
