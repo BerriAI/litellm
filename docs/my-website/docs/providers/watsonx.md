@@ -246,6 +246,33 @@ response = completion(
 )
 ```
 
+### Passing `ibm-watsonx-ai` API client
+
+You can also pass an instance of an API client of the [watsonx.ai Python SDK](https://ibm.github.io/watsonx-ai-python-sdk/index.html) to the completion and embedding functions for more customized and better-supported authentication options.
+
+```python
+# Make sure to install the ibm-watsonx-ai package first
+# with `pip install ibm-watsonx-ai`
+from ibm_watsonx_ai.client import APIClient
+from litellm import completion
+
+watsonx_client = APIClient(
+    credentials={
+        'apikey': "",
+        'url': ""
+    },
+    project_id=""
+)
+response = completion(
+    model="watsonx/ibm/granite-13b-chat-v2",
+    messages=[{ "content": "What is your favorite color?","role": "user"}],
+    client=watsonx_client
+)
+response
+# ModelResponse(id='chatcmpl-...', choices=[Choices(finish_reason='stop', index=0, message=Message(content="I don't have a favorite color, but I do like the color blue. What's your favorite color?", role='assistant'))], created=1716740689.482, model=ibm/granite-13b-chat-v2, object='chat.completion', system_fingerprint=None, usage=Usage(prompt_tokens=19, completion_tokens=45, total_tokens=64), finish_reason='eos_token')
+```
+
+For more information on how to use the IBM watsonx.ai Python SDK, see [here](https://ibm.github.io/watsonx-ai-python-sdk/install.html).
 
 ## Supported IBM watsonx.ai Models
 
