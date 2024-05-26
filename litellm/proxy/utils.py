@@ -50,6 +50,13 @@ from typing_extensions import overload
 
 
 def print_verbose(print_statement):
+    """
+    Prints the given `print_statement` to the console if `litellm.set_verbose` is True.
+    Also logs the `print_statement` at the debug level using `verbose_proxy_logger`.
+
+    :param print_statement: The statement to be printed and logged.
+    :type print_statement: Any
+    """
     verbose_proxy_logger.debug(print_statement)
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
@@ -194,7 +201,7 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
-        print_verbose(f"Inside Proxy Logging Pre-call hook!")
+        print_verbose("Inside Proxy Logging Pre-call hook!")
         ### ALERTING ###
         asyncio.create_task(
             self.slack_alerting_instance.response_taking_too_long(request_data=data)
@@ -2098,6 +2105,7 @@ async def reset_budget(prisma_client: PrismaClient):
                     team_id=team.team_id,
                     spend=0.0,
                     budget_reset_at=now + timedelta(seconds=duration_s),
+                    updated_at=now,
                 )
                 team_reset_requests.append(reset_team_budget_request)
             await prisma_client.update_data(
