@@ -14,6 +14,7 @@ from litellm.proxy._types import (
     CallInfo,
     WebhookEvent,
     AlertType,
+    ResetTeamBudgetRequest,
 )
 from litellm.caching import DualCache, RedisCache
 from litellm.router import Deployment, ModelInfo, LiteLLM_Params
@@ -49,6 +50,13 @@ from typing_extensions import overload
 
 
 def print_verbose(print_statement):
+    """
+    Prints the given `print_statement` to the console if `litellm.set_verbose` is True.
+    Also logs the `print_statement` at the debug level using `verbose_proxy_logger`.
+
+    :param print_statement: The statement to be printed and logged.
+    :type print_statement: Any
+    """
     verbose_proxy_logger.debug(print_statement)
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
@@ -193,7 +201,7 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
-        print_verbose(f"Inside Proxy Logging Pre-call hook!")
+        print_verbose("Inside Proxy Logging Pre-call hook!")
         ### ALERTING ###
         asyncio.create_task(
             self.slack_alerting_instance.response_taking_too_long(request_data=data)
@@ -1021,7 +1029,7 @@ class PrismaClient:
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(
-                    f"PrismaClient: get_data: table_name == 'spend'"
+                    "PrismaClient: get_data: table_name == 'spend'"
                 )
                 if key_val is not None:
                     if query_type == "find_unique":
@@ -1046,6 +1054,12 @@ class PrismaClient:
                 if query_type == "find_unique":
                     response = await self.db.litellm_teamtable.find_unique(
                         where={"team_id": team_id}  # type: ignore
+                    )
+                elif query_type == "find_all" and reset_at is not None:
+                    response = await self.db.litellm_teamtable.find_many(
+                        where={  # type:ignore
+                            "budget_reset_at": {"lt": reset_at},
+                        }
                     )
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_teamtable.find_many(
@@ -1438,7 +1452,7 @@ class PrismaClient:
                     )
                 await batcher.commit()
                 print_verbose(
-                    "\033[91m" + f"DB Token Table update succeeded" + "\033[0m"
+                    "\033[91m" + "DB Token Table update succeeded" + "\033[0m"
                 )
             elif (
                 table_name is not None
@@ -1467,8 +1481,40 @@ class PrismaClient:
                     )
                 await batcher.commit()
                 verbose_proxy_logger.info(
-                    "\033[91m" + f"DB User Table Batch update succeeded" + "\033[0m"
+                    "\033[91m" + "DB User Table Batch update succeeded" + "\033[0m"
                 )
+            elif (
+                table_name is not None
+                and table_name == "team"
+                and query_type == "update_many"
+                and data_list is not None
+                and isinstance(data_list, list)
+            ):
+                # Batch write update queries
+                batcher = self.db.batch_()
+                for idx, team in enumerate(data_list):
+                    try:
+                        data_json = self.jsonify_object(
+                            data=team.model_dump(exclude_none=True)
+                        )
+                    except:
+                        data_json = self.jsonify_object(
+                            data=team.dict(exclude_none=True)
+                        )
+                    batcher.litellm_teamtable.upsert(
+                        where={"team_id": team.team_id},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update user-specified values, if it already exists
+                        },
+                    )
+                await batcher.commit()
+                verbose_proxy_logger.info(
+                    "\033[91m" + "DB Team Table Batch update succeeded" + "\033[0m"
+                )
+
         except Exception as e:
             import traceback
 
@@ -2041,6 +2087,31 @@ async def reset_budget(prisma_client: PrismaClient):
 
             await prisma_client.update_data(
                 query_type="update_many", data_list=users_to_reset, table_name="user"
+            )
+
+        ## Reset Team Budget
+        now = datetime.utcnow()
+        teams_to_reset = await prisma_client.get_data(
+            table_name="team",
+            query_type="find_all",
+            reset_at=now,
+        )
+
+        if teams_to_reset is not None and len(teams_to_reset) > 0:
+            team_reset_requests = []
+            for team in teams_to_reset:
+                duration_s = _duration_in_seconds(duration=team.budget_duration)
+                reset_team_budget_request = ResetTeamBudgetRequest(
+                    team_id=team.team_id,
+                    spend=0.0,
+                    budget_reset_at=now + timedelta(seconds=duration_s),
+                    updated_at=now,
+                )
+                team_reset_requests.append(reset_team_budget_request)
+            await prisma_client.update_data(
+                query_type="update_many",
+                data_list=team_reset_requests,
+                table_name="team",
             )
 
 

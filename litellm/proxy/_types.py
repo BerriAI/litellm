@@ -602,6 +602,21 @@ class TeamMemberDeleteRequest(LiteLLMBase):
 
 
 class UpdateTeamRequest(LiteLLMBase):
+    """
+    UpdateTeamRequest, used by /team/update when you need to update a team
+
+    team_id: str
+    team_alias: Optional[str] = None
+    organization_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    max_budget: Optional[float] = None
+    models: Optional[list] = None
+    blocked: Optional[bool] = None
+    budget_duration: Optional[str] = None
+    """
+
     team_id: str  # required
     team_alias: Optional[str] = None
     organization_id: Optional[str] = None
@@ -612,6 +627,22 @@ class UpdateTeamRequest(LiteLLMBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
+
+
+class ResetTeamBudgetRequest(LiteLLMBase):
+    """
+    internal type used to reset the budget on a team
+    used by reset_budget()
+
+    team_id: str
+    spend: float
+    budget_reset_at: datetime
+    """
+
+    team_id: str
+    spend: float
+    budget_reset_at: datetime
+    updated_at: datetime
 
 
 class DeleteTeamRequest(LiteLLMBase):
