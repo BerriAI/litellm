@@ -16,20 +16,26 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 
 interface ModelHubProps {
-
   userID: string;
-
   userRole: string;
-
   token: string;
-
   accessToken: string;
-
   keys: any; // Replace with the appropriate type for 'keys' prop
-
   premiumUser: boolean;
 
 }
+
+interface ModelInfo {
+    model_group: string;
+    mode: string;
+    supports_function_calling: boolean;
+    supports_vision: boolean;
+    max_input_tokens?: number;
+    max_output_tokens?: number;
+
+    // Add other properties if needed
+
+  }
 
 
 
@@ -49,22 +55,15 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
 }) => {
 
-
-
-  const [modelHubData, setModelHubData] = useState(null);
-
+  const [modelHubData, setModelHubData] =  useState<ModelInfo[] | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
-
-  const [selectedModel, setSelectedModel] = useState(null);
-
+  const [selectedModel, setSelectedModel] =  useState<null | ModelInfo>(null);
 
 
   useEffect(() => {
 
     if (!accessToken || !token || !userRole || !userID) {
-
       return;
-
     }
 
 
@@ -95,7 +94,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
 
 
-  const showModal = (model) => {
+  const showModal = (model: ModelInfo) => {
 
     setSelectedModel(model);
 
@@ -125,7 +124,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
 
 
-  const copyToClipboard = (text) => {
+  const copyToClipboard = (text: string) => {
 
     navigator.clipboard.writeText(text);
 
@@ -163,7 +162,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
         <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
 
         
-          {modelHubData && modelHubData.map((model: any) => (
+          {modelHubData && modelHubData.map((model: ModelInfo) => (
 
             <Card
 
