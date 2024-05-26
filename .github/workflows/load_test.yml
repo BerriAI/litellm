@@ -22,6 +22,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install PyGithub
+      - name: re-deploy proxy
+        run: |
+          echo "Current working directory: $PWD"
+          ls
+          python ".github/workflows/redeploy_proxy.py"
+        env:
+          LOAD_TEST_REDEPLOY_URL1: ${{ secrets.LOAD_TEST_REDEPLOY_URL1 }}
+        working-directory: ${{ github.workspace }}
       - name: Run Load Test
         id: locust_run
         uses: BerriAI/locust-github-action@master
