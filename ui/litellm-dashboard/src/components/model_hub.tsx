@@ -16,10 +16,10 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 
 interface ModelHubProps {
-  userID: string;
-  userRole: string;
-  token: string;
-  accessToken: string;
+  userID: string | null;
+  userRole: string | null;
+  token: string | null;
+  accessToken: string | null;
   keys: any; // Replace with the appropriate type for 'keys' prop
   premiumUser: boolean;
 
