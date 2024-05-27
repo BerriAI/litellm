@@ -19,11 +19,13 @@ class ModelInfo(TypedDict):
     Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
     """
 
-    max_tokens: int
-    max_input_tokens: int
-    max_output_tokens: int
+    max_tokens: Optional[int]
+    max_input_tokens: Optional[int]
+    max_output_tokens: Optional[int]
     input_cost_per_token: float
     output_cost_per_token: float
     litellm_provider: str
-    mode: str
-    supported_openai_params: List[str]
+    mode: Literal[
+        "completion", "embedding", "image_generation", "chat", "audio_transcription"
+    ]
+    supported_openai_params: Optional[List[str]]
