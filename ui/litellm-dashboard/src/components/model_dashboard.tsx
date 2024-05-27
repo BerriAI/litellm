@@ -86,6 +86,8 @@ import type { UploadProps } from "antd";
 import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+
 interface ModelDashboardProps {
   accessToken: string | null;
   token: string | null;
@@ -269,6 +271,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
+  const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
+
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
     Array<string>
@@ -296,6 +300,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] =
     useState<RetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
+  function formatCreatedAt(createdAt: string | null) {
+    if (createdAt) {
+      const date = new Date(createdAt);
+      const options = { month: 'long', day: 'numeric', year: 'numeric' };
+      return date.toLocaleDateString('en-US');
+    }
+    return null;
+  }
 
   const EditModelModal: React.FC<EditModelModalProps> = ({
     visible,
@@ -423,8 +436,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setEditModalVisible(true);
   };
 
+  const handleInfoClick = (model: any) => {
+    setSelectedModel(model);
+    setInfoModalVisible(true);
+  };
+
   const handleEditCancel = () => {
     setEditModalVisible(false);
+    setSelectedModel(null);
+  };
+
+  const handleInfoCancel = () => {
+    setInfoModalVisible(false);
     setSelectedModel(null);
   };
 
@@ -1075,15 +1098,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       )}
                       <TableHeaderCell
                         style={{
-                          maxWidth: "200px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        Extra litellm Params
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
                           maxWidth: "85px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
@@ -1106,14 +1120,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           /1M Tokens ($)
                         </p>
                       </TableHeaderCell>
+                      
                       <TableHeaderCell
                         style={{
-                          maxWidth: "120px",
+                          maxWidth: "50px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
                         }}
                       >
-                        Max Tokens
+                        Created At
+                      </TableHeaderCell>
+                      <TableHeaderCell
+                        style={{
+                          maxWidth: "50px",
+                          whiteSpace: "normal",
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        Created By
                       </TableHeaderCell>
                       <TableHeaderCell
                         style={{
@@ -1123,6 +1147,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         }}
                       >
                         Status
+                      </TableHeaderCell>
+                      <TableHeaderCell>
+
                       </TableHeaderCell>
                     </TableRow>
                   </TableHead>
@@ -1140,12 +1167,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         <TableRow key={index}>
                           <TableCell
                             style={{
-                              maxWidth: "150px",
+                              maxWidth: "100px",
                               whiteSpace: "normal",
                               wordBreak: "break-word",
                             }}
                           >
-                            <Text>{model.model_name}</Text>
+                            <p style={{ fontSize: "10px" }}>
+                            {model.model_name}
+                            </p>
                           </TableCell>
                           <TableCell
                             style={{
@@ -1154,41 +1183,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
+                            <p style={{ fontSize: "10px" }}>
                             {model.provider}
+                            </p>
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
-                              style={{
-                                maxWidth: "150px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              {model.api_base}
-                            </TableCell>
-                          )}
-                          <TableCell
                             style={{
-                              maxWidth: "200px",
+                              maxWidth: "150px",
                               whiteSpace: "normal",
                               wordBreak: "break-word",
                             }}
                           >
-                            <Accordion>
-                              <AccordionHeader>
-                                <Text>Litellm params</Text>
-                              </AccordionHeader>
-                              <AccordionBody>
-                                <pre>
-                                  {JSON.stringify(
-                                    model.cleanedLitellmParams,
-                                    null,
-                                    2
-                                  )}
-                                </pre>
-                              </AccordionBody>
-                            </Accordion>
+                             <Tooltip title={model && model.api_base}>
+                            <pre
+                              style={{
+                                maxWidth: "150px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                                fontSize: "10px",
+                              }}
+                              title={model && model.api_base ? model.api_base : ""}
+                            >
+                              {model && model.api_base ? model.api_base.slice(0, 20) : null}
+                            </pre>
+                            </Tooltip>
                           </TableCell>
+                          
+                          )}
                           <TableCell
                             style={{
                               maxWidth: "80px",
@@ -1211,16 +1233,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               model.litellm_params.output_cost_per_token ||
                               null}
                           </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "120px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <p style={{ fontSize: "10px" }}>
-                              Max Tokens: {model.max_tokens} <br></br>
-                              Max Input Tokens: {model.max_input_tokens}
+                          <TableCell>
+                          <p style={{ fontSize: "10px" }}>
+                            {formatCreatedAt(model.model_info.created_at)}
+                            </p>
+                           
+                          </TableCell>
+                          <TableCell>
+                          <p style={{ fontSize: "10px" }}>
+                            {model.model_info.created_by}
                             </p>
                           </TableCell>
                           <TableCell
@@ -1236,7 +1257,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 size="xs"
                                 className="text-white"
                               >
-                                <p style={{ fontSize: "10px" }}>DB Model</p>
+                                <p style={{ fontSize: "8px" }}>DB Model</p>
                               </Badge>
                             ) : (
                               <Badge
@@ -1244,26 +1265,42 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 size="xs"
                                 className="text-black"
                               >
-                                <p style={{ fontSize: "10px" }}>Config Model</p>
+                                <p style={{ fontSize: "8px" }}>Config Model</p>
                               </Badge>
                             )}
                           </TableCell>
                           <TableCell
                             style={{
-                              maxWidth: "100px",
+                              maxWidth: "150px",
                               whiteSpace: "normal",
                               wordBreak: "break-word",
                             }}
                           >
+                            <Grid numItems={3}>
+                            <Col>
+                            <Icon
+                              icon={InformationCircleIcon}
+                              size="sm"
+                              onClick={() => handleInfoClick(model)}
+                            />
+                            </Col>
+                            <Col>
                             <Icon
                               icon={PencilAltIcon}
                               size="sm"
                               onClick={() => handleEditClick(model)}
                             />
+                            </Col>
+                           
+                            <Col>
                             <DeleteModelButton
                               modelID={model.model_info.id}
                               accessToken={accessToken}
                             />
+                            </Col>
+
+                            </Grid>
+                            
                           </TableCell>
                         </TableRow>
                       ))}
@@ -1277,6 +1314,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               model={selectedModel}
               onSubmit={handleEditSubmit}
             />
+            <Modal
+              title={selectedModel && selectedModel.model_name}
+              visible={infoModalVisible}
+              width={800}
+              footer={null}
+              onCancel={handleInfoCancel}
+            >
+
+              <Title>Model Info</Title>
+              <SyntaxHighlighter language="json" >
+                {selectedModel && JSON.stringify(selectedModel, null, 2)}
+              </SyntaxHighlighter>
+              
+            </Modal>
           </TabPanel>
           <TabPanel className="h-full">
             <Title2 level={2}>Add new model</Title2>
