@@ -229,17 +229,21 @@ async def test_pre_call_hook_user_tpm_limits():
     """
     Test if error raised on hitting tpm limits
     """
+    local_cache = DualCache()
     # create user with tpm/rpm limits
+    user_id = "test-user"
+    user_obj = {"tpm_limit": 9, "rpm_limit": 10}
+
+    local_cache.set_cache(key=user_id, value=user_obj)
 
     _api_key = "sk-12345"
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,
-        user_id="ishaan",
-        user_id_rate_limits={"tpm_limit": 9, "rpm_limit": 10},
+        user_id=user_id,
     )
     res = dict(user_api_key_dict)
     print("dict user", res)
-    local_cache = DualCache()
+
     parallel_request_handler = MaxParallelRequestsHandler()
 
     await parallel_request_handler.async_pre_call_hook(
@@ -248,7 +252,7 @@ async def test_pre_call_hook_user_tpm_limits():
 
     kwargs = {
         "litellm_params": {
-            "metadata": {"user_api_key_user_id": "ishaan", "user_api_key": "gm"}
+            "metadata": {"user_api_key_user_id": user_id, "user_api_key": "gm"}
         }
     }
 
@@ -734,7 +738,7 @@ async def test_bad_router_call():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.user_api_key_cache.get_cache(  # type: ignore
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -751,7 +755,7 @@ async def test_bad_router_call():
     except:
         pass
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.user_api_key_cache.get_cache(  # type: ignore
             key=request_count_api_key
         )["current_requests"]
         == 0
