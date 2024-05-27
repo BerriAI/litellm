@@ -9345,28 +9345,49 @@ async def model_streaming_metrics(
     startTime = startTime or datetime.now() - timedelta(days=7)  # show over past week
     endTime = endTime or datetime.now()
 
-    sql_query = """
-        SELECT
-            api_base,
-            model_group,
-            model,
-            DATE_TRUNC('day', "startTime")::DATE AS day,
-            AVG(EXTRACT(epoch FROM ("completionStartTime" - "startTime")))  AS time_to_first_token
-        FROM
-            "LiteLLM_SpendLogs"
-        WHERE
-            "startTime" BETWEEN $2::timestamp AND $3::timestamp
-            AND "model_group" = $1 AND "cache_hit" != 'True'
-            AND "completionStartTime" IS NOT NULL
-            AND "completionStartTime" != "endTime"
-        GROUP BY
-            api_base,
-            model_group,
-            model,
-            day
-        ORDER BY
-            time_to_first_token DESC;
-    """
+    is_same_day = startTime.date() == endTime.date()
+
+    if is_same_day:
+        sql_query = """
+            SELECT
+                api_base,
+                model_group,
+                model,
+                "startTime",
+                EXTRACT(epoch FROM ("completionStartTime" - "startTime")) AS time_to_first_token
+            FROM
+                "LiteLLM_SpendLogs"
+            WHERE
+                "model_group" = $1 AND "cache_hit" != 'True'
+                AND "completionStartTime" IS NOT NULL
+                AND "completionStartTime" != "endTime"
+                AND DATE("startTime") = DATE($2::timestamp)
+            ORDER BY
+                time_to_first_token DESC;
+        """
+    else:
+        sql_query = """
+            SELECT
+                api_base,
+                model_group,
+                model,
+                DATE_TRUNC('day', "startTime")::DATE AS day,
+                AVG(EXTRACT(epoch FROM ("completionStartTime" - "startTime"))) AS time_to_first_token
+            FROM
+                "LiteLLM_SpendLogs"
+            WHERE
+                "startTime" BETWEEN $2::timestamp AND $3::timestamp
+                AND "model_group" = $1 AND "cache_hit" != 'True'
+                AND "completionStartTime" IS NOT NULL
+                AND "completionStartTime" != "endTime"
+            GROUP BY
+                api_base,
+                model_group,
+                model,
+                day
+            ORDER BY
+                time_to_first_token DESC;
+        """
 
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
