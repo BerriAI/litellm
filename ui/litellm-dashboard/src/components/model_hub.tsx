@@ -202,7 +202,7 @@ print(response)
                         {
                           selectedModel?.supported_openai_params?.map((param) => (
                             
-                             <pre>
+                             <pre key={param}>
                               {param}
                              </pre>
                             
