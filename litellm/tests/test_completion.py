@@ -7,7 +7,7 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent-directory to the system path
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -38,7 +38,7 @@ def reset_callbacks():
 @pytest.mark.skip(reason="Local test")
 def test_response_model_none():
     """
-    Addresses:https://github.com/BerriAI/litellm/issues/2972
+    Addresses: https://github.com/BerriAI/litellm/issues/2972
     """
     x = completion(
         model="mymodel",
@@ -129,6 +129,27 @@ def test_completion_azure_command_r():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_databricks(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        response: litellm.ModelResponse = completion(
+            model="databricks/databricks-dbrx-instruct",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )  # type: ignore
+
+    else:
+        response: litellm.ModelResponse = await litellm.acompletion(
+            model="databricks/databricks-dbrx-instruct",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )  # type: ignore
+    print(f"response: {response}")
+
+    response_format_tests(response=response)
 
 
 # @pytest.mark.skip(reason="local test")

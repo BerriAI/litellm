@@ -35,7 +35,7 @@ class VertexAIError(Exception):
 
 class VertexAIAnthropicConfig:
     """
-    Reference: https://docs.anthropic.com/claude/reference/messages_post
+    Reference:https://docs.anthropic.com/claude/reference/messages_post
 
     Note that the API for Claude on Vertex differs from the Anthropic API documentation in the following ways:
 

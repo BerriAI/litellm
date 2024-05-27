@@ -1,9 +1,18 @@
-import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab, Select, SelectItem, DateRangePicker, DateRangePickerValue } from "@tremor/react";
+import { 
+  Grid, Col, Text, 
+  LineChart, TabPanel, TabPanels, 
+  TabGroup, TabList, Tab, Select, SelectItem, 
+  DateRangePicker, DateRangePickerValue, 
+  DonutChart,
+  AreaChart,
+  Callout,
+  Button,
+} from "@tremor/react";
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -16,6 +25,9 @@ import {
   modelMetricsCall,
   modelAvailableCall,
   modelInfoCall,
+  adminspendByProvider,
+  adminGlobalActivity,
+  adminGlobalActivityPerModel,
 } from "./networking";
 import { start } from "repl";
 
@@ -25,7 +37,15 @@ interface UsagePageProps {
   userRole: string | null;
   userID: string | null;
   keys: any[] | null;
+  premiumUser: boolean;
 }
+
+interface GlobalActivityData {
+  sum_api_requests: number;
+  sum_total_tokens: number;
+  daily_data: { date: string; api_requests: number; total_tokens: number }[];
+}
+
 
 type CustomTooltipTypeBar = {
   payload: any;
@@ -105,6 +125,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   userRole,
   userID,
   keys,
+  premiumUser,
 }) => {
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
@@ -115,6 +136,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
+  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
+  const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
@@ -136,6 +160,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   let endTime = formatDate(lastDay);
 
   console.log("keys in usage", keys);
+  console.log("premium user in usage", premiumUser);
 
   const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
     if (!startTime || !endTime || !accessToken) {
@@ -210,6 +235,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
           if (userRole == "Admin" || userRole == "Admin Viewer") {
             const overall_spend = await adminSpendLogsCall(accessToken);
             setKeySpendData(overall_spend);
+
+            const provider_spend = await adminspendByProvider(accessToken, token, startTime, endTime);
+            console.log("provider_spend", provider_spend);
+            setSpendByProvider(provider_spend);
+
+
             const top_keys = await adminTopKeysCall(accessToken);
             const filtered_keys = top_keys.map((k: any) => ({
               key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(
@@ -256,6 +287,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
             setTopUsers(spend_user_call);
 
             console.log("spend/user result", spend_user_call);
+
+            let global_activity_response = await adminGlobalActivity(accessToken, startTime, endTime);
+            setGlobalActivity(global_activity_response)
+
+            let global_activity_per_model = await adminGlobalActivityPerModel(accessToken, startTime, endTime);
+            console.log("global activity per model", global_activity_per_model);
+            setGlobalActivityPerModel(global_activity_per_model)
+
 
           } else if (userRole == "App Owner") {
             await userSpendLogsCall(
@@ -320,7 +359,15 @@ const UsagePage: React.FC<UsagePageProps> = ({
         </TabList>
         <TabPanels>
           <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
+
+          <TabGroup>
+            <TabList variant="solid" className="mt-1">
+            <Tab>Cost</Tab>
+            <Tab>Activity</Tab>
+          </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[100vh] w-full">
               <Col numColSpan={2}>
                 <Card>
                   <Title>Monthly Spend</Title>
@@ -373,7 +420,193 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Col numColSpan={1}>
                 
               </Col>
+              <Col numColSpan={2}>
+              <Card className="mb-2">
+                <Title>✨ Spend by Provider</Title>
+                {
+                  premiumUser ? (
+                    <>
+                    <Grid numItems={2}>
+                  <Col numColSpan={1}>
+                    <DonutChart
+                      className="mt-4 h-40"
+                      variant="pie"
+                      data={spendByProvider}
+                      index="provider"
+                      category="spend"
+                    />
+                  </Col>
+                  <Col numColSpan={1}>
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Provider</TableHeaderCell>
+                          <TableHeaderCell>Spend</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {spendByProvider.map((provider) => (
+                          <TableRow key={provider.provider}>
+                            <TableCell>{provider.provider}</TableCell>
+                            <TableCell>
+                              {parseFloat(provider.spend.toFixed(2)) < 0.00001
+                                ? "less than 0.00"
+                                : provider.spend.toFixed(2)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Col>
+                </Grid>
+                    </>
+                  ) : (
+                    <div>
+                    <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to use this feature</p>
+                    <Button variant="primary" className="mb-2">
+                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                            Get Free Trial
+                          </a>
+                        </Button>
+                    </div>
+                  )
+                }
+                
+              </Card>
+            </Col>
             </Grid>
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={1} className="gap-2 h-[75vh] w-full">
+                <Card>
+                <Title>All Up</Title>
+                <Grid numItems={2}>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                <AreaChart
+                    className="h-40"
+                    data={globalActivity.daily_data}
+                    index="date"
+                    colors={['cyan']}
+                    categories={['api_requests']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+
+                </Col>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                <BarChart
+                    className="h-40"
+                    data={globalActivity.daily_data}
+                    index="date"
+                    colors={['cyan']}
+                    categories={['total_tokens']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+                </Col>
+                </Grid>
+                
+
+                </Card>
+
+                {
+                  premiumUser ? ( 
+                    <>
+                    {globalActivityPerModel.map((globalActivity, index) => (
+                <Card key={index}>
+                  <Title>{globalActivity.model}</Title>
+                  <Grid numItems={2}>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                      <AreaChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['api_requests']}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                      <BarChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['total_tokens']}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                  </Grid>
+                </Card>
+              ))}
+                    </>
+                  ) : 
+                  <>
+                  {globalActivityPerModel && globalActivityPerModel.length > 0 &&
+                    globalActivityPerModel.slice(0, 1).map((globalActivity, index) => (
+                      <Card key={index}>
+                        <Title>✨ Activity by Model</Title>
+                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see analytics for all models</p>
+                        <Button variant="primary" className="mb-2">
+                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                            Get Free Trial
+                          </a>
+                        </Button>
+                        <Card>
+                        <Title>{globalActivity.model}</Title>
+                        <Grid numItems={2}>
+                          <Col>
+                            <Subtitle
+                              style={{
+                                fontSize: "15px",
+                                fontWeight: "normal",
+                                color: "#535452",
+                              }}
+                            >
+                              API Requests {globalActivity.sum_api_requests}
+                            </Subtitle>
+                            <AreaChart
+                              className="h-40"
+                              data={globalActivity.daily_data}
+                              index="date"
+                              colors={['cyan']}
+                              categories={['api_requests']}
+                              onValueChange={(v) => console.log(v)}
+                            />
+                          </Col>
+                          <Col>
+                            <Subtitle
+                              style={{
+                                fontSize: "15px",
+                                fontWeight: "normal",
+                                color: "#535452",
+                              }}
+                            >
+                              Tokens {globalActivity.sum_total_tokens}
+                            </Subtitle>
+                            <BarChart
+                              className="h-40"
+                              data={globalActivity.daily_data}
+                              index="date"
+                              colors={['cyan']}
+                              categories={['total_tokens']}
+                              onValueChange={(v) => console.log(v)}
+                            />
+                          </Col>
+                          
+                        </Grid>
+                        </Card>
+                      </Card>
+                    ))}
+                </>
+                }              
+              </Grid>
+            </TabPanel>
+            </TabPanels>
+            </TabGroup>
+
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full">
@@ -382,6 +615,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Title>Total Spend Per Team</Title>
                 <BarList
                   data={totalSpendPerTeam}
+                  
                 />
               </Card>
               <Card>

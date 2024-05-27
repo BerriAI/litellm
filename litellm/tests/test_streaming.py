@@ -235,6 +235,259 @@ def test_completion_azure_stream_special_char():
     assert len(response_str) > 0
 
 
+def test_completion_azure_stream_content_filter_no_delta():
+    """
+    Tests streaming from Azure when the chunks have no delta because they represent the filtered content
+    """
+    try:
+        chunks = [
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": "",
+                        "role": "assistant"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": "This"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " is"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " a"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " dummy"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": " response"
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "",
+                "choices": [
+                    {
+                    "finish_reason": None,
+                    "index": 0,
+                    "content_filter_offsets": {
+                        "check_offset": 35159,
+                        "start_offset": 35159,
+                        "end_offset": 36150
+                    },
+                    "content_filter_results": {
+                        "hate": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "self_harm": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "sexual": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "violence": {
+                        "filtered": False,
+                        "severity": "safe"
+                        }
+                    }
+                    }
+                ],
+                "created": 0,
+                "model": "",
+                "object": ""
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {
+                        "content": "."
+                    },
+                    "finish_reason": None,
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                    "delta": {},
+                    "finish_reason": "stop",
+                    "index": 0
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a"
+                },
+                {
+                "id": "",
+                "choices": [
+                    {
+                    "finish_reason": None,
+                    "index": 0,
+                    "content_filter_offsets": {
+                        "check_offset": 36150,
+                        "start_offset": 36060,
+                        "end_offset": 37029
+                    },
+                    "content_filter_results": {
+                        "hate": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "self_harm": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "sexual": {
+                        "filtered": False,
+                        "severity": "safe"
+                        },
+                        "violence": {
+                        "filtered": False,
+                        "severity": "safe"
+                        }
+                    }
+                    }
+                ],
+                "created": 0,
+                "model": "",
+                "object": ""
+                }            
+        ]
+
+        chunk_list = []
+        for chunk in chunks:
+            new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+            if "choices" in chunk and isinstance(chunk["choices"], list):
+                new_choices = []
+                for choice in chunk["choices"]:
+                    if isinstance(choice, litellm.utils.StreamingChoices):
+                        _new_choice = choice
+                    elif isinstance(choice, dict):
+                        _new_choice = litellm.utils.StreamingChoices(**choice)
+                    new_choices.append(_new_choice)
+                new_chunk.choices = new_choices
+            chunk_list.append(new_chunk)
+
+        completion_stream = ModelResponseListIterator(model_responses=chunk_list)
+
+        litellm.set_verbose = True
+
+        response = litellm.CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model="gpt-4-0613",
+            custom_llm_provider="cached_response",
+            logging_obj=litellm.Logging(
+                model="gpt-4-0613",
+                messages=[{"role": "user", "content": "Hey"}],
+                stream=True,
+                call_type="completion",
+                start_time=time.time(),
+                litellm_call_id="12345",
+                function_id="1245",
+            ),
+        )
+
+        for idx, chunk in enumerate(response):
+            complete_response = ""
+            for idx, chunk in enumerate(response):
+                # print
+                delta = chunk.choices[0].delta
+                content = delta.content if delta else None
+                complete_response += content or ""
+                if chunk.choices[0].finish_reason is not None:
+                    break
+            assert len(complete_response) > 0
+
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
 def test_completion_cohere_stream_bad_key():
     try:
         litellm.cache = None
@@ -949,6 +1202,62 @@ def test_vertex_ai_stream():
 #         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_vertexai_stream_bad_key()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_databricks_streaming(sync_mode):
+    litellm.set_verbose = True
+    model_name = "databricks/databricks-dbrx-instruct"
+    try:
+        if sync_mode:
+            final_chunk: Optional[litellm.ModelResponse] = None
+            response: litellm.CustomStreamWrapper = completion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=10,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            for idx, chunk in enumerate(response):
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+        else:
+            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=100,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            idx = 0
+            final_chunk: Optional[litellm.ModelResponse] = None
+            async for chunk in response:
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+                idx += 1
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize("sync_mode", [False, True])
