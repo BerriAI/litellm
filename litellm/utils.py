@@ -3900,6 +3900,7 @@ def client(original_function):
                     and model in context_window_fallback_dict
                 ):
                     if len(args) > 0:
+                        args = list(args)
                         args[0] = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
